@@ -13,5 +13,8 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
   }
 }
