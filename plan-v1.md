@@ -12,8 +12,6 @@ Three properties make or break this product, and they drive every decision below
 2. **The widget key is public by construction.** It sits in the HTML of a public website. Anything that treats it as a secret is broken by design. Authorization must come from something the page cannot forge.
 3. **Every feature is tested, or it does not ship.** Security controls carry a stricter bar than features: 100% branch coverage plus mutation testing, because a security test that passes against broken code is worse than no test.
 
-`/Users/matteo.grosso/Projects/personal` is empty. Everything here is new.
-
 This document doubles as the build brief — it is written to be executable, not aspirational.
 
 ---
@@ -979,23 +977,6 @@ Security is not a phase; it is a gate on every phase. The listed security work i
 | **P5 Billing** | Stripe Checkout + Portal, plans, webhook state machine, quota enforcement, usage metering + rollups | Webhook fixture suite; quota boundary tests |
 | **P6 Analytics + attribution** | Funnel, zero-results panel, usage dashboards, Shopify app + order webhook attribution, theme app extension | Event-pipeline tests; attribution correctness test |
 | **P7 GA readiness** | k6 at tenant scale, partitioning decision from measured data, restore drill, external pen test, docs, status page | Load targets met; pen-test findings closed |
-
-### Fast-Track Sequencing Option (Getting to Demo Earlier)
-
-If prioritizing a live demo running on early design-partner storefronts in weeks rather than months, shift the widget client ahead of deep security/billing infrastructure:
-
-```
-[P0: Core DB + RLS] ──> [P1: Catalog + LLM] ──> [P2-lite & P3: Widget & Cards] ──> Demoable MVP
-                                                        │
-[P7: Launch] <── [P6: Analytics] <── [P5: Stripe/SdI] <── [P4: Security Hardening]
-```
-
-*How this works in practice:*
-1. **P2-lite** extracts only the irreducible RAG & streaming core (hybrid search `P2-17`..`20`, prompt assembly `P2-23`..`25`, and SSE streaming `P2-29` authenticated with temporary static keys), bypassing dynamic CORS and origin tokens for the demo.
-2. **P3 Widget Client** is built immediately against P2-lite, allowing embedding on selected design-partner stores.
-3. **P4 (Security Hardening)**, **P5 (Stripe & SdI Invoicing)**, and **P6 (Analytics)** are completed in parallel to bring the platform to full multi-tenant production grade before GA.
-
----
 
 ## Part 8 — Documentation and Knowledge Capture
 
