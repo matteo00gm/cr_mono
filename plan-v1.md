@@ -391,8 +391,10 @@ Two reasons this is the right rule and not just a preference. First, **the selle
 - Messages sent this period vs. the plan cap, as a meter with a projected end-of-period figure.
 - Breakdown by day, by origin (a tenant may have several verified domains), and by locale.
 - **Quota notification system (80% and 100%):**
-  - **At 80% (Warning):** In-dashboard warning banner + automated email to `OWNER` with two direct CTAs: **[Acquista Ricarica +1.000 messaggi (€15)]** or **[Passa a Pro (€79/mo)]** to prevent service interruption.
-  - **At 100% (Hard stop):** In-dashboard critical banner + automated email to `OWNER` notifying that the widget is paused, with one-click restoration via **[Ricarica immediata (€15)]** or **[Upgrade piano]**.
+  - **In-Dashboard Banners (All Roles):**
+    - **For `OWNER`:** Top warning/critical banner with direct purchase CTAs: **[Acquista Ricarica +1.000 messaggi (€15)]** or **[Passa a Pro (€79/mo)]**.
+    - **For `EDITOR`:** Informational banner stating current quota status and prompting to notify a workspace `OWNER` to top up or upgrade (since `EDITOR` lacks `billing:manage` permission).
+  - **Automated Emails (`OWNER`s only):** Dispatched via Resend to **all members with `role = 'OWNER'`** on the tenant at 80% (warning) and 100% (hard stop) thresholds. Not sent to `EDITOR`s to avoid noise and conserve platform email quotas.
 - Cost transparency: tokens consumed (we absorb the cost; showing it justifies the tier).
 
 ### 2.4 Analytics and sales tracking
@@ -4499,11 +4501,11 @@ Quota check reads `current_usage < (plan_cap + purchased_top_up_messages)`.
 ### P5-12 · Usage meter and notifications
 
 **How.** Dashboard meter with a projected end-of-period figure from the current daily rate (§2.3).
-- **80% Warning Notification:** Triggered on reaching 80% of plan allowance. Shows an in-dashboard warning banner and sends an email to the tenant's `OWNER` containing two direct CTAs: **[Acquista Ricarica +1.000 messaggi (€15)]** and **[Passa al piano Pro (€79/mo)]**.
-- **100% Quota Exceeded Notification:** Triggered at 100% cap. Shows a critical in-dashboard banner and sends an email to `OWNER` stating that the widget is paused, offering immediate restoration via **[Ricarica immediata (€15)]** or **[Upgrade piano]**.
+- **80% Warning Notification:** Triggered on reaching 80% of plan allowance. Shows an in-dashboard warning banner (actionable for `OWNER`, informational for `EDITOR`) and sends an email to **all members with `role = 'OWNER'`** on the tenant containing two direct CTAs: **[Acquista Ricarica +1.000 messaggi (€15)]** and **[Passa al piano Pro (€79/mo)]**.
+- **100% Quota Exceeded Notification:** Triggered at 100% cap. Shows a critical in-dashboard banner and sends an email to **all `OWNER`s** stating that the widget is paused, offering immediate restoration via **[Ricarica immediata (€15)]** or **[Upgrade piano]**. `EDITOR`s see an in-dashboard message prompting them to alert an Owner.
 - **Idempotency:** Emails are sent **once per period per threshold** (idempotency key: `(tenant_id, period, threshold)` stored in `notification_events`) — duplicate quota alert emails are strictly prevented. Breakdown by day and origin in the dashboard.
 
-**Tests.** Boundary tests at 79/80/99/100/101%; each email sends exactly once per period; email template renders both top-up and upgrade checkout links with valid tenant context; projection is sane on a partial month.
+**Tests.** Boundary tests at 79/80/99/100/101%; each email sends exactly once per period to all `OWNER`s on the tenant; `EDITOR` users receive zero billing emails; email template renders both top-up and upgrade checkout links with valid tenant context; dashboard banner renders role-appropriate CTAs for `OWNER` vs `EDITOR`; projection is sane on a partial month.
 
 **Files.** `UsageMeter.tsx`, notification job, email templates, tests. **~150 lines.**
 
