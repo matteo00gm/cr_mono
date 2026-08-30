@@ -1,0 +1,9 @@
+{
+  "name": "@catalogorosso/widget",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit"
+  }
+}
