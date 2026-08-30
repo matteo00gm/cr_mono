@@ -1,0 +1,17 @@
+{
+  "name": "catalogorosso",
+  "version": "0.0.0",
+  "private": true,
+  "description": "AI Sommelier — Multi-Tenant SaaS RAG Platform",
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "clean": "turbo run clean && rm -rf node_modules"
+  }
+}
