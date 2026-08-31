@@ -1,7 +1,9 @@
 name: CI
 
-# Fastest possible signal on a PR: formatting, lint and typecheck.
-# Tests and coverage gates land in their own workflow (P0-07).
+# Fast signal on a PR: formatting, lint, typecheck, tests and the §6.2
+# coverage gates. The two jobs run in parallel deliberately — chaining them
+# behind `needs` would hide a test failure until a lint failure was fixed,
+# costing a round trip to learn something we could have reported at once.
 on:
   pull_request:
   push:
@@ -14,7 +16,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Least privilege: this workflow only reads the tree.
+# Least privilege: these jobs only read the tree.
 permissions:
   contents: read
 
@@ -22,6 +24,11 @@ env:
   # Keep CI logs free of telemetry notices.
   TURBO_TELEMETRY_DISABLED: 1
   DO_NOT_TRACK: 1
+  # Turbo remote cache. Inert until these exist — an unset secret is an empty
+  # string and Turbo falls back to its local cache. Benefits build, typecheck
+  # and lint; tests are one root Vitest run with no per-package task to cache.
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
 
 jobs:
   verify:
@@ -53,3 +60,47 @@ jobs:
       # One Turbo invocation runs both tasks in parallel and reuses the cache.
       - name: Lint and typecheck
         run: pnpm turbo run lint typecheck
+
+      # Turbo tasks are per-package, so this is the only thing that lints
+      # root-level files: vitest.config.ts, eslint.config.js, scripts/.
+      - name: Lint root-level configs and scripts
+        run: pnpm lint:root
+
+  test:
+    name: Test and coverage gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      # Guards the P0-02 emit split: tests belong to tsconfig.json (checked)
+      # and not to tsconfig.build.json (emitted). Without this the split can
+      # regress silently, since nothing else looks inside dist.
+      - name: Assert no test artefacts in dist
+        run: |
+          leaked=$(find apps packages -path '*/dist/*' -name '*.test.*' -not -path '*/node_modules/*')
+          if [ -n "$leaked" ]; then
+            echo "Test artefacts leaked into build output:"
+            echo "$leaked"
+            exit 1
+          fi
+          echo "dist is clean."
+
+      - name: Test with coverage
+        run: pnpm test:coverage
+
+      # The §6.2 bars. Vitest applies coverage at the root of a projects run,
+      # so per-package thresholds cannot live in Vitest config at all.
+      - name: Enforce coverage gates
+        run: pnpm coverage:check

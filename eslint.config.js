@@ -32,6 +32,19 @@ export default tseslint.config(
     ...tseslint.configs.disableTypeChecked,
   },
 
+  // Build/CI scripts: plain ESM JavaScript, deliberately outside every
+  // tsconfig. Type-aware rules need a program these files do not belong to,
+  // so the project service is switched off for them rather than being fed a
+  // synthetic default project.
+  {
+    files: ['scripts/**/*.{js,mjs}'],
+    ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      parserOptions: { projectService: false },
+      globals: { console: 'readonly', process: 'readonly' },
+    },
+  },
+
   // Repo-specific rules: dependency direction enforcement
   {
     rules: {

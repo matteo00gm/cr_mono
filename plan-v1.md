@@ -933,6 +933,7 @@ Non-negotiable: **no feature merges without tests at the level appropriate to it
 - `packages/core`, `packages/rag`, `packages/db`: ≥ 90% lines and branches.
 - `apps/api`: ≥ 85%.
 - `apps/widget`: ≥ 85% plus visual regression on every state.
+- `apps/worker`: ≥ 85%. `apps/dashboard`: ≥ 80%. `packages/testing`: **exempt**, because test helpers execute inside the suites that consume them and v8 attributes that coverage to the consuming project — a bar here would measure nothing. These three were unstated above and are set in `scripts/check-coverage.mjs`; a package with **no** entry there fails CI rather than defaulting open, on the same principle §6.3 applies to an endpoint missing a capability entry.
 - Bundle-size budgets fail the build.
 
 ### 6.3 The tests that matter most
@@ -1536,9 +1537,26 @@ Then restore and confirm a clean tree. Also time a cold run (no Turbo cache, no 
 
 **Turbo remote cache does not apply to the test job.** P0-05 runs tests as one root Vitest invocation, so there is no per-package task to cache; `TURBO_TOKEN`/`TURBO_TEAM` still pay off on `build`, `typecheck` and `lint`. Revisit only if the suite's wall-clock actually becomes the CI bottleneck, and revisit by measuring rather than by assuming.
 
-**Tests.** Temporarily drop a threshold to prove the gate fails, then restore. Also assert the vacuous-pass case explicitly: feed the script a summary whose paths match no known package and confirm it **fails** rather than reporting all-green.
+**Give the script an optional summary-path argument.** `node scripts/check-coverage.mjs <path>` lets the failure modes be exercised against a fixture without disturbing real coverage output. A gate whose failure path is awkward to test is a gate whose failure path goes untested.
 
-**Files.** `.github/workflows/ci.yml`, `scripts/check-coverage.mjs`. **~90 lines.**
+**Two jobs, running in parallel, not chained by `needs`.** Putting the test job behind the lint job saves a little runner time but hides a test failure until the lint failure is fixed — one round trip to learn something both jobs could have reported at once.
+
+**The test job also guards the P0-02 emit split.** A `find` over `dist` for test artefacts, run after `pnpm build`. Nothing else looks inside `dist`, so without this the split regresses silently.
+
+**Turbo remote cache is wired but inert.** `TURBO_TOKEN`/`TURBO_TEAM` are read from secrets and variables; an unset secret is an empty string and Turbo falls back to its local cache, so the workflow is correct either way. It benefits `build`, `typecheck` and `lint` — never the test run, which is one root Vitest invocation with no per-package task to cache.
+
+**Tests.** Four failure modes, each proven to fail rather than inferred from a green run:
+
+| Guard | Injected fault | Expected |
+|---|---|---|
+| Threshold | real uncovered code in `packages/core` | `FAIL` rows naming package, metric, actual, required; exit 1 |
+| Vacuous pass | fixture summary whose paths match no package | hard error before any comparison |
+| Missing bar | a new package with no `THRESHOLDS` entry | hard error naming the package |
+| `dist` hygiene | a planted `dist/index.test.js` | exit 1, listing the leaked file |
+
+The first is the one people write; the second and third are the ones that actually keep the gate honest, because both fail *silently green* if unguarded.
+
+**Files.** `.github/workflows/ci.yml`, `scripts/check-coverage.mjs`. **~250 lines.** Larger than the original estimate: the table renderer, the config-versus-disk reconciliation and the three hard-error paths are most of it, and they are the parts that make the gate more than a threshold comparison.
 
 ---
 
@@ -5010,10 +5028,24 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **+** Recorded that branch protection is not committable: until the `verify` job is a required status check, every "PR-blocking" gate in Part 6 reports and nothing more.
 - **Verified in CI, 2026-08-31.** Both triggers exercised via PR #1 (merged as `bb40724`). The `pull_request` run completed in **26s** and the `push`-to-`main` run in **39s**, against a two-minute target. Every step succeeded: all three pinned SHAs resolved, `cache: pnpm` worked against a real store, `install --frozen-lockfile` took 3s, and `lint`+`typecheck` 11-16s. Caveat on the evidence: the step-level log endpoint requires authentication even on a public repository, so cache hit-versus-miss is not observable from outside CI - only that the step succeeded.
 
+### P0-07 · CI: test + coverage gates — implemented
+
+- **Δ** Per-package thresholds live entirely in `scripts/check-coverage.mjs`, not in Vitest config. With `test.projects`, Vitest applies `coverage` once at the root of the run, so there is no per-project place to put a different bar. The original spec assumed otherwise.
+- **+** Bars set for the three packages §6.2 left unstated: `apps/worker` 85%, `apps/dashboard` 80%, `packages/testing` exempt with a written reason. Recorded in §6.2 itself so the plan and the script agree.
+- **+** A package on disk with no `THRESHOLDS` entry is a **hard failure**, and so is an entry naming a package that does not exist. Without the first, a new package arrives with no bar and nobody notices; without the second, a renamed package leaves a bar silently guarding nothing. Verified by creating `packages/rag` with no entry and confirming CI-equivalent failure.
+- **+** Vacuous-pass guard: if the summary attributes **zero** files to a package, the script hard-fails before comparing anything. This is the failure the Windows path-separator bug produces, and it is indistinguishable from success without the guard. The table also prints a `Files` column so the evidence is visible, not just asserted.
+- **+** Path grouping uses `path.relative` plus `path.sep` rather than string replacement. Writing it as a replacement is precisely how the bug gets reintroduced — and is what the first draft here did, until the collapse of an escaped backslash exposed it.
+- **+** Optional summary-path argument, so the vacuous-pass and threshold failures can be tested against fixtures.
+- **+** `packages/security` gated at 100% on **all four** metrics, not branches alone. §6.2 specifies "100% branch"; 100% branch coverage does not imply a never-called function was executed, so lines, statements and functions are held to the same bar in the package where that matters most.
+- **+** Found and closed a gap that predates this task: **root-level files were never linted in CI.** `turbo run lint` is per-package, so `vitest.config.ts`, `eslint.config.js` and the new `scripts/` escaped both lint and typecheck entirely. Added a `lint:root` script and a CI step, plus an ESLint block that switches the project service off for `scripts/**` — plain ESM outside every tsconfig, where type-aware rules cannot resolve a program. Proven non-vacuous by injecting an unused variable and an undefined reference.
+- **+** `dist`-hygiene assertion moved into CI, guarding the P0-02 emit split from silent regression.
+- **Δ** Two parallel jobs rather than a chain. See the task section for the reasoning.
+
 ### ⚠ Open items
 
 | Item | Owner | Note |
 |---|---|---|
-| Branch protection not configured | repository settings | `verify` must be a required status check on `main` before any gate in Part 6 actually blocks a merge. Now actionable: GitHub only offers checks it has recently observed, and as of the PR #1 runs it has seen this one. |
-| `packages/rag` does not exist | P1 | §6.2 sets a coverage bar for it; the package arrives with the RAG work. |
-| Per-package coverage thresholds | P0-07 | Cannot come from Vitest config — `coverage` applies at the root of a projects run. They live entirely in `scripts/check-coverage.mjs`, which must normalise native path separators or it passes vacuously on Windows. |
+| Branch protection not configured | repository settings | **Both** `verify` and `test` must be required status checks on `main` before any gate in Part 6 actually blocks a merge — requiring only one leaves the other advisory. GitHub offers only checks it has recently observed, so `test` becomes selectable after its first run. |
+| `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |
+| Turbo remote cache not enabled | repository secrets | `TURBO_TOKEN` / `TURBO_TEAM` are referenced by the workflow but unset, so Turbo uses its local cache only. Harmless; wire it when CI wall-clock starts to matter. |
+| Coverage bars are untested against real code | P1 | Every source file is still `export {}`, so all bars sit at 100% of nothing. The gate's failure path is proven against injected faults, but the bars themselves only start biting when real code lands. |
