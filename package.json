@@ -2,6 +2,7 @@
   "name": "catalogorosso",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "description": "AI Sommelier — Multi-Tenant SaaS RAG Platform",
   "packageManager": "pnpm@11.24.0",
   "engines": {
@@ -12,10 +13,28 @@
     "test": "turbo run test",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
-    "clean": "turbo run clean && rm -rf node_modules"
+    "clean": "turbo run clean && rm -rf node_modules",
+    "format": "prettier --write .",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,yaml,yml,md,css}": [
+      "prettier --write"
+    ]
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.9.1",
+    "eslint-config-prettier": "^10.1.8",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.4.1",
+    "prettier": "^3.9.6",
     "turbo": "^2.10.12",
-    "typescript": "^7.0.2"
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.68.0"
   }
 }
