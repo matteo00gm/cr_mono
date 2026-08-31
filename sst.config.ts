@@ -73,6 +73,8 @@ export default $config({
   },
 
   async run() {
-    // Infrastructure is added from P0-12 onward.
+    // Dynamic import, which is how SST expects infra to be pulled in: the
+    // module body runs inside the app context, where the `sst.*` globals exist.
+    await import('./infra/vpc');
   },
 });

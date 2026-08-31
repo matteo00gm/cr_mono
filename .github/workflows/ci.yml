@@ -71,6 +71,22 @@ jobs:
       - name: Check architectural boundaries
         run: pnpm boundaries
 
+      # Partial stand-in for P0-12's real acceptance test, which is "zero
+      # AWS::EC2::NatGateway in the deployed stack" and needs AWS access. This
+      # only catches the way the invariant would actually be lost: someone
+      # switching the VPC to managed NAT, at ~$32/month per AZ. Replace it with
+      # the deployed-stack assertion once a stage exists.
+      - name: Assert no managed NAT Gateway is configured
+        run: |
+          # Match configuration, not prose: infra/vpc.ts explains at length why
+          # managed NAT is avoided, and a bare grep for the word flags that
+          # explanation. Anchor on the assignment instead.
+          if grep -rnE "(nat|type)[[:space:]]*:[[:space:]]*['\"]managed['\"]" infra/ 2>/dev/null; then
+            echo "::error::infra/ configures managed NAT — see P0-12; ~\$32/month per AZ, the largest avoidable cost in the stack"
+            exit 1
+          fi
+          echo "no managed NAT configured."
+
   test:
     name: Test and coverage gates
     runs-on: ubuntu-latest
