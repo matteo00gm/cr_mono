@@ -1665,9 +1665,15 @@ Do not settle for validating `renovate.json` against `renovate-schema.json` with
 
 **How.** `new sst.aws.Vpc('Vpc', { nat: 'ec2' })` if the SST version supports an EC2-based NAT; otherwise `{ nat: false }` and attach the P0-13 instance manually. **Verify no `AWS::EC2::NatGateway` appears in the deployed resources** — this is the check that actually protects the budget. Two AZs (RDS requires a subnet group spanning two), single NAT.
 
-**Tests.** Assert zero NAT Gateways in the deployed stack; add it to the P0-16 budget review.
+**SST v4 supports `nat: "ec2"`, and it is the fck-nat AMI on `t4g.nano` by default.** Confirmed in `platform/src/components/aws/vpc.ts` at the pinned tag. Two consequences: the `{ nat: false }` fallback in this task is unnecessary, and **P0-13 is already delivered by this option** — SST's EC2 NAT path *is* fck-nat with routing for the private subnets. Re-read P0-13 as a verification task rather than a build task.
 
-**Files.** `infra/vpc.ts`. **~30 lines.**
+**The zero-NAT-Gateway claim is provable from source, not only from a deploy.** The same file creates `ec2.NatGateway` resources exclusively when the NAT type is `"managed"`, so `nat: "ec2"` provisions none. Worth knowing, because the deployed assertion needs AWS access and this one does not.
+
+**Set `az: 2` explicitly.** It is a requirement — RDS needs a subnet group spanning two AZs — not a tuning choice, and relying on the framework default means a change to that default silently breaks the database.
+
+**Tests.** Assert zero NAT Gateways in the deployed stack; add it to the P0-16 budget review. Until a stage exists, a CI grep guards the invariant the only way it would realistically be lost: someone setting managed NAT. Anchor that grep on the *assignment* (`nat: "managed"`, `type: "managed"`) — a bare search for the word matches the comment in `infra/vpc.ts` explaining why managed NAT is avoided, which is a false positive that trains people to ignore the check.
+
+**Files.** `infra/vpc.ts`, `sst.config.ts` (wire `run()`), CI guard. **~45 lines.**
 
 ---
 
@@ -5122,6 +5128,14 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **Δ** Region set to `eu-west-1` as an **assumption, not a plan decision** — §5 never pins one. It is the one input that must satisfy EU data residency, Bedrock model availability for the §5.3 default, and cost simultaneously. Named in a single constant with the reasoning inline; one line to change before the first deploy, a migration afterwards.
 - **Δ** `sst.config.ts` and `infra/**` are excluded from ESLint and from `pnpm typecheck`. They depend on globals (`$config`, `$app`, `sst.aws.*`) typed by `.sst/platform/config.d.ts`, which `sst install` generates and git ignores — so they belong to no tsconfig and type-aware rules have no program to resolve against. Recorded as an open item rather than left as an unexplained hole.
 - **⚠ Not deployed, and deliberately so.** `sst deploy` creates billable AWS resources and needs credentials. Verified only that the CLI loads (`sst 4.17.1`) and that every option exists in the pinned source.
+
+### P0-12 · SST VPC — implemented, not deployed
+
+- **Δ** `nat: "ec2"` is supported in SST v4, so the spec's `{ nat: false }` fallback is not needed. Its EC2 NAT is the fck-nat AMI on `t4g.nano` by default — which means **P0-13 is already satisfied by this one option** and should be re-scoped to verification.
+- **+** The zero-NAT-Gateway guarantee is established from the pinned SST source: `ec2.NatGateway` is only constructed when the NAT type is `"managed"`. The plan framed this as a deploy-time check; it is also a source-time fact, which is the only form available without AWS access.
+- **+** `az: 2` stated explicitly rather than inherited from the default, since two AZs is an RDS subnet-group requirement and a default change would break the database quietly.
+- **+** CI guard asserting no managed NAT is configured. First version grepped for `managed` and flagged `infra/vpc.ts`'s own explanation of why managed NAT is avoided — so it is anchored on the assignment, and verified against both the string and the object form of the option.
+- **⚠ Not deployed.** The plan's acceptance test needs AWS credentials and creates billable resources.
 
 ### ⚠ Open items
 
