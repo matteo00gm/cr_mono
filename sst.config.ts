@@ -77,5 +77,6 @@ export default $config({
     // module body runs inside the app context, where the `sst.*` globals exist.
     await import('./infra/vpc');
     await import('./infra/database');
+    await import('./infra/config');
   },
 });
