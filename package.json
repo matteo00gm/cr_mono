@@ -15,6 +15,7 @@
     "test:coverage": "vitest run --coverage",
     "coverage:check": "node scripts/check-coverage.mjs",
     "audit:check": "node scripts/check-audit.mjs",
+    "boundaries": "depcruise apps packages",
     "lint": "turbo run lint",
     "lint:root": "eslint . --ignore-pattern \"apps/**\" --ignore-pattern \"packages/**\"",
     "typecheck": "turbo run typecheck",
@@ -35,6 +36,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@vitest/coverage-v8": "^4.1.11",
+    "dependency-cruiser": "^17.4.3",
     "eslint": "^10.9.1",
     "eslint-config-prettier": "^10.1.8",
     "husky": "^9.1.7",
