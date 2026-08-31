@@ -26,5 +26,19 @@ export const vpc = new sst.aws.Vpc('Vpc', {
   az: 2,
 
   // See above. Never "managed".
-  nat: 'ec2',
+  //
+  // The instance type is stated explicitly rather than inherited. It is the
+  // number the cost model rests on, and a change to SST's default would move
+  // the bill without changing a line of this repo.
+  //
+  // Two things this does NOT give us, both verified against the pinned source
+  // rather than assumed — see P0-13:
+  //   1. One instance PER AZ, not one total. With az: 2 that is two t4g.nano
+  //      (~$6-7/month), not the ~$3-4 the plan's single-NAT model assumes.
+  //   2. No auto-replacement. SST creates a bare ec2.Instance, not an ASG, so
+  //      a dead NAT means private-subnet egress stays down — Stripe, Resend and
+  //      domain verification all fail — until someone intervenes.
+  nat: {
+    ec2: { instance: 't4g.nano' },
+  },
 });
