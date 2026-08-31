@@ -1,0 +1,20 @@
+# Normalise every text file to LF in the repository and in the working tree.
+# Without this, `core.autocrlf=true` on Windows checks files out as CRLF while
+# `.prettierrc` and `.editorconfig` both demand LF — so `prettier --check`
+# fails locally forever, `lint-staged` rewrites on every commit, and the CRLF
+# is invisible on the Linux CI runner that is supposed to be the gate.
+* text=auto eol=lf
+
+# Generated — keep out of diffs and reviews.
+pnpm-lock.yaml linguist-generated=true -diff
+
+# Binary: never normalise, never diff.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.xlsx binary

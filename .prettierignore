@@ -4,3 +4,8 @@ node_modules
 .sst
 coverage
 pnpm-lock.yaml
+
+# Spec document — 380 KB of prose and wide tables. Prettier would rewrite
+# emphasis markers and re-pad every table pipe, producing thousands of lines
+# of diff noise on a file that is read, not compiled.
+plan-v1.md

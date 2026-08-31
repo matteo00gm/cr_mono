@@ -1072,10 +1072,10 @@ Anti-rot checks in CI, each cheap:
 | # | Task | How / notes | Deps |
 |---|---|---|---|
 | P0-01 | ⛔ Repo init | pnpm workspace, `.nvmrc`, `.gitignore`, `.editorconfig`, root `package.json` | — |
-| P0-02 | TS base configs | `tsconfig.base.json`, strict on, per-package `extends` | 01 |
-| P0-03 | Turborepo pipeline | `turbo.json`: build/test/lint/typecheck with correct `dependsOn` | 01 |
-| P0-04 | ESLint + Prettier | flat config, `lint-staged`, husky pre-commit | 02 |
-| P0-05 | Vitest workspace | root config, per-package projects, coverage provider | 02 |
+| P0-02 | TS base configs | `tsconfig.base.json` + `tsconfig.emit.json`, strict on, per-package `tsconfig.json` (typecheck, sees tests) and `tsconfig.build.json` (emit, src only) | 01 |
+| P0-03 | Turborepo pipeline | `turbo.json`: build/typecheck/lint with correct `dependsOn`. No `test` task — tests are one root Vitest run (see P0-05) | 01 |
+| P0-04 | ESLint + Prettier | flat config, `lint-staged`, husky pre-commit, `.gitattributes` (`eol=lf`) | 02 |
+| P0-05 | Vitest workspace | root `vitest.config.ts` with `test.projects`, per-package environments, coverage provider | 02 |
 | P0-06 | CI: lint + typecheck | GitHub Actions, `--frozen-lockfile` | 03,04 |
 | P0-07 | CI: test + coverage gates | Turbo remote cache; per-package thresholds from §6.2, PR-blocking | 05,06 |
 | P0-08 | 🔒 gitleaks + dep audit in CI | pre-commit hook plus CI scan; `pnpm audit`/OSV gate | 06 |
@@ -1391,9 +1391,20 @@ Root `package.json` is **private**, has no dependencies except devDeps, and decl
 
 **How.** `strict: true`, plus the four that catch real bugs and are commonly forgotten: `noUncheckedIndexedAccess` (makes `arr[0]` possibly-undefined — matters a lot in the CSV/paste parsers), `exactOptionalPropertyTypes`, `noImplicitOverride`, `verbatimModuleSyntax`. Target `ES2023`, `module: "esnext"`, `moduleResolution: "bundler"`. Set `composite: true` and use project references so Turborepo can cache typecheck per package.
 
-**Tests.** `pnpm typecheck` passes on an empty repo.
+**Two configs per package, because one config cannot serve both roles.** Tests must live inside a tsconfig — otherwise `tsc` never checks them and ESLint's `projectService` errors out on every test file, so the whole suite is written without type safety. But tests must *not* be in the config that emits, or compiled tests land in `dist`. There is no glob-to-project routing in `projectService` and no way to include a file for checking while excluding it from emit, so the roles get separate files:
 
-**Files.** `tsconfig.base.json` + per-package `tsconfig.json` stubs. **~50 lines.**
+| File | Role | Includes | Emits |
+|---|---|---|---|
+| `tsconfig.base.json` | language + strictness, shared | — | — |
+| `tsconfig.emit.json` | extends base; `composite`, `declaration`, `declarationMap`, `sourceMap` | — | — |
+| `<pkg>/tsconfig.json` | lint + typecheck (`tsc --noEmit`, ESLint) | `src`, `test` | no |
+| `<pkg>/tsconfig.build.json` | build (`tsc --build`), referenced by root | `src` only | yes |
+
+`outDir`/`rootDir` **cannot** be hoisted into `tsconfig.emit.json`: relative paths in an extended config resolve against the file they are written in, so a hoisted `outDir: "dist"` means `<repo-root>/dist` for every package. They stay in each `tsconfig.build.json`. The root `tsconfig.json` references the `tsconfig.build.json` files — the emit graph — not the typecheck configs.
+
+**Tests.** `pnpm typecheck` passes on an empty repo. Then two assertions that the split actually holds, both cheap to re-run: a deliberate type error in a `test/` file fails `pnpm typecheck` (proving tests are checked), and `find` over `dist` matches no test artefact after `pnpm build` (proving they are not shipped).
+
+**Files.** `tsconfig.base.json`, `tsconfig.emit.json`, root `tsconfig.json`, per-package `tsconfig.json` + `tsconfig.build.json`. **~90 lines.**
 
 ---
 
@@ -1407,18 +1418,21 @@ Root `package.json` is **private**, has no dependencies except devDeps, and decl
 ```jsonc
 {
   "tasks": {
-    "build":     { "dependsOn": ["^build"], "outputs": ["dist/**"] },
+    "build":     { "dependsOn": ["^build"], "outputs": ["dist/**", "*.tsbuildinfo"] },
     "typecheck": { "dependsOn": ["^build"] },
-    "test":      { "dependsOn": ["^build"], "outputs": ["coverage/**"] },
     "lint":      {}
   }
 }
 ```
-`^build` means "upstream packages' build first". Add `globalDependencies: ["tsconfig.base.json", ".nvmrc"]` so changing them busts every cache — omitting this is the classic stale-cache bug.
+`^build` means "upstream packages' build first". Add `globalDependencies: ["tsconfig.base.json", "tsconfig.emit.json", ".nvmrc"]` so changing them busts every cache — omitting this is the classic stale-cache bug. `*.tsbuildinfo` belongs in `build.outputs`: it is what makes `tsc --build` incremental, and a cache that restores `dist` without it forces a full recompile on the next run.
 
-**Tests.** Run `pnpm build` twice; second run reports cache hits.
+**No `test` task, and no `clean` task.** Turbo tasks are per-package, but P0-05 settles on a single root Vitest run producing a single coverage report — there is nothing per-package left to cache, and a per-package `test` task that no package implements is dead config that reads as coverage. `clean` is one root `rimraf --glob` over the workspace instead of eight identical scripts. Turbo keeps exactly the three tasks that are genuinely per-package and worth caching.
 
-**Files.** `turbo.json`. **~35 lines.**
+**Cross-platform note.** Package scripts must not use `rm -rf`: pnpm runs them through `cmd.exe` on Windows, where it does not exist. Use `rimraf` (or a Node one-liner) anywhere a script deletes files.
+
+**Tests.** Run `pnpm build` twice; second run reports `FULL TURBO`.
+
+**Files.** `turbo.json`. **~20 lines.**
 
 ---
 
@@ -1432,9 +1446,20 @@ Root `package.json` is **private**, has no dependencies except devDeps, and decl
 - `no-restricted-imports` — `packages/*` may not import `apps/*`.
 - `no-restricted-syntax` — ban `innerHTML` in `apps/widget`.
 
-**Tests.** A deliberately bad file fails `pnpm lint` in CI.
+**`.gitattributes` is part of this task, not an afterthought.** `.editorconfig` and `.prettierrc` both declare LF, but neither controls what git writes to disk. With `core.autocrlf=true` — the Windows default — every file checks out as CRLF, so `prettier --check` fails permanently on a Windows machine while passing on the Linux CI runner that is supposed to be the gate; meanwhile `lint-staged` rewrites to LF on every commit and git converts back on every checkout. The three files must agree:
 
-**Files.** `eslint.config.js`, `.prettierrc`, `.husky/pre-commit`. **~70 lines.**
+```
+* text=auto eol=lf
+pnpm-lock.yaml linguist-generated=true -diff
+```
+
+Add `format:check` (`prettier --check .`) as its own script so the gate is runnable outside the hook, and run `git add --renormalize .` once when introducing this file. Put the spec document in `.prettierignore`: reformatting 380 KB of prose rewrites emphasis markers and re-pads every table, which is thousands of lines of diff on a file that is read rather than compiled.
+
+**Also configure `projectService.allowDefaultProject`** for root-level `*.config.ts`. Tooling configs (`vitest.config.ts`) belong to no tsconfig by design, and without this ESLint fails on them with "not found by the project service".
+
+**Tests.** A deliberately bad file fails `pnpm lint` in CI. `pnpm format:check` passes on a fresh clone **on Windows**, not only on the CI runner — that is the assertion that catches the CRLF trap, and checking only on Linux is how it stays hidden.
+
+**Files.** `eslint.config.js`, `.prettierrc`, `.prettierignore`, `.gitattributes`, `.husky/pre-commit`. **~85 lines.**
 
 ---
 
@@ -1444,11 +1469,21 @@ Root `package.json` is **private**, has no dependencies except devDeps, and decl
 
 **Why.** One runner, one coverage report; per-package thresholds get attached in P0-07.
 
-**How.** `defineWorkspace` listing `packages/*` and `apps/*`. Coverage provider `v8`, reporters `['text', 'json-summary', 'lcov']` — `json-summary` is what the gate script reads. Separate `environment` per project: `node` for packages and api, `jsdom` for dashboard and widget.
+**How.** One root `vitest.config.ts`. **Do not use `defineWorkspace` or `vitest.workspace.ts`** — that API was deprecated in Vitest 3 and removed in Vitest 4, where the file is a hard error. The replacement is `test.projects` in the root config, listing each package with its own `environment`: `node` for `packages/*`, `apps/api` and `apps/worker`; `jsdom` for `apps/dashboard` and `apps/widget`.
 
-**Tests.** One trivial passing test per package proves wiring.
+Coverage provider `v8`, reporters `['text', 'json-summary', 'lcov']` — `json-summary` is what the P0-07 gate script reads, `lcov` feeds PR annotation, `text` is for humans. Set `coverage.all: true`: without it, a file with no test at all is simply absent from the report, so coverage can be raised by deleting tests.
 
-**Files.** `vitest.workspace.ts`, `vitest.config.ts`. **~50 lines.**
+Tests live in each package's `test/` directory — inside `tsconfig.json`, outside `tsconfig.build.json` (see P0-02). Browser-side packages need `lib: ["ES2023", "DOM", "DOM.Iterable"]`, since the base config is ES-only and `document` otherwise does not typecheck.
+
+**`pnpm test` runs Vitest directly, not through Turbo.** One runner and one coverage report is the point of this task; routing through a per-package Turbo task fragments the report into eight partial ones. The cost is stated plainly: **no Turbo cache for the test run** — see P0-07.
+
+**Do not add `@types/node` here.** It is tempting for a wiring test that asserts on `process`, but it pulls Node globals into the browser-side packages' scope. Assert the environment split with `'document' in globalThis` / `'window' in globalThis` instead, and let `@types/node` arrive with the first real Node code.
+
+**Tests.** One trivial passing test per package, each asserting **its own** environment — node projects assert the DOM is absent, jsdom projects build and query a real element. A test that merely passes proves the runner started; these prove each project got the environment it was configured for.
+
+Separately, prove the coverage instrumentation before P0-07 is built on it, since an empty report reads identically to a working one when every source file is still a stub: add a throwaway file with one tested and one untested branch plus a second file with no test at all, confirm the report shows partial and zero coverage respectively, then delete both.
+
+**Files.** `vitest.config.ts`, one `test/index.test.ts` per package. **~55 lines.**
 
 ---
 
@@ -1472,11 +1507,15 @@ Root `package.json` is **private**, has no dependencies except devDeps, and decl
 
 **Why.** The coverage bars are the mechanism behind "every feature tested". Unenforced thresholds are decoration.
 
-**How.** Vitest cannot express *different* thresholds per package in one run cleanly, so put `coverage.thresholds` in each package's own config and let Vitest fail per project. Add `scripts/check-coverage.mjs` that reads each `coverage-summary.json` and fails with a table showing package, metric, actual, required — a reviewer should see *which* package regressed without opening logs. Wire Turbo remote cache via `TURBO_TOKEN`/`TURBO_TEAM`.
+**How.** Vitest applies `coverage` at the root of a projects run, not per project, so per-package thresholds cannot come from Vitest config at all — they live entirely in `scripts/check-coverage.mjs`. That script reads the **single** root `coverage/coverage-summary.json` written by P0-05, groups its per-file entries by package, and fails with a table showing package, metric, actual, required — a reviewer should see *which* package regressed without opening logs.
 
-**Tests.** Temporarily drop a threshold to prove the gate fails, then restore.
+**Normalise the paths.** The keys in `coverage-summary.json` are absolute native paths — on Windows, `C:\...\apps\api\src\index.ts` with backslashes. A grouping regex written against `/` matches nothing there, every package aggregates as empty, and the gate passes vacuously while reporting success. Strip the repo root and normalise separators before grouping, and assert the script found a non-zero file count per expected package — a gate that silently matches nothing is worse than no gate.
 
-**Files.** `.github/workflows/ci.yml`, `scripts/check-coverage.mjs`, per-package configs. **~90 lines.**
+**Turbo remote cache does not apply to the test job.** P0-05 runs tests as one root Vitest invocation, so there is no per-package task to cache; `TURBO_TOKEN`/`TURBO_TEAM` still pay off on `build`, `typecheck` and `lint`. Revisit only if the suite's wall-clock actually becomes the CI bottleneck, and revisit by measuring rather than by assuming.
+
+**Tests.** Temporarily drop a threshold to prove the gate fails, then restore. Also assert the vacuous-pass case explicitly: feed the script a summary whose paths match no known package and confirm it **fails** rather than reporting all-green.
+
+**Files.** `.github/workflows/ci.yml`, `scripts/check-coverage.mjs`. **~90 lines.**
 
 ---
 

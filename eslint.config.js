@@ -17,7 +17,10 @@ export default tseslint.config(
   {
     languageOptions: {
       parserOptions: {
-        projectService: true,
+        projectService: {
+          // Root-level tooling configs live in no tsconfig by design.
+          allowDefaultProject: ['*.config.ts', '*.config.mts', '*.config.js'],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
     },

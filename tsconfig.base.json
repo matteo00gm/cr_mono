@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
-    /* Language & Output */
+    /* Language & module resolution */
     "target": "ES2023",
     "module": "esnext",
     "moduleResolution": "bundler",
@@ -19,16 +19,6 @@
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
     "skipLibCheck": true,
-
-    /* Project references / Turborepo caching */
-    "composite": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-
-    /* Output */
-    "outDir": "dist",
-    "rootDir": "src",
 
     /* Interop */
     "esModuleInterop": true,

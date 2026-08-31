@@ -1,24 +1,14 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalDependencies": [
-    "tsconfig.base.json",
-    ".nvmrc"
-  ],
+  "globalDependencies": ["tsconfig.base.json", "tsconfig.emit.json", ".nvmrc"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**"]
+      "outputs": ["dist/**", "*.tsbuildinfo"]
     },
     "typecheck": {
       "dependsOn": ["^build"]
     },
-    "test": {
-      "dependsOn": ["^build"],
-      "outputs": ["coverage/**"]
-    },
-    "lint": {},
-    "clean": {
-      "cache": false
-    }
+    "lint": {}
   }
 }

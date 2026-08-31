@@ -1,10 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
+  /* Lint + typecheck project: sees tests, emits nothing. */
   "compilerOptions": {
-    "outDir": "dist",
-    "rootDir": "src",
+    "noEmit": true,
     "jsx": "react-jsx",
-    "jsxImportSource": "preact"
+    "jsxImportSource": "preact",
+    /* Browser-side app: the base config ships ES-only libs. */
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
-  "include": ["src"]
+  "include": ["src", "test"]
 }

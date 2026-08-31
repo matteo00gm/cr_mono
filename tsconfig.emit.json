@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  /*
+   * Emit policy for anything that ships. Extended only by per-package
+   * `tsconfig.build.json` files, which add their own `outDir`/`rootDir` —
+   * relative paths resolve against the config they are written in, so those
+   * two cannot live here.
+   */
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    /* Project references so Turborepo can cache per package */
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  }
+}

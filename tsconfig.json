@@ -1,13 +1,14 @@
 {
   "files": [],
+  /* Build graph: emit projects only. */
   "references": [
-    { "path": "packages/db" },
-    { "path": "packages/core" },
-    { "path": "packages/security" },
-    { "path": "packages/testing" },
-    { "path": "apps/api" },
-    { "path": "apps/worker" },
-    { "path": "apps/dashboard" },
-    { "path": "apps/widget" }
+    { "path": "packages/db/tsconfig.build.json" },
+    { "path": "packages/core/tsconfig.build.json" },
+    { "path": "packages/security/tsconfig.build.json" },
+    { "path": "packages/testing/tsconfig.build.json" },
+    { "path": "apps/api/tsconfig.build.json" },
+    { "path": "apps/worker/tsconfig.build.json" },
+    { "path": "apps/dashboard/tsconfig.build.json" },
+    { "path": "apps/widget/tsconfig.build.json" }
   ]
 }

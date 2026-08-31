@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.emit.json",
+  /* Emit project: production sources only — tests never reach `dist`. */
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"]
+}
