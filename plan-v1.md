@@ -1076,7 +1076,7 @@ Anti-rot checks in CI, each cheap:
 | P0-03 | Turborepo pipeline | `turbo.json`: build/typecheck/lint with correct `dependsOn`. No `test` task — tests are one root Vitest run (see P0-05) | 01 |
 | P0-04 | ESLint + Prettier | flat config, `lint-staged`, husky pre-commit, `.gitattributes` (`eol=lf`) | 02 |
 | P0-05 | Vitest workspace | root `vitest.config.ts` with `test.projects`, per-package environments, coverage provider | 02 |
-| P0-06 | CI: lint + typecheck | GitHub Actions, `--frozen-lockfile` | 03,04 |
+| P0-06 | CI: format + lint + typecheck | GitHub Actions, `--frozen-lockfile`, actions pinned to SHAs | 03,04 |
 | P0-07 | CI: test + coverage gates | Turbo remote cache; per-package thresholds from §6.2, PR-blocking | 05,06 |
 | P0-08 | 🔒 gitleaks + dep audit in CI | pre-commit hook plus CI scan; `pnpm audit`/OSV gate | 06 |
 | P0-09 | dependency-cruiser rules | forbid `packages/*` → `apps/*`; forbid raw DB pool outside `withTenant` | 06 |
@@ -1493,11 +1493,34 @@ Separately, prove the coverage instrumentation before P0-07 is built on it, sinc
 
 **Why.** Fastest signal; should fail in under two minutes.
 
-**How.** `actions/setup-node` with `cache: pnpm`, then `pnpm install --frozen-lockfile` (never plain `install` in CI — it can silently update the lockfile), then `pnpm turbo lint typecheck`. Add `concurrency: { group: ${{ github.ref }}, cancel-in-progress: true }` so pushes cancel superseded runs.
+**How.** `actions/setup-node` with `cache: pnpm`, then `pnpm install --frozen-lockfile` (never plain `install` in CI — it can silently update the lockfile, so the run stops testing the dependencies actually under review), then `pnpm turbo run lint typecheck`. One job, one install; Turbo runs both tasks in parallel off a single graph.
 
-**Tests.** The workflow itself.
+**Step order is load-bearing.** `pnpm/action-setup` must come **before** `actions/setup-node`. `cache: pnpm` shells out to pnpm to locate the store path, so pnpm has to be on `PATH` already; reversed, the cache step fails with an unhelpful error. `action-setup` needs no `version` input — it reads `packageManager` from `package.json`, which is the single source of truth.
 
-**Files.** `.github/workflows/ci.yml`. **~45 lines.**
+**Run `format:check` here too.** Prettier is otherwise enforced only by the `lint-staged` hook, and any contributor can skip a hook with `--no-verify`. Combined with the `.gitattributes` from P0-04, this is what makes the LF policy real rather than advisory.
+
+**Pin actions to full commit SHAs, with the version in a trailing comment.** A tag like `@v5` is mutable — whoever controls the tag controls what executes against our repository. P0-10 lists this as a Renovate concern, but the task that *introduces* an action is the one that should pin it; otherwise P0-10 has to go back and rewrite every workflow. The `# v5.1.0` comment is what Renovate reads to keep the pin current.
+
+**Also set** `concurrency: { group: ${{ github.workflow }}-${{ github.ref }}, cancel-in-progress: true }` so pushes cancel superseded runs — include the workflow name, or one workflow cancels a *different* workflow running against the same ref. Add `permissions: { contents: read }` (this job only reads the tree) and a `timeout-minutes` hang guard.
+
+**Scope stops at typecheck, deliberately.** Build, tests, coverage gates and the "no test artefacts in `dist`" assertion from P0-02 all belong to P0-07, where a build step exists to check them against.
+
+**A workflow file does not block a merge.** Everything Part 6 calls "PR-blocking" depends on the job being marked a **required status check** in the repository's branch-protection rules — which lives in GitHub settings and cannot be committed. Until `verify` is required on `main`, this workflow reports and nothing more. Configure it the moment the remote exists, together with linear history and no force-push to `main`; a red check that merges anyway is the purest form of decoration.
+
+**Tests.** The workflow cannot be proven by a green run — a green run only shows the gates did not fire. Prove each one *fails*, which is the property that matters:
+
+| Gate | Injected fault | Expected |
+|---|---|---|
+| `format:check` | unformatted file | non-zero exit |
+| `lint` | `innerHTML` in `apps/widget` | the P0-04 rule fires by name |
+| `typecheck` | `const x: number = 'str'` | `TS2322` |
+| `install --frozen-lockfile` | dependency added to `package.json` only | refuses, naming the drift |
+
+Then restore and confirm a clean tree. Also time a cold run (no Turbo cache, no `dist`) against the two-minute target.
+
+**One pre-flight check that can only fail in CI.** `pnpm/action-setup` downloads the exact version in `packageManager`, so that version must exist on the registry *and* its own `engines.node` must be satisfied by whatever `.nvmrc` resolves to. `pnpm@11.24.0` requires `node >=22.13`; a `.nvmrc` of `22` resolves to the latest 22.x and passes, but `engines.node: ">=22"` in `package.json` was looser than the package manager's own floor — so a developer on Node 22.5 gets a pnpm that refuses to start while CI stays green. Keep `engines.node` at or above the pinned pnpm's requirement.
+
+**Files.** `.github/workflows/ci.yml`. **~55 lines.**
 
 ---
 
@@ -1553,7 +1576,7 @@ Separately, prove the coverage instrumentation before P0-07 is built on it, sinc
 
 **Why.** Security patches arrive continuously; manual updates don't.
 
-**How.** Extend `config:recommended`. Group devDependencies into one weekly PR, auto-merge patch-level devDeps when CI is green, and **never** auto-merge anything in `packages/security` or a major version. Pin GitHub Actions to SHAs.
+**How.** Extend `config:recommended`. Group devDependencies into one weekly PR, auto-merge patch-level devDeps when CI is green, and **never** auto-merge anything in `packages/security` or a major version. Enable the `helpers:pinGitHubActionDigests` preset: workflows are already SHA-pinned at the task that introduced them (P0-06), so Renovate's job here is keeping those pins fresh — reading the `# vX.Y.Z` trailing comments — not introducing them.
 
 **Tests.** None.
 
@@ -4929,3 +4952,68 @@ pnpm mutation        # Stryker on packages/security
 8. In Stripe test mode, cancel the subscription. **Immediately** try sending a message — it must be refused with no model call. Then reload the host page after the 60 s edge TTL and confirm the widget renders the disabled state.
 9. Reactivate. Set the plan's message cap to 3, send 4 messages, confirm the 4th returns `429`/`QUOTA_EXCEEDED` and that no model call was billed.
 10. Create a second tenant with its own catalog. Using tenant B's dashboard token, attempt to fetch tenant A's product by id — expect `404`. Ask tenant B's widget a question that A's catalog answers well — confirm none of A's products appear.
+
+---
+
+## Part 11 — As-Built Log
+
+**Purpose.** Part 10 says what to build; this records what was actually built where the two diverged, and why. Every entry is a decision a future reader would otherwise have to reverse-engineer from the tree. The task sections in Part 10 have been edited in place to match reality — this log is the audit trail of *those* edits.
+
+Convention: **Δ** = deviation from the original spec · **+** = addition the spec did not call for · **⚠** = known-open item.
+
+### P0-01 · Repo init — amended in passing
+
+- **Δ** `engines.node` tightened from `>=22` to `>=22.13`. The pinned `packageManager` (`pnpm@11.24.0`) declares `engines.node: >=22.13`, so the looser range advertised support for Node versions on which pnpm itself refuses to start. CI never catches this — a `.nvmrc` of `22` resolves to the latest 22.x — so it would only ever bite a developer.
+- **+** Removed `apps/docs`: an empty directory with no `package.json`, absent from the workspace graph and from git.
+
+### P0-02 · TypeScript base config — restructured
+
+- **Δ** Four config layers instead of two. `tsconfig.base.json` now holds language and strictness only; a new root `tsconfig.emit.json` holds emit policy (`composite`, `declaration`, `declarationMap`, `sourceMap`); each package carries a `tsconfig.json` (lint + typecheck, includes `test`, `noEmit`) and a `tsconfig.build.json` (emit, `src` only).
+- **Why.** One config cannot serve both roles. Tests must be inside a tsconfig or `tsc` never checks them and ESLint's `projectService` errors on every test file — meaning the whole suite gets written without type safety. But tests must not be inside the config that emits, or compiled tests ship in `dist`. `projectService` has no glob-to-project routing, and tsconfig has no "check but do not emit this file" switch, so the two roles need two files.
+- **Δ** The root `tsconfig.json` references the `tsconfig.build.json` files — the emit graph — not the typecheck configs.
+- **Note.** `outDir`/`rootDir` deliberately stay in each package's build config. Relative paths in an extended config resolve against the file they are written in, so hoisting `outDir: "dist"` into `tsconfig.emit.json` would silently mean `<repo-root>/dist` for all eight packages.
+
+### P0-03 · Turborepo pipeline — reduced
+
+- **Δ** No `test` task. P0-05 settles on a single root Vitest run, so nothing per-package is left to cache; a task no package implements is dead config that reads as coverage.
+- **Δ** No `clean` task either — one root `rimraf --glob` replaced eight identical package scripts.
+- **+** `*.tsbuildinfo` added to `build.outputs`. It is what makes `tsc --build` incremental; a cache that restores `dist` without it forces a full recompile on the next run.
+- **+** `tsconfig.emit.json` added to `globalDependencies` alongside `tsconfig.base.json`.
+- **+** Cross-platform rule: package scripts must not use `rm -rf`. pnpm runs them through `cmd.exe` on Windows, where it does not exist. `rimraf` added as a root devDependency.
+
+### P0-04 · ESLint + Prettier + hooks — extended
+
+- **+** `.gitattributes` with `* text=auto eol=lf`. `.editorconfig` and `.prettierrc` both declared LF, but neither controls what git writes to disk: with `core.autocrlf=true` every file checked out as CRLF, so `prettier --check` failed permanently on Windows while passing on the Linux runner meant to be the gate, and `lint-staged` rewrote to LF on every commit only for git to convert it back. Introduced with a one-time `git add --renormalize .` and a repo-wide `prettier --write` across 28 previously-unformatted files.
+- **+** `format:check` script, so the formatting gate is runnable outside the hook and enforceable in CI.
+- **+** `plan-v1.md` added to `.prettierignore`. Formatting it rewrote emphasis markers and re-padded every table: 1,634 lines of diff on a document that is read, not compiled.
+- **+** `projectService.allowDefaultProject` for root-level `*.config.ts`. Tooling configs belong to no tsconfig by design, and ESLint otherwise fails on them with "not found by the project service".
+
+### P0-05 · Vitest workspace — the API changed under the plan
+
+- **Δ** No `vitest.workspace.ts`, no `defineWorkspace`. That API was deprecated in Vitest 3 and **removed in Vitest 4**, where the file is a hard error. Replaced by `test.projects` in a single root `vitest.config.ts`.
+- **Δ** `pnpm test` invokes Vitest directly rather than routing through Turbo. One runner and one coverage report is the point of the task; a per-package Turbo task fragments the report into eight partial ones. Cost accepted and recorded: no Turbo cache for the test run.
+- **+** `coverage.all: true`. Without it a file with no test is simply absent from the report, so coverage can be raised by deleting tests.
+- **+** Wiring tests assert **their own** environment: node projects assert the DOM is absent, jsdom projects build and query a real element. A merely-passing test proves the runner started, not that each project got the environment it was configured for.
+- **+** Coverage instrumentation probe-verified before P0-07 was built on it — a throwaway file with one tested and one untested branch, plus a second file with no test at all, confirmed partial and zero attribution respectively. An empty report is indistinguishable from a working one while every source file is still a stub.
+- **Δ** Declined `@types/node`, which a `process`-based environment assertion would have required: it pulls Node globals into the browser-side packages' scope. Asserted with `'document' in globalThis` instead.
+- **+** `lib: ["ES2023", "DOM", "DOM.Iterable"]` added to `apps/dashboard` and `apps/widget`; the base config is ES-only, so `document` otherwise does not typecheck.
+- **+** devDependencies added: `vitest`, `@vitest/coverage-v8`, `jsdom`, `rimraf`. Note: the first three were already sitting in `node_modules` from an abandoned attempt while absent from both `package.json` and the lockfile, alongside a stray root `coverage/` directory — all cleared before starting.
+
+### P0-06 · CI: format + lint + typecheck — hardened
+
+- **+** All three actions pinned to full commit SHAs with `# vX.Y.Z` trailing comments, resolved against the GitHub API rather than guessed: `actions/checkout` v5.1.0, `pnpm/action-setup` v4.3.0, `actions/setup-node` v5.0.0. P0-10 lists pinning as a Renovate concern, but the task that *introduces* an action is the one that should pin it, or P0-10 has to rewrite every workflow. A mutable tag means whoever controls the tag controls what executes against this repository.
+- **+** `format:check` runs in CI. Prettier was otherwise enforced only by the `lint-staged` hook, which any contributor can skip with `--no-verify`.
+- **Δ** `concurrency.group` is `${{ github.workflow }}-${{ github.ref }}`, not the spec's bare `${{ github.ref }}`. Without the workflow name, the P0-08 security workflow and this one would cancel each other on the same ref.
+- **+** `permissions: { contents: read }` and `timeout-minutes: 10`.
+- **+** Documented the load-bearing step order: `pnpm/action-setup` must precede `actions/setup-node`, because `cache: pnpm` shells out to pnpm to locate the store and fails obscurely if pnpm is not yet on `PATH`.
+- **+** Every gate tested by injected fault rather than by a green run — unformatted file, `innerHTML` in `apps/widget`, `const x: number = 'str'`, and a dependency added to `package.json` only. All four fail with non-zero exit. A green run only proves the gates did not fire.
+- **+** Recorded that branch protection is not committable: until the `verify` job is a required status check, every "PR-blocking" gate in Part 6 reports and nothing more.
+
+### ⚠ Open items
+
+| Item | Owner | Note |
+|---|---|---|
+| CI has never executed | needs a push | `.github/workflows/ci.yml` is not yet on `origin`; the repository reports zero workflow runs. Action resolution at the pinned SHAs, and `cache: pnpm` against a real store, remain unproven. |
+| Branch protection not configured | repository settings | `verify` must be a required status check on `main` before any gate in Part 6 actually blocks a merge. |
+| `packages/rag` does not exist | P1 | §6.2 sets a coverage bar for it; the package arrives with the RAG work. |
+| Per-package coverage thresholds | P0-07 | Cannot come from Vitest config — `coverage` applies at the root of a projects run. They live entirely in `scripts/check-coverage.mjs`, which must normalise native path separators or it passes vacuously on Windows. |

@@ -1,0 +1,55 @@
+name: CI
+
+# Fastest possible signal on a PR: formatting, lint and typecheck.
+# Tests and coverage gates land in their own workflow (P0-07).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs: a second push to the same branch makes the first
+# run's answer worthless. Keyed on the workflow as well as the ref, so this
+# never cancels a *different* workflow running against the same commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: this workflow only reads the tree.
+permissions:
+  contents: read
+
+env:
+  # Keep CI logs free of telemetry notices.
+  TURBO_TELEMETRY_DISABLED: 1
+  DO_NOT_TRACK: 1
+
+jobs:
+  verify:
+    name: Format, lint, typecheck
+    runs-on: ubuntu-latest
+    # Target is under two minutes; this is a hang guard, not a budget.
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # Must precede setup-node: `cache: pnpm` shells out to pnpm to locate
+      # the store, so pnpm has to be on PATH before that step runs.
+      # Version comes from `packageManager` in package.json.
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # Never plain `install` in CI — it can silently update the lockfile,
+      # so the run would no longer be testing the dependencies under review.
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      # One Turbo invocation runs both tasks in parallel and reuses the cache.
+      - name: Lint and typecheck
+        run: pnpm turbo run lint typecheck

@@ -6,7 +6,7 @@
   "description": "AI Sommelier — Multi-Tenant SaaS RAG Platform",
   "packageManager": "pnpm@11.24.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "scripts": {
     "build": "turbo run build",
