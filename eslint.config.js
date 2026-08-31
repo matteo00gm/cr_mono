@@ -5,7 +5,19 @@ import eslintConfigPrettier from 'eslint-config-prettier';
 export default tseslint.config(
   // Global ignores
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/.turbo/**', '**/.sst/**', '**/coverage/**'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/.turbo/**',
+      '**/.sst/**',
+      '**/coverage/**',
+      // SST owns these. They depend on globals ($config, $app, sst.aws.*)
+      // typed by .sst/platform/config.d.ts, which `sst install` generates and
+      // git ignores — so they belong to no tsconfig and type-aware rules have
+      // no program to resolve against. `sst diff` is what checks them.
+      'sst.config.ts',
+      'infra/**',
+    ],
   },
 
   // Base recommended rules for all TS files

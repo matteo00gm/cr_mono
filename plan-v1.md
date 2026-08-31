@@ -1647,9 +1647,13 @@ Do not settle for validating `renovate.json` against `renovate-schema.json` with
 
 **How.** In `app()`, return `{ name, home: 'aws', providers: { aws: { region, defaultTags: { tags: { env: $app.stage, service: 'sommelier' } } } } }`. `defaultTags` applies to every resource without per-resource repetition. `removal: $app.stage === 'prod' ? 'retain' : 'remove'` so a stray `sst remove` cannot delete the production database.
 
-**Tests.** `sst deploy --stage dev` succeeds; verify tags on a resource in the console.
+**Use `input.stage`, not `$app.stage`, inside `app()`.** `$app` is not populated while the app config is still being computed; the removal guard has to read the input.
 
-**Files.** `sst.config.ts`. **~50 lines.**
+**Guard both spellings of the production stage.** The check is an exact string match, so a stage deployed as `production` rather than `prod` falls through to `removal: 'remove'`. A naming slip should not be the thing that decides whether the production database can be deleted. Pair `removal: 'retain'` with `protect: true` as well — they fail differently: `retain` survives an intentional teardown, `protect` refuses the accidental one.
+
+**Tests.** `sst deploy --stage dev` succeeds; verify tags on a resource in the console. Note what this means: the acceptance test needs AWS credentials and creates billable resources, so it cannot be satisfied by CI-as-configured or by anyone without account access. Until it runs, the file is verified only by checking each option against the SST source for the pinned version.
+
+**Files.** `sst.config.ts`. **~75 lines.**
 
 ---
 
@@ -5110,10 +5114,22 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **Δ** Validated with `renovate-config-validator` rather than a JSON-schema check, after discovering the schema route is partly vacuous: recursive `$ref`s mean `packageRules` contents are unvalidated under draft-07, and a deliberately wrong `automerge: "yes"` passed. The real validator names the path and exits non-zero. Also had to drop the filename argument, which switches it into global-config mode.
 - **Judgment call to review:** `rangeStrategy: "bump"` rewrites the manifest range on every update rather than relying on the lockfile alone. It keeps `package.json` honest about what is actually installed, at the cost of more manifest churn. `timezone` is set to `Europe/Rome`, inferred from the plan's market rather than stated anywhere.
 
+### P0-11 · SST init + stages — implemented, not deployed
+
+- **Δ** Pinned **SST v4.17.1**, not v3. The plan named v3; that line has moved on and v4 is the current release of the same Pulumi-based lineage. Every option used (`name`, `home`, `removal`, `protect`, `providers`) was checked against `platform/src/config.ts` at that exact tag, since the config cannot be typechecked locally.
+- **+** `protect: true` alongside `removal: 'retain'` for production. Not in the spec; they defend against different mistakes.
+- **+** The protected-stage set contains both `prod` and `production`, because the guard is an exact match and a stage-name slip would otherwise quietly make production removable.
+- **Δ** Region set to `eu-west-1` as an **assumption, not a plan decision** — §5 never pins one. It is the one input that must satisfy EU data residency, Bedrock model availability for the §5.3 default, and cost simultaneously. Named in a single constant with the reasoning inline; one line to change before the first deploy, a migration afterwards.
+- **Δ** `sst.config.ts` and `infra/**` are excluded from ESLint and from `pnpm typecheck`. They depend on globals (`$config`, `$app`, `sst.aws.*`) typed by `.sst/platform/config.d.ts`, which `sst install` generates and git ignores — so they belong to no tsconfig and type-aware rules have no program to resolve against. Recorded as an open item rather than left as an unexplained hole.
+- **⚠ Not deployed, and deliberately so.** `sst deploy` creates billable AWS resources and needs credentials. Verified only that the CLI loads (`sst 4.17.1`) and that every option exists in the pinned source.
+
 ### ⚠ Open items
 
 | Item | Owner | Note |
 |---|---|---|
+| SST config is not typechecked | later | `sst.config.ts` and `infra/**` are excluded from ESLint and typecheck; their types come from generated `.sst/platform`. Close it with an `sst install && tsc` step once SST is set up in CI. |
+| SST never deployed | needs AWS access | P0-11/P0-12 are verified against pinned SST source only. The plan's acceptance tests — tags visible in the console, zero NAT Gateways in the deployed stack — need credentials and create billable resources. |
+| AWS region is an assumption | needs a decision | `eu-west-1`, chosen in P0-11 because §5 pins no region. Confirm against Bedrock model availability for the §5.3 default before the first deploy; it is one line now and a migration later. |
 | OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |
 | Branch protection not configured | repository settings | **All four** checks must be required on `main` before any gate in Part 6 blocks a merge: `verify` and `test` from ci.yml, `secrets` and `dependencies` from security.yml. Requiring a subset leaves the rest advisory. GitHub offers only checks it has recently observed, so each becomes selectable after its first run — revisit this list whenever a job is added. |
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |
