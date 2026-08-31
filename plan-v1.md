@@ -1079,7 +1079,7 @@ Anti-rot checks in CI, each cheap:
 | P0-05 | Vitest workspace | root `vitest.config.ts` with `test.projects`, per-package environments, coverage provider | 02 |
 | P0-06 | CI: format + lint + typecheck | GitHub Actions, `--frozen-lockfile`, actions pinned to SHAs | 03,04 |
 | P0-07 | CI: test + coverage gates | Turbo remote cache; per-package thresholds from §6.2, PR-blocking | 05,06 |
-| P0-08 | 🔒 gitleaks + dep audit in CI | pre-commit hook plus CI scan; `pnpm audit`/OSV gate | 06 |
+| P0-08 | 🔒 gitleaks + dep audit in CI | pre-commit hook plus CI scan; `pnpm audit` gate with expiring allowlist; OSV informational | 06 |
 | P0-09 | dependency-cruiser rules | forbid `packages/*` → `apps/*`; forbid raw DB pool outside `withTenant` | 06 |
 | P0-10 | Renovate config | grouped, auto-merge patch only | 01 |
 | P0-11 | ⛔ SST init + stages | `sst.config.ts`, `dev`/`staging`/`prod`, mandatory `env`+`service` tags | 01 |
@@ -1566,11 +1566,42 @@ The first is the one people write; the second and third are the ones that actual
 
 **Why.** A leaked `sk_` or Stripe key in git history is unrecoverable — rotation is mandatory and the history keeps the secret. Cheapest possible control.
 
-**How.** `gitleaks protect --staged` in the pre-commit hook, `gitleaks detect` on full history in CI. Add a custom rule for our own key shapes (`pk_live_`, `sk_live_`) so our formats are caught, not just vendors'. Separately run `pnpm audit --audit-level=high` and OSV; fail on high/critical with an `allowlist.json` requiring an expiry date per entry, so exceptions cannot become permanent.
+**How.** `gitleaks git --staged` in the pre-commit hook, `gitleaks git` over full history in CI. Note the commands: v8.19 deprecated `detect` and `protect` in favour of `git`, `dir` and `stdin`, and the modern spelling of `protect --staged` is `git --staged`. Add a custom rule for our own key shapes (`pk_live_`, `sk_live_`) so our formats are caught, not just vendors'. Separately run `pnpm audit` and OSV; fail on high/critical with an `audit-allowlist.json` requiring an expiry date per entry, so exceptions cannot become permanent.
 
-**Tests.** A fixture file containing a fake `sk_live_` is detected. Keep it out of the scanned path or the scanner flags itself.
+**Three details that decide whether the secret scan is real:**
 
-**Files.** `.gitleaks.toml`, `.husky/pre-commit`, `.github/workflows/security.yml`. **~60 lines.**
+- **`fetch-depth: 0` on checkout.** The default shallow clone contains exactly one commit, so a "full history" scan against it passes while checking almost nothing. This is the single easiest way to ship a secret gate that does nothing.
+- **`--redact` on every invocation.** Gitleaks prints the matched secret by default. Without redaction the gate reports a leak by copying it into a public build log, and into local terminal scrollback for the hook.
+- **A 24-character floor on the key regexes.** This is what keeps documentation scannable without path exceptions: the plan's own `pk_live_9f3a…` example is four characters and cannot match, while no real key is that short. Verified against the full working tree and every commit before merging.
+
+**No entropy floor on our own two rules.** The prefixes are specific enough that entropy adds nothing, and an entropy threshold introduces the one failure mode a secret scanner must not have — a false negative.
+
+**`pk_` deserves a rule but not the same reading as `sk_`.** It is public by construction (§3.2); it ships inside a script tag on the seller's page. A match is still worth blocking, because a real publishable key in this repo is almost always someone pasting a live tenant's key into a fixture that then outlives the tenant — but it is a hygiene finding, not an exposure.
+
+**The hook fails hard when gitleaks is absent.** Not a warning, not a skip. A hook that passes quietly when its scanner is missing is worse than no hook, because it reports a property it never checked. `winget install Gitleaks.Gitleaks` on Windows, `brew install gitleaks` on macOS. `git commit --no-verify` remains the honest escape hatch, and CI still catches anything pushed through it — just after the secret is already unrecoverable.
+
+**The allowlist needs a horizon cap, not only an expiry.** An expiry date alone does not stop an exception becoming permanent: nothing prevents `2099-01-01`. `scripts/check-audit.mjs` rejects any entry expiring more than **90 days** out, rejects a missing or placeholder `reason`, and fails on an expired entry so CI goes red until someone re-decides. Stale entries — ones whose advisory no longer appears — are reported but not fatal: an advisory disappearing is good news, and failing the build for it would punish the fix.
+
+**OSV runs informational, deliberately.** `osv-scanner scan` has no severity threshold (`--min-severity` belongs to `osv-scanner fix`), so blocking on it would fail the build on low-severity findings and contradict the high/critical policy enforced beside it. An inconsistent gate is the kind that gets deleted. `pnpm audit` plus the allowlist blocks; OSV reports. Make it blocking once its JSON output is filtered by severity.
+
+**Install both scanners as pinned binaries with verified checksums**, not as third-party actions: no licensing coupling (gitleaks-action requires a licence key for organisations), and the checksum is the actual supply-chain control.
+
+**Tests.** A secret scanner that silently stops matching is indistinguishable from a clean repository, so the rules assert themselves on every CI run rather than at review time only. Two steps: a fixture containing a synthetic `sk_live_` must be detected, and a file of ordinary code must not be — the second catches an over-broad rule, which is how false positives train people to ignore the gate.
+
+**Build the fixture at runtime.** A literal key-shaped string committed anywhere in the repo — the workflow file included — is found by the history scan, which is the plan's own warning about the scanner flagging itself. `printf 'sk_live_%s' "$(openssl rand -hex 16)"` never puts a matching string on disk, since `%` is outside the character class.
+
+The dependency gate's failure paths are exercised against fixtures, because there are no real advisories to wait for:
+
+| Case | Expected |
+|---|---|
+| high advisory, no allowlist entry | exit 1, table naming advisory, package, severity |
+| same advisory, valid 45-day entry | exit 0, listed as accepted |
+| entry expired | exit 1, naming how many days ago |
+| entry expiring beyond the 90-day cap | exit 1 |
+| entry with a placeholder `reason` | exit 1 |
+| entry matching no advisory | exit 0, reported as deletable |
+
+**Files.** `.gitleaks.toml`, `.husky/pre-commit`, `.github/workflows/security.yml`, `audit-allowlist.json`, `scripts/check-audit.mjs`, `scripts/lib/report.mjs`. **~330 lines.** The allowlist validator is most of the overage, and it is the part that makes the expiry rule more than a comment.
 
 ---
 
@@ -5041,11 +5072,27 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **+** `dist`-hygiene assertion moved into CI, guarding the P0-02 emit split from silent regression.
 - **Δ** Two parallel jobs rather than a chain. See the task section for the reasoning.
 
+### P0-08 · gitleaks + dependency audit — implemented
+
+- **Δ** Commands updated for gitleaks 8.30: `gitleaks git --staged` and `gitleaks git`, not the `protect`/`detect` spellings in the original spec — deprecated since v8.19. Verified against the v8.30.1 source, since a wrong flag makes the hook a no-op.
+- **+** `fetch-depth: 0` on the secret-scan checkout. Without it the "full history" scan sees one commit. This is the defect most likely to make a secret gate silently useless, and nothing about a green run reveals it.
+- **+** `--redact` everywhere. Gitleaks prints matched secrets by default; the unredacted gate reports a leak by writing it into a public build log.
+- **+** A 24-character floor on both key regexes, which is what lets the plan's own `pk_live_9f3a…` example coexist with the rule and needs no path exception. Verified by running both regexes over the full working tree and every commit on every branch: zero matches, with a positive control proving the pattern itself was not broken.
+- **+** Self-asserting rules: CI proves the `sk_live_` rule fires on a runtime-generated fixture **and** does not fire on ordinary code. The fixture is assembled with `printf 'sk_live_%s'` so no matching string is ever committed — the scanner-flags-itself trap the spec warns about.
+- **Δ** The hook fails hard when gitleaks is missing rather than warning. Consequence accepted: a contributor cannot commit until they install it. A hook that passes quietly without its scanner reports a property it never checked.
+- **+** The allowlist enforces a **90-day horizon cap**, not just an expiry. An expiry alone permits `2099-01-01`; the cap is the half that actually forces a re-decision. Also rejects placeholder reasons, and treats a stale entry as informational rather than fatal so that fixing an advisory does not turn CI red.
+- **Δ** OSV is informational, not blocking. `osv-scanner scan` has no severity threshold — `--min-severity` is a `fix` flag — so blocking would fail builds on low-severity findings while the neighbouring step enforces high/critical only. Recorded as an open item rather than quietly dropped.
+- **+** Both scanners installed as checksum-verified pinned binaries rather than third-party actions, avoiding gitleaks-action's organisation licence requirement.
+- **+** Extracted `scripts/lib/report.mjs`; the coverage gate from P0-07 was refactored onto it rather than having the table renderer copied. Both gate paths re-verified after the refactor.
+
 ### ⚠ Open items
 
 | Item | Owner | Note |
 |---|---|---|
-| Branch protection not configured | repository settings | **Both** `verify` and `test` must be required status checks on `main` before any gate in Part 6 actually blocks a merge — requiring only one leaves the other advisory. GitHub offers only checks it has recently observed, so `test` becomes selectable after its first run. |
+| OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |
+| gitleaks not installed locally | developer machines | The pre-commit hook fails hard without it: `winget install Gitleaks.Gitleaks`. Until then every commit needs `--no-verify`, which defeats the control. |
+| Secret scan unproven against a real run | needs a push | The rules and the history are verified locally by regex, but gitleaks itself has never executed — no binary on this machine. First CI run is the real test. |
+| Branch protection not configured | repository settings | **All four** checks must be required on `main` before any gate in Part 6 blocks a merge: `verify` and `test` from ci.yml, `secrets` and `dependencies` from security.yml. Requiring a subset leaves the rest advisory. GitHub offers only checks it has recently observed, so each becomes selectable after its first run — revisit this list whenever a job is added. |
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |
 | Turbo remote cache not enabled | repository secrets | `TURBO_TOKEN` / `TURBO_TEAM` are referenced by the workflow but unset, so Turbo uses its local cache only. Harmless; wire it when CI wall-clock starts to matter. |
 | Coverage bars are untested against real code | P1 | Every source file is still `export {}`, so all bars sit at 100% of nothing. The gate's failure path is proven against injected faults, but the bars themselves only start biting when real code lands. |

@@ -1,0 +1,57 @@
+# Secret scanning config (P0-08).
+#
+# Runs in two places: `gitleaks git --staged` in the pre-commit hook, which is
+# the control that actually matters, and `gitleaks git` over full history in
+# CI. The hook is primary — once a secret reaches a pushed commit it is in the
+# history permanently and rotation is mandatory, so CI catching it is already
+# too late to prevent the incident.
+
+title = "catalogorosso"
+
+# Vendor rules (AWS, Stripe, GitHub, Slack, private keys, ...) come from the
+# bundled default config. Ours are additive.
+[extend]
+useDefault = true
+
+# --- Our own key shapes -------------------------------------------------------
+#
+# `keywords` is a required pre-filter: gitleaks only evaluates the regex on
+# chunks containing one, which is what keeps full-history scans fast.
+#
+# No `entropy` floor on these two. The prefix is already highly specific, and
+# an entropy threshold buys nothing while risking a false *negative* — the one
+# kind of failure a secret scanner must not have.
+
+[[rules]]
+id = "catalogorosso-secret-key"
+description = "Catalogorosso secret API key (sk_live_) — server-side only, never in a repo"
+regex = '''sk_live_[A-Za-z0-9]{24,}'''
+keywords = ["sk_live_"]
+tags = ["catalogorosso", "secret-key", "critical"]
+
+# `pk_` is public by construction (§3.2) — it ships inside a script tag on the
+# seller's own page, so a match here is not an exposure in the way sk_ is.
+# It is still a finding: a real publishable key committed to this repo is
+# almost always someone pasting a live tenant's key into a test, which
+# identifies a customer and tends to end up in a fixture that outlives them.
+[[rules]]
+id = "catalogorosso-publishable-key"
+description = "Catalogorosso publishable key (pk_live_) — public by design, but not ours to commit"
+regex = '''pk_live_[A-Za-z0-9]{24,}'''
+keywords = ["pk_live_"]
+tags = ["catalogorosso", "publishable-key"]
+
+# --- Allowlist ----------------------------------------------------------------
+#
+# The 24-character floor above is what keeps documentation safe: the plan's own
+# example, `pk_live_9f3a...`, is four characters and cannot match. That is a
+# deliberate property, not luck — truncated illustrative keys stay legible in
+# docs without needing a path exception, and no real key is that short.
+[allowlist]
+description = "Lockfiles and build output carry no hand-written secrets"
+paths = [
+  '''pnpm-lock[.]yaml''',
+  '''(^|/)dist/''',
+  '''(^|/)coverage/''',
+  '''(^|/)node_modules/''',
+]

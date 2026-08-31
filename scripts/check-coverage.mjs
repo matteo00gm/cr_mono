@@ -14,6 +14,7 @@
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
+import { die as reportDie, table } from './lib/report.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
 const METRICS = ['lines', 'statements', 'functions', 'branches'];
@@ -42,10 +43,7 @@ const THRESHOLDS = {
   },
 };
 
-const die = (msg) => {
-  console.error('\n  coverage gate failed: ' + msg + '\n');
-  process.exit(1);
-};
+const die = (msg) => reportDie('coverage gate failed: ' + msg);
 
 /** Workspace packages actually present on disk. */
 const discover = () =>
@@ -75,17 +73,6 @@ const toPackage = (key) => {
 };
 
 const pct = (covered, total) => (total === 0 ? 100 : (covered / total) * 100);
-
-const table = (headers, rows) => {
-  const all = [headers, ...rows];
-  const w = headers.map((_, i) => Math.max(...all.map((r) => String(r[i]).length)));
-  const line = (r, pad) => '  ' + r.map((c, i) => String(c)[pad](w[i])).join('  ');
-  return [
-    line(headers, 'padEnd'),
-    '  ' + w.map((n) => '-'.repeat(n)).join('  '),
-    ...rows.map((r) => line(r, 'padEnd')),
-  ].join('\n');
-};
 
 // ------------------------------------------------------------------ load
 const summaryPath = process.argv[2]

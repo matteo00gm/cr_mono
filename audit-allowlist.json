@@ -1,0 +1,20 @@
+{
+  "//": [
+    "Accepted dependency risks, enforced by scripts/check-audit.mjs.",
+    "",
+    "Every entry needs an id (GHSA or npm advisory id), the package, a real",
+    "reason, and an expiry no more than 90 days out. The expiry is the point:",
+    "an exception that cannot lapse is a permanently disabled gate. When one",
+    "expires, CI fails until someone re-decides — which is the review actually",
+    "happening rather than being intended.",
+    "",
+    "Example of a valid entry:",
+    "  {",
+    "    \"id\": \"GHSA-xxxx-xxxx-xxxx\",",
+    "    \"package\": \"some-transitive-dep\",",
+    "    \"reason\": \"Only reachable through a dev-only codepath; upstream fix lands in 2.4.\",",
+    "    \"expires\": \"2026-11-15\"",
+    "  }"
+  ],
+  "entries": []
+}
