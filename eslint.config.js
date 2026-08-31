@@ -37,7 +37,7 @@ export default tseslint.config(
   // so the project service is switched off for them rather than being fed a
   // synthetic default project.
   {
-    files: ['scripts/**/*.{js,mjs}'],
+    files: ['scripts/**/*.{js,mjs}', '*.mjs'],
     ...tseslint.configs.disableTypeChecked,
     languageOptions: {
       parserOptions: { projectService: false },

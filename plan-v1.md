@@ -1080,7 +1080,7 @@ Anti-rot checks in CI, each cheap:
 | P0-06 | CI: format + lint + typecheck | GitHub Actions, `--frozen-lockfile`, actions pinned to SHAs | 03,04 |
 | P0-07 | CI: test + coverage gates | Turbo remote cache; per-package thresholds from §6.2, PR-blocking | 05,06 |
 | P0-08 | 🔒 gitleaks + dep audit in CI | pre-commit hook plus CI scan; `pnpm audit` gate with expiring allowlist; OSV informational | 06 |
-| P0-09 | dependency-cruiser rules | forbid `packages/*` → `apps/*`; forbid raw DB pool outside `withTenant` | 06 |
+| P0-09 | dependency-cruiser rules | forbid `packages/*` → `apps/*`; keep core/security framework-free; forbid raw DB pool outside `withTenant`; no cycles | 06 |
 | P0-10 | Renovate config | grouped, auto-merge patch only | 01 |
 | P0-11 | ⛔ SST init + stages | `sst.config.ts`, `dev`/`staging`/`prod`, mandatory `env`+`service` tags | 01 |
 | P0-12 | SST: VPC | public/private subnets, no NAT Gateway | 11 |
@@ -1613,9 +1613,13 @@ The dependency gate's failure paths are exercised against fixtures, because ther
 
 **How.** Three rules: no `packages/*` → `apps/*`; no `packages/security` → `apps/*` or AWS SDK; and **no import of the raw Drizzle client outside `packages/db/src/with-tenant.ts`**. That third rule is the important one — it is what makes tenant isolation structurally enforced rather than a convention.
 
-**Tests.** A fixture violating each rule fails the check.
+**Two spellings of the same violation.** A relative import into `apps/` resolves to a path matching `^apps/`; a workspace-name import (`@catalogorosso/api`) resolves to `node_modules/@catalogorosso/api`, which that pattern never matches. ESLint's `no-restricted-imports` from P0-04 catches the second form and reports it earlier, in the editor — but this rule must cover both anyway, because this file is what a reader consults to learn the boundaries, and a hole here reads as permission.
 
-**Files.** `.dependency-cruiser.js`, CI step. **~70 lines.**
+**The `withTenant` rule must be written before the code it guards.** `packages/db/src/with-tenant.ts` does not exist until P0-19, and neither `pg` nor `drizzle-orm` is installed yet. Write the rule now regardless: the match pattern has to cover the module name both unresolved (`pg`) and resolved (`node_modules/pg/...`), or it will pass silently today and keep passing after the dependency is added. Verify with a fixture in both states, plus a positive control proving `with-tenant.ts` itself is still allowed — a rule that forbids everyone is as broken as one that forbids nobody.
+
+**Tests.** A fixture violating each rule fails the check — and one asserting the sanctioned path still works.
+
+**Files.** `.dependency-cruiser.mjs` (not `.js`: this package is `"type": "module"`, so a `.js` config is parsed as ESM and `module.exports` is undefined), CI step. **~90 lines.**
 
 ---
 
@@ -5084,6 +5088,15 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **Δ** OSV is informational, not blocking. `osv-scanner scan` has no severity threshold — `--min-severity` is a `fix` flag — so blocking would fail builds on low-severity findings while the neighbouring step enforces high/critical only. Recorded as an open item rather than quietly dropped.
 - **+** Both scanners installed as checksum-verified pinned binaries rather than third-party actions, avoiding gitleaks-action's organisation licence requirement.
 - **+** Extracted `scripts/lib/report.mjs`; the coverage gate from P0-07 was refactored onto it rather than having the table renderer copied. Both gate paths re-verified after the refactor.
+
+### P0-09 · dependency-cruiser boundaries — implemented
+
+- **Δ** `.dependency-cruiser.mjs`, not `.js`. The root package is `"type": "module"`, so a `.js` config is loaded as ESM and `module.exports` is not defined — the tool fails before reading a single rule.
+- **+** Rule 1 covers the workspace-name spelling (`@catalogorosso/api`) as well as `^apps/`. Only the relative form matched at first; the fixture for the other form passed cleanly, which is exactly the kind of hole that reads as permission. ESLint catches that spelling too, so the gap was covered in practice — but not in the file people read to learn the architecture.
+- **+** The framework rule covers `hono` as well as the AWS SDK, per the stated reason for the rule: core and security must be testable without HTTP *or* AWS, and the spec only named AWS.
+- **+** `no-circular` added — cheap while the tool is already here, and cycles are trivial to prevent and expensive to unpick.
+- **+** The `withTenant` rule matches both resolved and unresolved module forms, since `pg` and `drizzle-orm` are not installed until P0-19. Written wrong, it would pass today and keep passing after the dependency arrived. Verified with a positive control: `packages/db/src/with-tenant.ts` importing `pg` produces no violation, while the same import anywhere else does.
+- **+** All four rules proven by fixture — 7 violations across 7 fixtures — then removed.
 
 ### ⚠ Open items
 

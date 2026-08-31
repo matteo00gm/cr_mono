@@ -66,6 +66,11 @@ jobs:
       - name: Lint root-level configs and scripts
         run: pnpm lint:root
 
+      # Architectural boundaries (P0-09). Separate from lint because these are
+      # graph properties across packages, which no per-file linter can see.
+      - name: Check architectural boundaries
+        run: pnpm boundaries
+
   test:
     name: Test and coverage gates
     runs-on: ubuntu-latest
