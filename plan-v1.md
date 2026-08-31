@@ -5008,12 +5008,12 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **+** Documented the load-bearing step order: `pnpm/action-setup` must precede `actions/setup-node`, because `cache: pnpm` shells out to pnpm to locate the store and fails obscurely if pnpm is not yet on `PATH`.
 - **+** Every gate tested by injected fault rather than by a green run — unformatted file, `innerHTML` in `apps/widget`, `const x: number = 'str'`, and a dependency added to `package.json` only. All four fail with non-zero exit. A green run only proves the gates did not fire.
 - **+** Recorded that branch protection is not committable: until the `verify` job is a required status check, every "PR-blocking" gate in Part 6 reports and nothing more.
+- **Verified in CI, 2026-08-31.** Both triggers exercised via PR #1 (merged as `bb40724`). The `pull_request` run completed in **26s** and the `push`-to-`main` run in **39s**, against a two-minute target. Every step succeeded: all three pinned SHAs resolved, `cache: pnpm` worked against a real store, `install --frozen-lockfile` took 3s, and `lint`+`typecheck` 11-16s. Caveat on the evidence: the step-level log endpoint requires authentication even on a public repository, so cache hit-versus-miss is not observable from outside CI - only that the step succeeded.
 
 ### ⚠ Open items
 
 | Item | Owner | Note |
 |---|---|---|
-| CI has never executed | needs a push | `.github/workflows/ci.yml` is not yet on `origin`; the repository reports zero workflow runs. Action resolution at the pinned SHAs, and `cache: pnpm` against a real store, remain unproven. |
-| Branch protection not configured | repository settings | `verify` must be a required status check on `main` before any gate in Part 6 actually blocks a merge. |
+| Branch protection not configured | repository settings | `verify` must be a required status check on `main` before any gate in Part 6 actually blocks a merge. Now actionable: GitHub only offers checks it has recently observed, and as of the PR #1 runs it has seen this one. |
 | `packages/rag` does not exist | P1 | §6.2 sets a coverage bar for it; the package arrives with the RAG work. |
 | Per-package coverage thresholds | P0-07 | Cannot come from Vitest config — `coverage` applies at the root of a projects run. They live entirely in `scripts/check-coverage.mjs`, which must normalise native path separators or it passes vacuously on Windows. |
