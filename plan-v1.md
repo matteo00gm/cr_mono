@@ -1631,9 +1631,11 @@ The dependency gate's failure paths are exercised against fixtures, because ther
 
 **How.** Extend `config:recommended`. Group devDependencies into one weekly PR, auto-merge patch-level devDeps when CI is green, and **never** auto-merge anything in `packages/security` or a major version. Enable the `helpers:pinGitHubActionDigests` preset: workflows are already SHA-pinned at the task that introduced them (P0-06), so Renovate's job here is keeping those pins fresh — reading the `# vX.Y.Z` trailing comments — not introducing them.
 
-**Tests.** None.
+**Tests.** Validate with the authoritative tool, not a JSON-schema check: `npx --package renovate renovate-config-validator`. And run it **without** a filename argument — passing one makes it validate the file as a *global* config, which has a different key set than a repository config, so a repo-only mistake can pass.
 
-**Files.** `renovate.json`. **~30 lines.**
+Do not settle for validating `renovate.json` against `renovate-schema.json` with a generic validator. The schema uses recursive `$ref`s, and under draft-07 a `$ref` suppresses its sibling keywords, so `packageRules` contents go completely unchecked: `"automerge": "yes"` passes. Confirmed here — the generic check accepted it, and the real validator rejected it by name. A validation step that silently covers only the top level is worse than none, because it is reported as green.
+
+**Files.** `renovate.json`. **~60 lines.**
 
 ---
 
@@ -5087,6 +5089,7 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **+** The allowlist enforces a **90-day horizon cap**, not just an expiry. An expiry alone permits `2099-01-01`; the cap is the half that actually forces a re-decision. Also rejects placeholder reasons, and treats a stale entry as informational rather than fatal so that fixing an advisory does not turn CI red.
 - **Δ** OSV is informational, not blocking. `osv-scanner scan` has no severity threshold — `--min-severity` is a `fix` flag — so blocking would fail builds on low-severity findings while the neighbouring step enforces high/critical only. Recorded as an open item rather than quietly dropped.
 - **+** Both scanners installed as checksum-verified pinned binaries rather than third-party actions, avoiding gitleaks-action's organisation licence requirement.
+- **Verified with the real binary, 2026-08-31.** gitleaks 8.30.1 installed locally (`winget`, same version as the CI pin). Full history: 13 commits, no leaks. The custom rule fires on its own — `--enable-rule catalogorosso-secret-key` alone exits 1 on the fixture — and the JSON report shows `Secret: REDACTED`, confirming `--redact` works. Ordinary code stays clean. The default ruleset also flags the fixture as `stripe-access-token`, since `sk_live_` is Stripe's shape too.
 - **+** Extracted `scripts/lib/report.mjs`; the coverage gate from P0-07 was refactored onto it rather than having the table renderer copied. Both gate paths re-verified after the refactor.
 
 ### P0-09 · dependency-cruiser boundaries — implemented
@@ -5098,13 +5101,20 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **+** The `withTenant` rule matches both resolved and unresolved module forms, since `pg` and `drizzle-orm` are not installed until P0-19. Written wrong, it would pass today and keep passing after the dependency arrived. Verified with a positive control: `packages/db/src/with-tenant.ts` importing `pg` produces no violation, while the same import anywhere else does.
 - **+** All four rules proven by fixture — 7 violations across 7 fixtures — then removed.
 
+### P0-10 · Renovate — implemented
+
+- **+** `helpers:pinGitHubActionDigests` plus a rule auto-merging action digest bumps: P0-06 pinned the actions by SHA, and a pin nobody refreshes becomes a stale pin, which is its own risk.
+- **+** `osvVulnerabilityAlerts` enabled, and `vulnerabilityAlerts` scheduled `at any time` so a security fix is never held behind the weekly devDependency window.
+- **Δ** Rule ordering is load-bearing: later `packageRules` win, so both "never auto-merge a major" and the `packages/security` rule must come *after* the auto-merge rule. Reversed, they are silently overridden.
+- **Note** The `packages/security` rule matches nothing today — every dependency lives in the root manifest, and that package declares none. It is in place so it already applies on the day that changes, rather than being remembered then.
+- **Δ** Validated with `renovate-config-validator` rather than a JSON-schema check, after discovering the schema route is partly vacuous: recursive `$ref`s mean `packageRules` contents are unvalidated under draft-07, and a deliberately wrong `automerge: "yes"` passed. The real validator names the path and exits non-zero. Also had to drop the filename argument, which switches it into global-config mode.
+- **Judgment call to review:** `rangeStrategy: "bump"` rewrites the manifest range on every update rather than relying on the lockfile alone. It keeps `package.json` honest about what is actually installed, at the cost of more manifest churn. `timezone` is set to `Europe/Rome`, inferred from the plan's market rather than stated anywhere.
+
 ### ⚠ Open items
 
 | Item | Owner | Note |
 |---|---|---|
 | OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |
-| gitleaks not installed locally | developer machines | The pre-commit hook fails hard without it: `winget install Gitleaks.Gitleaks`. Until then every commit needs `--no-verify`, which defeats the control. |
-| Secret scan unproven against a real run | needs a push | The rules and the history are verified locally by regex, but gitleaks itself has never executed — no binary on this machine. First CI run is the real test. |
 | Branch protection not configured | repository settings | **All four** checks must be required on `main` before any gate in Part 6 blocks a merge: `verify` and `test` from ci.yml, `secrets` and `dependencies` from security.yml. Requiring a subset leaves the rest advisory. GitHub offers only checks it has recently observed, so each becomes selectable after its first run — revisit this list whenever a job is added. |
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |
 | Turbo remote cache not enabled | repository secrets | `TURBO_TOKEN` / `TURBO_TEAM` are referenced by the workflow but unset, so Turbo uses its local cache only. Harmless; wire it when CI wall-clock starts to matter. |

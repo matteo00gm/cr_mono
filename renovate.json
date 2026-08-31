@@ -1,0 +1,53 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests", ":semanticCommits"],
+  "timezone": "Europe/Rome",
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 2,
+  "rangeStrategy": "bump",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  },
+  "packageRules": [
+    {
+      "description": "One weekly PR for every devDependency update. Individually they are noise; as a batch they are one review with one CI run.",
+      "matchDepTypes": ["devDependencies"],
+      "groupName": "devDependencies",
+      "schedule": ["before 6am on monday"]
+    },
+    {
+      "description": "Auto-merge patch, pin and digest updates to devDependencies once CI is green. Tooling patches are where the update cost exceeds the review value.",
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["patch", "pin", "digest"],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "description": "GitHub Action digests are pinned by P0-06 and kept fresh here. Safe to auto-merge: the digest is verified against the tag Renovate resolved it from.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest", "pin", "patch"],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "description": "Never auto-merge a major. A major is a behaviour change by definition, and the whole value of the gate is that a human reads the changelog.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "addLabels": ["major"]
+    },
+    {
+      "description": "Never auto-merge anything packages/security depends on, at any update level. Note: this matches nothing until that package declares its own dependencies, since they all currently live in the root manifest — the rule is here so it is already in place on the day it starts to matter.",
+      "matchFileNames": ["packages/security/**"],
+      "automerge": false,
+      "addLabels": ["security-critical"]
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": ["security", "vulnerability"],
+    "automerge": false,
+    "schedule": ["at any time"]
+  },
+  "osvVulnerabilityAlerts": true
+}
