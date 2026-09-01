@@ -1091,7 +1091,7 @@ Anti-rot checks in CI, each cheap:
 | P0-15 | SST: SSM paths + IAM | per-Lambda roles scoped to their parameter paths only | 11 |
 | P0-16 | SST: Budgets alarm | per stage; fail-loud if non-prod exceeds $15 | 11 |
 | P0-17 | SST: CloudFront skeleton | distribution + origins, no behaviours yet | 11 |
-| P0-17a | SST: chat behaviour (streaming) | `CachingDisabled` + compression off + ≥30s read timeout — **CloudFront buffers SSE otherwise** | 17 |
+| P0-17a | SST: chat behaviour (streaming) | `CachingDisabled` + compression off + ≥30s read timeout — **CloudFront buffers SSE otherwise**. **Blocked on the API Lambda origin** — a cache behaviour needs an origin to target, so this cannot land before P0-54 | 17, API origin |
 | P0-18 | ⛔ `packages/db`: Drizzle + pool | connection factory, env-driven config | 02,14 |
 | P0-19 | ⛔ 🔒 `withTenant()` helper | opens tx, `SET LOCAL app.tenant_id`, the **only** sanctioned DB entry point | 18 |
 | P0-20 | Migration: extensions | `vector`, `pg_trgm`, `unaccent`; confirm `halfvec` available | 18 |
@@ -1111,7 +1111,7 @@ Anti-rot checks in CI, each cheap:
 | P0-34 | 🔒 Migration: `rate_limit_buckets` | for the Postgres limiter (§5.7) | 22 |
 | P0-35 | 🔒 Migration: `token_revocations` | `jti` + expiry, for the sweep job | 22 |
 | P0-36 | Migration: `outbox` | | 26 |
-| P0-37 | ⛔ 🔒 RLS: enable + FORCE + policies | every tenant-scoped table; `USING` **and** `WITH CHECK` | 22–36 |
+| P0-37 | ⛔ 🔒 RLS: enable + FORCE + policies | every tenant-scoped table; `USING` **and** `WITH CHECK`; wrap the GUC read in `nullif(..., '')` or an ended transaction leaves `''` and the cast raises 22P02 | 22–36 |
 | P0-38 | 🔒 Test: RLS isolation | tenant B's context returns zero of A's rows, per table | 37 |
 | P0-39 | 🔒 Test: role privileges | `app_rw` lacks `BYPASSRLS`, is not table owner, has no DDL | 21,37 |
 | P0-40 | Test: migration up/down/up | on a seeded DB, in CI | 37 |
@@ -1830,7 +1830,17 @@ Three details that are the whole point:
 
 Every repository function takes `tx` as its first parameter. There is no ambient database access.
 
-**Tests.** Seed tenants A and B. `withTenant(A)` sees only A's rows. A nested `withTenant(B)` inside `withTenant(A)` throws rather than silently re-setting. After the transaction commits, a fresh query on the same pooled connection reads `current_setting('app.tenant_id', true)` as null. A non-UUID id throws.
+**Tests.** Seed tenants A and B. `withTenant(A)` sees only A's rows. A nested `withTenant(B)` inside `withTenant(A)` throws rather than silently re-setting. After the transaction commits, a fresh query on the same pooled connection no longer sees A's id. A non-UUID id throws.
+
+**Three things this suite gets wrong if written carelessly, each of which makes it pass while proving nothing:**
+
+- **Connect as a non-superuser.** Testcontainers' default user is a SUPERUSER, and superusers bypass RLS outright — `FORCE` does not apply to them. Written that way the policies are inert and every isolation assertion passes vacuously. Create the `app_rw` role from P0-21 in the fixture and run the assertions through it, asserting `rolsuper` and `rolbypassrls` are both false so the suite fails loudly if that ever regresses.
+- **`FORCE ROW LEVEL SECURITY`, not just `ENABLE`.** Without FORCE the table owner is exempt, which is the same failure wearing a different hat.
+- **Pool size 1.** With a larger pool the "context does not leak" assertion can pass by landing on a different connection than the one the transaction used.
+
+**The reverted GUC is an empty string, not null.** Once `app.tenant_id` has been set in a session, ending the transaction reverts it to `''` rather than unsetting it. So `current_setting('app.tenant_id', true)::uuid` raises `22P02` on the next query instead of matching no rows — an error where the policy should simply be false. Policies must read `nullif(current_setting('app.tenant_id', true), '')::uuid`, and this task's own assertion should be "no longer A's id" rather than "null".
+
+**Assert the emitted SQL, not the call count.** A unit test that checks `execute` was called once cannot see the third argument to `set_config`. Flip it from `true` to `false` and tenant context survives the transaction onto a pooled connection — while every mock-based test still passes. Render the statement and assert `SELECT set_config('app.tenant_id', $1, true)` with the id as a bound parameter.
 
 **Files.** `packages/db/src/with-tenant.ts`, `packages/db/test/with-tenant.spec.ts`. **~60 lines + ~110 test lines.**
 
@@ -5218,10 +5228,35 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **Note** The `costFilters` entry matches `user:env$<stage>`, which exists only because P0-11's `defaultTags` stamps it everywhere. If those tags regress, this budget watches an empty set and never fires — a monitoring failure whose only symptom is silence.
 - **✓ Deployed and verified.** Verified in `dev` stack on 2026-09-01: `BudgetAlertEmail` set via `sst secret`, SNS topic + email subscription dispatched and confirmed, AWS Monthly Cost Budget active with forecast/actual alerts.
 
+### Review of P0-17 to P0-19 (branches rebuilt)
+
+Reviewed as delivered, then rebuilt as three branches. P0-17a was dropped entirely rather than corrected.
+
+**Boundary enforcement had silently stopped working.**
+
+- **🔒 `exclude: { path: 'node_modules' }` in `.dependency-cruiser.mjs` made the raw-DB rule unfireable.** `exclude` removes modules from the graph, so no rule targeting an npm package can ever match. The rule passed for exactly as long as the driver was uninstalled — the P0-09 fixtures proved it worked *because* `pg` was absent then, and it went blind the moment P0-18 added a real driver. `doNotFollow` already prevents traversal; excluding as well is what caused the blindness.
+- **🔒 The rule named `pg`, but P0-18 chose postgres-js (`postgres`).** Even unblinded it would have matched nothing. Now covers `pg`, `postgres` and `drizzle-orm`, with `client.ts` added to the allowed set and `test/` exempted so the integration suite can drive a real connection.
+- **🔒 `packages/db/src/index.ts` re-exported `getDb`, `getSql` and `createDbClient`.** Any app could `import { getDb } from '@catalogorosso/db'` and query with no tenant context — and no import rule can catch it, because the app imports *this package*, not the driver. The guarantee has to hold at the export surface. `index.ts` now exports `withTenant`, its errors and types only.
+
+**The unit tests could not see the guarantee they existed for.** They asserted `execute` was called once, never what was executed. Flipping `is_local` from `true` to `false` left every test green while tenant context leaked onto the pooled connection. Added an assertion on the rendered SQL and bound parameters, plus an ordering test, and confirmed by mutation that the first one fails when `true` becomes `false`.
+
+**Added the integration suite the guarantee actually needs** — and it failed three times before passing, each failure a real finding: the superuser bypass, the empty-string GUC, and Drizzle burying the SQLSTATE under `cause`. All three are now written into the plan.
+
+**Dropped P0-17a rather than fixing it.** Its cache behaviour pointed `/v1/widget/chat` at the **S3 origin**, so chat requests would have hit the bucket, 404'd, and been rewritten to `index.html` with **200 OK** — the SPA served as a successful chat response. It also used the deprecated `forwardedValues` API instead of the `CachingDisabled` managed policy the task names, and omitted the ≥30s origin read timeout, which cannot be set without a custom origin. A cache behaviour needs an origin; it belongs with the API Lambda.
+
+**Flagged a distribution-wide hazard in P0-17.** `customErrorResponses` maps 403/404 to 200 `index.html` for *every* behaviour, not just S3. Correct for the SPA alone; the moment API paths join this distribution, every genuine API 404 becomes a 200 carrying HTML — silently breaking P4-15, whose point is that a cross-tenant id returns 404. Recorded in the file where the API origin will be added.
+
+**Other corrections.** `forceDestroy` on the dashboard bucket is now stage-conditional, matching the treatment of `removal: retain` and RDS deletion protection. `getDb(url?)` accepted a URL and ignored it once cached, silently returning the first connection; it now takes no arguments. Removed `getSql`, the `DbConfig` knobs nothing set, and the `__setDbForTests` backdoor — `withTenant` already accepts an injected database, so the seam was unused indirection.
+
+**Adding Testcontainers broke `pnpm install --frozen-lockfile`.** pnpm 11 exits non-zero on unapproved build scripts, including in CI. Recorded the decision in `pnpm-workspace.yaml` as `ignoredBuiltDependencies` rather than approving them — not running third-party postinstall scripts is the safer default anyway.
+
 ### ⚠ Open items
 
 | Item | Owner | Note |
 |---|---|---|
+| P0-17a blocked | needs the API origin | The streaming chat behaviour needs a Lambda Function URL origin to target. Land it with P0-54, using the `CachingDisabled` managed policy and a >=30s origin read timeout. |
+| CloudFront error mapping vs P4-15 | before the API joins the CDN | `customErrorResponses` is distribution-wide, so SPA 404->200 would turn API 404s into 200 HTML. Split the distribution or move SPA routing into a CloudFront Function. |
+| Integration suite not in CI | later | `pnpm test:integration` needs Docker and runs separately from `pnpm test`. GitHub runners have Docker; add it as its own job so the unit loop stays fast. |
 | Combined non-prod budget | needs an account-level resource | §5.8 targets $15 across all non-prod, but budgets are created per stage, so N stages can total N x $15 unnoticed. Needs one budget created outside per-stage IaC. |
 | `BudgetAlertEmail` secret unset | per stage | Set for `dev` stage during testing; must be set via `sst secret set BudgetAlertEmail <address>` before deploying any new stage. |
 | NAT: per-AZ count and no auto-replacement | needs a decision | Two `t4g.nano` instead of one (~$6-7 vs ~$3-4/month), and a dead NAT silently kills private-subnet egress with nothing to restore it. See P0-13 for the options. |
@@ -5232,4 +5267,4 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 | Branch protection not configured | repository settings | **All four** checks must be required on `main` before any gate in Part 6 blocks a merge: `verify` and `test` from ci.yml, `secrets` and `dependencies` from security.yml. Requiring a subset leaves the rest advisory. GitHub offers only checks it has recently observed, so each becomes selectable after its first run — revisit this list whenever a job is added. |
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |
 | Turbo remote cache not enabled | repository secrets | `TURBO_TOKEN` / `TURBO_TEAM` are referenced by the workflow but unset, so Turbo uses its local cache only. Harmless; wire it when CI wall-clock starts to matter. |
-| Coverage bars are untested against real code | P1 | Every source file is still `export {}`, so all bars sit at 100% of nothing. The gate's failure path is proven against injected faults, but the bars themselves only start biting when real code lands. |
+| Coverage bars now measure real code | **closed (2026-09-01)** | No longer 100% of nothing: `packages/core` 22/22 statements and `packages/db` 33/33 across 3 files, both at 100% against their 90% bars. `apps/*`, `packages/security` and `packages/testing` are still stubs, so their bars stay unexercised until code lands. |

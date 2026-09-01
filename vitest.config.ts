@@ -33,6 +33,8 @@ const project = (root: string, environment: 'node' | 'jsdom') => ({
     root,
     environment,
     include: ['test/**/*.test.ts'],
+    // Integration tests need Docker and run from vitest.integration.config.ts.
+    exclude: ['test/**/*.integration.test.ts'],
   },
 });
 

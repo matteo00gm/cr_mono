@@ -1,0 +1,20 @@
+import { defineConfig } from 'vitest/config';
+
+/**
+ * Integration suite: real Postgres via Testcontainers.
+ *
+ * Separate from `vitest.config.ts` so `pnpm test` stays fast and needs no
+ * Docker. §6.4 runs both in CI, in that order — a unit suite you hesitate to
+ * run is a unit suite that stops being run.
+ */
+export default defineConfig({
+  test: {
+    name: 'integration',
+    root: 'packages/db',
+    environment: 'node',
+    include: ['test/**/*.integration.test.ts'],
+    // Container start dominates; the assertions themselves are milliseconds.
+    testTimeout: 60_000,
+    hookTimeout: 180_000,
+  },
+});
