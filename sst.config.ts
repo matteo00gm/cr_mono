@@ -77,5 +77,6 @@ export default $config({
     await import('./infra/database');
     await import('./infra/config');
     await import('./infra/budgets');
+    await import('./infra/cdn');
   },
 });
