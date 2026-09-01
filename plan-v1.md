@@ -130,10 +130,15 @@ Every tenant-scoped table gets `tenant_id uuid not null` and an RLS policy. No e
 
 ```
 tenants          id, name, slug (citext), status, plan (nullable),
-                 stripe_customer_id, stripe_subscription_id, locale, currency,
-                 created_at, updated_at
+                 stripe_customer_id, stripe_subscription_id, trial_ends_at,
+                 locale, currency, created_at, updated_at
                  status: PENDING_VERIFICATION | TRIALING | ACTIVE | PAST_DUE
                        | DISABLED | CANCELED
+                 trial_ends_at arrives with P5-05, together with the
+                 tenant_status_coherent CHECK that is its only reader —
+                 see §5.2b. It is listed here because §5.2b's constraint
+                 refers to it, and a column named in a constraint but in
+                 no table listing reads as an omission.
 
 tenant_domains   id, tenant_id, origin (text, normalized serialized origin),
                  verification_method, verification_token, verified_at, status
@@ -835,6 +840,8 @@ ALTER TABLE tenants ADD CONSTRAINT tenant_status_coherent CHECK (
 ```
 `ACTIVE` without a subscription is by definition an orphaned state, and a `CHECK` makes it unreachable by any code path — including a future bug — rather than merely untested for.
 
+**`trial_ends_at` does not exist yet.** P0-22 ships `tenants` without it, deliberately: nothing before P5 sets `TRIALING`, so the column would sit unread and the CHECK above could not be added anyway — half a constraint is not a constraint. Both land together in **P5-05**. `tenants` holds a handful of rows, so adding a nullable column then costs nothing; this is not the `enriched_*` case in P0-26, where the argument for reserving early was the size of the table.
+
 ### 5.3 Cost levers, ranked by actual monthly impact
 
 Choosing a cheap model already captured the large win. What remains, against a **~$122/month** baseline:
@@ -1328,7 +1335,7 @@ Anti-rot checks in CI, each cheap:
 | P5-03 | 🔒 Webhook: raw-body signature verify | before any body parser touches it | P5-01 |
 | P5-03a | 🔒 SdI / FatturaPA e-invoicing bridge | async job on `invoice.paid` → Fatture in Cloud API to emit FatturaPA XML | P5-03,P5-04 |
 | P5-04 | 🔒 Webhook idempotency | `processed_webhooks`, replay is a no-op | P5-03 |
-| P5-05 | ⛔ Status state machine | TRIALING→ACTIVE→PAST_DUE→DISABLED→CANCELED; `tenant_status_coherent` CHECK; `livemode` + customer↔tenant binding | P5-04 |
+| P5-05 | ⛔ Status state machine | TRIALING→ACTIVE→PAST_DUE→DISABLED→CANCELED; **adds `tenants.trial_ends_at`** and the `tenant_status_coherent` CHECK that reads it (§5.2b); `livemode` + customer↔tenant binding | P5-04 |
 | P5-05a | 🔒 Payment-failure blocking | **no grace** — `PAST_DUE` blocks the widget on first failure; dashboard stays open; Stripe retries restore automatically (§5.2b) | P5-05 |
 | P5-06 | 🔒 Webhook fixture test suite | every transition; unsigned and mis-signed rejected | P5-05 |
 | P5-07 | Test: DISABLED propagation split | chat refused immediately; `/config` may lag 60 s | P5-05,P2-13 |
@@ -1977,6 +1984,8 @@ Migrations run as `app_migrate` (owner), the app connects as `app_rw`. `app_rw` 
 **How.** `id uuid primary key default gen_random_uuid()`, `name`, `slug citext unique`, `status` as a Postgres enum with the six values from §Data Model, `plan`, `stripe_customer_id unique`, `stripe_subscription_id unique`, `locale`, `currency`, timestamps. Default `status = 'PENDING_VERIFICATION'` so a half-created tenant is never accidentally serviceable. Use `citext` for `slug` so case-variant slugs cannot collide — an application that lowercases on write is one forgotten code path away from `Winery` and `winery` being two tenants.
 
 **`plan` is nullable.** *(Decision the original spec left open.)* A tenant exists from signup and chooses a plan later; null means "no subscription yet". Any non-null default reads downstream as an entitlement the tenant has not bought.
+
+**`trial_ends_at` is deliberately absent.** §5.2b's `tenant_status_coherent` CHECK refers to it, so its absence here looks like an oversight and is not: nothing before P5 sets `TRIALING`, the column would sit unread, and the CHECK cannot be added without the state machine that maintains it. Column and constraint land together in P5-05.
 
 **`updated_at` is maintained by a trigger, not by the application.** Drizzle's `$onUpdate` only fires for updates that go through Drizzle: a backfill in a migration, a correction applied with `psql`, or any raw statement leaves the column stale — and a timestamp that is right most of the time is worse than none, because it gets trusted. Add one `set_updated_at()` function in this PR and a `CREATE TRIGGER` per table thereafter, as a `--custom` migration alongside each table's generated one.
 
