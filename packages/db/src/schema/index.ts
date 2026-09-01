@@ -9,3 +9,4 @@
 export * from './memberships.js';
 export * from './tenant-domains.js';
 export * from './tenants.js';
+export * from './widget-keys.js';
