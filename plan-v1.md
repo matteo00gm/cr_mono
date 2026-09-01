@@ -1760,11 +1760,17 @@ Do not settle for validating `renovate.json` against `renovate-schema.json` with
 
 **Why.** §5.8 sets a target of under $15/month for non-prod. An unmonitored target is a wish, and a misconfigured NAT Gateway would blow it silently.
 
-**How.** `aws.budgets.Budget` filtered on the `env` tag from P0-11. Non-prod: $15 with alerts at 80% actual and 100% forecast. Prod: set from the §5.2a estimate (~$25) with headroom. Forecast alerts matter more than actual — they fire before the money is spent.
+**How.** `aws.budgets.Budget` filtered on the `env` tag from P0-11. Non-prod: $15 with alerts at 80% actual and 100% forecast. Prod: set from the §5.2a estimate (~$25) with headroom — put the threshold *above* the estimate rather than on it, because an alarm that fires on ordinary variance is muted within a month. Forecast alerts matter more than actual — they fire before the money is spent.
+
+**The tag filter is why P0-11 had to come first.** `costFilters` matches `user:env$<stage>`, which only exists because `defaultTags` stamps it on every resource. Get the tags wrong and this budget watches an empty set and never fires — a monitoring failure with no symptom.
+
+**§5.8's $15 is a combined non-prod figure, and a per-stage budget cannot express it.** Two non-prod stages at $15 each total $30 with nothing alarming. A budget spanning all non-prod stages belongs to no single stage's stack, so it cannot be created by per-stage IaC without every stage racing to own the same resource. Per-stage budgets give attribution; closing the combined gap needs one account-level budget created once, outside this config.
+
+**Do not commit an alert address.** Use `sst.Secret` so the destination is set per stage with `sst secret set`, rather than a personal email living in git.
 
 **Tests.** None automatable; verify the subscription email arrives.
 
-**Files.** `infra/budgets.ts`. **~40 lines.**
+**Files.** `infra/budgets.ts`. **~90 lines.**
 
 ---
 
@@ -5202,10 +5208,19 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **+** First real code with real tests: 9 tests, `packages/core` at **100% lines and branches** against its 90% bar — the first time the P0-07 coverage gate has measured anything.
 - **⚠ Not deployed.** Verified by `pnpm typecheck:infra` and the unit suite.
 
+### P0-16 · Budget alarms — implemented, not deployed
+
+- **Δ** Prod threshold set to $35 rather than the §5.2a estimate of ~$25. A threshold placed on the estimate fires on normal month-to-month variance, and an alarm that cries wolf gets muted — at which point the control is gone without anyone deciding to remove it.
+- **⚠ Found a gap between §5.8 and this task.** §5.8 targets "under $15/month for both environments combined"; P0-16 specifies a budget *per stage*. Two non-prod stages at $15 each pass while totalling $30. A cross-stage budget belongs to no single stage's stack, so per-stage IaC cannot create one without every stage fighting over the same resource. Implemented per-stage for attribution and recorded the gap rather than quietly redefining the target.
+- **+** Alerts go to an `sst.Secret`-provided address via SNS, so no personal email is committed. The stage fails loudly at deploy if it is unset, which is better than defaulting to nobody.
+- **Note** The `costFilters` entry matches `user:env$<stage>`, which exists only because P0-11's `defaultTags` stamps it everywhere. If those tags regress, this budget watches an empty set and never fires — a monitoring failure whose only symptom is silence.
+
 ### ⚠ Open items
 
 | Item | Owner | Note |
 |---|---|---|
+| Combined non-prod budget | needs an account-level resource | §5.8 targets $15 across all non-prod, but budgets are created per stage, so N stages can total N x $15 unnoticed. Needs one budget created outside per-stage IaC. |
+| `BudgetAlertEmail` secret unset | needs a value | `sst secret set BudgetAlertEmail <address>` per stage, or P0-16's alarms have no destination. |
 | NAT: per-AZ count and no auto-replacement | needs a decision | Two `t4g.nano` instead of one (~$6-7 vs ~$3-4/month), and a dead NAT silently kills private-subnet egress with nothing to restore it. See P0-13 for the options. |
 | Infra typecheck needs `sst install` in CI | later | `pnpm typecheck:infra` is local-only until CI runs `sst install` first; that download is the cost of enforcing it. |
 | SST never deployed | needs AWS access | P0-11/P0-12 are verified against pinned SST source only. The plan's acceptance tests — tags visible in the console, zero NAT Gateways in the deployed stack — need credentials and create billable resources. |
