@@ -7,4 +7,5 @@
  * generate will read the database as having drifted and try to drop it.
  */
 export * from './memberships.js';
+export * from './tenant-domains.js';
 export * from './tenants.js';

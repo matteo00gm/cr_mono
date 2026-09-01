@@ -29,6 +29,20 @@
       "when": 1788297731664,
       "tag": "0003_memberships_updated_at",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788297957117,
+      "tag": "0004_tenant_domains",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788297964324,
+      "tag": "0005_tenant_domains_updated_at",
+      "breakpoints": true
     }
   ]
 }
