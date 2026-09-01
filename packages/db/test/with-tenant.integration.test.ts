@@ -33,24 +33,30 @@ const TENANT_B = 'b0000000-0000-4000-8000-000000000002';
 // declaring them non-nullable made the guards in afterAll look redundant to
 // the linter while still being necessary at runtime.
 let container: StartedPostgreSqlContainer | undefined;
-/** Owns the schema. Superuser, so RLS never applies to it. */
-let admin: DbClient | undefined;
+/** Connects as `app_migrate`: owns the table, the way a migration would. */
+let migrator: DbClient | undefined;
 /** Connects as `app_rw`: no superuser, no BYPASSRLS, not the table owner. */
 let app: DbClient | undefined;
 /** Assigned in beforeAll; tests do not run if that failed. */
 let db: Database;
 
-const APP_ROLE = 'app_rw';
-const APP_PASSWORD = 'app_rw_password';
-
 beforeAll(async () => {
   const started = await startPostgres();
   container = started.container;
 
-  const adminClient = createDbClient(started.adminUrl, { max: 1 });
-  admin = adminClient;
+  /*
+   * Created as `app_migrate`, not as the superuser.
+   *
+   * The table is then owned the way a real one is: `app_rw` is not its owner,
+   * and every privilege it has on this table comes from the ALTER DEFAULT
+   * PRIVILEGES grant in bootstrap/0001 rather than from a grant written here.
+   * Creating it as the superuser would leave `app_rw` with no access at all,
+   * and hide whether that default grant works.
+   */
+  const migrateClient = createDbClient(started.roleUrl('app_migrate'), { max: 1 });
+  migrator = migrateClient;
 
-  await adminClient.db.execute(sql`
+  await migrateClient.db.execute(sql`
     create table products (
       id uuid primary key default gen_random_uuid(),
       tenant_id uuid not null,
@@ -59,16 +65,16 @@ beforeAll(async () => {
   `);
 
   // Seeded before RLS is enabled, because FORCE applies to the table owner too.
-  await adminClient.db.execute(sql`
+  await migrateClient.db.execute(sql`
     insert into products (tenant_id, name) values
       (${TENANT_A}::uuid, 'Barolo'),
       (${TENANT_A}::uuid, 'Barbaresco'),
       (${TENANT_B}::uuid, 'Chianti')
   `);
 
-  await adminClient.db.execute(sql`alter table products enable row level security`);
+  await migrateClient.db.execute(sql`alter table products enable row level security`);
   // FORCE matters: without it the *owner* bypasses its own policies.
-  await adminClient.db.execute(sql`alter table products force row level security`);
+  await migrateClient.db.execute(sql`alter table products force row level security`);
   /*
    * `nullif(..., '')` is load-bearing, not defensive noise.
    *
@@ -78,41 +84,33 @@ beforeAll(async () => {
    * tenant context throws on its next query instead of returning zero rows —
    * an error where the policy should simply match nothing.
    */
-  await adminClient.db.execute(sql`
+  await migrateClient.db.execute(sql`
     create policy tenant_isolation on products
       using (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
       with check (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
   `);
 
   /*
-   * Run the assertions as a non-superuser, non-owner role — a preview of P0-21.
+   * Run the assertions as a non-superuser, non-owner role.
    *
    * This is not incidental. The first version of this suite connected as the
    * container's default user, which is a SUPERUSER: superusers bypass RLS
    * outright and `FORCE` does not apply to them, so every policy above was
    * inert and the isolation tests passed nothing. A suite that proves
-   * isolation must connect the way the application does.
+   * isolation must connect the way the application does — as the role
+   * bootstrap/0001 actually creates, not a lookalike made here.
    */
-  await adminClient.db.execute(
-    sql`create role ${sql.raw(APP_ROLE)} login password ${sql.raw(`'${APP_PASSWORD}'`)} nosuperuser nobypassrls`,
-  );
-  await admin.db.execute(
-    sql`grant select, insert, update, delete on products to ${sql.raw(APP_ROLE)}`,
-  );
 
   // max: 1 is the point. With a larger pool the "context does not leak"
   // assertion could pass merely by landing on a different connection.
-  const appClient = createDbClient(
-    `postgres://${APP_ROLE}:${APP_PASSWORD}@${container.getHost()}:${String(container.getPort())}/${container.getDatabase()}?sslmode=disable`,
-    { max: 1 },
-  );
+  const appClient = createDbClient(started.roleUrl('app_rw'), { max: 1 });
   app = appClient;
   db = appClient.db;
 }, 180_000);
 
 afterAll(async () => {
   await app?.close();
-  await admin?.close();
+  await migrator?.close();
   await container?.stop();
 }, 60_000);
 
