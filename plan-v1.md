@@ -715,13 +715,22 @@ Reference scenario, kept for contrast only — **50 tenants, 200,000 widget mess
 | Lambda (api + worker) | arm64; 200k chat @ ~5 s + ~2M config @ ~100 ms | ~$8 |
 | CloudWatch Logs | 14-day retention, bodies never logged | ~$8 |
 | CloudFront + S3 | immutable bundle paths, near-zero origin hits | ~$5 |
-| NAT (fck-nat t4g.nano) | still required — see below | ~$4 |
+| NAT (fck-nat t4g.nano) | **two** instances, one per AZ, each with an Elastic IP — see below | **~$13** |
 | SQS + EventBridge + SSM + KMS | | ~$2 |
 | ElastiCache Serverless Valkey | 100 MB floor, added by this scale (§5.7) | ~$6 |
 | Bedrock — Titan Embeddings V2 | 250k products ≈ 37.5M tokens, one-off | ~$0.75 |
 | **Total** | | **~$116–139** |
 
 **The cost structure has inverted.** With Opus 5 the model was 98% of the bill and infrastructure was noise. With Nova Lite, **Postgres is now the largest single line item** and the model is second. Every conclusion in §5.3 is re-ranked accordingly.
+
+**The ~$4 NAT figure was wrong, by roughly 3x.** It assumed one instance and no address charge. Neither holds:
+
+- **SST creates one NAT instance per AZ**, and the AZ count is pinned at two because an RDS subnet group requires two. So it is two `t4g.nano`, not one.
+- **Public IPv4 addresses have been billable since February 2024** at $0.005/hour, about $3.65/month each. SST allocates an Elastic IP per NAT instance, so that is a second line item the original estimate did not contain at all.
+
+Two instances at roughly $3/month plus two addresses at $3.65 is **~$13/month while the stage is up** — against a §5.8 non-prod target of $15 combined, this one line is most of the budget. Confirm against Cost Explorer rather than these list prices now that a real stage has been deployed.
+
+**The practical control is teardown, not a smaller footprint.** `t4g.nano` is already the smallest ARM instance, so nothing can be trimmed per instance; reducing the count means abandoning SST's maintained NAT path for hand-rolled instance and route-table wiring, whose failure mode is silent loss of all egress. Charges are hourly, so `sst deploy` on demand and `sst remove` afterwards costs cents per session and makes the monthly figure irrelevant for non-prod. Budget the ~$13 for whenever a stage does need to stay up.
 
 **NAT is still required**, despite Bedrock being reachable in-region. The API Lambda must also call Stripe and Resend, and perform domain-verification HTTP/DNS lookups — all public internet. So `fck-nat` stays at ~$4/month, and Bedrock traffic can simply route through it (text payloads are tiny: ~4 GB/month ≈ $0.18 in data charges). A dedicated Bedrock VPC interface endpoint would cost ~$7.30/month per AZ and is therefore **not** worth adding while a NAT path already exists.
 
@@ -1698,7 +1707,9 @@ Do not settle for validating `renovate.json` against `renovate-schema.json` with
 | **one** NAT instance | **one per AZ** — `zones.map(...)` | **not done** |
 | ASG of size 1 for automatic replacement | a bare `ec2.Instance`, no ASG | **not done** |
 
-**So what remains is two decisions, not an implementation.** Both cost money in different currencies and neither has a default that is obviously right:
+**Both decisions were taken on 2026-09-01: keep the cheapest footprint, defer auto-replacement to pre-launch.** The reasoning below is kept because the second one has to be revisited, and a deferral without its failure mode written down is indistinguishable from an oversight.
+
+**So what remained was two decisions, not an implementation.** Both cost money in different currencies and neither has a default that is obviously right:
 
 1. **Per-AZ instances.** With `az: 2` this is two `t4g.nano` (~$6–7/month) rather than the ~$3–4 the §5.1 single-NAT model assumes. Buying the second instance also buys AZ-failure independence, which a single shared NAT does not have — a single NAT means one AZ's outage takes egress down for both. Cheaper is not automatically better here, but the cost model should say which was chosen.
 2. **No automatic replacement.** This is the sharper one. A dead NAT instance takes down private-subnet egress — Stripe, Resend, domain verification — and nothing brings it back. Options, cheapest first: a CloudWatch `StatusCheckFailed_System` alarm with the `ec2:recover` action (handles host failure, not a hung OS); or replacing SST's NAT with a hand-rolled ASG of size 1 via `nat: false` and raw Pulumi, which is the plan's original design and buys full control at the cost of owning networking code that SST otherwise maintains and tests.
@@ -5259,7 +5270,8 @@ Reviewed as delivered, then rebuilt as three branches. P0-17a was dropped entire
 | Integration suite not in CI | later | `pnpm test:integration` needs Docker and runs separately from `pnpm test`. GitHub runners have Docker; add it as its own job so the unit loop stays fast. |
 | Combined non-prod budget | needs an account-level resource | §5.8 targets $15 across all non-prod, but budgets are created per stage, so N stages can total N x $15 unnoticed. Needs one budget created outside per-stage IaC. |
 | `BudgetAlertEmail` secret unset | per stage | Set for `dev` stage during testing; must be set via `sst secret set BudgetAlertEmail <address>` before deploying any new stage. |
-| NAT: per-AZ count and no auto-replacement | needs a decision | Two `t4g.nano` instead of one (~$6-7 vs ~$3-4/month), and a dead NAT silently kills private-subnet egress with nothing to restore it. See P0-13 for the options. |
+| NAT: cheapest footprint accepted | **decided (2026-09-01)** | Keep two `t4g.nano` (already the smallest instance) and no auto-replacement while pre-production. Cost is ~$13/month while up — see §5.2a — and hourly, so teardown is the control. |
+| NAT auto-replacement before prod | **P6 / pre-launch** | A dead NAT takes down Stripe, Resend and domain verification with nothing to restore it. Acceptable pre-production, not at launch. Cheapest fix is a CloudWatch `StatusCheckFailed_System` alarm with the `ec2:recover` action; the thorough one is an ASG of size 1. |
 | Infra typecheck needs `sst install` in CI | later | `pnpm typecheck:infra` is local-only until CI runs `sst install` first; that download is the cost of enforcing it. |
 | SST deploy verified | **closed (2026-09-01)** | Deployed and verified on `dev` stage in `eu-west-1` (VPC, NAT, RDS Postgres 16 with TLS, SSM parameters with SecureString decryption, SNS Topic + subscription, Budgets). Cleanly torn down with `sst remove` to avoid idle costs. |
 | Bedrock model access confirmed | **closed (2026-09-01)** | Confirmed active in `eu-west-1` via AWS CLI: `amazon.nova-lite-v1:0` (chat/pairing LLM) and `amazon.titan-embed-text-v2:0` (vector embeddings). |
