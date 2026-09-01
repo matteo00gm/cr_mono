@@ -46,6 +46,22 @@ describe('withTenant RLS transaction helper (P0-19)', () => {
     await expect(
       withTenant('12345678-1234-1234-1234-12345678901z', () => Promise.resolve('ok'), mockDb),
     ).rejects.toBeInstanceOf(InvalidTenantIdError);
+    // Right characters, wrong shape: no grouping, so `set_config` would take a
+    // value the policy's ::uuid cast then rejects at query time instead.
+    await expect(
+      withTenant('a0000000000040008000000000000001', () => Promise.resolve('ok'), mockDb),
+    ).rejects.toBeInstanceOf(InvalidTenantIdError);
+  });
+
+  it('accepts a well-formed UUID of any version', async () => {
+    // Validation is on shape, not on the version nibble. A v7 id — time-ordered,
+    // the sensible choice if these keys ever move off gen_random_uuid() for
+    // index locality — must not be rejected by a helper that has no business
+    // caring how the database generated it.
+    const { mockDb } = createMockDb();
+    const v7 = '01935b3e-7c00-7000-8000-0000000000ff';
+
+    await expect(withTenant(v7, () => Promise.resolve('ok'), mockDb)).resolves.toBe('ok');
   });
 
   it('sets transaction-local app.tenant_id and executes callback', async () => {
