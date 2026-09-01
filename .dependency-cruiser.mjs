@@ -55,10 +55,22 @@ export default {
         'nothing or — once someone "fixes" that with a default — returns another tenant rows. ' +
         'One sanctioned path means one thing to audit. See P0-19.',
       from: {
-        pathNot: '^packages/db/src/with-tenant[.]ts$',
+        // Both files, not just with-tenant.ts: P0-18 split the connection
+        // factory out of P0-19's helper, so the driver legitimately lives in
+        // client.ts too. What the rule protects is everything *outside* this
+        // package reaching a connection without going through withTenant.
+        // Tests are exempt: they are not a production path, and the RLS
+        // integration suite has to drive a real connection to prove isolation.
+        pathNot: '^packages/db/src/(client|with-tenant)[.]ts$|(^|/)test/',
       },
       to: {
-        path: '(^|/)node_modules/(pg|drizzle-orm)(/|$)|^(pg$|pg/|drizzle-orm($|/))',
+        // `postgres` is postgres-js, the driver P0-18 actually chose. The
+        // original pattern listed only `pg`, so it would have kept passing
+        // while the real client was imported anywhere.
+        path:
+          '(^|/)node_modules/(pg|postgres|drizzle-orm)(/|$)' +
+          '|^(pg|postgres)($|/)' +
+          '|^drizzle-orm($|/)',
       },
     },
 
@@ -79,6 +91,11 @@ export default {
     // Type-only imports are still architectural coupling: a package that
     // imports an app's types is still pointed the wrong way.
     tsPreCompilationDeps: true,
-    exclude: { path: '(^|/)(dist|coverage|node_modules)/' },
+    // `node_modules` is deliberately NOT excluded. `exclude` removes modules
+    // from the graph entirely, which silently makes every rule targeting an
+    // npm package unfireable — the raw-DB rule passed for exactly as long as
+    // the driver was uninstalled. `doNotFollow` above already stops traversal
+    // into them; they still need to appear as dependencies to be matched.
+    exclude: { path: '(^|/)(dist|coverage)/' },
   },
 };

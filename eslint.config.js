@@ -10,6 +10,7 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/.turbo/**',
       '**/.sst/**',
+      '**/sst-env.d.ts',
       '**/coverage/**',
       // SST owns these. They depend on globals ($config, $app, sst.aws.*)
       // typed by .sst/platform/config.d.ts, which `sst install` generates and

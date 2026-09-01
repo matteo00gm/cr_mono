@@ -1,3 +1,26 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+
+# Do not fail the install when a dependency ships a build script we are not
+# running.
+#
+# pnpm 11 blocks dependency build scripts by default and then exits non-zero
+# to make you acknowledge them — including on `install --frozen-lockfile`, so
+# without this every CI job fails the moment such a package appears. Three
+# arrive under @testcontainers/postgresql and none is needed: cpu-features (an
+# optional native accelerator for ssh2), ssh2 (native build is an optimisation)
+# and protobufjs (a codegen postinstall we do not depend on).
+#
+# What this does and does not change, because the distinction matters: pnpm
+# still refuses to execute those scripts — verified by the absence of any native
+# build output afterwards. Only the error is silenced. So the supply-chain
+# protection is intact and what is lost is the *notification* that some future
+# dependency wanted to run code at install time. Renovate PRs and the P0-08
+# audit gate remain the compensating controls.
+#
+# Note `onlyBuiltDependencies` and `ignoredBuiltDependencies` were both tried,
+# in this file and in package.json's `pnpm` field. Neither suppresses the error
+# in pnpm 11.24; only this setting does. Listing them anyway would be config
+# that reads as load-bearing while doing nothing.
+strictDepBuilds: false
