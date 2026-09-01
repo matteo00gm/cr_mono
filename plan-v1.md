@@ -1715,11 +1715,20 @@ Do not settle for validating `renovate.json` against `renovate-schema.json` with
 
 **Why.** The largest line in the month-one bill (§5.2a) and the dependency for every migration.
 
+**Most of this list is already the SST v4 default** — verified in `platform/src/components/aws/postgres.ts` at the pinned tag, not assumed: `storageEncrypted: true`, `storageType: "gp3"`, `backupRetentionPeriod: 7`, `storage` 20 GB, `instance` `t4g.micro`, and passing a `Vpc` places the instance in its private subnets. Do not restate defaults for their own sake; do restate `instance` and `storage`, because those two are the figures §5.2a's bill is built from and a silent default change would move the bill with no diff in the repo.
+
+**Two places SST's default is wrong for us, and one is a security default:**
+
+- **`rds.force_ssl` ships as `"0"`.** SST's generated parameter group sets it explicitly to zero, so an unencrypted connection is accepted unless overridden. This is the single most important line in the task.
+- **`version` defaults to `"17"`.** Pin `16` — and pin it rather than inherit, so a future SST default bump cannot move the engine version underneath a database that already holds data.
+
+**Use the *function* form of `transform`, not the object form.** `transform()` applies an object as a shallow spread (`{...args, ...transform}`), so passing `parameters` replaces SST's entire array and silently drops the `rds.logical_replication` entry it also sets. The function form mutates the args in place, so rewriting one parameter leaves the rest as found and survives SST changing its own defaults.
+
 **How.** `t4g.micro`, 20 GB gp3, private subnets, `storageEncrypted: true`, `rds.force_ssl = 1`, `deletionProtection` in prod, 7-day PITR. Parameter group: `shared_preload_libraries` unchanged (pgvector needs no preload), and **`max_connections` left at default** — do not raise it to compensate for Lambda concurrency; cap concurrency instead (P1-48). Credentials generated into Secrets Manager by SST, then read once and mirrored to SSM in P0-15 to avoid per-invocation Secrets Manager cost.
 
 **Tests.** Connect from a Lambda; assert TLS is required by attempting a non-TLS connection and expecting failure.
 
-**Files.** `infra/database.ts`. **~55 lines.**
+**Files.** `infra/database.ts`, `infra/stage.ts`. **~75 lines.**
 
 ---
 
@@ -5166,6 +5175,15 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **+** `sst install` generates `.sst/platform/config.d.ts` and needs **no AWS credentials**, which makes `sst.config.ts` and `infra/**` typecheckable after all. Added `tsconfig.sst.json` and `scripts/check-infra-types.mjs`. Before this, every line of infrastructure in P0-11 and P0-12 was unverified.
 - **+** Errors are filtered to our own files. SST's platform sources do not currently compile cleanly against the Node types resolved here — a mismatch inside a vendored toolchain. `skipLibCheck` does not help, because the offending files are `.ts` sources, not declarations.
 - **⚠ A silent-pass bug, caught only by testing the failure path.** The first version shelled out via `npx`, which on Windows resolves to `npx.cmd` — and since the fix for CVE-2024-27980 Node refuses to spawn `.cmd` without `shell: true`. It failed with `EINVAL`, produced no output, and the gate read that silence as "no errors" and exited 0. Now it invokes `node node_modules/typescript/bin/tsc` directly and treats an empty result from a non-zero exit as a failure. The general lesson: **a gate that shells out must distinguish "nothing wrong" from "nothing ran"**, and the only way to know which one you built is to break it on purpose.
+
+### P0-14 · RDS Postgres — implemented, not deployed
+
+- **🔒 SST's parameter group ships `rds.force_ssl = "0"`.** Not absent — explicitly zero, so unencrypted connections are accepted. Overridden to `"1"`. This is the finding that justified reading the component source rather than trusting that "SST does the sensible thing".
+- **Δ** Pinned `version: '16'`; SST defaults to 17. Pinned rather than inherited so a default bump cannot move the engine under a database holding data.
+- **+** Used the **function** form of `transform` for the parameter group. The object form is applied as a shallow spread, so supplying `parameters` would have replaced SST's array wholesale and silently dropped its `rds.logical_replication` entry — a regression that would not have shown up in any diff.
+- **Note** `storageEncrypted`, gp3, 7-day retention and private-subnet placement are already SST defaults and are deliberately not restated. `instance` and `storage` are restated despite matching defaults, because they are the numbers §5.2a's cost model rests on.
+- **+** `infra/stage.ts` centralises the protected-stage check. `sst.config.ts` keeps its own copy on purpose: it is evaluated before infra modules load, and must stay self-contained.
+- **⚠ Not deployed.** Verified by `pnpm typecheck:infra` only. The plan's test — asserting a non-TLS connection is refused — needs a live instance.
 
 ### ⚠ Open items
 
