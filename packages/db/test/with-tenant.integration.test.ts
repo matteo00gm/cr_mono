@@ -1,9 +1,10 @@
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { NestedTenantContextError, withTenant } from '../src/with-tenant.js';
+import { startPostgres } from './support/postgres.js';
+import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
 /**
  * RLS isolation against real Postgres (P0-19).
@@ -43,11 +44,10 @@ const APP_ROLE = 'app_rw';
 const APP_PASSWORD = 'app_rw_password';
 
 beforeAll(async () => {
-  container = await new PostgreSqlContainer('postgres:16-alpine').start();
+  const started = await startPostgres();
+  container = started.container;
 
-  const adminClient = createDbClient(`${container.getConnectionUri()}?sslmode=disable`, {
-    max: 1,
-  });
+  const adminClient = createDbClient(started.adminUrl, { max: 1 });
   admin = adminClient;
 
   await adminClient.db.execute(sql`

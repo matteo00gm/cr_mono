@@ -10,3 +10,8 @@ pnpm-lock.yaml
 # emphasis markers and re-pad every table pipe, producing thousands of lines
 # of diff noise on a file that is read, not compiled.
 plan-v1.md
+
+# drizzle-kit's migration ledger. It rewrites this file on every `db:generate`,
+# so formatting it here would produce a diff on the next generate and back
+# again on the next format — a loop with no winner.
+packages/db/migrations/meta/

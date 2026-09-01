@@ -17,7 +17,18 @@ import { type Database, getDb } from './client.js';
  *    tenant context swapping within a single workflow.
  */
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/**
+ * Shape only — deliberately not the version and variant bits.
+ *
+ * The earlier pattern pinned the version nibble to 1-5 and the variant to
+ * 8/9/a/b, which describes the UUIDs `gen_random_uuid()` happens to emit today
+ * and rejects the ones it would emit tomorrow: a v7 id, chosen for index
+ * locality, fails validation and every request for that tenant 500s. The
+ * database is the authority on what it generated, so what is checked here is
+ * the only thing that matters to `set_config` — that the value is a
+ * well-formed UUID and cannot be anything else.
+ */
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const tenantStorage = new AsyncLocalStorage<{ readonly tenantId: string }>();
 

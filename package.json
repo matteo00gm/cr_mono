@@ -24,6 +24,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "clean": "rimraf --glob coverage .turbo \"{apps,packages}/*/dist\" \"{apps,packages}/*/.turbo\" \"{apps,packages}/*/*.tsbuildinfo\"",
+    "db:generate": "drizzle-kit generate",
     "prepare": "husky"
   },
   "lint-staged": {
@@ -40,6 +41,7 @@
     "@testcontainers/postgresql": "^12.1.0",
     "@vitest/coverage-v8": "^4.1.11",
     "dependency-cruiser": "^17.4.3",
+    "drizzle-kit": "^0.31.10",
     "eslint": "^10.9.1",
     "eslint-config-prettier": "^10.1.8",
     "husky": "^9.1.7",
