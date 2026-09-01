@@ -745,6 +745,8 @@ The target is **at most ~10 tenants**, not 50 and not 200. That is a design inpu
 
 **One thing gets more important, not less.** At 10 tenants, a single abusive or runaway tenant is **10% of your customer base** and can be a large fraction of total spend. Per-tenant quota enforcement (P2-36), per-tenant model-spend alerting (P7-02) and the billing-fraud controls in §5.2b are worth *more* at this size, not less — and with only 10 tenants, a human can actually review the alerts.
 
+**Region: `eu-west-1` (Ireland).** Decided 2026-08-31, previously unstated anywhere in this plan. EU data residency, Bedrock coverage for §5.3, and lower cost than eu-south-1. Set once in `sst.config.ts`; every figure below assumes it.
+
 ### 5.2a The actual month-one bill — 2 tenants
 
 The table above is a 50-tenant projection. Month one looks nothing like it. Assume 2 wine shops, ~1,500 widget messages total, ~6,000 widget page-loads, ~1,000 products between them.
@@ -5166,7 +5168,7 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **Δ** Pinned **SST v4.17.1**, not v3. The plan named v3; that line has moved on and v4 is the current release of the same Pulumi-based lineage. Every option used (`name`, `home`, `removal`, `protect`, `providers`) was checked against `platform/src/config.ts` at that exact tag, since the config cannot be typechecked locally.
 - **+** `protect: true` alongside `removal: 'retain'` for production. Not in the spec; they defend against different mistakes.
 - **+** The protected-stage set contains both `prod` and `production`, because the guard is an exact match and a stage-name slip would otherwise quietly make production removable.
-- **Δ** Region set to `eu-west-1` as an **assumption, not a plan decision** — §5 never pins one. It is the one input that must satisfy EU data residency, Bedrock model availability for the §5.3 default, and cost simultaneously. Named in a single constant with the reasoning inline; one line to change before the first deploy, a migration afterwards.
+- **Δ** Region set to `eu-west-1`. §5 never pinned one, so this began as an assumption and was **confirmed as a decision on 2026-08-31**. It satisfies EU data residency, Bedrock availability for the §5.3 default, and cost together. Named in a single constant. Note the residual: region availability does not grant Bedrock model access — that is a separate per-model action in the account.
 - **Δ** `sst.config.ts` and `infra/**` are excluded from ESLint and from `pnpm typecheck`. They depend on globals (`$config`, `$app`, `sst.aws.*`) typed by `.sst/platform/config.d.ts`, which `sst install` generates and git ignores — so they belong to no tsconfig and type-aware rules have no program to resolve against. Recorded as an open item rather than left as an unexplained hole.
 - **⚠ Not deployed, and deliberately so.** `sst deploy` creates billable AWS resources and needs credentials. Verified only that the CLI loads (`sst 4.17.1`) and that every option exists in the pinned source.
 
@@ -5224,7 +5226,7 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 | NAT: per-AZ count and no auto-replacement | needs a decision | Two `t4g.nano` instead of one (~$6-7 vs ~$3-4/month), and a dead NAT silently kills private-subnet egress with nothing to restore it. See P0-13 for the options. |
 | Infra typecheck needs `sst install` in CI | later | `pnpm typecheck:infra` is local-only until CI runs `sst install` first; that download is the cost of enforcing it. |
 | SST never deployed | needs AWS access | P0-11/P0-12 are verified against pinned SST source only. The plan's acceptance tests — tags visible in the console, zero NAT Gateways in the deployed stack — need credentials and create billable resources. |
-| AWS region is an assumption | needs a decision | `eu-west-1`, chosen in P0-11 because §5 pins no region. Confirm against Bedrock model availability for the §5.3 default before the first deploy; it is one line now and a migration later. |
+| Bedrock model access not granted | AWS console | Region availability is not enough — each Bedrock model must be explicitly granted in the account before it can be invoked. Needed before the §5.3 default or the P1 bake-off can run. |
 | OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |
 | Branch protection not configured | repository settings | **All four** checks must be required on `main` before any gate in Part 6 blocks a merge: `verify` and `test` from ci.yml, `secrets` and `dependencies` from security.yml. Requiring a subset leaves the rest advisory. GitHub offers only checks it has recently observed, so each becomes selectable after its first run — revisit this list whenever a job is added. |
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |

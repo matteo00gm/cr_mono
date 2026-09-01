@@ -15,16 +15,14 @@
 /**
  * One region, named once.
  *
- * ASSUMPTION, NOT A DECISION FROM THE PLAN — §5 never pins a region. It has to
- * satisfy three constraints at once, so it is worth confirming before the first
- * deploy rather than after:
- *   1. EU data residency (the product is Italian-market, sellers' customer data).
- *   2. Availability of the chosen Bedrock model (§5.3 defaults to Nova Lite).
- *      Bedrock model coverage varies by region and is the binding constraint.
- *   3. Cost. eu-south-1 (Milan) is closer to users but pricier and has thinner
- *      service coverage than eu-west-1.
- * eu-west-1 is the conservative pick. Changing it before anything is deployed
- * costs one line; changing it afterwards is a migration.
+ * `eu-west-1` (Ireland), confirmed as a decision rather than inherited as a
+ * default. It satisfies the three constraints that bind here simultaneously:
+ * EU data residency for sellers' customer data, availability of the Bedrock
+ * models §5.3 depends on, and cost — eu-south-1 (Milan) is nearer to users but
+ * pricier with thinner service coverage.
+ *
+ * Region availability is necessary but not sufficient for Bedrock: each model
+ * must also be granted in the account before it can be invoked.
  */
 const AWS_REGION = 'eu-west-1';
 
