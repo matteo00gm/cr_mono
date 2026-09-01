@@ -61,7 +61,16 @@ export default {
         // package reaching a connection without going through withTenant.
         // Tests are exempt: they are not a production path, and the RLS
         // integration suite has to drive a real connection to prove isolation.
-        pathNot: '^packages/db/src/(client|with-tenant)[.]ts$|(^|/)test/',
+        //
+        // src/schema/ is exempt from P0-22 because table *declarations* are not
+        // database access: `pgTable` describes a shape, it opens nothing. The
+        // rule is about reaching a connection, and nothing under schema/ can.
+        // Narrowed to that directory rather than to the package, so a future
+        // file in packages/db/src that does open a connection is still caught.
+        pathNot:
+          '^packages/db/src/(client|with-tenant)[.]ts$' +
+          '|^packages/db/src/schema/' +
+          '|(^|/)test/',
       },
       to: {
         // `postgres` is postgres-js, the driver P0-18 actually chose. The
