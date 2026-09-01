@@ -763,7 +763,7 @@ The table above is a 50-tenant projection. Month one looks nothing like it. Assu
 | Line item | Config | $/month |
 |---|---|---|
 | **RDS PostgreSQL** | `db.t4g.micro` single-AZ + 20 GB gp3 | **~$15** |
-| NAT (fck-nat `t4g.nano`) | VPC egress for Stripe, Resend, verification | ~$4 |
+| NAT (fck-nat `t4g.nano`) | VPC egress for Stripe, Resend, verification — **two** instances (one per AZ) plus two Elastic IPs | **~$13** |
 | CloudWatch Logs | 14-day retention, bodies never logged | ~$1–3 |
 | KMS + SSM | SSM standard tier is free; one CMK if used | ~$0–1 |
 | CloudFront + S3 | widget + dashboard, immutable paths | ~$0–1 |
@@ -772,7 +772,7 @@ The table above is a 50-tenant projection. Month one looks nothing like it. Assu
 | Lambda (api + worker) | ~4,400 GB-s, ~13k requests | **$0** — inside the free tier |
 | SQS + EventBridge | ~5k messages | ~$0 |
 | ~~ElastiCache Valkey~~ | **not deployed** (§5.7) | **$0** |
-| **Total** | | **~$21–24/month** |
+| **Total** | | **~$30–33/month** |
 
 Three things to take from this:
 
@@ -917,7 +917,7 @@ Starting at 0 tenants and reaching maybe 2 in month one changes this decision, s
 
 ### 5.8 Non-production environments
 
-Dev and staging should cost close to nothing: Lambda's free tier (1M requests + 400,000 GB-seconds monthly, which does not expire) covers non-prod compute entirely; Aurora Serverless v2 with scale-to-zero or a single `db.t4g.micro` covers the database; and with no cache tier there is nothing else to pay for. Target **under $15/month for both environments combined.** Enforce it with an AWS Budgets alarm per environment and mandatory cost-allocation tags (`env`, `service`) from the very first SST commit — retrofitting tags is miserable.
+Dev and staging should cost close to nothing: Lambda's free tier (1M requests + 400,000 GB-seconds monthly, which does not expire) covers non-prod compute entirely; Aurora Serverless v2 with scale-to-zero or a single `db.t4g.micro` covers the database; and with no cache tier there is nothing else to pay for. Target **under $15/month for both environments combined** — achievable only if non-prod stages are **torn down when idle**, which is worth stating because the arithmetic does not otherwise work. A single running stage is RDS at ~$15 plus NAT at ~$13 (§5.2a), so it exceeds the whole target on its own before anything else is counted. Charges are hourly, so `sst deploy` on demand and `sst remove` afterwards keeps a test session in the cents. A stage that must stay up needs its own budget line, not this one. Enforce it with an AWS Budgets alarm per environment and mandatory cost-allocation tags (`env`, `service`) from the very first SST commit — retrofitting tags is miserable.
 
 ---
 
