@@ -38,6 +38,21 @@ export const vpc = new sst.aws.Vpc('Vpc', {
   //   2. No auto-replacement. SST creates a bare ec2.Instance, not an ASG, so
   //      a dead NAT means private-subnet egress stays down — Stripe, Resend and
   //      domain verification all fail — until someone intervenes.
+  //
+  // DECISION (2026-09-01): both accepted for now, deliberately. Cheapest
+  // resources while pre-production; revisit before prod, where the missing
+  // auto-replacement becomes an availability problem rather than an
+  // inconvenience. Recorded in P0-13 so it is a scheduled decision and not a
+  // forgotten default.
+  //
+  // Note the instance type is already the floor — t4g.nano is the smallest ARM
+  // instance available, so there is nothing left to trim per instance. The only
+  // remaining lever is the *count*, and SST ties that to the AZ count, which
+  // RDS pins at two. Going to one NAT means `nat: false` plus hand-rolled
+  // instance and route tables: owning networking code whose failure mode is
+  // silent total egress loss, to save cents per hour on a stage that is torn
+  // down between sessions. Not worth it. The real cost control here is
+  // `sst remove`, not a smaller footprint.
   nat: {
     ec2: { instance: 't4g.nano' },
   },
