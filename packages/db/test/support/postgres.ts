@@ -2,6 +2,8 @@ import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 
 /**
@@ -37,7 +39,9 @@ export const ROLE_PASSWORDS = {
 
 export type BootstrapRole = keyof typeof ROLE_PASSWORDS;
 
-const BOOTSTRAP_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../bootstrap');
+const PACKAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), '../..');
+const BOOTSTRAP_DIR = join(PACKAGE_DIR, 'bootstrap');
+const MIGRATIONS_DIR = join(PACKAGE_DIR, 'migrations');
 
 export interface TestPostgres {
   readonly container: StartedPostgreSqlContainer;
@@ -48,7 +52,7 @@ export interface TestPostgres {
 }
 
 /**
- * Starts a container and applies `bootstrap/`.
+ * Starts a container, applies `bootstrap/`, then runs the migrations.
  *
  * Returns connection strings rather than a client: suites need to connect as
  * different roles, and handing back one client would quietly make the superuser
@@ -59,16 +63,16 @@ export const startPostgres = async (): Promise<TestPostgres> => {
   const container = await new PostgreSqlContainer(POSTGRES_IMAGE).start();
   const adminUrl = `${container.getConnectionUri()}?sslmode=disable`;
 
-  await applyBootstrap(adminUrl);
+  const host = container.getHost();
+  const port = String(container.getPort());
+  const database = container.getDatabase();
+  const roleUrl = (role: BootstrapRole) =>
+    `postgres://${role}:${ROLE_PASSWORDS[role]}@${host}:${port}/${database}?sslmode=disable`;
 
-  return {
-    container,
-    adminUrl,
-    roleUrl: (role) =>
-      `postgres://${role}:${ROLE_PASSWORDS[role]}@${container.getHost()}:${String(
-        container.getPort(),
-      )}/${container.getDatabase()}?sslmode=disable`,
-  };
+  await applyBootstrap(adminUrl);
+  await applyMigrations(roleUrl('app_migrate'));
+
+  return { container, adminUrl, roleUrl };
 };
 
 /**
@@ -101,6 +105,25 @@ export const applyBootstrap = async (
     for (const file of files) {
       await sql.unsafe(await readFile(join(BOOTSTRAP_DIR, file), 'utf8')).simple();
     }
+  } finally {
+    await sql.end();
+  }
+};
+
+/**
+ * Runs the migration chain through Drizzle's own migrator.
+ *
+ * The real path, not a re-implementation: it reads `meta/_journal.json` and
+ * records what it applied, so a broken journal fails here rather than on a
+ * deploy. Call it as `app_migrate` — whoever runs a migration owns the tables
+ * it creates, and everything about tenant isolation depends on that owner not
+ * being `app_rw`.
+ */
+export const applyMigrations = async (url: string): Promise<void> => {
+  const sql = postgres(url, { max: 1 });
+
+  try {
+    await migrate(drizzle({ client: sql }), { migrationsFolder: MIGRATIONS_DIR });
   } finally {
     await sql.end();
   }

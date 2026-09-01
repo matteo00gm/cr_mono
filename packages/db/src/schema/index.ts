@@ -1,8 +1,9 @@
 /**
  * Drizzle schema — the typed surface over the migrated database.
  *
- * Empty until P0-22 adds `tenants`. It exists now because `drizzle.config.ts`
- * needs a schema entry point to generate migrations from, and because the
- * import path is what every later table module is re-exported through.
+ * `drizzle.config.ts` generates every migration from what this file exports, so
+ * a table that is not re-exported here does not exist as far as `db:generate` is
+ * concerned: it will be silently absent from the SQL, and — worse — a later
+ * generate will read the database as having drifted and try to drop it.
  */
-export {};
+export * from './tenants.js';
