@@ -1740,9 +1740,17 @@ Do not settle for validating `renovate.json` against `renovate-schema.json` with
 
 **How.** Namespace `/sommelier/<stage>/<name>`. `SecureString` under the AWS-managed `aws/ssm` key — free, versus $1/month per customer-managed key, and sufficient because SSM already encrypts at rest. Read at cold start and cache in a module-level variable for the container's life; never per-invocation. Each function's role gets `ssm:GetParameter*` on **only its own paths** plus `kms:Decrypt` on the one key.
 
-**Tests.** Unit-test the config loader against a mocked SSM. Assert a function denied a path fails closed with a clear error, not a silent `undefined`.
+**This task collides with the P0-09 boundary, and the boundary wins.** P0-09 keeps `packages/core` free of the AWS SDK so its tests stay plain unit tests. Putting an SSM client in `packages/core/src/config.ts` breaks that. Resolve it with a port, not an exemption: `core` defines a `ParameterStore` interface and the loader; the SSM-backed adapter is constructed at the edge, in the app that owns the IAM role. The stated reason for the boundary — testable without a mocked cloud — is then satisfied by construction rather than by discipline.
 
-**Files.** `infra/config.ts`, `packages/core/src/config.ts`. **~80 lines.**
+**Memoise the promise, not the value, and evict on rejection.** Sharing the in-flight promise means concurrent callers during a cold start make one round trip. Evicting a rejected one matters more: caching the failure would turn a momentary SSM blip into an outage lasting the entire container lifetime.
+
+**Fail closed on blank, not just absent.** A denied IAM path and an empty parameter must both raise, naming the full path. Returning `undefined` is what gets treated as "not configured" and quietly defaulted.
+
+**Scope `kms:Decrypt` with a condition, not a key ARN.** The `aws/ssm` managed key's id is account- and region-specific and unknown at synth time. `resources: ['*']` narrowed by `kms:ViaService = ssm.<region>.amazonaws.com` expresses the property actually wanted: decryption performed by SSM on this function's behalf.
+
+**Tests.** Unit-test the config loader against a mocked SSM. Assert a function denied a path fails closed with a clear error, not a silent `undefined`. Also assert the caching contract in both directions — one fetch for concurrent callers, and a *retryable* failure.
+
+**Files.** `infra/config.ts`, `packages/core/src/config.ts`, `packages/core/test/config.test.ts`. **~180 lines.**
 
 ---
 
@@ -5184,6 +5192,15 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **Note** `storageEncrypted`, gp3, 7-day retention and private-subnet placement are already SST defaults and are deliberately not restated. `instance` and `storage` are restated despite matching defaults, because they are the numbers §5.2a's cost model rests on.
 - **+** `infra/stage.ts` centralises the protected-stage check. `sst.config.ts` keeps its own copy on purpose: it is evaluated before infra modules load, and must stay self-contained.
 - **⚠ Not deployed.** Verified by `pnpm typecheck:infra` only. The plan's test — asserting a non-TLS connection is refused — needs a live instance.
+
+### P0-15 · SSM parameters + per-function IAM — implemented, not deployed
+
+- **Δ Resolved a conflict this plan created.** P0-09's literal rule bans the AWS SDK in `packages/security`; the implementation extended it to `packages/core` on the strength of the stated Why. P0-15 then specified an SSM-reading loader in exactly that package. Kept the stricter rule and inverted the dependency: `core` owns a `ParameterStore` port and the loader, the AWS adapter lives at the edge. The alternative — relaxing the rule for one file — would have traded a structural guarantee for a convenience.
+- **+** The loader memoises the in-flight promise and **evicts it on rejection**. Caching a failure would convert one SSM blip into a container-lifetime outage; that is the test most likely to be missing from a hand-written cache.
+- **+** Blank values are treated as missing, not just absent ones, so a misconfigured empty parameter cannot be read as a configured value.
+- **+** `kms:Decrypt` is granted on `*` with a `kms:ViaService` condition rather than a key ARN, because the `aws/ssm` key id is not known at synth time. The condition is what makes the grant narrow.
+- **+** First real code with real tests: 9 tests, `packages/core` at **100% lines and branches** against its 90% bar — the first time the P0-07 coverage gate has measured anything.
+- **⚠ Not deployed.** Verified by `pnpm typecheck:infra` and the unit suite.
 
 ### ⚠ Open items
 
