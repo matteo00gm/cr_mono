@@ -6,4 +6,5 @@
  * concerned: it will be silently absent from the SQL, and — worse — a later
  * generate will read the database as having drifted and try to drop it.
  */
+export * from './memberships.js';
 export * from './tenants.js';
