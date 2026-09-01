@@ -59,6 +59,9 @@ apps/
   docs/         Integration guides: Shopify, custom site adapter
 packages/
   db/           Drizzle schema, migrations, RLS policies, seeds, factories —
+                split into bootstrap/ (extensions, roles, grants — run as the
+                master role) and migrations/ (tables, indexes, policies — run
+                as app_migrate). See P0-20 for why that boundary exists —
                 AND the API contracts, derived from the tables via drizzle-zod
                 rather than hand-written a second time. Widget, dashboard and
                 API all import these types.
@@ -126,8 +129,9 @@ What is **not** deferrable, because the product or its security depends on it: t
 Every tenant-scoped table gets `tenant_id uuid not null` and an RLS policy. No exceptions — the migration test asserts this.
 
 ```
-tenants          id, name, slug, status, plan, stripe_customer_id,
-                 stripe_subscription_id, locale, created_at
+tenants          id, name, slug (citext), status, plan (nullable),
+                 stripe_customer_id, stripe_subscription_id, locale, currency,
+                 created_at, updated_at
                  status: PENDING_VERIFICATION | TRIALING | ACTIVE | PAST_DUE
                        | DISABLED | CANCELED
 
@@ -140,10 +144,15 @@ tenant_domains   id, tenant_id, origin (text, normalized serialized origin),
 widget_keys      id, tenant_id, public_key, secret_key_hash (argon2id),
                  secret_key_prefix, secret_key_last4, revoked_at, created_at
 
-memberships      id, tenant_id, user_id, role, invited_by, created_at
+memberships      id, tenant_id, user_id (text — Better Auth ids are not
+                 UUIDs), role, invited_by, created_at, updated_at
                  role: OWNER | EDITOR at launch; ADMIN | VIEWER added later
                  as extra columns in the capability table (§2.7)
                  At least one OWNER per tenant, enforced by a guard + test.
+                 UNIQUE(tenant_id, user_id); index on user_id alone, which is
+                 the lookup made before any tenant is known.
+                 Its RLS policy is the one exception to the pattern below —
+                 see P0-23.
 
 products         id, tenant_id, sku, external_variant_id, name, producer,
                  vintage, grape_varieties[], region, denomination, wine_type,
@@ -193,15 +202,23 @@ processed_webhooks  provider, event_id, processed_at   PRIMARY KEY(provider, eve
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE products FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON products
-  USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
-  WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+  USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 ```
+
+The `nullif` is load-bearing, not defensive noise: once a custom GUC has been set
+in a session, ending the transaction reverts it to the **empty string** rather
+than unsetting it, so a bare `''::uuid` raises `22P02` on the next query instead
+of matching no rows — an error where the policy should simply be false. (P0-37
+says the same; repeated here because this block is what gets copied.)
 
 Three database roles, strictly separated:
 
 - `app_rw` — runtime. **No** `BYPASSRLS`, **not** the table owner, no DDL.
 - `app_migrate` — migrations only. Not used by the running app.
-- `app_admin` — break-glass, human-only, audited.
+- `app_admin` — break-glass, human-only, audited. `BYPASSRLS` **but `NOLOGIN`**: the
+  one role that can read across tenants has no credential to leak, and enabling it
+  is a deliberate act by a human with master access (P0-21).
 
 Every request opens a transaction and sets `SET LOCAL app.tenant_id = $1` from the **server-resolved** tenant before any query. `SET LOCAL` (not `SET`) so a pooled connection cannot leak the setting to the next request. Wrap this in a single `withTenant(tenantId, fn)` helper in `packages/db` — it is the only sanctioned way to touch the database, and a lint rule forbids raw pool access outside it.
 
@@ -1103,11 +1120,13 @@ Anti-rot checks in CI, each cheap:
 | P0-17a | SST: chat behaviour (streaming) | `CachingDisabled` + compression off + ≥30s read timeout — **CloudFront buffers SSE otherwise**. **Blocked on the API Lambda origin** — a cache behaviour needs an origin to target, so this cannot land before P0-54 | 17, API origin |
 | P0-18 | ⛔ `packages/db`: Drizzle + pool | connection factory, env-driven config | 02,14 |
 | P0-19 | ⛔ 🔒 `withTenant()` helper | opens tx, `SET LOCAL app.tenant_id`, the **only** sanctioned DB entry point | 18 |
-| P0-20 | Migration: extensions | `vector`, `pg_trgm`, `unaccent`; confirm `halfvec` available | 18 |
-| P0-21 | 🔒 Migration: DB roles | `app_rw` (no BYPASSRLS, not owner), `app_migrate`, `app_admin` | 20 |
-| P0-22 | Migration: `tenants` | incl. status enum from §Data Model | 20 |
-| P0-23 | Migration: `memberships` | `role` enum OWNER/EDITOR | 22 |
-| P0-24 | 🔒 Migration: `tenant_domains` | **`UNIQUE(origin)` globally** — the anti-sharing backbone | 22 |
+| P0-20 | Migration tooling + extensions | drizzle-kit, the `bootstrap/` vs `migrations/` split, down-file convention; `vector`, `pg_trgm`, `unaccent`, **`citext`**; confirm `halfvec` available | 18 |
+| P0-21 | 🔒 **Bootstrap**: DB roles | `app_rw` (no BYPASSRLS, not owner), `app_migrate`, `app_admin` (**NOLOGIN**). Passwords as GUCs, not psql vars | 20 |
+| P0-21a | ⛔ 🔒 Connect the app as `app_rw` | SSM params + `database/url` off the master credentials. **Without it every RLS policy is inert in production** | 21,15 |
+| P0-21b | Apply bootstrap + migrations to a stage | the deploy-time path P0 otherwise lacks | 21a,40 |
+| P0-22 | Migration: `tenants` | incl. status enum from §Data Model; `plan` nullable; shared `updated_at` trigger; widens the P0-09 rule for `src/schema/` | 21 |
+| P0-23 | Migration: `memberships` | `role` enum OWNER/EDITOR; **`user_id text`**; RLS policy shape decided here, applied in 37 | 22 |
+| P0-24 | 🔒 Migration: `tenant_domains` | **`UNIQUE(origin)` globally, covering PENDING rows** — the anti-sharing backbone | 22 |
 | P0-25 | 🔒 Migration: `widget_keys` | `secret_key_hash`, prefix, last4 | 22 |
 | P0-26 | Migration: `products` | full template field set incl. `external_variant_id`, `enriched_*` reserved | 22 |
 | P0-27 | Migration: `product_embeddings` | `halfvec(1024)` + HNSW index | 26 |
@@ -1120,7 +1139,7 @@ Anti-rot checks in CI, each cheap:
 | P0-34 | 🔒 Migration: `rate_limit_buckets` | for the Postgres limiter (§5.7) | 22 |
 | P0-35 | 🔒 Migration: `token_revocations` | `jti` + expiry, for the sweep job | 22 |
 | P0-36 | Migration: `outbox` | | 26 |
-| P0-37 | ⛔ 🔒 RLS: enable + FORCE + policies | every tenant-scoped table; `USING` **and** `WITH CHECK`; wrap the GUC read in `nullif(..., '')` or an ended transaction leaves `''` and the cast raises 22P02 | 22–36 |
+| P0-37 | ⛔ 🔒 RLS: enable + FORCE + policies | every tenant-scoped table; `USING` **and** `WITH CHECK`; wrap the GUC read in `nullif(..., '')` or an ended transaction leaves `''` and the cast raises 22P02. **`memberships` is not the boilerplate** (P0-23), so the generator needs a per-table override | 22–36 |
 | P0-38 | 🔒 Test: RLS isolation | tenant B's context returns zero of A's rows, per table | 37 |
 | P0-39 | 🔒 Test: role privileges | `app_rw` lacks `BYPASSRLS`, is not table owner, has no DDL | 21,37 |
 | P0-40 | Test: migration up/down/up | on a seeded DB, in CI | 37 |
@@ -1837,7 +1856,7 @@ export async function withTenant<T>(
 Three details that are the whole point:
 - **`true` (transaction-local) is mandatory.** A plain `SET` persists on a pooled connection and leaks the tenant into the *next* request that reuses it — a cross-tenant data leak of exactly the kind this plan exists to prevent.
 - **Parameterise `tenantId`.** Never string-interpolate; `set_config` takes it as a value.
-- **Validate it is a UUID before use** and reject otherwise, so a malformed id fails loudly rather than setting an empty context that some policy might treat permissively.
+- **Validate it is a UUID before use** and reject otherwise, so a malformed id fails loudly rather than setting an empty context that some policy might treat permissively. **Validate the shape, not the version:** a pattern pinning the version nibble to `1-5` and the variant to `8/9/a/b` describes what `gen_random_uuid()` emits today and rejects what it would emit tomorrow — a v7 id, the sensible choice if these keys ever move for index locality, fails validation and every request for that tenant 500s on an id the database itself produced. The helper has no business caring how the id was generated.
 
 Every repository function takes `tx` as its first parameter. There is no ambient database access.
 
@@ -1857,41 +1876,95 @@ Every repository function takes `tx` as its first parameter. There is no ambient
 
 ---
 
-### P0-20 · Migration: extensions
+### P0-20 · Migration tooling + extensions
 
-**What.** First migration: enable `vector`, `pg_trgm`, `unaccent`.
+**What.** The migration system, and the extensions everything later depends on: `vector`, `pg_trgm`, `unaccent`, `citext`.
 
 **Why. ** Everything vector- and search-related depends on these, and `halfvec` availability must be confirmed before P0-27 commits to the column type.
 
-**How.** `CREATE EXTENSION IF NOT EXISTS vector;` etc. Then **assert the pgvector version supports `halfvec`** (0.7+) in the migration itself with a `DO` block that raises if not — failing at migration time with a clear message beats failing at P0-27 with a type error. Establish the Drizzle migration setup (`drizzle.config.ts`, `drizzle-kit generate`) in this PR since it is the first migration.
+**How.** `CREATE EXTENSION IF NOT EXISTS vector;` etc. Then **assert `halfvec` is available** in the file itself with a `DO` block that raises if not — failing at bootstrap time with a clear message beats failing at P0-27 with a type error. Establish the Drizzle migration setup (`drizzle.config.ts`, `drizzle-kit generate`) in this PR since it is the first DDL.
 
-**Tests.** Migration runs on the Testcontainers image; assert `halfvec` is a known type. Pin the container image to a `pgvector/pgvector:pg16` tag so CI and RDS agree.
+**Two folders, because they need different privileges.** *(Correction to the original spec, which numbered extensions and roles as migrations `0000` and `0001`.)* `CREATE EXTENSION` and `CREATE ROLE` require privileges `app_migrate` does not have — on RDS, `rds_superuser` — and `app_migrate` cannot create itself. Granting them so everything could live in one chain would hand superuser-grade DDL to the role that runs on every deploy. Meanwhile tables **must** be owned by `app_migrate`, because `FORCE ROW LEVEL SECURITY` does not apply to a table's owner, and whoever runs a migration owns what it creates — so table DDL cannot simply run as master either. Hence:
 
-**Files.** `drizzle.config.ts`, `packages/db/migrations/0000_extensions.sql`. **~40 lines.**
+| Folder | Runs as | Holds |
+|---|---|---|
+| `packages/db/bootstrap/` | master (`rds_superuser`) | extensions, roles, schema grants |
+| `packages/db/migrations/` | `app_migrate` | tables, indexes, constraints, RLS policies |
+
+**`citext` is enabled here**, ahead of `tenants.slug` in P0-22, so that no table migration ever has to reach for superuser privileges.
+
+**Assert the type, not a version string.** The plan originally said "assert the pgvector version supports `halfvec` (0.7+)". Compare `to_regtype('halfvec') IS NULL` instead: the type is the thing actually required, and comparing `"0.10.0"` to `"0.7.0"` as text is a bug waiting for pgvector's tenth minor release. Report the version in the error message, not in the condition.
+
+**Migrations are generated, never hand-written.** `pnpm db:generate --name=<name>` derives the SQL from the Drizzle schema, so the TypeScript and the SQL cannot drift. `drizzle.config.ts` deliberately carries **no `dbCredentials`**: that field is read only by `push` and `introspect`, so omitting it means generation cannot reach a database and nobody can accidentally push a schema change to a stage. Anything the schema cannot express — RLS policies, triggers, backfills — is a `--custom` migration from the same command, so the journal stays the one record of order.
+
+**Down migrations are a convention set here.** Drizzle has no notion of one; P0-40's up/down/up drill does. Every migration gets a hand-written reverse at `migrations/down/<same filename>`, and bootstrap likewise. Deciding this at P0-40 instead would mean retrofitting reversibility across ten migrations.
+
+**Tests.** Bootstrap runs on the Testcontainers image; assert each extension is installed and `halfvec` is a known type, and that re-applying changes nothing (bootstrap runs on every deploy, so "already exists" cannot be an error).
+
+**Pin the container image exactly, and pin it *low*.** `pgvector/pgvector:0.8.0-pg16`, not the floating `pg16` tag and not the newest release. 0.8.0 is what RDS offers for Postgres 16, so a capability that works in CI works on the deployed database. Pinning newest inverts the guarantee — the suite could pass on something RDS does not have yet, and the failure lands in production. A floating tag gives it up entirely by changing underneath a green build.
+
+**Files.** `drizzle.config.ts`, `packages/db/bootstrap/0000_extensions.sql` + its down file, `packages/db/README.md`, `packages/db/test/support/postgres.ts`. **~130 lines + ~145 test lines.**
 
 ---
 
-### P0-21 · Migration: database roles 🔒
+### P0-21 · Bootstrap: database roles 🔒
 
 **What.** Three roles: `app_rw`, `app_migrate`, `app_admin`.
 
 **Why.** RLS is bypassed entirely by a superuser, by `BYPASSRLS`, and — subtly — **by the table owner** unless `FORCE ROW LEVEL SECURITY` is set. If the app connects as the owner, every policy in P0-37 is decoration. This role separation is what makes RLS real.
 
-**How.**
+**How.** Bootstrap, not a migration, for the reasons in P0-20: `CREATE ROLE` needs privileges `app_migrate` does not have, and `app_migrate` cannot create itself.
+
 ```sql
-CREATE ROLE app_rw LOGIN PASSWORD :'app_rw_password' NOBYPASSRLS;
-CREATE ROLE app_migrate LOGIN PASSWORD :'app_migrate_password' NOBYPASSRLS;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
-GRANT USAGE ON SCHEMA public TO app_rw;
--- tables owned by app_migrate; app_rw gets DML only
+GRANT USAGE ON SCHEMA public TO app_rw, app_migrate;
+GRANT CREATE ON SCHEMA public TO app_migrate;   -- the only DDL grant
 ALTER DEFAULT PRIVILEGES FOR ROLE app_migrate IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_rw;
 ```
-Migrations run as `app_migrate` (owner), the app connects as `app_rw`. `app_rw` gets **no DDL**. Passwords come from SSM, injected as psql variables — never literals in a migration file.
+Migrations run as `app_migrate` (owner), the app connects as `app_rw`. `app_rw` gets **no DDL** — that is what stops it ever owning a table and inheriting the owner exemption.
 
-**Tests.** Covered by P0-39.
+**Passwords arrive as session GUCs, and the `CREATE ROLE` is built inside `EXECUTE`.** The original spec said "injected as psql variables", which assumes `psql`; the files are applied through the driver, where `:'var'` means nothing. Read them with `current_setting('bootstrap.app_rw_password')` and build the statement with `format(..., %L)`. Two reasons, and the second is the one that matters: a literal is a secret in git, and a plain `CREATE ROLE ... PASSWORD 'x'` is **written verbatim to the server log** under `log_statement = 'ddl'`, while a statement built inside `EXECUTE` is not logged at all. The caller sets the GUC through a bound parameter, so it is never in a logged statement either.
 
-**Files.** `packages/db/migrations/0001_roles.sql`. **~50 lines.**
+**Re-running rotates the password rather than failing.** Bootstrap runs on every deploy, so "the role already exists" cannot be an error — and rotation falling out of that is the useful part: changing a password becomes re-running bootstrap with a new value, not a separate ritual.
+
+**`app_admin` is `NOLOGIN`.** *(Decision the original spec left open.)* Break-glass needs `BYPASSRLS` — reading across tenants is the point — and that is exactly the power that must not sit behind a password in a parameter store, where any process that can read SSM inherits it. With no password the role cannot be connected to at all; using it means a human with master access grants it or sets a password deliberately, and that act is the audit trail. P0-39 asserts `rolcanlogin = false`.
+
+**Create the `drizzle` schema here.** Drizzle's migrator records applied migrations in a `drizzle` schema and tries to create it on first run. Creating a schema needs `CREATE` on the *database* — "make any schema you like", far wider than "own this one" — so create it here with `AUTHORIZATION app_migrate` and revoke from `PUBLIC`. `app_rw` gets no `USAGE`, so the runtime role cannot read the migration history, let alone rewrite it.
+
+**Tests.** Role attributes, the schema-privilege split, and that the `ALTER DEFAULT PRIVILEGES` grant actually reaches a table created by `app_migrate` — both halves of that statement (future objects only, and only from the named role) are easy to get wrong in a way that grants nothing and is noticed much later. The deep privilege sweep stays in P0-39.
+
+**Files.** `packages/db/bootstrap/0001_roles.sql` + its down file. **~105 lines + ~160 test lines.**
+
+---
+
+### P0-21a · Connect the app as `app_rw` 🔒 ⛔
+
+**What.** SSM parameters for the role passwords, and `database/url` repointed from the master credentials to `app_rw`.
+
+**Why.** **P0-21 is not finished without this.** `infra/config.ts` currently builds `DATABASE_URL` from `database.username`/`database.password` — the RDS master, which holds `rds_superuser` and therefore bypasses RLS outright. Every policy P0-37 writes would be inert in production while the whole test suite stays green, because the suite connects as `app_rw` and production does not. This is the same vacuous-pass failure the P0-19 suite was rewritten to avoid, one layer down.
+
+**How.** Generate both role passwords in SST, write them to `/sommelier/<stage>/database/app_rw_password` and `.../app_migrate_password` as `SecureString`, and rebuild `database/url` from the `app_rw` credentials. Keep the master URL as its own parameter for bootstrap and break-glass, read by nothing at runtime. Extend `parameterReadPermissions` so no function is granted the master or migrate paths.
+
+**Tests.** Assert the synthesised `database/url` does not contain the master username. The real proof is P0-39 run against a deployed stage.
+
+**Deps.** 21, 15. **Must land before P0-54**, which is the first thing to open a connection from an app.
+
+**Files.** `infra/config.ts`, `infra/database.ts`. **~60 lines.**
+
+---
+
+### P0-21b · Apply bootstrap and migrations to a stage
+
+**What.** The deploy-time path that runs `bootstrap/` as master and `migrations/` as `app_migrate`.
+
+**Why.** P0 has no such path. Bootstrap and migrations are applied by hand and by the test fixtures, which is fine while no stage holds data and stops being fine the moment one does. Left unstated it becomes someone running `psql` against production from a laptop.
+
+**How.** A short script run from CI against the stage's VPC, or a one-shot Lambda invoked after deploy. Bootstrap first (idempotent, master credentials from SSM), then `drizzle-orm/migrator` as `app_migrate`. The interesting question is where it runs from, since RDS is in private subnets — decide that with P0-40, which needs the same path.
+
+**Deps.** 21a, 40.
+
+**Files.** `scripts/db-deploy.mjs` or an SST task. **~90 lines.**
 
 ---
 
@@ -1901,13 +1974,19 @@ Migrations run as `app_migrate` (owner), the app connects as `app_rw`. `app_rw` 
 
 **Why.** Every other table references it.
 
-**How.** `id uuid primary key default gen_random_uuid()`, `slug citext unique`, `status` as a Postgres enum with the six values from §Data Model, `plan`, `stripe_customer_id unique`, `stripe_subscription_id unique`, `locale`, `currency`, timestamps. Default `status = 'PENDING_VERIFICATION'` so a half-created tenant is never accidentally serviceable. Use `citext` for `slug` so case-variant slugs cannot collide.
+**How.** `id uuid primary key default gen_random_uuid()`, `name`, `slug citext unique`, `status` as a Postgres enum with the six values from §Data Model, `plan`, `stripe_customer_id unique`, `stripe_subscription_id unique`, `locale`, `currency`, timestamps. Default `status = 'PENDING_VERIFICATION'` so a half-created tenant is never accidentally serviceable. Use `citext` for `slug` so case-variant slugs cannot collide — an application that lowercases on write is one forgotten code path away from `Winery` and `winery` being two tenants.
 
-Note: `tenants` itself is **not** RLS-protected on `tenant_id` (it *is* the tenant); access is guarded by the membership check in P0-47.
+**`plan` is nullable.** *(Decision the original spec left open.)* A tenant exists from signup and chooses a plan later; null means "no subscription yet". Any non-null default reads downstream as an entitlement the tenant has not bought.
 
-**Tests.** Insert, unique violations on `slug` and Stripe ids, enum rejects an unknown status.
+**`updated_at` is maintained by a trigger, not by the application.** Drizzle's `$onUpdate` only fires for updates that go through Drizzle: a backfill in a migration, a correction applied with `psql`, or any raw statement leaves the column stale — and a timestamp that is right most of the time is worse than none, because it gets trusted. Add one `set_updated_at()` function in this PR and a `CREATE TRIGGER` per table thereafter, as a `--custom` migration alongside each table's generated one.
 
-**Files.** `packages/db/src/schema/tenants.ts`, migration. **~60 lines.**
+**This PR also widens the P0-09 boundary rule.** `no-raw-db-outside-with-tenant` forbids `drizzle-orm` outside `client.ts` and `with-tenant.ts`, so the first schema file fails `pnpm boundaries`. Exempt `packages/db/src/schema/` specifically — `pgTable` describes a shape and opens nothing, so a declaration is not the database access the rule exists to catch — and scope the exemption to that directory, not the package, so a future file under `packages/db/src` that *does* open a connection is still caught.
+
+Note: `tenants` itself is **not** RLS-protected on `tenant_id` (it *is* the tenant); access is guarded by the membership check in P0-47. See P0-37 for whether it should nonetheless carry a policy on `id`.
+
+**Tests.** A unit spec over `getTableConfig` pinning the enum values, the defaults and the unique constraints — it runs without Docker, which is the difference between an assertion that runs on every commit and one that runs when someone remembers. Then integration: insert defaults, a **case-variant** slug collision, unique violations on both Stripe ids, an unknown status rejected, the trigger firing on a raw `UPDATE`, and that the table is owned by `app_migrate`.
+
+**Files.** `packages/db/src/schema/tenants.ts`, generated migration, `0001_updated_at_trigger.sql`, down files, `.dependency-cruiser.mjs`. **~110 lines + ~200 test lines.**
 
 ---
 
@@ -1919,9 +1998,26 @@ Note: `tenants` itself is **not** RLS-protected on `tenant_id` (it *is* the tena
 
 **How.** `role` enum `('OWNER','EDITOR')` — created with only the two launch values; `ADMIN`/`VIEWER` are added later with `ALTER TYPE ... ADD VALUE`, which is why an enum is fine here. `unique(tenant_id, user_id)`. `on delete cascade` from `tenants`. Index on `user_id` — the hot lookup is "which tenants does this user belong to", so that index, not the composite, is what serves it.
 
-**Tests.** Duplicate membership rejected; cascade delete works; enum rejects `'ADMIN'` for now.
+**`user_id` is `text`, not `uuid`.** *(The §Data Model listing does not say, and the wrong guess is expensive.)* Better Auth generates its own ids and they are not UUIDs (§P0-23a). A `uuid` column rejects every real user id, and converting later is a migration across the one table authorisation depends on.
 
-**Files.** schema + migration. **~50 lines.**
+**The foreign key to `auth_user` lands in P0-23a, not here.** A two-line `ALTER` against an empty table. Pulling P0-23a forward instead would mean settling Better Auth's id strategy, cookie cache and table prefix before P0-45 provides the context for those calls.
+
+**Its RLS policy is not the boilerplate — decide the shape now, apply it in P0-37.** Tenant resolution reads this table *before* a tenant is known, so a plain `tenant_id = app.tenant_id` policy returns zero rows on the login path. The answer is a second GUC rather than an un-scoped read, so that every runtime query stays under RLS and the exception list does not grow:
+
+```sql
+CREATE POLICY tenant_isolation ON memberships
+  USING (
+    tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+    OR user_id = nullif(current_setting('app.user_id', true), '')
+  )
+  WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+```
+
+**`WITH CHECK` gets only the tenant branch.** Put `user_id` in it and any authenticated user can insert a membership for themselves into any tenant — self-service privilege escalation through the table that defines authorisation. P0-38 should assert exactly that insert fails. The `withUser(userId, fn)` helper that sets the second GUC belongs with P0-47.
+
+**Tests.** A Better Auth shaped id accepted; duplicate membership rejected; the same user in two tenants accepted; enum rejects `'ADMIN'`; foreign key and cascade; the `user_id` index present. Assert the index from `pg_indexes`, **not** from an `EXPLAIN` plan: the planner will not choose an index on a table holding a handful of rows, and it cannot be pushed into it honestly, because `ANALYZE` needs table ownership that `app_rw` does not have.
+
+**Files.** schema + generated migration + trigger migration + down files. **~70 lines + ~220 test lines.**
 
 ---
 
@@ -1937,11 +2033,23 @@ The constraint that matters:
 ```sql
 CREATE UNIQUE INDEX tenant_domains_origin_key ON tenant_domains (origin);
 ```
-Global, **not** scoped to `tenant_id`. Add a `CHECK` that `origin` matches `^https?://[a-z0-9.-]+(:[0-9]+)?$` — lowercase only, no path, no trailing slash — so a malformed origin cannot reach the allowlist even if normalization (P2-05) is bypassed. Defence in depth at the schema level.
+Global, **not** scoped to `tenant_id`.
 
-**Tests.** Two tenants cannot both claim `https://winery.com`. The `CHECK` rejects uppercase, a trailing slash, a path, and a bare hostname.
+**It covers `PENDING` rows too.** *(Decision the original spec left implicit.)* Scoping uniqueness to verified rows would let two tenants hold competing claims on one origin and race at verification — turning a failed insert into someone losing a domain they had already built a widget against. The cost is that an abandoned claim holds an origin, which is what `verification_expires_at` plus a sweep is for; the contested-legitimate-owner path is P4-18's `domain_claims`.
 
-**Files.** schema + migration. **~70 lines.**
+**A `23505` on this constraint must surface as a flat refusal.** "That origin belongs to another tenant" is an oracle for enumerating who the customers are. Note for whoever writes the endpoint in P4.
+
+**Tighten the `CHECK`.** The regex originally given, `^https?://[a-z0-9.-]+(:[0-9]+)?$`, still accepts `https://winery.com.` and `https://a..b` — the first of which §6.3 lists as a bypass attempt. Require well-formed labels instead:
+```sql
+CHECK (origin ~ '^https?://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?$')
+```
+Defence in depth behind P2-05's normalisation, at the schema level.
+
+**Index `tenant_id`.** The unique index on `origin` serves origin → tenant, the widget's hot path, but nothing covers `tenant_id`, so listing a tenant's domains — and the referential check behind `DELETE FROM tenants` — would scan the table.
+
+**Tests.** Two tenants cannot both claim `https://winery.com`, including while the first claim is still `PENDING`. The `CHECK` rejects, each as its own case: uppercase scheme and host, mixed case, a trailing slash, a path, a **trailing dot**, an **empty label**, a bare hostname, a **hyphen at either edge of a label**, userinfo, a wildcard, trailing whitespace, and a non-HTTP scheme. It accepts a plain origin, a subdomain, an explicit port, and `http://localhost:5173` — dev origins have to keep working or P2-05 grows an exception.
+
+**Files.** schema + generated migration + trigger migration + down files. **~95 lines + ~150 test lines.**
 
 ---
 
@@ -1999,6 +2107,8 @@ Note the `halfvec_cosine_ops` opclass — using `vector_cosine_ops` with a `half
 
 **Tests.** Insert a 1024-dim vector; a wrong-dimension insert is rejected; `EXPLAIN` on a similarity query shows an index scan, not a sequential scan. That `EXPLAIN` assertion is worth having — a silently unused index is a latency cliff nobody notices until production.
 
+**The `EXPLAIN` assertion needs setting up properly, or it proves nothing.** The planner will not choose an index on a table holding a handful of rows, and `ANALYZE` requires table ownership, which `app_rw` does not have. So: seed enough rows for the index to win, run `ANALYZE` on an `app_migrate` connection, and only then assert the plan. Reaching for `SET enable_seqscan = off` instead turns it into "the index is usable", which `pg_indexes` answers more honestly and without the theatre.
+
 **Files.** schema + migration. **~60 lines.**
 
 ---
@@ -2046,6 +2156,8 @@ Note the `halfvec_cosine_ops` opclass — using `vector_cosine_ops` with a `half
 ---
 
 ### P0-31 · Migration: `audit_log` 🔒
+
+> Note from P0-21: the `ALTER DEFAULT PRIVILEGES` grant gives `app_rw` all four DML verbs on every table `app_migrate` creates. Append-only is therefore a property of an explicit `REVOKE UPDATE, DELETE` in this migration, not of anyone's intention.
 
 **What.** Append-only record of who did what.
 
@@ -2165,6 +2277,11 @@ Four details that decide whether this works:
 - **`WITH CHECK` as well as `USING`.** `USING` filters reads; without `WITH CHECK` a bug could *insert* a row with another tenant's id.
 - **`current_setting(..., true)`** — the `true` means "missing is null, don't error". With no tenant set the comparison is null, so **zero rows** match. Failing closed is the correct default; without the second argument the query raises instead, which is noisier but also acceptable — what is *not* acceptable is a fallback that matches everything.
 - Generate the SQL from the table list in code, not by hand, so a new table cannot be silently missed.
+
+**Two tables are not the boilerplate, and the generator has to know it.**
+
+- **`memberships`** carries a second `USING` branch on an `app.user_id` GUC, because tenant resolution reads it before a tenant is known — the policy is written out in P0-23. `WITH CHECK` stays tenant-only; including `user_id` there is self-service privilege escalation. A generator that overwrites this with the default policy silently breaks login, so the override belongs in the table list, not in a hand-edit after generation.
+- **`tenants`** has no `tenant_id` column, but it should still carry `USING (id = nullif(current_setting('app.tenant_id', true), '')::uuid)`. Every runtime read of a tenant row happens with context already set, so the policy costs nothing and closes the obvious hole of a bug enumerating every tenant. The one path it blocks is signup, which creates a tenant before context exists — generate the id in the application and open the transaction with `withTenant(newId, ...)`, so the insert satisfies its own `WITH CHECK`.
 
 **Tests.** P0-38 and P0-41.
 
