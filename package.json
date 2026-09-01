@@ -19,6 +19,7 @@
     "lint": "turbo run lint",
     "lint:root": "eslint . --ignore-pattern \"apps/**\" --ignore-pattern \"packages/**\"",
     "typecheck": "turbo run typecheck",
+    "typecheck:infra": "node scripts/check-infra-types.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "clean": "rimraf --glob coverage .turbo \"{apps,packages}/*/dist\" \"{apps,packages}/*/.turbo\" \"{apps,packages}/*/*.tsbuildinfo\"",

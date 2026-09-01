@@ -22,7 +22,7 @@ This document doubles as the build brief — it is written to be executable, not
 |---|---|---|
 | Language | **TypeScript everywhere** | Chosen for least code and least spend: one language across widget, dashboard, API and worker; contract types shared, not regenerated; one test runner; one CI; one container base. A second toolchain (Python AI service) would double CI, add cross-language contract drift, and buy nothing that pgvector plus the vendor TS SDKs don't already give. |
 | Monorepo | **pnpm workspaces + Turborepo** | pnpm's strict linking stops accidental cross-package imports. Turborepo (~30 lines of `turbo.json`) declares task order once, runs independent tasks in parallel, and **caches task results by input hash** — so a PR touching only the widget replays cached results for `db`/`core`/`security` instead of re-running them. That matters specifically because the test suite is ~60% of this repo and CI would otherwise be the slowest part of every loop. |
-| IaC | **SST v3** | Chosen for maintainability, not brevity: `sst dev` runs your local code against real AWS events (live Lambda), which is the single biggest day-to-day productivity factor for a Lambda app and cannot easily be replicated with raw CDK. It also owns the error-prone wiring — CloudFront ↔ Function URL ↔ `streaming: true` ↔ static-site deploys with cache invalidation — in ~100 lines versus 300–500. Risk acknowledged: SST v3 moved from CloudFormation to Pulumi, so the framework has churn history; mitigated by the fact that every resource underneath is standard AWS and SST exposes an escape hatch to raw resources. |
+| IaC | **SST v4** (pinned `4.17.1`; the plan originally said v3, superseded — see P0-11) | Chosen for maintainability, not brevity: `sst dev` runs your local code against real AWS events (live Lambda), which is the single biggest day-to-day productivity factor for a Lambda app and cannot easily be replicated with raw CDK. It also owns the error-prone wiring — CloudFront ↔ Function URL ↔ `streaming: true` ↔ static-site deploys with cache invalidation — in ~100 lines versus 300–500. Risk acknowledged: the v3 line moved from CloudFormation to Pulumi and v4 continued it, so the framework has churn history; mitigated by the fact that every resource underneath is standard AWS and SST exposes an escape hatch to raw resources. That churn is exactly why every option used in `sst.config.ts` and `infra/` is checked against the pinned tag's source rather than against docs or memory. |
 | API | **Hono on AWS Lambda (arm64)**, behind CloudFront + Function URLs | Not NestJS: Nest's DI bootstrap costs 1–2s cold start and ~1 GB on Lambda. Hono is ~14 KB, cold-starts in ~150–250 ms at 512 MB, and its middleware are plain functions — easier to unit-test than Nest guards, and less boilerplate. Lambda means **zero idle cost**. |
 | Streaming | **Lambda Function URL with `RESPONSE_STREAM`** | SSE for the chat endpoint. Response streaming is first-class on **Node.js managed runtimes**; Go/Python need a custom runtime or the Lambda Web Adapter. API Gateway cannot stream — Function URLs (fronted by CloudFront) are required. |
 | Dashboard | **Static Vite + Preact SPA on S3 + CloudFront** | Not Next.js: the dashboard sits entirely behind a login, so SSR buys no SEO and no first-paint advantage worth paying for. A static SPA needs **no server at all** — it rides the same CloudFront distribution as the widget, costs pennies, removes Vercel (or OpenNext) as a deployment target, and eliminates a whole class of server/client-component bugs. Preact rather than React so there is **one** UI runtime across both apps. |
@@ -1665,7 +1665,9 @@ Do not settle for validating `renovate.json` against `renovate-schema.json` with
 
 **How.** `new sst.aws.Vpc('Vpc', { nat: 'ec2' })` if the SST version supports an EC2-based NAT; otherwise `{ nat: false }` and attach the P0-13 instance manually. **Verify no `AWS::EC2::NatGateway` appears in the deployed resources** — this is the check that actually protects the budget. Two AZs (RDS requires a subnet group spanning two), single NAT.
 
-**SST v4 supports `nat: "ec2"`, and it is the fck-nat AMI on `t4g.nano` by default.** Confirmed in `platform/src/components/aws/vpc.ts` at the pinned tag. Two consequences: the `{ nat: false }` fallback in this task is unnecessary, and **P0-13 is already delivered by this option** — SST's EC2 NAT path *is* fck-nat with routing for the private subnets. Re-read P0-13 as a verification task rather than a build task.
+**SST v4 supports `nat: "ec2"`, and it is the fck-nat AMI on `t4g.nano` by default.** Confirmed in `platform/src/components/aws/vpc.ts` at the pinned tag, so the `{ nat: false }` fallback in this task is unnecessary.
+
+**It does not, however, deliver all of P0-13** — an earlier revision of this plan claimed it did, and that was wrong. SST's EC2 NAT covers the fck-nat AMI (looked up via SSM), `sourceDestCheck: false` and the `0.0.0.0/0` private route table. It does **not** cover the other two things P0-13 asks for. See P0-13.
 
 **The zero-NAT-Gateway claim is provable from source, not only from a deploy.** The same file creates `ec2.NatGateway` resources exclusively when the NAT type is `"managed"`, so `nat: "ec2"` provisions none. Worth knowing, because the deployed assertion needs AWS access and this one does not.
 
@@ -1683,11 +1685,27 @@ Do not settle for validating `renovate.json` against `renovate-schema.json` with
 
 **Why.** Lambda in the VPC needs outbound internet for Stripe, Resend, and domain verification. ~$4/month versus ~$32.
 
-**How.** Use the `fck-nat` community AMI (looked up by SSM parameter, not hard-coded). Disable source/destination checking — omitting this is the classic failure where the instance runs but forwards nothing. Add the `0.0.0.0/0` route in the private route table to its ENI, and an ASG of size 1 so instance replacement is automatic.
+**Most of this is already done by `nat: "ec2"` from P0-12.** Verified line by line against the pinned SST source rather than assumed:
 
-**Tests.** From a Lambda in the private subnet, `fetch('https://api.stripe.com')` resolves. Add this as a deploy-time smoke check.
+| P0-13 requirement | SST `nat: "ec2"` | Status |
+|---|---|---|
+| fck-nat AMI, looked up not hard-coded | resolved via `ssm.Parameter.get` | done |
+| `sourceDestCheck` disabled | set `false` on the instance | done |
+| `0.0.0.0/0` route in the private route table | route table created and associated | done |
+| `t4g.nano` | the default; now stated explicitly | done |
+| **one** NAT instance | **one per AZ** — `zones.map(...)` | **not done** |
+| ASG of size 1 for automatic replacement | a bare `ec2.Instance`, no ASG | **not done** |
 
-**Files.** `infra/nat.ts`. **~60 lines.**
+**So what remains is two decisions, not an implementation.** Both cost money in different currencies and neither has a default that is obviously right:
+
+1. **Per-AZ instances.** With `az: 2` this is two `t4g.nano` (~$6–7/month) rather than the ~$3–4 the §5.1 single-NAT model assumes. Buying the second instance also buys AZ-failure independence, which a single shared NAT does not have — a single NAT means one AZ's outage takes egress down for both. Cheaper is not automatically better here, but the cost model should say which was chosen.
+2. **No automatic replacement.** This is the sharper one. A dead NAT instance takes down private-subnet egress — Stripe, Resend, domain verification — and nothing brings it back. Options, cheapest first: a CloudWatch `StatusCheckFailed_System` alarm with the `ec2:recover` action (handles host failure, not a hung OS); or replacing SST's NAT with a hand-rolled ASG of size 1 via `nat: false` and raw Pulumi, which is the plan's original design and buys full control at the cost of owning networking code that SST otherwise maintains and tests.
+
+**Do not hand-roll the ASG without a deploy target.** Raw NAT/route-table wiring that typechecks but was never deployed is the worst kind of infrastructure code: it looks finished and its failure mode is silent loss of all outbound traffic.
+
+**Tests.** From a Lambda in the private subnet, `fetch('https://api.stripe.com')` resolves. Add this as a deploy-time smoke check. Until a stage exists, `pnpm typecheck:infra` is what verifies the configuration compiles at all.
+
+**Files.** `infra/vpc.ts` (explicit instance type), `tsconfig.sst.json`, `scripts/check-infra-types.mjs`. **~90 lines.**
 
 ---
 
@@ -5137,11 +5155,24 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **+** CI guard asserting no managed NAT is configured. First version grepped for `managed` and flagged `infra/vpc.ts`'s own explanation of why managed NAT is avoided — so it is anchored on the assignment, and verified against both the string and the object form of the option.
 - **⚠ Not deployed.** The plan's acceptance test needs AWS credentials and creates billable resources.
 
+### P0-13 · NAT instance — mostly pre-delivered, two decisions left
+
+- **Correction to this plan.** The P0-12 entry previously stated that `nat: "ec2"` delivered P0-13 outright. It does not: it covers the AMI lookup, `sourceDestCheck` and the private route table, but creates **one instance per AZ** (two, at `az: 2`) and uses a bare `ec2.Instance` with **no ASG**, so there is no automatic replacement. Both were found by reading the pinned source; both are now recorded in P0-12 and P0-13.
+- **+** The NAT instance type is stated explicitly instead of inherited from SST's default. It is the figure the cost model rests on, and a change to that default would move the bill with no diff in this repo.
+- **Δ** Did not hand-roll the ASG. It is the plan's original design, but raw NAT and route-table wiring that has never been deployed is the worst kind of infrastructure code — it reads as finished and fails by silently dropping all egress. Left as an explicit decision instead.
+
+### Infrastructure typechecking — closed as part of P0-13
+
+- **+** `sst install` generates `.sst/platform/config.d.ts` and needs **no AWS credentials**, which makes `sst.config.ts` and `infra/**` typecheckable after all. Added `tsconfig.sst.json` and `scripts/check-infra-types.mjs`. Before this, every line of infrastructure in P0-11 and P0-12 was unverified.
+- **+** Errors are filtered to our own files. SST's platform sources do not currently compile cleanly against the Node types resolved here — a mismatch inside a vendored toolchain. `skipLibCheck` does not help, because the offending files are `.ts` sources, not declarations.
+- **⚠ A silent-pass bug, caught only by testing the failure path.** The first version shelled out via `npx`, which on Windows resolves to `npx.cmd` — and since the fix for CVE-2024-27980 Node refuses to spawn `.cmd` without `shell: true`. It failed with `EINVAL`, produced no output, and the gate read that silence as "no errors" and exited 0. Now it invokes `node node_modules/typescript/bin/tsc` directly and treats an empty result from a non-zero exit as a failure. The general lesson: **a gate that shells out must distinguish "nothing wrong" from "nothing ran"**, and the only way to know which one you built is to break it on purpose.
+
 ### ⚠ Open items
 
 | Item | Owner | Note |
 |---|---|---|
-| SST config is not typechecked | later | `sst.config.ts` and `infra/**` are excluded from ESLint and typecheck; their types come from generated `.sst/platform`. Close it with an `sst install && tsc` step once SST is set up in CI. |
+| NAT: per-AZ count and no auto-replacement | needs a decision | Two `t4g.nano` instead of one (~$6-7 vs ~$3-4/month), and a dead NAT silently kills private-subnet egress with nothing to restore it. See P0-13 for the options. |
+| Infra typecheck needs `sst install` in CI | later | `pnpm typecheck:infra` is local-only until CI runs `sst install` first; that download is the cost of enforcing it. |
 | SST never deployed | needs AWS access | P0-11/P0-12 are verified against pinned SST source only. The plan's acceptance tests — tags visible in the console, zero NAT Gateways in the deployed stack — need credentials and create billable resources. |
 | AWS region is an assumption | needs a decision | `eu-west-1`, chosen in P0-11 because §5 pins no region. Confirm against Bedrock model availability for the §5.3 default before the first deploy; it is one line now and a migration later. |
 | OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |
