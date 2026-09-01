@@ -5259,7 +5259,13 @@ Reviewed as delivered, then rebuilt as three branches. P0-17a was dropped entire
 
 **Other corrections.** `forceDestroy` on the dashboard bucket is now stage-conditional, matching the treatment of `removal: retain` and RDS deletion protection. `getDb(url?)` accepted a URL and ignored it once cached, silently returning the first connection; it now takes no arguments. Removed `getSql`, the `DbConfig` knobs nothing set, and the `__setDbForTests` backdoor — `withTenant` already accepts an injected database, so the seam was unused indirection.
 
-**Adding Testcontainers broke `pnpm install --frozen-lockfile`.** pnpm 11 exits non-zero on unapproved build scripts, including in CI. Recorded the decision in `pnpm-workspace.yaml` as `ignoredBuiltDependencies` rather than approving them — not running third-party postinstall scripts is the safer default anyway.
+**Adding Testcontainers broke `pnpm install --frozen-lockfile` — and the first fix did not work.** pnpm 11 blocks dependency build scripts and then exits non-zero to force acknowledgement, including under `--frozen-lockfile`, so every CI job failed at the install step and nothing after it ran.
+
+The fix that *appeared* to work was `ignoredBuiltDependencies` in `pnpm-workspace.yaml`. It passed locally and failed in CI, because pnpm caches the decision in `node_modules/.modules.yaml`: the local tree had it recorded from an earlier interactive install, so the check was satisfied there and only there. **Verifying an install fix in a tree that already has `node_modules` proves nothing** — reproduce in a fresh worktree, which is what CI actually starts from.
+
+`onlyBuiltDependencies` and `ignoredBuiltDependencies` were both tried, in `pnpm-workspace.yaml` and in `package.json`'s `pnpm` field. None suppresses the error in pnpm 11.24. Only `strictDepBuilds: false` does.
+
+What that setting changes, precisely: pnpm **still refuses to run the scripts** — confirmed by the absence of any native build output after a clean install. Only the error is silenced, so the supply-chain protection is intact and what is lost is the *notification* that a future dependency wants to run code at install time. Renovate and the P0-08 audit gate remain the compensating controls. Do not list the unused keys alongside it: config that reads as load-bearing while doing nothing is worse than no config.
 
 ### ⚠ Open items
 
