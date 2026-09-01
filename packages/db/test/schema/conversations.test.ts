@@ -19,6 +19,16 @@ describe('conversations schema', () => {
     );
   });
 
+  it('cascades from tenants.id', () => {
+    // The P7-07 retention purge and a GDPR erasure both rely on deleting a
+    // tenant taking its whole history with it.
+    const [foreignKey] = conversationConfig.foreignKeys;
+    const reference = foreignKey?.reference();
+
+    expect(getTableConfig(reference?.foreignTable ?? conversations).name).toBe('tenants');
+    expect(foreignKey?.onDelete).toBe('cascade');
+  });
+
   it('indexes the scan the purge job and analytics both make', () => {
     expect(conversationConfig.indexes.map((i) => i.config.name)).toContain(
       'conversations_tenant_started_idx',

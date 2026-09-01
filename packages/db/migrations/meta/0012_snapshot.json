@@ -1,6 +1,6 @@
 {
-  "id": "4eef81c7-fdf1-416b-b130-5fcce06fa997",
-  "prevId": "504a8798-7eea-4f1d-a603-9bc24c1827a1",
+  "id": "3fba5a47-886d-41e8-8959-508401a0e812",
+  "prevId": "3e106d13-2aeb-4076-8734-a5bb4b0aece7",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -406,12 +406,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "dim": {
-          "name": "dim",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -618,30 +612,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'PENDING'"
-        },
-        "enriched_tasting_notes": {
-          "name": "enriched_tasting_notes",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "enriched_food_pairings": {
-          "name": "enriched_food_pairings",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "enriched_model": {
-          "name": "enriched_model",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "enriched_at": {
-          "name": "enriched_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         },
         "created_at": {
           "name": "created_at",
