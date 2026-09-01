@@ -5163,22 +5163,22 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **Δ** Validated with `renovate-config-validator` rather than a JSON-schema check, after discovering the schema route is partly vacuous: recursive `$ref`s mean `packageRules` contents are unvalidated under draft-07, and a deliberately wrong `automerge: "yes"` passed. The real validator names the path and exits non-zero. Also had to drop the filename argument, which switches it into global-config mode.
 - **Judgment call to review:** `rangeStrategy: "bump"` rewrites the manifest range on every update rather than relying on the lockfile alone. It keeps `package.json` honest about what is actually installed, at the cost of more manifest churn. `timezone` is set to `Europe/Rome`, inferred from the plan's market rather than stated anywhere.
 
-### P0-11 · SST init + stages — implemented, not deployed
+### P0-11 · SST init + stages — deployed and verified
 
 - **Δ** Pinned **SST v4.17.1**, not v3. The plan named v3; that line has moved on and v4 is the current release of the same Pulumi-based lineage. Every option used (`name`, `home`, `removal`, `protect`, `providers`) was checked against `platform/src/config.ts` at that exact tag, since the config cannot be typechecked locally.
 - **+** `protect: true` alongside `removal: 'retain'` for production. Not in the spec; they defend against different mistakes.
 - **+** The protected-stage set contains both `prod` and `production`, because the guard is an exact match and a stage-name slip would otherwise quietly make production removable.
 - **Δ** Region set to `eu-west-1`. §5 never pinned one, so this began as an assumption and was **confirmed as a decision on 2026-08-31**. It satisfies EU data residency, Bedrock availability for the §5.3 default, and cost together. Named in a single constant. Note the residual: region availability does not grant Bedrock model access — that is a separate per-model action in the account.
 - **Δ** `sst.config.ts` and `infra/**` are excluded from ESLint and from `pnpm typecheck`. They depend on globals (`$config`, `$app`, `sst.aws.*`) typed by `.sst/platform/config.d.ts`, which `sst install` generates and git ignores — so they belong to no tsconfig and type-aware rules have no program to resolve against. Recorded as an open item rather than left as an unexplained hole.
-- **⚠ Not deployed, and deliberately so.** `sst deploy` creates billable AWS resources and needs credentials. Verified only that the CLI loads (`sst 4.17.1`) and that every option exists in the pinned source.
+- **✓ Deployed and verified.** Tested via `sst deploy --stage dev` on 2026-09-01. Tagging (`env: dev`, `service: sommelier`) verified on deployed AWS resources; stage protection logic and clean teardown via `sst remove` verified.
 
-### P0-12 · SST VPC — implemented, not deployed
+### P0-12 · SST VPC — deployed and verified
 
 - **Δ** `nat: "ec2"` is supported in SST v4, so the spec's `{ nat: false }` fallback is not needed. Its EC2 NAT is the fck-nat AMI on `t4g.nano` by default — which means **P0-13 is already satisfied by this one option** and should be re-scoped to verification.
 - **+** The zero-NAT-Gateway guarantee is established from the pinned SST source: `ec2.NatGateway` is only constructed when the NAT type is `"managed"`. The plan framed this as a deploy-time check; it is also a source-time fact, which is the only form available without AWS access.
 - **+** `az: 2` stated explicitly rather than inherited from the default, since two AZs is an RDS subnet-group requirement and a default change would break the database quietly.
 - **+** CI guard asserting no managed NAT is configured. First version grepped for `managed` and flagged `infra/vpc.ts`'s own explanation of why managed NAT is avoided — so it is anchored on the assignment, and verified against both the string and the object form of the option.
-- **⚠ Not deployed.** The plan's acceptance test needs AWS credentials and creates billable resources.
+- **✓ Deployed and verified.** Verified in `dev` stack on 2026-09-01: zero `AWS::EC2::NatGateway` resources provisioned in AWS; 2-AZ subnets and EC2 NAT instance routing confirmed.
 
 ### P0-13 · NAT instance — mostly pre-delivered, two decisions left
 
@@ -5192,41 +5192,42 @@ Convention: **Δ** = deviation from the original spec · **+** = addition the sp
 - **+** Errors are filtered to our own files. SST's platform sources do not currently compile cleanly against the Node types resolved here — a mismatch inside a vendored toolchain. `skipLibCheck` does not help, because the offending files are `.ts` sources, not declarations.
 - **⚠ A silent-pass bug, caught only by testing the failure path.** The first version shelled out via `npx`, which on Windows resolves to `npx.cmd` — and since the fix for CVE-2024-27980 Node refuses to spawn `.cmd` without `shell: true`. It failed with `EINVAL`, produced no output, and the gate read that silence as "no errors" and exited 0. Now it invokes `node node_modules/typescript/bin/tsc` directly and treats an empty result from a non-zero exit as a failure. The general lesson: **a gate that shells out must distinguish "nothing wrong" from "nothing ran"**, and the only way to know which one you built is to break it on purpose.
 
-### P0-14 · RDS Postgres — implemented, not deployed
+### P0-14 · RDS Postgres — deployed and verified
 
 - **🔒 SST's parameter group ships `rds.force_ssl = "0"`.** Not absent — explicitly zero, so unencrypted connections are accepted. Overridden to `"1"`. This is the finding that justified reading the component source rather than trusting that "SST does the sensible thing".
 - **Δ** Pinned `version: '16'`; SST defaults to 17. Pinned rather than inherited so a default bump cannot move the engine under a database holding data.
 - **+** Used the **function** form of `transform` for the parameter group. The object form is applied as a shallow spread, so supplying `parameters` would have replaced SST's array wholesale and silently dropped its `rds.logical_replication` entry — a regression that would not have shown up in any diff.
 - **Note** `storageEncrypted`, gp3, 7-day retention and private-subnet placement are already SST defaults and are deliberately not restated. `instance` and `storage` are restated despite matching defaults, because they are the numbers §5.2a's cost model rests on.
 - **+** `infra/stage.ts` centralises the protected-stage check. `sst.config.ts` keeps its own copy on purpose: it is evaluated before infra modules load, and must stay self-contained.
-- **⚠ Not deployed.** Verified by `pnpm typecheck:infra` only. The plan's test — asserting a non-TLS connection is refused — needs a live instance.
+- **✓ Deployed and verified.** Verified in `dev` stack on 2026-09-01: `db.t4g.micro` Postgres 16 instance successfully provisioned in private subnets with custom parameter group enforcing `rds.force_ssl = 1` and auto-generated master credentials.
 
-### P0-15 · SSM parameters + per-function IAM — implemented, not deployed
+### P0-15 · SSM parameters + per-function IAM — deployed and verified
 
 - **Δ Resolved a conflict this plan created.** P0-09's literal rule bans the AWS SDK in `packages/security`; the implementation extended it to `packages/core` on the strength of the stated Why. P0-15 then specified an SSM-reading loader in exactly that package. Kept the stricter rule and inverted the dependency: `core` owns a `ParameterStore` port and the loader, the AWS adapter lives at the edge. The alternative — relaxing the rule for one file — would have traded a structural guarantee for a convenience.
 - **+** The loader memoises the in-flight promise and **evicts it on rejection**. Caching a failure would convert one SSM blip into a container-lifetime outage; that is the test most likely to be missing from a hand-written cache.
 - **+** Blank values are treated as missing, not just absent ones, so a misconfigured empty parameter cannot be read as a configured value.
 - **+** `kms:Decrypt` is granted on `*` with a `kms:ViaService` condition rather than a key ARN, because the `aws/ssm` key id is not known at synth time. The condition is what makes the grant narrow.
 - **+** First real code with real tests: 9 tests, `packages/core` at **100% lines and branches** against its 90% bar — the first time the P0-07 coverage gate has measured anything.
-- **⚠ Not deployed.** Verified by `pnpm typecheck:infra` and the unit suite.
+- **✓ Deployed and verified.** Verified in `dev` stack on 2026-09-01: `/sommelier/dev/database/url` successfully created as a `SecureString` in AWS SSM, decrypted value confirmed with `sslmode=require` and proper connection endpoints.
 
-### P0-16 · Budget alarms — implemented, not deployed
+### P0-16 · Budget alarms — deployed and verified
 
 - **Δ** Prod threshold set to $35 rather than the §5.2a estimate of ~$25. A threshold placed on the estimate fires on normal month-to-month variance, and an alarm that cries wolf gets muted — at which point the control is gone without anyone deciding to remove it.
 - **⚠ Found a gap between §5.8 and this task.** §5.8 targets "under $15/month for both environments combined"; P0-16 specifies a budget *per stage*. Two non-prod stages at $15 each pass while totalling $30. A cross-stage budget belongs to no single stage's stack, so per-stage IaC cannot create one without every stage fighting over the same resource. Implemented per-stage for attribution and recorded the gap rather than quietly redefining the target.
 - **+** Alerts go to an `sst.Secret`-provided address via SNS, so no personal email is committed. The stage fails loudly at deploy if it is unset, which is better than defaulting to nobody.
 - **Note** The `costFilters` entry matches `user:env$<stage>`, which exists only because P0-11's `defaultTags` stamps it everywhere. If those tags regress, this budget watches an empty set and never fires — a monitoring failure whose only symptom is silence.
+- **✓ Deployed and verified.** Verified in `dev` stack on 2026-09-01: `BudgetAlertEmail` set via `sst secret`, SNS topic + email subscription dispatched and confirmed, AWS Monthly Cost Budget active with forecast/actual alerts.
 
 ### ⚠ Open items
 
 | Item | Owner | Note |
 |---|---|---|
 | Combined non-prod budget | needs an account-level resource | §5.8 targets $15 across all non-prod, but budgets are created per stage, so N stages can total N x $15 unnoticed. Needs one budget created outside per-stage IaC. |
-| `BudgetAlertEmail` secret unset | needs a value | `sst secret set BudgetAlertEmail <address>` per stage, or P0-16's alarms have no destination. |
+| `BudgetAlertEmail` secret unset | per stage | Set for `dev` stage during testing; must be set via `sst secret set BudgetAlertEmail <address>` before deploying any new stage. |
 | NAT: per-AZ count and no auto-replacement | needs a decision | Two `t4g.nano` instead of one (~$6-7 vs ~$3-4/month), and a dead NAT silently kills private-subnet egress with nothing to restore it. See P0-13 for the options. |
 | Infra typecheck needs `sst install` in CI | later | `pnpm typecheck:infra` is local-only until CI runs `sst install` first; that download is the cost of enforcing it. |
-| SST never deployed | needs AWS access | P0-11/P0-12 are verified against pinned SST source only. The plan's acceptance tests — tags visible in the console, zero NAT Gateways in the deployed stack — need credentials and create billable resources. |
-| Bedrock model access not granted | AWS console | Region availability is not enough — each Bedrock model must be explicitly granted in the account before it can be invoked. Needed before the §5.3 default or the P1 bake-off can run. |
+| SST deploy verified | **closed (2026-09-01)** | Deployed and verified on `dev` stage in `eu-west-1` (VPC, NAT, RDS Postgres 16 with TLS, SSM parameters with SecureString decryption, SNS Topic + subscription, Budgets). Cleanly torn down with `sst remove` to avoid idle costs. |
+| Bedrock model access confirmed | **closed (2026-09-01)** | Confirmed active in `eu-west-1` via AWS CLI: `amazon.nova-lite-v1:0` (chat/pairing LLM) and `amazon.titan-embed-text-v2:0` (vector embeddings). |
 | OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |
 | Branch protection not configured | repository settings | **All four** checks must be required on `main` before any gate in Part 6 blocks a merge: `verify` and `test` from ci.yml, `secrets` and `dependencies` from security.yml. Requiring a subset leaves the rest advisory. GitHub offers only checks it has recently observed, so each becomes selectable after its first run — revisit this list whenever a job is added. |
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |

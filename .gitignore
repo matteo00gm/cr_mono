@@ -8,6 +8,7 @@ build/
 
 # SST
 .sst/
+sst-env.d.ts
 
 # Turborepo
 .turbo/
