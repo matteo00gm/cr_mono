@@ -2284,6 +2284,10 @@ Grant INSERT and SELECT only. Enforced at the grant level, not by convention —
 
 **Tests.** Second insert of the same `(provider, event_id)` raises a unique violation.
 
+**The key is the mechanism, so there is no surrogate id** *(decision).* A primary key over `(provider, event_id)` rather than a unique index beside a generated `id`: there is nothing else about a row here worth identifying, and the handler's real shape is `insert ... on conflict do nothing returning`, where an empty result means somebody else already claimed the event. Asserted that way, including the concurrent-delivery case, not just the bare unique violation.
+
+**`provider` leads the key** because event ids are only unique within a provider. Shopify arrives at P6-07 and will reuse `evt_`-shaped ids of its own.
+
 **Files.** schema + migration. **~30 lines.**
 
 ---
