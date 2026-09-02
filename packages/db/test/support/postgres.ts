@@ -1,10 +1,6 @@
-import { readdir, readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import postgres from 'postgres';
+
+import { applyBootstrap, applyMigrations, type BootstrapRole } from '../../src/deploy.js';
 
 /**
  * Shared Postgres fixture for the integration suites (P0-20, P0-21).
@@ -32,16 +28,10 @@ export const POSTGRES_IMAGE = 'pgvector/pgvector:0.8.0-pg16';
  * real ones. Fixed rather than random so a failing run can be reproduced by
  * connecting to the container by hand.
  */
-export const ROLE_PASSWORDS = {
+export const ROLE_PASSWORDS: Record<BootstrapRole, string> = {
   app_migrate: 'app_migrate_test_password',
   app_rw: 'app_rw_test_password',
-} as const;
-
-export type BootstrapRole = keyof typeof ROLE_PASSWORDS;
-
-const PACKAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), '../..');
-const BOOTSTRAP_DIR = join(PACKAGE_DIR, 'bootstrap');
-const MIGRATIONS_DIR = join(PACKAGE_DIR, 'migrations');
+};
 
 export interface TestPostgres {
   readonly container: StartedPostgreSqlContainer;
@@ -53,6 +43,11 @@ export interface TestPostgres {
 
 /**
  * Starts a container, applies `bootstrap/`, then runs the migrations.
+ *
+ * Both steps come from `src/deploy.ts` — the module a deploy uses — rather
+ * than from a copy living here. When the two were separate, these suites could
+ * prove the SQL correct while the deploy path stayed broken, which is exactly
+ * what happened with the P0-21 `CREATE SCHEMA` grant.
  *
  * Returns connection strings rather than a client: suites need to connect as
  * different roles, and handing back one client would quietly make the superuser
@@ -69,62 +64,8 @@ export const startPostgres = async (): Promise<TestPostgres> => {
   const roleUrl = (role: BootstrapRole) =>
     `postgres://${role}:${ROLE_PASSWORDS[role]}@${host}:${port}/${database}?sslmode=disable`;
 
-  await applyBootstrap(adminUrl);
+  await applyBootstrap(adminUrl, ROLE_PASSWORDS);
   await applyMigrations(roleUrl('app_migrate'));
 
   return { container, adminUrl, roleUrl };
-};
-
-/**
- * Applies every file in `bootstrap/`, in filename order, as the connecting role.
- *
- * Role passwords go in as session GUCs through a bound parameter, never
- * interpolated into the SQL — the same shape the deployed bootstrap will use
- * with values read from SSM, so this path is not a test-only shortcut.
- *
- * `max: 1` is what makes that work: the GUCs are session state, so the files
- * have to run on the same connection that set them.
- *
- * The files themselves run through postgres-js's simple protocol (`.simple()`)
- * because each holds several statements, and the extended protocol accepts only
- * one per round trip. Simple queries cannot carry bound parameters, which is
- * precisely why the passwords arrive as GUCs instead.
- */
-export const applyBootstrap = async (
-  url: string,
-  passwords: Record<BootstrapRole, string> = ROLE_PASSWORDS,
-): Promise<void> => {
-  const files = (await readdir(BOOTSTRAP_DIR)).filter((f) => f.endsWith('.sql')).sort();
-  const sql = postgres(url, { max: 1 });
-
-  try {
-    for (const [role, password] of Object.entries(passwords)) {
-      await sql`select set_config(${`bootstrap.${role}_password`}, ${password}, false)`;
-    }
-
-    for (const file of files) {
-      await sql.unsafe(await readFile(join(BOOTSTRAP_DIR, file), 'utf8')).simple();
-    }
-  } finally {
-    await sql.end();
-  }
-};
-
-/**
- * Runs the migration chain through Drizzle's own migrator.
- *
- * The real path, not a re-implementation: it reads `meta/_journal.json` and
- * records what it applied, so a broken journal fails here rather than on a
- * deploy. Call it as `app_migrate` — whoever runs a migration owns the tables
- * it creates, and everything about tenant isolation depends on that owner not
- * being `app_rw`.
- */
-export const applyMigrations = async (url: string): Promise<void> => {
-  const sql = postgres(url, { max: 1 });
-
-  try {
-    await migrate(drizzle({ client: sql }), { migrationsFolder: MIGRATIONS_DIR });
-  } finally {
-    await sql.end();
-  }
 };

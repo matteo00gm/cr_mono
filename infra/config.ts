@@ -154,3 +154,42 @@ export const parameterReadPermissions = (names: readonly string[]) => {
     },
   ];
 };
+
+/**
+ * Read access to the deploy-time parameters, for the migration runner only
+ * (P0-21b).
+ *
+ * `parameterReadPermissions` throws on these paths by design, so the deploy
+ * path needs its own grant rather than an exception threaded through the
+ * function every application component calls. Two entry points, named
+ * differently, is the point: granting the master connection is a deliberate
+ * act that reads as one at the call site.
+ *
+ * Whatever uses this runs in-VPC. RDS is in private subnets with egress but no
+ * inbound path, so a GitHub-hosted runner cannot reach the database — see
+ * P0-21b for why that decision belongs to this task rather than to P0-40.
+ */
+export const deployParameterReadPermissions = () => [
+  {
+    actions: ['ssm:GetParameter', 'ssm:GetParameters'],
+    resources: [
+      'database/master_url',
+      'database/app_rw_password',
+      'database/app_migrate_password',
+    ].map(
+      (name) =>
+        $interpolate`arn:aws:ssm:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:parameter${parameterPath(name)}`,
+    ),
+  },
+  {
+    actions: ['kms:Decrypt'],
+    resources: ['*'],
+    conditions: [
+      {
+        test: 'StringEquals',
+        variable: 'kms:ViaService',
+        values: [$interpolate`ssm.${aws.getRegionOutput().name}.amazonaws.com`],
+      },
+    ],
+  },
+];

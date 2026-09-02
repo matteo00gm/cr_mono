@@ -2,7 +2,8 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
-import { applyBootstrap, startPostgres } from './support/postgres.js';
+import { applyBootstrap } from '../src/deploy.js';
+import { ROLE_PASSWORDS, startPostgres } from './support/postgres.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
 /**
@@ -65,7 +66,7 @@ describe('bootstrap/0000_extensions', () => {
     // one-shot someone has to remember not to repeat.
     const before = await db.execute(sql`select extname, extversion from pg_extension order by 1`);
 
-    await applyBootstrap(adminUrl);
+    await applyBootstrap(adminUrl, ROLE_PASSWORDS);
 
     const after = await db.execute(sql`select extname, extversion from pg_extension order by 1`);
     expect([...after]).toEqual([...before]);

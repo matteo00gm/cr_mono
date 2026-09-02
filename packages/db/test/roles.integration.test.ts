@@ -2,12 +2,8 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
-import {
-  applyBootstrap,
-  ROLE_PASSWORDS,
-  startPostgres,
-  type TestPostgres,
-} from './support/postgres.js';
+import { applyBootstrap } from '../src/deploy.js';
+import { ROLE_PASSWORDS, startPostgres, type TestPostgres } from './support/postgres.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
 /**
@@ -153,7 +149,7 @@ describe('bootstrap/0001_roles', () => {
       await withNewPassword.close();
       // Put it back: later files in this suite, and any suite sharing the
       // fixture, expect the documented password.
-      await applyBootstrap(started.adminUrl);
+      await applyBootstrap(started.adminUrl, ROLE_PASSWORDS);
     }
   });
 });
