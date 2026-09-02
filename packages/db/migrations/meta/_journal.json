@@ -127,6 +127,20 @@
       "when": 1788390662615,
       "tag": "0017_audit_log_append_only",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1788390810272,
+      "tag": "0018_security_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788390813205,
+      "tag": "0019_security_events_append_only",
+      "breakpoints": true
     }
   ]
 }
