@@ -58,3 +58,31 @@ export const database = new sst.aws.Postgres('Database', {
     },
   },
 });
+
+/**
+ * Passwords for the roles `bootstrap/0001_roles.sql` creates (P0-21a).
+ *
+ * Generated rather than typed by a person. No human needs to read these: the
+ * application receives them inside `database/url`, and the deploy path reads
+ * them from SSM. A password someone had to choose is a password that ends up
+ * in a password manager, a ticket, or a screenshot.
+ *
+ * `RandomPassword` keeps the value in Pulumi state, so it is stable across
+ * deploys. That stability is the point — a password regenerated on every
+ * deploy would immediately disagree with the one the database actually holds,
+ * and the application would start failing to authenticate somewhere between
+ * the parameter being updated and bootstrap being re-run.
+ *
+ * `special: false` because these end up inside a `postgres://` URL, where
+ * `@`, `:` and `/` are delimiters. Percent-encoding them is possible and is
+ * one more thing every consumer has to get right; 48 alphanumeric characters
+ * carry more entropy than the punctuation would add.
+ */
+const rolePassword = (logicalName: string) =>
+  new random.RandomPassword(logicalName, {
+    length: 48,
+    special: false,
+  });
+
+export const appRwPassword = rolePassword('AppRwPassword');
+export const appMigratePassword = rolePassword('AppMigratePassword');

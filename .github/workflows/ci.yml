@@ -87,6 +87,27 @@ jobs:
           fi
           echo "no managed NAT configured."
 
+      # The application must connect as app_rw, never as the RDS master. The
+      # master holds rds_superuser, which bypasses RLS outright, so every
+      # policy P0-37 writes would be inert in production while the test suite
+      # stayed green — the suite connects as app_rw and production would not.
+      #
+      # Anchored on the parameter being built rather than on the word "master":
+      # infra/config.ts explains the distinction at length, and a bare grep for
+      # the word flags the explanation. Replace this with the deployed-stack
+      # assertion in P0-39 once a stage exists.
+      - name: Assert the app database URL is built from app_rw
+        run: |
+          if ! grep -A3 "'database/url'," infra/config.ts | grep -qE "connectionUrl\('app_rw'"; then
+            echo "::error::infra/config.ts must build database/url from app_rw — see P0-21a; the RDS master bypasses RLS, which would make every P0-37 policy inert in production"
+            exit 1
+          fi
+          if ! grep -A3 "'database/master_url'," infra/config.ts | grep -qE "connectionUrl\(database\.username"; then
+            echo "::error::infra/config.ts must keep the master credentials on their own parameter — see P0-21a"
+            exit 1
+          fi
+          echo "database/url is built from app_rw; master credentials are on their own path."
+
   test:
     name: Test and coverage gates
     runs-on: ubuntu-latest
