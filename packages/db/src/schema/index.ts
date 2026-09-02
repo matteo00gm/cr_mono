@@ -11,6 +11,7 @@ export * from './conversations.js';
 export * from './memberships.js';
 export * from './product-embeddings.js';
 export * from './products.js';
+export * from './security-events.js';
 export * from './tenant-domains.js';
 export * from './tenants.js';
 export * from './usage.js';

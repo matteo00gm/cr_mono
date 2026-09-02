@@ -2264,6 +2264,12 @@ Grant INSERT and SELECT only. Enforced at the grant level, not by convention —
 
 **Tests.** Insert with a null tenant; UPDATE denied.
 
+**The nullable `tenant_id` has a consequence for P0-37** *(carry forward).* This table is not simply tenant-scoped, so it cannot take the boilerplate policy. A row with a null `tenant_id` belongs to no tenant — an `INVALID_KEY` matched none, which is why it was rejected — and the boilerplate `USING (tenant_id = current_setting(...))` would make exactly those rows invisible to everyone. They should be readable by `app_admin` only. Add it to the per-table override list alongside `memberships` and `tenants`.
+
+**`type` is an enum, unlike `audit_log.action`** *(decision).* These six drive behaviour — P2-16 counts them per key and origin to decide when a key is being abused — so an unrecognised value is a bug rather than a new fact, and the type is what makes it one. `action` is free text precisely because the opposite is true there.
+
+**`security_events_key_origin_idx` deliberately does not lead with `tenant_id`.** The rows that matter most to the P2-16 count are the ones where no tenant could be resolved at all, so an index leading on tenant would not serve them.
+
 **Files.** schema + migration. **~45 lines.**
 
 ---
