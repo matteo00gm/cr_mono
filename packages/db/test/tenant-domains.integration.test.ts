@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { startPostgres } from './support/postgres.js';
+import { timestampMicros } from './support/timestamps.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
 /**
@@ -151,6 +152,8 @@ describe('tenant_domains', () => {
       sql`select updated_at from tenant_domains where id = ${id}::uuid`,
     );
 
-    expect(Number([...after][0]?.updated_at)).toBeGreaterThan(Number([...before][0]?.updated_at));
+    expect(timestampMicros([...after][0]?.updated_at)).toBeGreaterThan(
+      timestampMicros([...before][0]?.updated_at),
+    );
   });
 });

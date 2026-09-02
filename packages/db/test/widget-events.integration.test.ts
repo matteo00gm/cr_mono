@@ -86,7 +86,7 @@ describe('widget_events', () => {
     await db.execute(sql`
       insert into widget_events (tenant_id, session_id, type, metadata)
       values (${tenantId}::uuid, 'sess-meta', 'ZERO_RESULTS',
-              ${{ query: 'vino per sushi', retrieved: 0 }})
+              ${JSON.stringify({ query: 'vino per sushi', retrieved: 0 })}::jsonb)
     `);
 
     const rows = await db.execute(

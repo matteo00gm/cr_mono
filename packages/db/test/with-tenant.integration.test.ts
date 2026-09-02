@@ -56,8 +56,12 @@ beforeAll(async () => {
   const migrateClient = createDbClient(started.roleUrl('app_migrate'), { max: 1 });
   migrator = migrateClient;
 
+  // Named for the fixture it is. P0-26 migrates a real `products` table into
+  // this same database, so calling this one `products` too failed with
+  // duplicate_table before a single assertion ran. What is proved here is the
+  // withTenant helper, which should not depend on another task's schema.
   await migrateClient.db.execute(sql`
-    create table products (
+    create table with_tenant_fixture (
       id uuid primary key default gen_random_uuid(),
       tenant_id uuid not null,
       name text not null
@@ -66,15 +70,15 @@ beforeAll(async () => {
 
   // Seeded before RLS is enabled, because FORCE applies to the table owner too.
   await migrateClient.db.execute(sql`
-    insert into products (tenant_id, name) values
+    insert into with_tenant_fixture (tenant_id, name) values
       (${TENANT_A}::uuid, 'Barolo'),
       (${TENANT_A}::uuid, 'Barbaresco'),
       (${TENANT_B}::uuid, 'Chianti')
   `);
 
-  await migrateClient.db.execute(sql`alter table products enable row level security`);
+  await migrateClient.db.execute(sql`alter table with_tenant_fixture enable row level security`);
   // FORCE matters: without it the *owner* bypasses its own policies.
-  await migrateClient.db.execute(sql`alter table products force row level security`);
+  await migrateClient.db.execute(sql`alter table with_tenant_fixture force row level security`);
   /*
    * `nullif(..., '')` is load-bearing, not defensive noise.
    *
@@ -85,7 +89,7 @@ beforeAll(async () => {
    * an error where the policy should simply match nothing.
    */
   await migrateClient.db.execute(sql`
-    create policy tenant_isolation on products
+    create policy tenant_isolation on with_tenant_fixture
       using (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
       with check (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
   `);
@@ -116,7 +120,11 @@ afterAll(async () => {
 
 describe('withTenant against real Postgres', () => {
   it("sees only the active tenant's rows", async () => {
-    const rows = await withTenant(TENANT_A, (tx) => tx.execute(sql`select name from products`), db);
+    const rows = await withTenant(
+      TENANT_A,
+      (tx) => tx.execute(sql`select name from with_tenant_fixture`),
+      db,
+    );
 
     expect([...rows].map((r) => r.name).sort()).toEqual(['Barbaresco', 'Barolo']);
   });
@@ -126,7 +134,8 @@ describe('withTenant against real Postgres', () => {
     // rather than relying on the caller to add a tenant filter.
     const rows = await withTenant(
       TENANT_A,
-      (tx) => tx.execute(sql`select name from products where tenant_id = ${TENANT_B}::uuid`),
+      (tx) =>
+        tx.execute(sql`select name from with_tenant_fixture where tenant_id = ${TENANT_B}::uuid`),
       db,
     );
 
@@ -138,7 +147,9 @@ describe('withTenant against real Postgres', () => {
     const error = await withTenant(
       TENANT_A,
       (tx) =>
-        tx.execute(sql`insert into products (tenant_id, name) values (${TENANT_B}::uuid, 'x')`),
+        tx.execute(
+          sql`insert into with_tenant_fixture (tenant_id, name) values (${TENANT_B}::uuid, 'x')`,
+        ),
       db,
     ).catch((caught: unknown) => caught);
 
@@ -164,7 +175,7 @@ describe('withTenant against real Postgres', () => {
 
   it('returns nothing when queried with no tenant context at all', async () => {
     // Fails closed: an unset app.tenant_id makes the policy NULL, not true.
-    const rows = await db.execute(sql`select name from products`);
+    const rows = await db.execute(sql`select name from with_tenant_fixture`);
 
     expect([...rows]).toHaveLength(0);
   });
