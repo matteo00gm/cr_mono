@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { startPostgres } from './support/postgres.js';
+import { timestampMicros } from './support/timestamps.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
 /**
@@ -107,6 +108,11 @@ describe('products', () => {
   it('round-trips arrays as arrays', async () => {
     // Including a value containing a comma, which is what a delimited-string
     // implementation gets wrong and an array does not.
+    //
+    // Built with `array[...]` rather than by interpolating a JS array: drizzle
+    // expands `${[a, b]}` into a row constructor `($1, $2)`, so the insert is
+    // rejected as "expression is of type record" (42804) before the comma is
+    // tested at all.
     await db.execute(sql`
       insert into products (
         tenant_id, sku, name, wine_type, price_cents, currency, stock_status,
@@ -114,7 +120,9 @@ describe('products', () => {
       )
       values (
         ${tenantId}::uuid, 'SKU-ARRAY', 'Barbaresco', 'RED', 4200, 'EUR', 'IN_STOCK',
-        ${['Nebbiolo']}, ${['Brasato al Barolo, ossobuco', 'Formaggi stagionati']}, ${['strutturato']}
+        array[${'Nebbiolo'}]::text[],
+        array[${'Brasato al Barolo, ossobuco'}, ${'Formaggi stagionati'}]::text[],
+        array[${'strutturato'}]::text[]
       )
     `);
 
@@ -149,11 +157,20 @@ describe('products', () => {
   ])('refuses %s', async (_label, column, value) => {
     // All three are import failures rather than user intent: a mis-parsed cell,
     // a European decimal comma read as a thousands separator.
+    // price_cents carries a valid value so the other two cases have one, and
+    // is overwritten when it is itself the column under test. Appending
+    // `${column}` to a fixed list that already named price_cents listed it
+    // twice, so that case failed with duplicate_column (42701) before the
+    // CHECK was ever reached — the assertion was judging the wrong error.
+    const values: Record<string, string> = { price_cents: '100', [column]: value };
+    const columns = Object.keys(values).join(', ');
+    const literals = Object.values(values).join(', ');
+
     const error = await db
       .execute(
         sql.raw(`
-          insert into products (tenant_id, sku, name, wine_type, price_cents, currency, stock_status, ${column})
-          values ('${tenantId}'::uuid, 'SKU-BAD-${column}', 'X', 'RED', 100, 'EUR', 'IN_STOCK', ${value})
+          insert into products (tenant_id, sku, name, wine_type, currency, stock_status, ${columns})
+          values ('${tenantId}'::uuid, 'SKU-BAD-${column}', 'X', 'RED', 'EUR', 'IN_STOCK', ${literals})
         `),
       )
       .catch((caught: unknown) => caught);
@@ -208,6 +225,8 @@ describe('products', () => {
     await db.execute(sql`update products set stock_qty = 12 where id = ${id}::uuid`);
     const after = await db.execute(sql`select updated_at from products where id = ${id}::uuid`);
 
-    expect(Number([...after][0]?.updated_at)).toBeGreaterThan(Number([...before][0]?.updated_at));
+    expect(timestampMicros([...after][0]?.updated_at)).toBeGreaterThan(
+      timestampMicros([...before][0]?.updated_at),
+    );
   });
 });

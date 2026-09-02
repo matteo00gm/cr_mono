@@ -77,20 +77,30 @@ describe('conversations', () => {
     const conversation = await startConversation(visitorHash('ordered'), 'sess-ordered');
     const conversationId = String([...conversation][0]?.id);
 
+    // Two statements rather than one multi-row insert. `now()` is the
+    // transaction timestamp, so rows written by a single statement share a
+    // created_at to the microsecond and come back in whatever order the heap
+    // hands them over — there is no ordering to keep. Separate statements are
+    // also how a real conversation arrives.
     await db.execute(sql`
       insert into messages (tenant_id, conversation_id, role, content, model, input_tokens, output_tokens, latency_ms)
-      values
-        (${tenantId}::uuid, ${conversationId}::uuid, 'USER', 'Che vino con il brasato?', null, null, null, null),
-        (${tenantId}::uuid, ${conversationId}::uuid, 'ASSISTANT', 'Un Barolo.', 'nova-lite', 420, 88, 640)
+      values (${tenantId}::uuid, ${conversationId}::uuid, 'USER', 'Che vino con il brasato?', null, null, null, null)
+    `);
+    await db.execute(sql`
+      insert into messages (tenant_id, conversation_id, role, content, model, input_tokens, output_tokens, latency_ms)
+      values (${tenantId}::uuid, ${conversationId}::uuid, 'ASSISTANT', 'Un Barolo.', 'nova-lite', 420, 88, 640)
     `);
 
+    // created_at alone. `role` was a tiebreaker for rows that no longer tie,
+    // and it never sorted the way it read: message_role is an enum, so it
+    // orders by declaration order, not alphabetically.
     const rows = await db.execute(sql`
       select role, content from messages
       where conversation_id = ${conversationId}::uuid
-      order by created_at, role
+      order by created_at
     `);
 
-    expect([...rows].map((r) => r.role)).toEqual(['ASSISTANT', 'USER']);
+    expect([...rows].map((r) => r.role)).toEqual(['USER', 'ASSISTANT']);
   });
 
   it('keeps a recommendation auditable after the product is deleted', async () => {
