@@ -2214,6 +2214,16 @@ The index goes in a `--custom` migration, because Drizzle cannot model an operat
 
 **Tests.** Insert and aggregate; assert `app_rw` cannot UPDATE `usage_events`.
 
+**A CHECK on `period`** *(added).* `period ~ '^[0-9]{6}$'`. Not in the original spec, but the spec's own reason for the column depends on it: the quota check is an indexed equality lookup, so it is only correct if every writer agrees on the format. A single row written `2026-09` is invisible to that lookup — and invisible usage grants *free* usage. This constraint fails closed where its absence fails open.
+
+**`kind` is `text`, not an enum** *(decision the spec left open).* §Data Model names the column without fixing its values, and the billable set grows as actions are added. The allowed set belongs in the `drizzle-zod` contract (P0-42), the same reasoning as `products.wine_type`.
+
+**`usage_daily` keeps UPDATE; `usage_events` gives it up.** The asymmetry is deliberate and asserted: the ledger must not be rewritable by the code path that writes it, while the rollup is upserted nightly and a re-run has to converge rather than fail.
+
+**Counters default to `0`, not null.** A missing day and a day with no activity are different facts; null conflates them and puts a `coalesce` in every dashboard sum that someone eventually forgets.
+
+**`tokens_in`/`tokens_out` in the rollup, `input_tokens`/`output_tokens` in the ledger** — the same quantity under two names, inherited from §Data Model, which spells them differently in the two tables. Kept rather than quietly harmonised: renaming a column the plan states explicitly belongs in a change that says so.
+
 **Files.** schema + migration. **~65 lines.**
 
 ---

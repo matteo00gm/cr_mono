@@ -1,0 +1,15 @@
+-- `usage_events` is a ledger, and append-only is a property of the grant.
+--
+-- P0-21's ALTER DEFAULT PRIVILEGES gives app_rw all four DML verbs on every
+-- table app_migrate creates, so this table arrives UPDATE-able and DELETE-able
+-- and stays that way unless something says otherwise. Intention is not a
+-- constraint: the row that bills a tenant must not be editable by the code path
+-- that bills them, and a bug in metering should fail loudly rather than quietly
+-- rewrite what was already counted.
+--
+-- SELECT and INSERT are left in place: quota enforcement (P2-36) reads this
+-- table on the hot path and writes to it after every model call.
+--
+-- `usage_daily` deliberately keeps UPDATE. It is a rollup, upserted by the
+-- nightly job (P5-13), and re-running that job must converge rather than fail.
+REVOKE UPDATE, DELETE ON usage_events FROM app_rw;
