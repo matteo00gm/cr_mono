@@ -130,10 +130,15 @@ Every tenant-scoped table gets `tenant_id uuid not null` and an RLS policy. No e
 
 ```
 tenants          id, name, slug (citext), status, plan (nullable),
-                 stripe_customer_id, stripe_subscription_id, locale, currency,
-                 created_at, updated_at
+                 stripe_customer_id, stripe_subscription_id, trial_ends_at,
+                 locale, currency, created_at, updated_at
                  status: PENDING_VERIFICATION | TRIALING | ACTIVE | PAST_DUE
                        | DISABLED | CANCELED
+                 trial_ends_at arrives with P5-05, together with the
+                 tenant_status_coherent CHECK that is its only reader —
+                 see §5.2b. It is listed here because §5.2b's constraint
+                 refers to it, and a column named in a constraint but in
+                 no table listing reads as an omission.
 
 tenant_domains   id, tenant_id, origin (text, normalized serialized origin),
                  verification_method, verification_token, verified_at, status
@@ -835,6 +840,8 @@ ALTER TABLE tenants ADD CONSTRAINT tenant_status_coherent CHECK (
 ```
 `ACTIVE` without a subscription is by definition an orphaned state, and a `CHECK` makes it unreachable by any code path — including a future bug — rather than merely untested for.
 
+**`trial_ends_at` does not exist yet.** P0-22 ships `tenants` without it, deliberately: nothing before P5 sets `TRIALING`, so the column would sit unread and the CHECK above could not be added anyway — half a constraint is not a constraint. Both land together in **P5-05**. `tenants` holds a handful of rows, so adding a nullable column then costs nothing; this is not the `enriched_*` case in P0-26, where the argument for reserving early was the size of the table.
+
 ### 5.3 Cost levers, ranked by actual monthly impact
 
 Choosing a cheap model already captured the large win. What remains, against a **~$122/month** baseline:
@@ -1127,11 +1134,11 @@ Anti-rot checks in CI, each cheap:
 | P0-22 | Migration: `tenants` | incl. status enum from §Data Model; `plan` nullable; shared `updated_at` trigger; widens the P0-09 rule for `src/schema/` | 21 |
 | P0-23 | Migration: `memberships` | `role` enum OWNER/EDITOR; **`user_id text`**; RLS policy shape decided here, applied in 37 | 22 |
 | P0-24 | 🔒 Migration: `tenant_domains` | **`UNIQUE(origin)` globally, covering PENDING rows** — the anti-sharing backbone | 22 |
-| P0-25 | 🔒 Migration: `widget_keys` | `secret_key_hash`, prefix, last4 | 22 |
+| P0-25 | 🔒 Migration: `widget_keys` | `secret_key_hash`, prefix, last4; partial unique on the active key; argon2id round-trip moves to P4-07 | 22 |
 | P0-26 | Migration: `products` | full template field set incl. `external_variant_id`, `enriched_*` reserved | 22 |
 | P0-27 | Migration: `product_embeddings` | `halfvec(1024)` + HNSW index | 26 |
 | P0-28 | Migration: `conversations`, `messages` | | 22 |
-| P0-29 | Migration: `widget_events` | type enum from §Data Model | 22 |
+| P0-29 | Migration: `widget_events` | type enum from §Data Model; `SET NULL` on conversation and product so analytics do not shrink as data ages out | 22 |
 | P0-30 | Migration: `usage_events`, `usage_daily` | append-only + rollup table | 22 |
 | P0-31 | 🔒 Migration: `audit_log` | no UPDATE/DELETE grant to `app_rw` | 22 |
 | P0-32 | 🔒 Migration: `security_events` | | 22 |
@@ -1328,7 +1335,7 @@ Anti-rot checks in CI, each cheap:
 | P5-03 | 🔒 Webhook: raw-body signature verify | before any body parser touches it | P5-01 |
 | P5-03a | 🔒 SdI / FatturaPA e-invoicing bridge | async job on `invoice.paid` → Fatture in Cloud API to emit FatturaPA XML | P5-03,P5-04 |
 | P5-04 | 🔒 Webhook idempotency | `processed_webhooks`, replay is a no-op | P5-03 |
-| P5-05 | ⛔ Status state machine | TRIALING→ACTIVE→PAST_DUE→DISABLED→CANCELED; `tenant_status_coherent` CHECK; `livemode` + customer↔tenant binding | P5-04 |
+| P5-05 | ⛔ Status state machine | TRIALING→ACTIVE→PAST_DUE→DISABLED→CANCELED; **adds `tenants.trial_ends_at`** and the `tenant_status_coherent` CHECK that reads it (§5.2b); `livemode` + customer↔tenant binding | P5-04 |
 | P5-05a | 🔒 Payment-failure blocking | **no grace** — `PAST_DUE` blocks the widget on first failure; dashboard stays open; Stripe retries restore automatically (§5.2b) | P5-05 |
 | P5-06 | 🔒 Webhook fixture test suite | every transition; unsigned and mis-signed rejected | P5-05 |
 | P5-07 | Test: DISABLED propagation split | chat refused immediately; `/config` may lag 60 s | P5-05,P2-13 |
@@ -1978,6 +1985,8 @@ Migrations run as `app_migrate` (owner), the app connects as `app_rw`. `app_rw` 
 
 **`plan` is nullable.** *(Decision the original spec left open.)* A tenant exists from signup and chooses a plan later; null means "no subscription yet". Any non-null default reads downstream as an entitlement the tenant has not bought.
 
+**`trial_ends_at` is deliberately absent.** §5.2b's `tenant_status_coherent` CHECK refers to it, so its absence here looks like an oversight and is not: nothing before P5 sets `TRIALING`, the column would sit unread, and the CHECK cannot be added without the state machine that maintains it. Column and constraint land together in P5-05.
+
 **`updated_at` is maintained by a trigger, not by the application.** Drizzle's `$onUpdate` only fires for updates that go through Drizzle: a backfill in a migration, a correction applied with `psql`, or any raw statement leaves the column stale — and a timestamp that is right most of the time is worse than none, because it gets trusted. Add one `set_updated_at()` function in this PR and a `CREATE TRIGGER` per table thereafter, as a `--custom` migration alongside each table's generated one.
 
 **This PR also widens the P0-09 boundary rule.** `no-raw-db-outside-with-tenant` forbids `drizzle-orm` outside `client.ts` and `with-tenant.ts`, so the first schema file fails `pnpm boundaries`. Exempt `packages/db/src/schema/` specifically — `pgTable` describes a shape and opens nothing, so a declaration is not the database access the rule exists to catch — and scope the exemption to that directory, not the package, so a future file under `packages/db/src` that *does* open a connection is still caught.
@@ -2061,9 +2070,13 @@ Defence in depth behind P2-05's normalisation, at the schema level.
 
 **How.** `public_key text unique not null` stored in plaintext (it is public). For the secret: `secret_key_hash text` (argon2id), `secret_key_prefix text`, `secret_key_last4 text` — the prefix and last4 exist so the UI can identify a key without storing it. **No column ever holds the secret in plaintext.** Add `revoked_at`, and `grace_until` for the 24-hour public-key rotation window (P4-08). Partial unique index so only one non-revoked public key is active per tenant.
 
-**Tests.** Round-trip argon2id verify. Assert no column contains the raw secret after creation — an explicit test, because this is exactly the mistake worth catching.
+**`revoked_at` and `grace_until` answer different questions, and both are needed.** Rotation cannot be atomic — the seller's page carries the old key until they redeploy — so rotation sets `revoked_at` (this is no longer *the* key, which frees the partial unique index for the new one) while `grace_until` keeps it accepted for a day. Collapsing them into one column forces a choice between breaking every page instantly and never expiring anything. Add a `CHECK (grace_until is null or revoked_at is not null)`: a grace window on a live key is the shape of a bug that keeps a compromised key alive.
 
-**Files.** schema + migration. **~55 lines.**
+**Tests.** Assert no column contains the raw secret after creation — and assert it **against the stored row**, by searching every column of `to_jsonb(row)` for the plaintext, not by listing the columns. A future column that helpfully caches the secret then fails without anyone remembering to update the test. Plus: the second active key refused, rotation accepted once the first is revoked with both rows retained, and grace-without-revocation refused.
+
+The argon2id round-trip belongs with **key minting (P4-07)**, not here: hashing is not this table's behaviour, and pulling an argon2 binding into a migration PR tests the binding. The property that matters at this stage — the plaintext appears in no column — holds for any hash.
+
+**Files.** schema + generated migration + trigger migration + down files. **~95 lines + ~165 test lines.**
 
 ---
 
@@ -2081,9 +2094,13 @@ Defence in depth behind P2-05's normalisation, at the schema level.
 - `unique(tenant_id, sku)` — the upsert key for P1-24.
 - `status` enum `('ACTIVE','ARCHIVED')` for soft delete.
 
-**Tests.** Insert with minimum required fields; duplicate `(tenant_id, sku)` rejected; array round-trip.
+**`wine_type` is `text`, not an enum.** *(Decision the spec left open.)* Wine categories grow sideways — orange, pét-nat, col fondo — and each addition would be an `ALTER TYPE` for a label that guards nothing. The allowed set belongs in the shared `drizzle-zod` contract (P0-42), which is where §2.2 already puts validation; the column's job is to require a value. `stock_status`, `status` and `embedding_state` *are* enums, because each drives behaviour — retrieval filtering, soft delete, the worker queue.
 
-**Files.** schema + migration. **~110 lines.** *(Largest migration; splitting it would leave the table unusable mid-way, so it stays one PR.)*
+**The alcohol CHECK is lower-bound only.** `numeric(4, 2)` cannot represent anything at or above 100, so it rejects `120` itself — with `numeric_value_out_of_range` (22003), not a check violation. A `between 0 and 100` check reads as though it were doing that work while being unreachable. Assert **both** error codes in the tests so the reason stays visible to the next reader.
+
+**Tests.** Insert with minimum required fields and assert the defaults (`ACTIVE`, `PENDING` — not `INDEXED`, or a product silently never gets embedded); duplicate `(tenant_id, sku)` rejected and the same SKU in another tenant accepted; array round-trip **with a value containing a comma** (`'Brasato al Barolo, ossobuco'`), which is what a delimited-string implementation gets wrong; exact price and `13.50`; negative price and negative alcohol refused.
+
+**Files.** schema + generated migration + trigger migration + down files. **~145 lines + ~220 test lines.** *(Largest migration; splitting it would leave the table unusable mid-way, so it stays one PR.)*
 
 ---
 
@@ -2103,7 +2120,13 @@ CREATE INDEX ON product_embeddings
   USING hnsw (embedding halfvec_cosine_ops)
   WITH (m = 16, ef_construction = 64);
 ```
-Note the `halfvec_cosine_ops` opclass — using `vector_cosine_ops` with a `halfvec` column silently fails to use the index. `ON DELETE CASCADE` from `products` so P1-04's vector hard-delete is partly enforced by the database.
+**Correction to the stated trap.** Naming `vector_cosine_ops` on a `halfvec` column does **not** fail silently: Postgres refuses with *"operator class vector_cosine_ops does not accept data type halfvec"*, and omitting the opclass refuses too, because `halfvec` has no default for `hnsw`. Both are loud, which is the good case. What *is* silent is a valid opclass for the **wrong distance**: `halfvec_l2_ops` builds without complaint and then never serves a `<=>` query, so retrieval keeps returning correct results by sequential scan and gets slower in proportion to the catalog. Verified on pgvector 0.8.0. The opclass has to match the operator retrieval actually uses.
+
+The index goes in a `--custom` migration, because Drizzle cannot model an operator class on a custom column type.
+
+**Also index `tenant_id` on its own.** Retrieval always filters by tenant before it ranks by distance, and RLS adds that predicate whether or not the query does. Without it the tenant filter is applied by rechecking rows the vector scan already returned, so a tenant with 50 products pays for a search across every tenant's vectors.
+
+`ON DELETE CASCADE` from `products` so P1-04's vector hard-delete is partly enforced by the database.
 
 **Tests.** Insert a 1024-dim vector; a wrong-dimension insert is rejected; `EXPLAIN` on a similarity query shows an index scan, not a sequential scan. That `EXPLAIN` assertion is worth having — a silently unused index is a latency cliff nobody notices until production.
 
@@ -2121,9 +2144,13 @@ Note the `halfvec_cosine_ops` opclass — using `vector_cosine_ops` with a `half
 
 **How.** `conversations`: `session_id`, `origin`, `visitor_hash` (salted hash, **never a raw IP** — the salt lives in SSM and rotates), `locale`, timestamps. `messages`: `role` enum, `content text`, `retrieved_product_ids uuid[]` (so a recommendation is auditable after the fact), `model`, `input_tokens`, `output_tokens`, `latency_ms`. Index `(tenant_id, created_at desc)` for the purge job and analytics.
 
-**Tests.** Insert a conversation with messages; cascade delete; `visitor_hash` is never a valid IP string.
+**Make "never a raw IP" a constraint, not a rule.** `CHECK (visitor_hash ~ '^[a-f0-9]{64}$')` — a SHA-256 digest and nothing else. An IPv4 address has dots, an IPv6 address has colons, and neither is 64 characters, so both are refused by construction. An IP column is exactly the kind of thing added "temporarily" for debugging that then lives in backups for years; this makes adding one impossible rather than discouraged. Keep the column nullable, so "not identified" is representable without a placeholder that looks like a real hash.
 
-**Files.** schema + migration. **~70 lines.**
+**`retrieved_product_ids` stays a plain `uuid[]` with no foreign key.** It is a record of what was shown at the time and has to survive the product being archived or deleted — a cascade would erase the evidence along with the product, which is precisely the record wanted when a seller asks why something was recommended. Postgres cannot express an FK array anyway; the risk worth a test is someone "fixing" this into a join table with cascade semantics.
+
+**Tests.** Insert a conversation with messages; cascade from conversation and from tenant; a recommendation surviving its product's deletion; and the `visitor_hash` check refusing an IPv4 address, an IPv6 address, a truncated hash, an uppercase hash and an email, while accepting a real digest and null.
+
+**Files.** schema + generated migration + down file. **~110 lines + ~180 test lines.**
 
 ---
 
@@ -2135,9 +2162,11 @@ Note the `halfvec_cosine_ops` opclass — using `vector_cosine_ops` with a `half
 
 **How.** `type` enum with the seven values from §Data Model, `product_id` nullable, `metadata jsonb`. Index `(tenant_id, type, created_at desc)`. Expect high row counts — add a comment noting this table is the first candidate for partitioning or a rollup-and-prune policy, and revisit at P7.
 
-**Tests.** Insert each event type; enum rejects an unknown one.
+**`conversation_id` and `product_id` are `ON DELETE SET NULL`, not cascade.** The retention purge deletes old conversations (P7-07) and products are archived and deleted routinely. With cascade, every historical conversion rate changes retroactively as data ages out — downward, and silently, which is the worst kind of wrong number. `session_id` is `NOT NULL` and outlives both, so a funnel stays reconstructable after its conversation is gone. `conversation_id` is nullable for a second reason too: `WIDGET_OPEN` happens before any conversation exists. The tenant foreign key stays cascade — deleting a tenant does delete its data.
 
-**Files.** schema + migration. **~45 lines.**
+**Tests.** Insert each event type; enum rejects an unknown one; both set-null paths leave the event intact; `metadata` round-trips as structured JSON rather than a string.
+
+**Files.** schema + generated migration + down file. **~90 lines + ~170 test lines.**
 
 ---
 
