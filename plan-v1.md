@@ -1137,7 +1137,7 @@ Anti-rot checks in CI, each cheap:
 | P0-23 | Migration: `memberships` | `role` enum OWNER/EDITOR; **`user_id text`**; RLS policy shape decided here, applied in 37 | 22 |
 | P0-24 | 🔒 Migration: `tenant_domains` | **`UNIQUE(origin)` globally, covering PENDING rows** — the anti-sharing backbone | 22 |
 | P0-25 | 🔒 Migration: `widget_keys` | `secret_key_hash`, prefix, last4; partial unique on the active key; argon2id round-trip moves to P4-07 | 22 |
-| P0-26 | Migration: `products` | full template field set incl. `external_variant_id`, `enriched_*` reserved | 22 |
+| P0-26 | Migration: `products` | full template field set incl. `external_variant_id`; **no `enriched_*`** (§4.2 retracted) | 22 |
 | P0-27 | Migration: `product_embeddings` | `halfvec(1024)` + HNSW index | 26 |
 | P0-28 | Migration: `conversations`, `messages` | | 22 |
 | P0-29 | Migration: `widget_events` | type enum from §Data Model; `SET NULL` on conversation and product so analytics do not shrink as data ages out | 22 |
@@ -2098,13 +2098,15 @@ The argon2id round-trip belongs with **key minting (P4-07)**, not here: hashing 
 - `price_cents integer` — **integer minor units, never float**. Money in floating point produces `12.499999` bugs.
 - `grape_varieties text[]`, `food_pairings text[]`, `style_tags text[]` — arrays, with GIN indexes added in P1-07.
 - `external_variant_id text` — nullable at the column level but required by the form (P1-01), because a legacy row may predate it while new entries must have it.
-- `content_hash text`, `embedding_state` enum, `enriched_*` columns **reserved now** (§4.2) so adding enrichment later is not a migration.
+- `content_hash text` and the `embedding_state` enum — the worker's queue state. **No `enriched_*` columns**; see below.
 - `unique(tenant_id, sku)` — the upsert key for P1-24.
 - `status` enum `('ACTIVE','ARCHIVED')` for soft delete.
 
 **`wine_type` is `text`, not an enum.** *(Decision the spec left open.)* Wine categories grow sideways — orange, pét-nat, col fondo — and each addition would be an `ALTER TYPE` for a label that guards nothing. The allowed set belongs in the shared `drizzle-zod` contract (P0-42), which is where §2.2 already puts validation; the column's job is to require a value. `stock_status`, `status` and `embedding_state` *are* enums, because each drives behaviour — retrieval filtering, soft delete, the worker queue.
 
 **The alcohol CHECK is lower-bound only.** `numeric(4, 2)` cannot represent anything at or above 100, so it rejects `120` itself — with `numeric_value_out_of_range` (22003), not a check violation. A `between 0 and 100` check reads as though it were doing that work while being unreachable. Assert **both** error codes in the tests so the reason stays visible to the next reader.
+
+**No `enriched_*` columns.** *(Correction — §4.2 retracts the reservation there.)* The original spec reserved `enriched_tasting_notes`, `enriched_food_pairings`, `enriched_model` and `enriched_at` so that adding enrichment later would not be a migration. That argument does not survive checking: `ALTER TABLE ADD COLUMN` with no default is metadata-only and O(1) since Postgres 11, and `products` holds roughly 2,500 SKUs per tenant — nowhere near the size at which the answer would change. What the reservation actually buys is a guess at the shape of a feature §4.2 deliberately left undesigned, and a committed column reads to the next person as a decision that was made. They land with the enrichment work that defines them.
 
 **Tests.** Insert with minimum required fields and assert the defaults (`ACTIVE`, `PENDING` — not `INDEXED`, or a product silently never gets embedded); duplicate `(tenant_id, sku)` rejected and the same SKU in another tenant accepted; array round-trip **with a value containing a comma** (`'Brasato al Barolo, ossobuco'`), which is what a delimited-string implementation gets wrong; exact price and `13.50`; negative price and negative alcohol refused.
 
