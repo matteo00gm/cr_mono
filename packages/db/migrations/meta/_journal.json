@@ -92,6 +92,13 @@
       "when": 1788305710883,
       "tag": "0012_conversations_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788305719474,
+      "tag": "0013_widget_events",
+      "breakpoints": true
     }
   ]
 }
