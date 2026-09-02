@@ -2264,7 +2264,7 @@ Grant INSERT and SELECT only. Enforced at the grant level, not by convention —
 
 **Tests.** Insert with a null tenant; UPDATE denied.
 
-**The nullable `tenant_id` has a consequence for P0-37** *(carry forward).* This table is not simply tenant-scoped, so it cannot take the boilerplate policy. A row with a null `tenant_id` belongs to no tenant — an `INVALID_KEY` matched none, which is why it was rejected — and the boilerplate `USING (tenant_id = current_setting(...))` would make exactly those rows invisible to everyone. They should be readable by `app_admin` only. Add it to the per-table override list alongside `memberships` and `tenants`.
+**The nullable `tenant_id` has a consequence for P0-37** *(carry forward — now written into the P0-37 override list itself, which is where the implementer will read it).* This table is not simply tenant-scoped, so it cannot take the boilerplate policy. The failure is worse than invisibility: the boilerplate `WITH CHECK` **rejects the insert**, because the comparison against a null `tenant_id` is null and `WITH CHECK` requires true. Verified against Postgres 16. So the application could not record an `INVALID_KEY` rejection at all — it would raise, at the moment it is under attack. The `USING` half then hides any row written by another path. Both halves are widened in P0-37.
 
 **`type` is an enum, unlike `audit_log.action`** *(decision).* These six drive behaviour — P2-16 counts them per key and origin to decide when a key is being abused — so an unrecognised value is a bug rather than a new fact, and the type is what makes it one. `action` is free text precisely because the opposite is true there.
 
@@ -2367,10 +2367,18 @@ Four details that decide whether this works:
 - **`current_setting(..., true)`** — the `true` means "missing is null, don't error". With no tenant set the comparison is null, so **zero rows** match. Failing closed is the correct default; without the second argument the query raises instead, which is noisier but also acceptable — what is *not* acceptable is a fallback that matches everything.
 - Generate the SQL from the table list in code, not by hand, so a new table cannot be silently missed.
 
-**Two tables are not the boilerplate, and the generator has to know it.**
+**Three tables are not the boilerplate, and the generator has to know it.**
 
 - **`memberships`** carries a second `USING` branch on an `app.user_id` GUC, because tenant resolution reads it before a tenant is known — the policy is written out in P0-23. `WITH CHECK` stays tenant-only; including `user_id` there is self-service privilege escalation. A generator that overwrites this with the default policy silently breaks login, so the override belongs in the table list, not in a hand-edit after generation.
 - **`tenants`** has no `tenant_id` column, but it should still carry `USING (id = nullif(current_setting('app.tenant_id', true), '')::uuid)`. Every runtime read of a tenant row happens with context already set, so the policy costs nothing and closes the obvious hole of a bug enumerating every tenant. The one path it blocks is signup, which creates a tenant before context exists — generate the id in the application and open the transaction with `withTenant(newId, ...)`, so the insert satisfies its own `WITH CHECK`.
+- **`security_events`** has a **nullable** `tenant_id` (P0-32), and the boilerplate policy does not merely hide those rows — it refuses to write them. Verified against Postgres 16: with `WITH CHECK (tenant_id = current_setting(...))`, inserting a row whose `tenant_id` is null raises *new row violates row-level security policy*, because the comparison is null and `WITH CHECK` requires true. The rows that cannot be written are precisely the `INVALID_KEY` and unattributable `UNAUTHORIZED_ORIGIN` rejections — so the application would hard-error at the exact moment it is under attack, and the log would be empty for the events it exists to capture. The `USING` half then hides any that were written by another path: in the same check, two rows in the table, one visible. The policy needs both halves widened:
+  ```sql
+  CREATE POLICY tenant_isolation ON security_events
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id IS NULL
+                OR tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+  ```
+  `USING` stays strict, so a tenant still sees only its own rows and the unattributed ones are reachable only through `app_admin`, which is what `BYPASSRLS` is for. `WITH CHECK` admits the null case, and that is a deliberate widening: `app_rw` can write an unattributed row from any context. The table is append-only (P0-32), so the worst available misuse is writing noise into a log nobody can edit — set against being unable to record an attack at all.
 
 **Tests.** P0-38 and P0-41.
 
