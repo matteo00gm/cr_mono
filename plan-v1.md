@@ -2244,6 +2244,12 @@ Grant INSERT and SELECT only. Enforced at the grant level, not by convention —
 
 **Tests.** Insert succeeds; UPDATE and DELETE as `app_rw` both raise insufficient privilege.
 
+**`actor_user_id` is nullable `text`** *(decision the spec left open).* `text` for the same reason as `memberships.user_id` — Better Auth ids are not UUIDs, and the FK arrives with P0-23a. Nullable because not every audited action has a human behind it: a Stripe webhook downgrading a subscription (P5-09) changes what a tenant can do and belongs in this log, and attributing it to a person would be a lie.
+
+**`action` and `target` stay free text**, not enums. An audit log has to record an action added next week without a migration — a schema change on the write path is the friction that makes people log nothing. The readers are a runbook and a human, not a query planner.
+
+**`ip` is `inet`, not `text`.** The type refuses a malformed address at write time and makes subnet containment answerable when someone asks what else came from that network. Asserted: a bad address raises 22P02.
+
 **Files.** schema + migration. **~45 lines.**
 
 ---
