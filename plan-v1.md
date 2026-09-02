@@ -1983,7 +1983,21 @@ Migrations run as `app_migrate` (owner), the app connects as `app_rw`. `app_rw` 
 
 **Deps.** 21a.
 
-**Files.** `scripts/db-deploy.mjs` or an SST task. **~90 lines.**
+**The applying itself lives in `packages/db/src/deploy.ts`** *(implementation note).* Not in the script, and not copied from the test fixture — the fixture now imports it. That is the point: while the deploy path and the fixture were separate, the suites could prove the SQL correct while the migrator could not run as `app_migrate` at all, which is precisely the P0-21 `CREATE SCHEMA` bug. One implementation means the integration suites exercise what a deploy will do.
+
+It opens connections outside `withTenant`, so `no-raw-db-outside-with-tenant` needed a third exemption — and a different justification from `src/schema/`. Schema files are exempt because they *cannot* reach a connection; this one genuinely does. What earns it is the purpose: DDL, run by the roles that own the schema, before any tenant row exists, where there is no tenant context to set and no policy for one to satisfy. Named as a single file rather than a directory, so it does not become a hole for whatever lands beside it.
+
+**Credentials arrive as environment variables**, not fetched from SSM by the script. The invoker already holds the parameter values as deploy-time outputs, so an AWS SDK dependency to fetch what the caller can pass would buy nothing and would make the script untestable without mocking AWS.
+
+**`withRole` derives the `app_migrate` URL from the master URL** rather than accepting a second URL. Two URLs can disagree about which database they point at, and nothing downstream would catch it — migrations would be applied elsewhere and report success. Built with `URL`, not string concatenation: an unencoded `@` in a password ends the userinfo section and silently changes the host.
+
+**`deployParameterReadPermissions` is a separate entry point** from `parameterReadPermissions`, which P0-21a makes throw on these paths. Two differently-named functions is deliberate — granting the master connection should read as a decision at the call site.
+
+**Removing the fixture's default password argument was load-bearing.** The moved function used to default to the test passwords; carrying that into a production module would have let a real deploy silently bootstrap with `app_rw_test_password`. Dropping the default turned that into two compile errors at the call sites that relied on it.
+
+**Not deployed.** Everything here is verified against a container rather than AWS: the eleven integration suites now run through this module, and `withRole` has its own spec. The infra half is typechecked only.
+
+**Files.** `packages/db/src/deploy.ts`, `scripts/db-deploy.mjs`, `infra/config.ts`, `.dependency-cruiser.mjs`, plus the fixture rewiring.
 
 ---
 

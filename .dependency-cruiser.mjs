@@ -67,8 +67,16 @@ export default {
         // rule is about reaching a connection, and nothing under schema/ can.
         // Narrowed to that directory rather than to the package, so a future
         // file in packages/db/src that does open a connection is still caught.
+        //
+        // src/deploy.ts is exempt from P0-21b, and unlike schema/ it really
+        // does open connections. The exemption is for what it connects *for*:
+        // applying bootstrap and migrations, as the roles that own the schema,
+        // before any tenant row exists. There is no tenant context to set and
+        // no policy for one to satisfy — withTenant would have nothing to say.
+        // Named as one file rather than a directory, so this stays a hole for
+        // exactly the deploy path and not for whatever lands beside it.
         pathNot:
-          '^packages/db/src/(client|with-tenant)[.]ts$' +
+          '^packages/db/src/(client|with-tenant|deploy)[.]ts$' +
           '|^packages/db/src/schema/' +
           '|(^|/)test/',
       },
