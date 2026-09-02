@@ -1959,6 +1959,10 @@ Migrations run as `app_migrate` (owner), the app connects as `app_rw`. `app_rw` 
 
 **Tests.** Assert the synthesised `database/url` does not contain the master username. The real proof is P0-39 run against a deployed stage.
 
+**How that assertion is actually made** *(implementation note).* As a static check in CI over `infra/config.ts`, not a unit test over the synthesised value. There is no infra test harness and adding one is not free: `infra/**` cannot be imported by Vitest, because it needs the SST globals and the generated `.sst/platform` types that `pnpm typecheck:infra` exists to cover separately. The check follows the "no managed NAT" precedent already in `ci.yml` — anchored on the parameter being built rather than on the word *master*, since this file discusses the master credentials at length in prose and a bare grep would flag the explanation. It is verified to fail on the pre-P0-21a form, which is the only property that makes a grep worth having.
+
+**The deploy-only paths are enforced at synth time**, not by review: `parameterReadPermissions` throws if a caller asks for `database/master_url` or `database/app_migrate_password`. A function requesting one should stop the deploy rather than appear in a diff someone skims. `database/app_rw_password` is deliberately not on that list — it is the same secret already inside `database/url`, which functions legitimately read, so listing it would imply a boundary that does not exist.
+
 **Deps.** 21, 15. **Must land before P0-54**, which is the first thing to open a connection from an app.
 
 **Files.** `infra/config.ts`, `infra/database.ts`. **~60 lines.**

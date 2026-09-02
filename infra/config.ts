@@ -1,6 +1,6 @@
 /// <reference path="../.sst/platform/config.d.ts" />
 
-import { database } from './database';
+import { appMigratePassword, appRwPassword, database } from './database';
 
 /**
  * Parameter store and per-function IAM scoping (P0-15).
@@ -39,11 +39,74 @@ const secureParameter = (logicalName: string, name: string, value: $util.Input<s
  * would refuse a plaintext connection anyway, but failing in the client with a
  * clear message beats failing in the server with a generic one.
  */
+const connectionUrl = (user: $util.Input<string>, password: $util.Input<string>) =>
+  $interpolate`postgres://${user}:${password}@${database.host}:${database.port}/${database.database}?sslmode=require`;
+
+/**
+ * What the application connects as: `app_rw` (P0-21a).
+ *
+ * This used to be built from `database.username`/`database.password` — the RDS
+ * master, which holds `rds_superuser`. A superuser bypasses RLS outright, so
+ * every policy P0-37 writes would have been inert in production while the
+ * whole test suite stayed green, because the suite connects as `app_rw` and
+ * production did not. The verification path and the deployed path differed in
+ * exactly the dimension being verified.
+ */
 export const databaseUrl = secureParameter(
   'DatabaseUrl',
   'database/url',
-  $interpolate`postgres://${database.username}:${database.password}@${database.host}:${database.port}/${database.database}?sslmode=require`,
+  connectionUrl('app_rw', appRwPassword.result),
 );
+
+/**
+ * The master credentials, kept as their own parameter and read by nothing at
+ * runtime.
+ *
+ * Bootstrap needs them — `CREATE ROLE` and `CREATE EXTENSION` require
+ * privileges `app_migrate` does not have — and a human needs them when
+ * everything else has failed. Both are deploy-time and break-glass uses, which
+ * is why this is a separate path that `parameterReadPermissions` refuses to
+ * grant rather than a value any function can reach.
+ */
+export const databaseMasterUrl = secureParameter(
+  'DatabaseMasterUrl',
+  'database/master_url',
+  connectionUrl(database.username, database.password),
+);
+
+/**
+ * The role passwords, for the deploy path that applies bootstrap and
+ * migrations (P0-21b).
+ *
+ * Bootstrap reads them as session GUCs rather than interpolating them into
+ * SQL, so the values never appear in a logged statement.
+ */
+export const appRwPasswordParameter = secureParameter(
+  'AppRwPassword',
+  'database/app_rw_password',
+  appRwPassword.result,
+);
+
+export const appMigratePasswordParameter = secureParameter(
+  'AppMigratePassword',
+  'database/app_migrate_password',
+  appMigratePassword.result,
+);
+
+/**
+ * Paths that exist for the deploy path and for break-glass, and that no
+ * application function may be granted.
+ *
+ * Enforced at synth time rather than reviewed: a function asking for one is a
+ * mistake that should stop the deploy, not appear in a diff someone skims.
+ * `database/app_rw_password` is deliberately absent — it is the same secret
+ * already inside `database/url`, which functions legitimately read, so listing
+ * it would imply a boundary that does not exist.
+ */
+const DEPLOY_ONLY_PARAMETERS: ReadonlySet<string> = new Set([
+  'database/master_url',
+  'database/app_migrate_password',
+]);
 
 /**
  * IAM permissions granting read access to *specific* parameters only.
@@ -59,23 +122,35 @@ export const databaseUrl = secureParameter(
  * restricts the grant to decryption performed by SSM on this function's behalf,
  * which is the property actually wanted.
  */
-export const parameterReadPermissions = (names: readonly string[]) => [
-  {
-    actions: ['ssm:GetParameter', 'ssm:GetParameters'],
-    resources: names.map(
-      (name) =>
-        $interpolate`arn:aws:ssm:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:parameter${parameterPath(name)}`,
-    ),
-  },
-  {
-    actions: ['kms:Decrypt'],
-    resources: ['*'],
-    conditions: [
-      {
-        test: 'StringEquals',
-        variable: 'kms:ViaService',
-        values: [$interpolate`ssm.${aws.getRegionOutput().name}.amazonaws.com`],
-      },
-    ],
-  },
-];
+export const parameterReadPermissions = (names: readonly string[]) => {
+  const deployOnly = names.filter((name) => DEPLOY_ONLY_PARAMETERS.has(name));
+
+  if (deployOnly.length > 0) {
+    throw new Error(
+      `parameterReadPermissions: ${deployOnly.join(', ')} is deploy-time only. ` +
+        'Granting it to a function would hand that function a connection that ' +
+        'bypasses RLS (master) or can alter the schema (app_migrate).',
+    );
+  }
+
+  return [
+    {
+      actions: ['ssm:GetParameter', 'ssm:GetParameters'],
+      resources: names.map(
+        (name) =>
+          $interpolate`arn:aws:ssm:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:parameter${parameterPath(name)}`,
+      ),
+    },
+    {
+      actions: ['kms:Decrypt'],
+      resources: ['*'],
+      conditions: [
+        {
+          test: 'StringEquals',
+          variable: 'kms:ViaService',
+          values: [$interpolate`ssm.${aws.getRegionOutput().name}.amazonaws.com`],
+        },
+      ],
+    },
+  ];
+};

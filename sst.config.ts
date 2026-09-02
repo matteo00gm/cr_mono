@@ -53,6 +53,12 @@ export default $config({
       protect: isProtected,
 
       providers: {
+        // Supplies `random.RandomPassword` for the database role credentials
+        // (P0-21a). Declared here because SST injects a provider's global only
+        // for the providers an app names; `sst install` regenerates the
+        // typings that make `random` visible to `pnpm typecheck:infra`.
+        random: '4.16.6',
+
         aws: {
           region: AWS_REGION,
           // Cost-allocation tags cannot be retrofitted usefully: spend that
