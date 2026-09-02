@@ -1132,7 +1132,7 @@ Anti-rot checks in CI, each cheap:
 | P0-20 | Migration tooling + extensions | drizzle-kit, the `bootstrap/` vs `migrations/` split, down-file convention; `vector`, `pg_trgm`, `unaccent`, **`citext`**; confirm `halfvec` available | 18 |
 | P0-21 | 🔒 **Bootstrap**: DB roles | `app_rw` (no BYPASSRLS, not owner), `app_migrate`, `app_admin` (**NOLOGIN**). Passwords as GUCs, not psql vars | 20 |
 | P0-21a | ⛔ 🔒 Connect the app as `app_rw` | SSM params + `database/url` off the master credentials. **Without it every RLS policy is inert in production** | 21,15 |
-| P0-21b | Apply bootstrap + migrations to a stage | the deploy-time path P0 otherwise lacks | 21a,40 |
+| P0-21b | Apply bootstrap + migrations to a stage | the deploy-time path P0 otherwise lacks; **runs in-VPC — a GitHub-hosted runner cannot reach RDS** | 21a |
 | P0-22 | Migration: `tenants` | incl. status enum from §Data Model; `plan` nullable; shared `updated_at` trigger; widens the P0-09 rule for `src/schema/` | 21 |
 | P0-23 | Migration: `memberships` | `role` enum OWNER/EDITOR; **`user_id text`**; RLS policy shape decided here, applied in 37 | 22 |
 | P0-24 | 🔒 Migration: `tenant_domains` | **`UNIQUE(origin)` globally, covering PENDING rows** — the anti-sharing backbone | 22 |
@@ -1975,9 +1975,13 @@ Migrations run as `app_migrate` (owner), the app connects as `app_rw`. `app_rw` 
 
 **Why.** P0 has no such path. Bootstrap and migrations are applied by hand and by the test fixtures, which is fine while no stage holds data and stops being fine the moment one does. Left unstated it becomes someone running `psql` against production from a laptop.
 
-**How.** A short script run from CI against the stage's VPC, or a one-shot Lambda invoked after deploy. Bootstrap first (idempotent, master credentials from SSM), then `drizzle-orm/migrator` as `app_migrate`. The interesting question is where it runs from, since RDS is in private subnets — decide that with P0-40, which needs the same path.
+**How.** Bootstrap first — idempotent, master credentials from `database/master_url` — then `drizzle-orm/migrator` as `app_migrate`, with the password from `database/app_migrate_password`. Both are paths P0-21a deliberately withholds from application functions, so the runner needs its own grant rather than reusing `parameterReadPermissions`, which throws on them.
 
-**Deps.** 21a, 40.
+**Where it runs from is this row's decision, not P0-40's.** *(Correction.)* The original text deferred it to "P0-40, which needs the same path". P0-40 needs no such path: it is `Test: migration up/down/up`, run against a throwaway container in CI, and it never touches a deployed database. Reading the whole backlog confirms no other row in P0–P7 owns a deploy-time path to a stage's database — P0-58 is the dashboard's static deploy — so this row owns the decision and the dependency on 40 is dropped.
+
+**The constraint that decides it.** RDS sits in private subnets. There is egress (`nat: "ec2"`, §P0-13) but no inbound path, so a GitHub-hosted runner cannot reach the instance at all; "a short script run from CI against the stage's VPC" is not available without a self-hosted runner or an SSM tunnel, and neither is currently justified. That leaves one-shot in-VPC execution — a Lambda or an SST task invoked after deploy. `sst deploy` against `dev` is already a trodden path (see the closed "SST deploy verified" open item), which is what makes this the cheap option rather than a new capability.
+
+**Deps.** 21a.
 
 **Files.** `scripts/db-deploy.mjs` or an SST task. **~90 lines.**
 
@@ -2431,7 +2435,7 @@ export const productInsert = createInsertSchema(products, {
 
 **Why.** Integration tests must run against real Postgres — RLS, `halfvec`, HNSW and `tsvector` behaviour cannot be faked, and mocking them would test the mock.
 
-**How.** `@testcontainers/postgresql` with the pinned `pgvector/pgvector:pg16` image. **One container per test file, reused across tests in that file** — per-test containers make the suite unusably slow. Between tests, `TRUNCATE ... RESTART IDENTITY CASCADE` rather than re-migrating. Expose `withTestDb(fn)` that yields a db connected **as `app_rw`**, not the superuser — otherwise every RLS test passes vacuously, which is the single easiest way to render this entire test strategy meaningless.
+**How.** `@testcontainers/postgresql` with the `pgvector/pgvector:0.8.0-pg16` image — pinned exactly and pinned *low*, for the reasons given in P0-20. *(Correction: this line used to read "the pinned `pgvector/pgvector:pg16` image", which is a contradiction — `pg16` is the floating tag, the very thing that pin exists to avoid. The implementation has always used `0.8.0-pg16`.)* **One container per test file, reused across tests in that file** — per-test containers make the suite unusably slow. Between tests, `TRUNCATE ... RESTART IDENTITY CASCADE` rather than re-migrating. Expose `withTestDb(fn)` that yields a db connected **as `app_rw`**, not the superuser — otherwise every RLS test passes vacuously, which is the single easiest way to render this entire test strategy meaningless.
 
 **Tests.** A smoke test proving the harness connects as a non-superuser and that RLS is in force.
 
