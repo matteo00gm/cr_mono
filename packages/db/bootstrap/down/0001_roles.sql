@@ -9,6 +9,17 @@
 --
 -- No CASCADE, deliberately: a dependency this does not know about should abort
 -- the rollback rather than be quietly destroyed.
+-- DROP OWNED BY below also revokes privileges on shared objects, the database
+-- grant included, but it is spelled out here so the reverse of the CREATE grant
+-- is visible rather than implied.
+DO $$
+BEGIN
+  EXECUTE format('REVOKE CREATE ON DATABASE %I FROM app_migrate', current_database());
+EXCEPTION WHEN undefined_object THEN
+  NULL;
+END
+$$;
+
 DROP SCHEMA IF EXISTS drizzle CASCADE;
 
 DROP OWNED BY app_rw, app_migrate, app_admin;

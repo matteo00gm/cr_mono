@@ -98,14 +98,40 @@ ALTER DEFAULT PRIVILEGES FOR ROLE app_migrate IN SCHEMA public
 ALTER DEFAULT PRIVILEGES FOR ROLE app_migrate IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO app_rw;
 
--- The migration ledger's home, created here because app_migrate cannot make it.
+-- The migration ledger's home.
 --
--- Drizzle's migrator records applied migrations in a `drizzle` schema and will
--- try to create it on first run. Creating a schema needs CREATE on the
--- *database*, which app_migrate does not have and should not be given — that
--- privilege is "make any schema you like", far wider than "own this one". So
--- the schema is created here with app_migrate as its owner, and the migrator
--- finds it already present.
+-- Drizzle's migrator records applied migrations in a `drizzle` schema, and the
+-- first statement migrate() runs is an unconditional
+-- `CREATE SCHEMA IF NOT EXISTS "drizzle"`.
+--
+-- *(Correction.)* This file used to create the schema here and assume the
+-- migrator would find it present and move on. It does not. Postgres checks
+-- CREATE on the *database* before it evaluates IF NOT EXISTS, so the statement
+-- fails with 42501 (permission denied for database) on a schema that already
+-- exists and is already owned by the caller. Every integration suite failed
+-- exactly this way the first time they were run, and any deploy applying
+-- migrations as app_migrate would have failed identically — this was never a
+-- test-only problem.
+--
+-- So app_migrate is granted CREATE on the database. That is wider than owning
+-- one schema, and the objection this comment used to make against it was fair
+-- in isolation. It does not survive the comparison: app_migrate already owns
+-- every table, so it can already drop them, or ALTER TABLE ... NO FORCE ROW
+-- LEVEL SECURITY, which is a far larger power than creating a schema. The
+-- boundary carrying the tenant-isolation guarantee is app_rw, and nothing here
+-- touches it.
+--
+-- Dynamic because the database name differs per environment and GRANT cannot
+-- take a parameter.
+DO $$
+BEGIN
+  EXECUTE format('GRANT CREATE ON DATABASE %I TO app_migrate', current_database());
+END
+$$;
+
+-- Still created here, owned by app_migrate, so the ledger's ownership does not
+-- depend on which role happened to run the first migration — the migrator's
+-- CREATE SCHEMA is now the no-op it was always meant to be.
 --
 -- app_rw is given no USAGE on it, so the runtime role cannot read the migration
 -- history, let alone rewrite it. That matters more than it looks: the ledger is
