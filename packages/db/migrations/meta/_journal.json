@@ -57,6 +57,20 @@
       "when": 1788298534867,
       "tag": "0007_widget_keys_updated_at",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788305249633,
+      "tag": "0008_products",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788305251096,
+      "tag": "0009_products_updated_at",
+      "breakpoints": true
     }
   ]
 }
