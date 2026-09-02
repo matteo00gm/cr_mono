@@ -12,5 +12,6 @@ export * from './product-embeddings.js';
 export * from './products.js';
 export * from './tenant-domains.js';
 export * from './tenants.js';
+export * from './usage.js';
 export * from './widget-events.js';
 export * from './widget-keys.js';
