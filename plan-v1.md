@@ -623,7 +623,9 @@ Embedding text is assembled from a deterministic template (name, producer, vinta
 
 Sparse catalogs (many sellers have little more than a name and a price) can be enriched by the model into structured pairing metadata — food categories, intensity, style tags — stored in separate `enriched_*` columns so it never overwrites seller-authored data, flagged in the UI, and always tenant-scoped. Bulk enrichment runs through Bedrock batch inference at 50% off.
 
-**Cut from launch scope.** Sellers fill the fields manually to start, and the `ZERO_RESULTS` panel (§2.4) will show whether thin catalog data is actually hurting retrieval — which is better evidence for building this than an assumption is. Reserve the `enriched_*` columns in the P0 schema so adding it later is not a migration.
+**Cut from launch scope.** Sellers fill the fields manually to start, and the `ZERO_RESULTS` panel (§2.4) will show whether thin catalog data is actually hurting retrieval — which is better evidence for building this than an assumption is.
+
+~~Reserve the `enriched_*` columns in the P0 schema so adding it later is not a migration.~~ **Retracted.** The premise is wrong twice over: `ALTER TABLE ADD COLUMN` with no default has been metadata-only and O(1) since Postgres 11, so adding a column later is not the expensive operation this assumes, and `products` holds roughly 2,500 SKUs per tenant — not a large table by any measure that would change the answer. And the deeper problem is that reserving a shape now guesses at a schema for the feature this section has just decided *not* to design, on the grounds that we do not yet know what it needs. A wrong guess is worse than an absence, because it reads as authoritative to the next person. P0-26 ships without them.
 
 ### 4.3 Deletion
 
@@ -1135,7 +1137,7 @@ Anti-rot checks in CI, each cheap:
 | P0-23 | Migration: `memberships` | `role` enum OWNER/EDITOR; **`user_id text`**; RLS policy shape decided here, applied in 37 | 22 |
 | P0-24 | 🔒 Migration: `tenant_domains` | **`UNIQUE(origin)` globally, covering PENDING rows** — the anti-sharing backbone | 22 |
 | P0-25 | 🔒 Migration: `widget_keys` | `secret_key_hash`, prefix, last4; partial unique on the active key; argon2id round-trip moves to P4-07 | 22 |
-| P0-26 | Migration: `products` | full template field set incl. `external_variant_id`, `enriched_*` reserved | 22 |
+| P0-26 | Migration: `products` | full template field set incl. `external_variant_id`; **no `enriched_*`** (§4.2 retracted) | 22 |
 | P0-27 | Migration: `product_embeddings` | `halfvec(1024)` + HNSW index | 26 |
 | P0-28 | Migration: `conversations`, `messages` | | 22 |
 | P0-29 | Migration: `widget_events` | type enum from §Data Model; `SET NULL` on conversation and product so analytics do not shrink as data ages out | 22 |
@@ -1397,6 +1399,8 @@ Everything else is either additive or a UI concern. These eight are the load-bea
 **What "light PR" means here, concretely:** target **≤ 150 lines of production diff**, ≤ 250 including tests. If a spec below exceeds that, it says so and splits. One PR changes one concept — a PR that touches a migration *and* an endpoint *and* a component is three PRs.
 
 Each spec has the same five parts: **What** (the deliverable), **Why** (the reason it exists, so a reviewer can judge whether the code achieves it), **How** (the actual approach, with code where the detail matters), **Tests** (part of the same PR), and **Files + size**.
+
+**A column earns its place by being read.** Applied while building P0-22 through P0-29, and worth stating because it cuts against a habit this document had: "reserve it now so adding it later is not a migration" is an argument that does not survive checking. `ALTER TABLE ADD COLUMN` with no default is metadata-only and O(1) in Postgres, and none of these tables is large enough for the answer to change. What reserving actually costs is a guess at the shape of a feature nobody has designed — and a wrong guess is worse than an absence, because the next reader treats a committed column as a decision. Two kinds of column are worse still: one the database already enforces elsewhere (`product_embeddings.dim` against `halfvec(1024)`), and one that duplicates a fact without a constraint keeping the two in agreement. Where a duplicate genuinely earns its place, tie it down with a `CHECK` rather than a convention.
 
 > Specs for **P0** follow. P1–P7 continue in the same format.
 
@@ -2056,6 +2060,8 @@ Defence in depth behind P2-05's normalisation, at the schema level.
 
 **Index `tenant_id`.** The unique index on `origin` serves origin → tenant, the widget's hot path, but nothing covers `tenant_id`, so listing a tenant's domains — and the referential check behind `DELETE FROM tenants` — would scan the table.
 
+**`status` and `verified_at` say the same thing, and should be tied together.** `status = 'VERIFIED'` is exactly `verified_at IS NOT NULL`, so the two can disagree — and the one that gates service is `status`. Keep both (P4-18 will want more states than a timestamp can express) but add `CHECK ((status = 'VERIFIED') = (verified_at IS NOT NULL))` when P4 extends the enum, so the redundancy cannot rot. Noted rather than done in P0-24, which was already merged when this came up.
+
 **Tests.** Two tenants cannot both claim `https://winery.com`, including while the first claim is still `PENDING`. The `CHECK` rejects, each as its own case: uppercase scheme and host, mixed case, a trailing slash, a path, a **trailing dot**, an **empty label**, a bare hostname, a **hyphen at either edge of a label**, userinfo, a wildcard, trailing whitespace, and a non-HTTP scheme. It accepts a plain origin, a subdomain, an explicit port, and `http://localhost:5173` — dev origins have to keep working or P2-05 grows an exception.
 
 **Files.** schema + generated migration + trigger migration + down files. **~95 lines + ~150 test lines.**
@@ -2068,7 +2074,9 @@ Defence in depth behind P2-05's normalisation, at the schema level.
 
 **Why.** `pk_` is public by construction; `sk_` must never be recoverable from the database.
 
-**How.** `public_key text unique not null` stored in plaintext (it is public). For the secret: `secret_key_hash text` (argon2id), `secret_key_prefix text`, `secret_key_last4 text` — the prefix and last4 exist so the UI can identify a key without storing it. **No column ever holds the secret in plaintext.** Add `revoked_at`, and `grace_until` for the 24-hour public-key rotation window (P4-08). Partial unique index so only one non-revoked public key is active per tenant.
+**How.** `public_key text unique not null` stored in plaintext (it is public). For the secret: `secret_key_hash text` (argon2id), `secret_key_prefix text`, `secret_key_last4 text` — the prefix and last4 exist so the UI can identify a key without storing it.
+
+**`secret_key_prefix` earns its place only because there is more than one prefix.** If every secret began `sk_live_` the column would hold the same eight characters on every row and identify nothing — `secret_key_last4` would be doing all the work. It is kept because §5.2b's `event.livemode` assertion means test-mode and live-mode keys both exist, so the prefix distinguishes `sk_test_` from `sk_live_` at a glance, which is exactly the mistake worth catching in a support conversation. If that ever stops being true, the column should go. **No column ever holds the secret in plaintext.** Add `revoked_at`, and `grace_until` for the 24-hour public-key rotation window (P4-08). Partial unique index so only one non-revoked public key is active per tenant.
 
 **`revoked_at` and `grace_until` answer different questions, and both are needed.** Rotation cannot be atomic — the seller's page carries the old key until they redeploy — so rotation sets `revoked_at` (this is no longer *the* key, which frees the partial unique index for the new one) while `grace_until` keeps it accepted for a day. Collapsing them into one column forces a choice between breaking every page instantly and never expiring anything. Add a `CHECK (grace_until is null or revoked_at is not null)`: a grace window on a live key is the shape of a bug that keeps a compromised key alive.
 
@@ -2090,13 +2098,15 @@ The argon2id round-trip belongs with **key minting (P4-07)**, not here: hashing 
 - `price_cents integer` — **integer minor units, never float**. Money in floating point produces `12.499999` bugs.
 - `grape_varieties text[]`, `food_pairings text[]`, `style_tags text[]` — arrays, with GIN indexes added in P1-07.
 - `external_variant_id text` — nullable at the column level but required by the form (P1-01), because a legacy row may predate it while new entries must have it.
-- `content_hash text`, `embedding_state` enum, `enriched_*` columns **reserved now** (§4.2) so adding enrichment later is not a migration.
+- `content_hash text` and the `embedding_state` enum — the worker's queue state. **No `enriched_*` columns**; see below.
 - `unique(tenant_id, sku)` — the upsert key for P1-24.
 - `status` enum `('ACTIVE','ARCHIVED')` for soft delete.
 
 **`wine_type` is `text`, not an enum.** *(Decision the spec left open.)* Wine categories grow sideways — orange, pét-nat, col fondo — and each addition would be an `ALTER TYPE` for a label that guards nothing. The allowed set belongs in the shared `drizzle-zod` contract (P0-42), which is where §2.2 already puts validation; the column's job is to require a value. `stock_status`, `status` and `embedding_state` *are* enums, because each drives behaviour — retrieval filtering, soft delete, the worker queue.
 
 **The alcohol CHECK is lower-bound only.** `numeric(4, 2)` cannot represent anything at or above 100, so it rejects `120` itself — with `numeric_value_out_of_range` (22003), not a check violation. A `between 0 and 100` check reads as though it were doing that work while being unreachable. Assert **both** error codes in the tests so the reason stays visible to the next reader.
+
+**No `enriched_*` columns.** *(Correction — §4.2 retracts the reservation there.)* The original spec reserved `enriched_tasting_notes`, `enriched_food_pairings`, `enriched_model` and `enriched_at` so that adding enrichment later would not be a migration. That argument does not survive checking: `ALTER TABLE ADD COLUMN` with no default is metadata-only and O(1) since Postgres 11, and `products` holds roughly 2,500 SKUs per tenant — nowhere near the size at which the answer would change. What the reservation actually buys is a guess at the shape of a feature §4.2 deliberately left undesigned, and a committed column reads to the next person as a decision that was made. They land with the enrichment work that defines them.
 
 **Tests.** Insert with minimum required fields and assert the defaults (`ACTIVE`, `PENDING` — not `INDEXED`, or a product silently never gets embedded); duplicate `(tenant_id, sku)` rejected and the same SKU in another tenant accepted; array round-trip **with a value containing a comma** (`'Brasato al Barolo, ossobuco'`), which is what a delimited-string implementation gets wrong; exact price and `13.50`; negative price and negative alcohol refused.
 
@@ -2114,7 +2124,9 @@ The argon2id round-trip belongs with **key minting (P4-07)**, not here: hashing 
 ```sql
 embedding halfvec(1024) NOT NULL
 ```
-`halfvec` for the 3× memory reduction that keeps the index in `shared_buffers` (§5.1). Store `model text` and `dim integer` per row so a future model change is detectable per-row rather than assumed globally. `unique(tenant_id, product_id, chunk_idx)`. Index:
+`halfvec` for the 3× memory reduction that keeps the index in `shared_buffers` (§5.1). Store `model text` per row so a future model change is detectable per-row rather than assumed globally.
+
+**No `dim` column** *(correction).* The original spec paired `model` with `dim integer`. `halfvec(1024)` already enforces the dimension — a vector of any other length is refused outright with SQLSTATE 22000 — so `dim` could only ever hold 1024, while nothing would constrain it to actually *say* 1024, because no check ties an integer column to the length of a vector beside it. A denormalised copy that can silently disagree with what it copies is worse than no copy. The per-row versioning this was reaching for is **P1-49's `version smallint`**, which joins the unique key and is read by retrieval; `dim` never was. `unique(tenant_id, product_id, chunk_idx)`. Index:
 ```sql
 CREATE INDEX ON product_embeddings
   USING hnsw (embedding halfvec_cosine_ops)
