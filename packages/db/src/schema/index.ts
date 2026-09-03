@@ -16,6 +16,7 @@ export * from './rate-limit-buckets.js';
 export * from './security-events.js';
 export * from './tenant-domains.js';
 export * from './tenants.js';
+export * from './token-revocations.js';
 export * from './usage.js';
 export * from './widget-events.js';
 export * from './widget-keys.js';
