@@ -1105,46 +1105,64 @@ Anti-rot checks in CI, each cheap:
 - **`⛔` marks hard blockers** — a broad set of later work cannot start until these merge.
 - Rows within a phase that share no dependency can go in parallel.
 
+### Where the build actually is — 2026-09-03
+
+**`✅` in the `#` column means merged to `main`.** Verified against the tree at `1622d3c`, not from memory: every ✅ row has an artifact on disk, and the database rows have a migration, a hand-written reverse, a unit shape spec and an integration suite.
+
+**Merged:** P0-01 → P0-33, plus P0-21a and P0-21b. **Next in build order: P0-34.**
+
+**Two low-numbered rows are *not* done**, and their position in the table is misleading: **P0-17a** is blocked on the API Lambda origin and lands with P0-54, and **P0-23a** (Better Auth tables) sits later in dependency order than its number suggests. Neither is an oversight.
+
+**State of `packages/db`:** 14 tables across 12 schema modules, migrations `0000`–`0020` (**the next one is `0021`**), 15 integration suites / 134 tests, 106 unit tests, per-package coverage gates passing, and `pnpm db:generate` reporting no drift.
+
+**Three things that will otherwise mislead you:**
+
+1. **Nothing has been deployed to AWS.** P0-21a and P0-21b are verified against a container and typechecked; neither has run against a real stage. The proof for them is P0-39 and a first deploy, both outstanding. A green build says nothing about whether the deployed application connects as `app_rw`.
+2. **The integration suite does not run in CI.** `ci.yml` runs lint, typecheck, unit tests and the coverage gates; `pnpm test:integration` needs Docker and is not wired in (see ⚠ Open items). A green PR therefore does *not* mean the 134 integration tests passed — run them locally before trusting a schema change.
+3. **Branch protection is not configured**, so none of those checks blocks a merge yet. They are advisory until the four required checks are set on `main`.
+
+---
+
 ### P0 — Foundation (⛔ everything depends on this phase)
 
 | # | Task | How / notes | Deps |
 |---|---|---|---|
-| P0-01 | ⛔ Repo init | pnpm workspace, `.nvmrc`, `.gitignore`, `.editorconfig`, root `package.json` | — |
-| P0-02 | TS base configs | `tsconfig.base.json` + `tsconfig.emit.json`, strict on, per-package `tsconfig.json` (typecheck, sees tests) and `tsconfig.build.json` (emit, src only) | 01 |
-| P0-03 | Turborepo pipeline | `turbo.json`: build/typecheck/lint with correct `dependsOn`. No `test` task — tests are one root Vitest run (see P0-05) | 01 |
-| P0-04 | ESLint + Prettier | flat config, `lint-staged`, husky pre-commit, `.gitattributes` (`eol=lf`) | 02 |
-| P0-05 | Vitest workspace | root `vitest.config.ts` with `test.projects`, per-package environments, coverage provider | 02 |
-| P0-06 | CI: format + lint + typecheck | GitHub Actions, `--frozen-lockfile`, actions pinned to SHAs | 03,04 |
-| P0-07 | CI: test + coverage gates | Turbo remote cache; per-package thresholds from §6.2, PR-blocking | 05,06 |
-| P0-08 | 🔒 gitleaks + dep audit in CI | pre-commit hook plus CI scan; `pnpm audit` gate with expiring allowlist; OSV informational | 06 |
-| P0-09 | dependency-cruiser rules | forbid `packages/*` → `apps/*`; keep core/security framework-free; forbid raw DB pool outside `withTenant`; no cycles | 06 |
-| P0-10 | Renovate config | grouped, auto-merge patch only | 01 |
-| P0-11 | ⛔ SST init + stages | `sst.config.ts`, `dev`/`staging`/`prod`, mandatory `env`+`service` tags | 01 |
-| P0-12 | SST: VPC | public/private subnets, no NAT Gateway | 11 |
-| P0-13 | SST: fck-nat instance | `t4g.nano`, route table for private subnets | 12 |
-| P0-14 | ⛔ SST: RDS `t4g.micro` | 20 GB gp3, private subnet, TLS required, parameter group | 12 |
-| P0-15 | SST: SSM paths + IAM | per-Lambda roles scoped to their parameter paths only | 11 |
-| P0-16 | SST: Budgets alarm | per stage; fail-loud if non-prod exceeds $15 | 11 |
-| P0-17 | SST: CloudFront skeleton | distribution + origins, no behaviours yet | 11 |
+| ✅ P0-01 | ⛔ Repo init | pnpm workspace, `.nvmrc`, `.gitignore`, `.editorconfig`, root `package.json` | — |
+| ✅ P0-02 | TS base configs | `tsconfig.base.json` + `tsconfig.emit.json`, strict on, per-package `tsconfig.json` (typecheck, sees tests) and `tsconfig.build.json` (emit, src only) | 01 |
+| ✅ P0-03 | Turborepo pipeline | `turbo.json`: build/typecheck/lint with correct `dependsOn`. No `test` task — tests are one root Vitest run (see P0-05) | 01 |
+| ✅ P0-04 | ESLint + Prettier | flat config, `lint-staged`, husky pre-commit, `.gitattributes` (`eol=lf`) | 02 |
+| ✅ P0-05 | Vitest workspace | root `vitest.config.ts` with `test.projects`, per-package environments, coverage provider | 02 |
+| ✅ P0-06 | CI: format + lint + typecheck | GitHub Actions, `--frozen-lockfile`, actions pinned to SHAs | 03,04 |
+| ✅ P0-07 | CI: test + coverage gates | Turbo remote cache; per-package thresholds from §6.2, PR-blocking | 05,06 |
+| ✅ P0-08 | 🔒 gitleaks + dep audit in CI | pre-commit hook plus CI scan; `pnpm audit` gate with expiring allowlist; OSV informational | 06 |
+| ✅ P0-09 | dependency-cruiser rules | forbid `packages/*` → `apps/*`; keep core/security framework-free; forbid raw DB pool outside `withTenant`; no cycles | 06 |
+| ✅ P0-10 | Renovate config | grouped, auto-merge patch only | 01 |
+| ✅ P0-11 | ⛔ SST init + stages | `sst.config.ts`, `dev`/`staging`/`prod`, mandatory `env`+`service` tags | 01 |
+| ✅ P0-12 | SST: VPC | public/private subnets, no NAT Gateway | 11 |
+| ✅ P0-13 | SST: fck-nat instance | `t4g.nano`, route table for private subnets | 12 |
+| ✅ P0-14 | ⛔ SST: RDS `t4g.micro` | 20 GB gp3, private subnet, TLS required, parameter group | 12 |
+| ✅ P0-15 | SST: SSM paths + IAM | per-Lambda roles scoped to their parameter paths only | 11 |
+| ✅ P0-16 | SST: Budgets alarm | per stage; fail-loud if non-prod exceeds $15 | 11 |
+| ✅ P0-17 | SST: CloudFront skeleton | distribution + origins, no behaviours yet | 11 |
 | P0-17a | SST: chat behaviour (streaming) | `CachingDisabled` + compression off + ≥30s read timeout — **CloudFront buffers SSE otherwise**. **Blocked on the API Lambda origin** — a cache behaviour needs an origin to target, so this cannot land before P0-54 | 17, API origin |
-| P0-18 | ⛔ `packages/db`: Drizzle + pool | connection factory, env-driven config | 02,14 |
-| P0-19 | ⛔ 🔒 `withTenant()` helper | opens tx, `SET LOCAL app.tenant_id`, the **only** sanctioned DB entry point | 18 |
-| P0-20 | Migration tooling + extensions | drizzle-kit, the `bootstrap/` vs `migrations/` split, down-file convention; `vector`, `pg_trgm`, `unaccent`, **`citext`**; confirm `halfvec` available | 18 |
-| P0-21 | 🔒 **Bootstrap**: DB roles | `app_rw` (no BYPASSRLS, not owner), `app_migrate`, `app_admin` (**NOLOGIN**). Passwords as GUCs, not psql vars | 20 |
-| P0-21a | ⛔ 🔒 Connect the app as `app_rw` | SSM params + `database/url` off the master credentials. **Without it every RLS policy is inert in production** | 21,15 |
-| P0-21b | Apply bootstrap + migrations to a stage | the deploy-time path P0 otherwise lacks; **runs in-VPC — a GitHub-hosted runner cannot reach RDS** | 21a |
-| P0-22 | Migration: `tenants` | incl. status enum from §Data Model; `plan` nullable; shared `updated_at` trigger; widens the P0-09 rule for `src/schema/` | 21 |
-| P0-23 | Migration: `memberships` | `role` enum OWNER/EDITOR; **`user_id text`**; RLS policy shape decided here, applied in 37 | 22 |
-| P0-24 | 🔒 Migration: `tenant_domains` | **`UNIQUE(origin)` globally, covering PENDING rows** — the anti-sharing backbone | 22 |
-| P0-25 | 🔒 Migration: `widget_keys` | `secret_key_hash`, prefix, last4; partial unique on the active key; argon2id round-trip moves to P4-07 | 22 |
-| P0-26 | Migration: `products` | full template field set incl. `external_variant_id`; **no `enriched_*`** (§4.2 retracted) | 22 |
-| P0-27 | Migration: `product_embeddings` | `halfvec(1024)` + HNSW index | 26 |
-| P0-28 | Migration: `conversations`, `messages` | | 22 |
-| P0-29 | Migration: `widget_events` | type enum from §Data Model; `SET NULL` on conversation and product so analytics do not shrink as data ages out | 22 |
-| P0-30 | Migration: `usage_events`, `usage_daily` | append-only + rollup table | 22 |
-| P0-31 | 🔒 Migration: `audit_log` | no UPDATE/DELETE grant to `app_rw` | 22 |
-| P0-32 | 🔒 Migration: `security_events` | | 22 |
-| P0-33 | Migration: `processed_webhooks` | PK `(provider, event_id)` | 20 |
+| ✅ P0-18 | ⛔ `packages/db`: Drizzle + pool | connection factory, env-driven config | 02,14 |
+| ✅ P0-19 | ⛔ 🔒 `withTenant()` helper | opens tx, `SET LOCAL app.tenant_id`, the **only** sanctioned DB entry point | 18 |
+| ✅ P0-20 | Migration tooling + extensions | drizzle-kit, the `bootstrap/` vs `migrations/` split, down-file convention; `vector`, `pg_trgm`, `unaccent`, **`citext`**; confirm `halfvec` available | 18 |
+| ✅ P0-21 | 🔒 **Bootstrap**: DB roles | `app_rw` (no BYPASSRLS, not owner), `app_migrate`, `app_admin` (**NOLOGIN**). Passwords as GUCs, not psql vars | 20 |
+| ✅ P0-21a | ⛔ 🔒 Connect the app as `app_rw` | SSM params + `database/url` off the master credentials. **Without it every RLS policy is inert in production** | 21,15 |
+| ✅ P0-21b | Apply bootstrap + migrations to a stage | the deploy-time path P0 otherwise lacks; **runs in-VPC — a GitHub-hosted runner cannot reach RDS** | 21a |
+| ✅ P0-22 | Migration: `tenants` | incl. status enum from §Data Model; `plan` nullable; shared `updated_at` trigger; widens the P0-09 rule for `src/schema/` | 21 |
+| ✅ P0-23 | Migration: `memberships` | `role` enum OWNER/EDITOR; **`user_id text`**; RLS policy shape decided here, applied in 37 | 22 |
+| ✅ P0-24 | 🔒 Migration: `tenant_domains` | **`UNIQUE(origin)` globally, covering PENDING rows** — the anti-sharing backbone | 22 |
+| ✅ P0-25 | 🔒 Migration: `widget_keys` | `secret_key_hash`, prefix, last4; partial unique on the active key; argon2id round-trip moves to P4-07 | 22 |
+| ✅ P0-26 | Migration: `products` | full template field set incl. `external_variant_id`; **no `enriched_*`** (§4.2 retracted) | 22 |
+| ✅ P0-27 | Migration: `product_embeddings` | `halfvec(1024)` + HNSW index | 26 |
+| ✅ P0-28 | Migration: `conversations`, `messages` | | 22 |
+| ✅ P0-29 | Migration: `widget_events` | type enum from §Data Model; `SET NULL` on conversation and product so analytics do not shrink as data ages out | 22 |
+| ✅ P0-30 | Migration: `usage_events`, `usage_daily` | append-only + rollup table | 22 |
+| ✅ P0-31 | 🔒 Migration: `audit_log` | no UPDATE/DELETE grant to `app_rw` | 22 |
+| ✅ P0-32 | 🔒 Migration: `security_events` | | 22 |
+| ✅ P0-33 | Migration: `processed_webhooks` | PK `(provider, event_id)` | 20 |
 | P0-34 | 🔒 Migration: `rate_limit_buckets` | for the Postgres limiter (§5.7) | 22 |
 | P0-35 | 🔒 Migration: `token_revocations` | `jti` + expiry, for the sweep job | 22 |
 | P0-36 | Migration: `outbox` | | 26 |
