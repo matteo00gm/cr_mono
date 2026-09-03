@@ -148,6 +148,20 @@
       "when": 1788390975847,
       "tag": "0020_processed_webhooks",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1788394722158,
+      "tag": "0021_rate_limit_buckets",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1788394724480,
+      "tag": "0022_rate_limit_buckets_storage",
+      "breakpoints": true
     }
   ]
 }

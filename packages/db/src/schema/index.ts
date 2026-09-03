@@ -12,6 +12,7 @@ export * from './memberships.js';
 export * from './product-embeddings.js';
 export * from './processed-webhooks.js';
 export * from './products.js';
+export * from './rate-limit-buckets.js';
 export * from './security-events.js';
 export * from './tenant-domains.js';
 export * from './tenants.js';

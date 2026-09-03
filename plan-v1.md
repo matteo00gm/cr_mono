@@ -2348,9 +2348,13 @@ ALTER TABLE rate_limit_buckets SET (
 ```
 `fillfactor = 70` keeps updates HOT so they avoid touching indexes. On the autovacuum settings, a review suggestion of `scale_factor = 0.05` is directionally right but the wrong knob for **this** table: `scale_factor` is proportional to table size, and this table is deliberately *small* (P2-14 sweeps it) while its churn is high. Five percent of a few thousand rows means autovacuum waits for ~100 dead tuples' worth of proportion while thousands accumulate between sweeps. Setting `scale_factor = 0.0` with an **absolute** `threshold` makes vacuuming depend on churn rather than size, which is the actual problem.
 
-**Tests.** Deferred to P2-03 for behaviour; add a migration test asserting the storage parameters are set, since a later `ALTER TABLE` could silently drop them.
+**Tests.** Behaviour is deferred to P2-03, which tests the limiter through its interface. Here: assert the storage parameters are actually set, since a later `ALTER TABLE` could drop them silently and no limiter test would notice the table had started bloating. *(This paragraph appeared twice, saying nearly the same thing in two ways; merged.)*
 
-**Tests.** Deferred to P2-03, which tests the limiter through its interface.
+**Assert the parameters by parsing `reloptions`, not by string match** *(implementation note).* Postgres normalises what it stores — `scale_factor = 0.0` comes back as `0.0`, so an exact-string assertion fails on formatting while the setting is correct. Parse into name/number pairs and compare numerically.
+
+**No `tenant_id` column** *(decision the spec left implicit).* The tenant is encoded inside `bucket_key` along with the dimension, because the limiter also counts things belonging to no tenant — an IP hammering an invalid key. So the table is out of P0-41's scope rather than allowlisted by it: that test looks for tables *having* a `tenant_id`. Isolation here is the key format's job, which is worth knowing before someone "fixes" the missing column.
+
+**`app_rw` keeps `DELETE` here**, unlike the P0-30 to P0-32 ledgers. P2-14 sweeps closed windows, and this is the one table where deletion is the point rather than the risk.
 
 **Files.** schema + migration. **~40 lines.**
 
