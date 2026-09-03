@@ -1163,6 +1163,7 @@ Anti-rot checks in CI, each cheap:
 | ✅ P0-31 | 🔒 Migration: `audit_log` | no UPDATE/DELETE grant to `app_rw` | 22 |
 | ✅ P0-32 | 🔒 Migration: `security_events` | | 22 |
 | ✅ P0-33 | Migration: `processed_webhooks` | PK `(provider, event_id)` | 20 |
+| P0-33a | 🔒 Ledger integrity: the grants that make a ledger | append-only is defeated by `DELETE FROM tenants`; `processed_webhooks` has no revoke at all | 30,31,32,33 |
 | P0-34 | 🔒 Migration: `rate_limit_buckets` | for the Postgres limiter (§5.7) | 22 |
 | P0-35 | 🔒 Migration: `token_revocations` | `jti` + expiry, for the sweep job | 22 |
 | P0-36 | Migration: `outbox` | | 26 |
@@ -2307,6 +2308,24 @@ Grant INSERT and SELECT only. Enforced at the grant level, not by convention —
 **`provider` leads the key** because event ids are only unique within a provider. Shopify arrives at P6-07 and will reuse `evt_`-shaped ids of its own.
 
 **Files.** schema + migration. **~30 lines.**
+
+---
+
+### P0-33a · Ledger integrity: the grants that make a ledger 🔒
+
+**What.** Two gaps found reviewing P0-30 through P0-33 together, after all four had merged.
+
+**Why.** Three tables advertise append-only in a migration and do not deliver it, and a fourth never claimed it and should have.
+
+**1. `DELETE FROM tenants` erases every ledger.** `usage_events`, `audit_log` and `security_events` each `REVOKE UPDATE, DELETE ... FROM app_rw`, and each cascades from `tenants`. `app_rw` keeps `DELETE` on `tenants` from P0-21's default privileges, and a referential-integrity cascade is not permission-checked against the invoking role. So one statement available to the runtime role removes the billing ledger, the record of who deleted the tenant, and the security events describing attacks on it — the three things those revokes exist to protect, defeated by the role they constrain. Not theoretical: the *goes with its tenant* case in each of those three integration suites deletes a tenant as `app_rw` and asserts the rows are gone.
+
+What this needs is a decision about what tenant deletion should *mean*, which is a billing and compliance question rather than a schema one. Deleting a tenant's conversations is P7-07's job and clearly right. Deleting the record of what they were billed for is not obviously right, and deleting the audit trail of the deletion itself is self-evidently wrong. Options, cheapest first: revoke `DELETE ON tenants` from `app_rw` and route deletion through a deliberate path; or change these three FKs to `ON DELETE SET NULL` or `RESTRICT` and let the GDPR erasure job (P7-08) decide per table what it removes. **Decide before P5** — once real money is metered the answer stops being reversible.
+
+**2. `processed_webhooks` is mutable by `app_rw`.** It got no revoke, so the default privileges leave the runtime role holding `UPDATE` and `DELETE` on the ledger whose only purpose is idempotency. A bug or a compromised application credential deletes a row, and the next redelivery of that event applies a second time — the double-apply §3.8 describes. The plan already treats replay as security-relevant (`REPLAYED_WEBHOOK` is a `security_events` type), so this is the one such ledger left writable. `REVOKE UPDATE, DELETE`, with retention pruning left to a role that is not `app_rw`.
+
+**Tests.** As `app_rw`: deleting a tenant does not remove whatever the chosen option keeps; `UPDATE` and `DELETE` on `processed_webhooks` raise insufficient privilege. The three existing *goes with its tenant* assertions currently prove the opposite and have to change with it.
+
+**Files.** two migrations + down files, plus the integration assertions. **~60 lines.**
 
 ---
 
