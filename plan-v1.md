@@ -2517,7 +2517,15 @@ Four details that decide whether this works:
 
 **Tests.** This is the test.
 
-**Files.** `packages/db/test/rls-coverage.spec.ts`. **~70 test lines.**
+**Verified as the spec asks:** a scratch table with a `tenant_id` and no policy is reported by the reflection query, so the assertion fails on it rather than passing vacuously.
+
+**The `ALLOWLIST` is empty, and the spec's contents for it were wrong** *(correction).* It named `processed_webhooks` and `tenants`. Neither belongs: **neither has a `tenant_id` column**, so neither is discovered by the query in the first place — `processed_webhooks` derives its tenant from the event, and `tenants` *is* the tenant. Allowlisting them would exempt something never in scope, which reads as deliberate while hiding that the real reason is different. The list stays, empty, for the case the plan anticipated but the schema has not produced: a table genuinely scoped by tenant that still must not be isolated.
+
+**Reflection has to be the discovery mechanism, not `RLS_POLICIES`.** P0-37 and P0-38 both derive from that list, so a table missing from it is invisible to them by construction. Asking the database for every table with a `tenant_id` is the only direction that finds what the list forgot — and a final assertion reconciles the two, so a table in the schema but not the list, or the reverse, fails.
+
+**Four checks beyond enable/force/policy**, each a distinct way to have RLS and not have isolation: a policy with `USING` but no `WITH CHECK` (reads filtered, writes unrestricted — every read test still passes); a **second permissive policy**, OR-ed in Postgres so it widens rather than replaces; a stale allowlist entry naming a table that no longer exists; and a guard that the reflection query itself returns something, since a column rename would otherwise leave every assertion passing while checking nothing.
+
+**Files.** `packages/db/test/rls-coverage.integration.test.ts`. **7 assertions.**
 
 ---
 
