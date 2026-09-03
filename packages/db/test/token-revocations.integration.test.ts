@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { startPostgres } from './support/postgres.js';
+import { createTenant } from './support/tenant.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
 /**
@@ -38,12 +39,7 @@ afterAll(async () => {
 }, 60_000);
 
 beforeEach(async () => {
-  const rows = await db.execute(sql`
-    insert into tenants (name, slug)
-    values ('Tok', ${`tok-${String(Date.now())}-${String(Math.random()).slice(2)}`})
-    returning id
-  `);
-  tenantId = String([...rows][0]?.id);
+  tenantId = await createTenant(db, 'tok');
 });
 
 const revoke = (jti: string, expiresAt = '2026-12-31T00:00:00Z') =>

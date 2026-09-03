@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { startPostgres } from './support/postgres.js';
+import { createTenant, useTenant } from './support/tenant.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
 /**
@@ -35,16 +36,25 @@ beforeAll(async () => {
   client = createDbClient(started.roleUrl('app_rw'), { max: 1 });
   db = client.db;
 
-  const tenant = await db.execute(
-    sql`insert into tenants (name, slug) values ('Chat', 'chat') returning id`,
-  );
-  tenantId = String([...tenant][0]?.id);
+  tenantId = await createTenant(db, 'chat');
 }, 180_000);
 
 afterAll(async () => {
   await client?.close();
   await container?.stop();
 }, 60_000);
+
+/**
+ * Re-scope before every test (P0-37).
+ *
+ * The tenant GUC is session state, so any test that creates a second tenant
+ * moves the context and leaves the next one reading as somebody else. Setting
+ * it here makes each test independent of what ran before it, which is what the
+ * shared `tenantId` from `beforeAll` already implied.
+ */
+beforeEach(async () => {
+  await useTenant(db, tenantId);
+});
 
 describe('conversations', () => {
   it('accepts a salted hash as the visitor identifier', async () => {
@@ -153,10 +163,10 @@ describe('conversations', () => {
 
   it('deletes the whole history when the tenant is deleted', async () => {
     // What the P7-07 retention purge and a GDPR erasure both rely on.
-    const doomed = await db.execute(
-      sql`insert into tenants (name, slug) values ('Gone', 'gone') returning id`,
-    );
-    const doomedId = String([...doomed][0]?.id);
+    // Created through the helper, so the session is scoped to it: the rows
+    // below could not otherwise be written, and the read afterwards could not
+    // see them.
+    const doomedId = await createTenant(db, 'gone');
 
     const conversation = await db.execute(sql`
       insert into conversations (tenant_id, session_id, origin, locale)

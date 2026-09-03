@@ -2431,7 +2431,17 @@ Four details that decide whether this works:
   ```
   `USING` stays strict, so a tenant still sees only its own rows and the unattributed ones are reachable only through `app_admin`, which is what `BYPASSRLS` is for. `WITH CHECK` admits the null case, and that is a deliberate widening: `app_rw` can write an unattributed row from any context. The table is append-only (P0-32), so the worst available misuse is writing noise into a log nobody can edit — set against being unable to record an attack at all.
 
-**Tests.** P0-38 and P0-41.
+**Tests.** P0-38 and P0-41 for isolation and coverage. This PR carries the generator's own: `rls.test.ts` regenerates the migration and diffs it against the committed file, so adding a table to the list without regenerating fails CI, and `rls.integration.test.ts` asserts the migration actually reached the database — a migration can be generated correctly and never applied, and every other suite would pass while isolation was absent.
+
+**Enabling RLS broke 13 of 18 integration suites, 50 tests** *(implementation note).* Correctly. Those suites created a tenant and wrote rows referencing it with nothing scoping the connection — they were relying on the absence of the guarantee they exist to protect. They now create tenants through a helper that sets the GUC first, which is the same shape signup must use, so the suites exercise the real path rather than a test-only escape. Three consequences worth knowing before writing another suite:
+
+- **Tenant context is session state, so creating a second tenant moves it.** Any test asserting on the first tenant afterwards reads as the second. Suites with a shared tenant re-scope in `beforeEach`.
+- **`FORCE` applies to `app_migrate` too** — that is what FORCE means — so a fixture seeding through the migrator connection needs its own context on that connection. P0-27's HNSW seeding did.
+- **`tenants` cannot be inserted without generating the id first**, because `WITH CHECK (id = app.tenant_id)` names a row that does not exist yet. Generate in the application, set context, then insert.
+
+**`INSERT ... RETURNING` on an unattributed `security_events` row fails with 42501** *(carry into P2-16).* Postgres applies the **SELECT** policy to a `RETURNING` clause, so asking for the row back requires it to be visible under `USING` — which for a null-tenant row it deliberately is not. `WITH CHECK` permits the write; the `RETURNING` is what fails. **P2-16's writer must not use `RETURNING` for these**, and the assertion for it lives in the P0-32 suite so the constraint cannot be deleted as a stale comment.
+
+**Abuse counting across unattributed rejections cannot run as `app_rw`** *(carry into P2-16).* Those rows are visible only to a role that bypasses RLS. Counting how often one `pk_` was presented from one origin — the P2-16 signal — therefore needs `app_admin` or a dedicated path, not the application role.
 
 **Files.** `packages/db/migrations/00xx_rls.sql`, generator script. **~120 lines** (mostly generated SQL).
 

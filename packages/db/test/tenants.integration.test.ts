@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { startPostgres } from './support/postgres.js';
+import { useTenant } from './support/tenant.js';
 import { timestampMicros } from './support/timestamps.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
@@ -26,16 +28,31 @@ let container: StartedPostgreSqlContainer | undefined;
 let client: DbClient | undefined;
 let db: Database;
 
-const insert = (values: { name: string; slug: string; status?: string }) =>
-  db.execute(sql`
-    insert into tenants (name, slug, status)
+/**
+ * Creates a tenant the way signup has to after P0-37.
+ *
+ * `tenants` carries `WITH CHECK (id = app.tenant_id)`, so the row must satisfy
+ * a policy naming an id that does not exist until this statement runs. The
+ * resolution is to generate the id in the application and set the context
+ * first — which is what P0-37 specifies signup does, so this helper exercises
+ * the real path rather than a test-only escape.
+ */
+const insert = async (values: { name: string; slug: string; status?: string }) => {
+  const id = randomUUID();
+
+  await useTenant(db, id);
+
+  return db.execute(sql`
+    insert into tenants (id, name, slug, status)
     values (
+      ${id}::uuid,
       ${values.name},
       ${values.slug},
       coalesce(${values.status ?? null}, 'PENDING_VERIFICATION')::tenant_status
     )
     returning id, status, plan, locale, currency
   `);
+};
 
 beforeAll(async () => {
   const started = await startPostgres();
@@ -82,15 +99,23 @@ describe('tenants', () => {
   it('rejects a second tenant claiming the same Stripe customer', async () => {
     // A webhook carrying a customer id has to resolve to exactly one tenant.
     // Without the constraint the handler has to guess which.
+    // Both rows need their own id and context, as signup does. The unique
+    // index is checked against every row rather than the visible ones, so the
+    // violation still fires across a tenant boundary the reader cannot see —
+    // which is the property being asserted.
+    const first = randomUUID();
+    await useTenant(db, first);
     await db.execute(sql`
-      insert into tenants (name, slug, stripe_customer_id)
-      values ('Stripe One', 'stripe-one', 'cus_shared')
+      insert into tenants (id, name, slug, stripe_customer_id)
+      values (${first}::uuid, 'Stripe One', 'stripe-one', 'cus_shared')
     `);
 
+    const second = randomUUID();
+    await useTenant(db, second);
     const error = await db
       .execute(
-        sql`insert into tenants (name, slug, stripe_customer_id)
-            values ('Stripe Two', 'stripe-two', 'cus_shared')`,
+        sql`insert into tenants (id, name, slug, stripe_customer_id)
+            values (${second}::uuid, 'Stripe Two', 'stripe-two', 'cus_shared')`,
       )
       .catch((caught: unknown) => caught);
 

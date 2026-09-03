@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { startPostgres } from './support/postgres.js';
+import { createTenant as createScopedTenant, useTenant } from './support/tenant.js';
 import { timestampMicros } from './support/timestamps.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
@@ -21,12 +22,15 @@ let container: StartedPostgreSqlContainer | undefined;
 let client: DbClient | undefined;
 let db: Database;
 
-const createTenant = async (slug: string): Promise<string> => {
-  const rows = await db.execute(
-    sql`insert into tenants (name, slug) values (${slug}, ${slug}) returning id`,
-  );
-  return String([...rows][0]?.id);
-};
+/**
+ * Creates a tenant and leaves the session scoped to it (P0-37).
+ *
+ * Delegates rather than inserting directly: `tenants` now carries
+ * `WITH CHECK (id = app.tenant_id)`, so the id has to exist before the row
+ * does. Creating a second tenant therefore *moves* the context — tests that
+ * span two tenants have to say which one they mean, with `useTenant`.
+ */
+const createTenant = (slug: string): Promise<string> => createScopedTenant(db, slug);
 
 const addMember = (tenantId: string, userId: string, role = 'EDITOR') =>
   db.execute(sql`
@@ -72,9 +76,13 @@ describe('memberships', () => {
   it('allows the same user in different tenants', async () => {
     // The uniqueness is per tenant, not global — an agency managing two
     // wineries is an ordinary case, not an error.
+    // Each membership is written under its own tenant's context, because
+    // WITH CHECK permits nothing else. Creating the second tenant moves the
+    // context, so the first membership is written before that happens.
     const first = await createTenant('agency-one');
-    const second = await createTenant('agency-two');
     await addMember(first, 'shared-user', 'OWNER');
+
+    const second = await createTenant('agency-two');
 
     await expect(addMember(second, 'shared-user', 'EDITOR')).resolves.toBeDefined();
   });
@@ -93,9 +101,16 @@ describe('memberships', () => {
   });
 
   it('refuses a membership for a tenant that does not exist', async () => {
-    const error = await addMember('00000000-0000-4000-8000-000000000000', 'ghost').catch(
-      (caught: unknown) => caught,
-    );
+    /*
+     * Scoped to the missing tenant, so the row satisfies WITH CHECK and the
+     * foreign key is what rejects it. Without this the policy refuses first
+     * and the test would assert 42501 — passing for the wrong reason and
+     * proving nothing about the FK it is named for.
+     */
+    const ghostTenant = '00000000-0000-4000-8000-000000000000';
+    await useTenant(db, ghostTenant);
+
+    const error = await addMember(ghostTenant, 'ghost').catch((caught: unknown) => caught);
 
     expect(pgErrorCode(error)).toBe(FOREIGN_KEY_VIOLATION);
   });

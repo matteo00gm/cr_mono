@@ -1,8 +1,9 @@
 import { sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { startPostgres } from './support/postgres.js';
+import { createTenant as createScopedTenant, useTenant } from './support/tenant.js';
 import { timestampMicros } from './support/timestamps.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
@@ -24,12 +25,15 @@ let client: DbClient | undefined;
 let db: Database;
 let tenantId: string;
 
-const createTenant = async (slug: string): Promise<string> => {
-  const rows = await db.execute(
-    sql`insert into tenants (name, slug) values (${slug}, ${slug}) returning id`,
-  );
-  return String([...rows][0]?.id);
-};
+/**
+ * Creates a tenant and leaves the session scoped to it (P0-37).
+ *
+ * Delegates rather than inserting directly: `tenants` now carries
+ * `WITH CHECK (id = app.tenant_id)`, so the id has to exist before the row
+ * does. Creating a second tenant therefore *moves* the context — tests that
+ * span two tenants have to say which one they mean, with `useTenant`.
+ */
+const createTenant = (slug: string): Promise<string> => createScopedTenant(db, slug);
 
 /** The minimum §2.2 marks as required: name, sku, wine_type, price, stock. */
 const insertMinimal = (tenant: string, sku: string) =>
@@ -51,6 +55,18 @@ afterAll(async () => {
   await client?.close();
   await container?.stop();
 }, 60_000);
+
+/**
+ * Re-scope before every test (P0-37).
+ *
+ * The tenant GUC is session state, so any test that creates a second tenant
+ * moves the context and leaves the next one reading as somebody else. Setting
+ * it here makes each test independent of what ran before it, which is what the
+ * shared `tenantId` from `beforeAll` already implied.
+ */
+beforeEach(async () => {
+  await useTenant(db, tenantId);
+});
 
 describe('products', () => {
   it('accepts a row with only the required fields', async () => {
@@ -99,8 +115,13 @@ describe('products', () => {
   it('allows the same sku in a different tenant', async () => {
     // SKUs are the seller's namespace, not ours. Two wineries both using
     // "BAROLO-2019" is ordinary.
-    const other = await createTenant('altra-cantina');
+    // Each write happens under its own tenant's context, because that is the
+    // only way either is permitted now: WITH CHECK rejects a row whose
+    // tenant_id is not the one the session is scoped to. Creating the second
+    // tenant moves the context, so the first insert comes first.
     await insertMinimal(tenantId, 'BAROLO-2019');
+
+    const other = await createTenant('altra-cantina');
 
     await expect(insertMinimal(other, 'BAROLO-2019')).resolves.toBeDefined();
   });

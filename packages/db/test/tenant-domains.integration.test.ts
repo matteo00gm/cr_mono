@@ -1,8 +1,9 @@
 import { sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { startPostgres } from './support/postgres.js';
+import { createTenant as createScopedTenant, useTenant } from './support/tenant.js';
 import { timestampMicros } from './support/timestamps.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
@@ -28,12 +29,15 @@ let db: Database;
 let tenantA: string;
 let tenantB: string;
 
-const createTenant = async (slug: string): Promise<string> => {
-  const rows = await db.execute(
-    sql`insert into tenants (name, slug) values (${slug}, ${slug}) returning id`,
-  );
-  return String([...rows][0]?.id);
-};
+/**
+ * Creates a tenant and leaves the session scoped to it (P0-37).
+ *
+ * Delegates rather than inserting directly: `tenants` now carries
+ * `WITH CHECK (id = app.tenant_id)`, so the id has to exist before the row
+ * does. Creating a second tenant therefore *moves* the context — tests that
+ * span two tenants have to say which one they mean, with `useTenant`.
+ */
+const createTenant = (slug: string): Promise<string> => createScopedTenant(db, slug);
 
 const addDomain = (tenantId: string, origin: string, registrable = 'winery.com') =>
   db.execute(sql`
@@ -57,6 +61,17 @@ afterAll(async () => {
   await container?.stop();
 }, 60_000);
 
+/**
+ * Re-scope to tenant A before every test (P0-37).
+ *
+ * `beforeAll` creates two tenants and the second one leaves the session scoped
+ * to it, so without this every test asserting on A reads as B. Tests that mean
+ * B say so with `useTenant`.
+ */
+beforeEach(async () => {
+  await useTenant(db, tenantA);
+});
+
 describe('tenant_domains', () => {
   it('starts a domain unverified', async () => {
     // A domain that is serviceable the moment it is typed in is a widget
@@ -71,6 +86,9 @@ describe('tenant_domains', () => {
     // claiming https://winery.com is the sharing this design exists to stop.
     await addDomain(tenantA, 'https://winery.com');
 
+    // Each write under its own tenant's context. The unique index still spans
+    // both, which is the point: B cannot see A's claim and is refused anyway.
+    await useTenant(db, tenantB);
     const error = await addDomain(tenantB, 'https://winery.com').catch((caught: unknown) => caught);
 
     expect(pgErrorCode(error)).toBe(UNIQUE_VIOLATION);
@@ -82,6 +100,8 @@ describe('tenant_domains', () => {
     // insert into someone losing a domain they already built against.
     await addDomain(tenantA, 'https://unverified-claim.com');
 
+    // As above: the second claim is made under B's own context.
+    await useTenant(db, tenantB);
     const error = await addDomain(tenantB, 'https://unverified-claim.com').catch(
       (caught: unknown) => caught,
     );
