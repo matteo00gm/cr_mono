@@ -162,6 +162,13 @@
       "when": 1788394724480,
       "tag": "0022_rate_limit_buckets_storage",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1788395049497,
+      "tag": "0023_token_revocations",
+      "breakpoints": true
     }
   ]
 }

@@ -2368,7 +2368,13 @@ ALTER TABLE rate_limit_buckets SET (
 
 **How.** `jti text primary key`, `tenant_id`, `expires_at timestamptz not null`. Index on `expires_at` for the sweep (P2-14). Rows are deletable once past expiry — the table stays small because tokens are short-lived.
 
-**Tests.** Deferred to P2-15.
+**Tests.** Revocation behaviour is deferred to P2-15, which tests it through the verify middleware.
+
+**A shape spec still lands here** *(implementation note).* Two reasons the deferral cannot be total: the §6.2 coverage gate counts a schema module with no unit test against `packages/db`, and the guarantees worth pinning are the schema's own rather than the middleware's — `expires_at NOT NULL` (a row with no expiry could never be swept, so the table's size argument fails quietly), the `jti` primary key, and the index the sweep scans by.
+
+**Revoking the same `jti` twice raises `23505`, and callers must expect it.** P4-06 removes a domain and revokes every token issued to it; a retry or two admins acting at once repeats the insert. The unique violation means *already revoked*, which is success, not a failure to distinguish from a real one.
+
+**`app_rw` keeps `DELETE` here**, as with `rate_limit_buckets` and unlike the P0-30 to P0-32 ledgers. An expired token cannot be replayed whether or not it is listed, so the sweep removing it loses nothing.
 
 **Files.** schema + migration. **~30 lines.**
 
