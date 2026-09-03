@@ -2495,7 +2495,15 @@ Four details that decide whether this works:
 
 **Tests.** This is the test.
 
-**Files.** `packages/db/test/migrations.spec.ts`, `packages/db/test/__snapshots__/schema.sql`. **~80 test lines.**
+**Compared against itself, not a committed snapshot** *(deviation).* The spec called for `pg_dump --schema-only` checked in under `__snapshots__/schema.sql`, diffed in review. This dumps the schema before the rollback and again after the re-migration and asserts the two are identical, without committing either. The reason: a committed dump is a ~1,000-line generated artifact that changes with every migration, and a diff nobody can meaningfully read is a diff that gets approved unread — while the drift it was meant to catch is already covered from the model side by `pnpm db:generate` reporting no changes. The self-comparison tests the property the task is named for. If the review-visible snapshot is still wanted, it is additive and cheap to add later.
+
+**`pg_dump` rather than a catalogue query.** A hand-rolled query only compares the objects someone thought to ask about, and the failure this test exists for is exactly the object nobody thought of — a leftover enum, a policy that survived its table.
+
+**Normalise the `restrict` meta-commands.** `pg_dump` 16+ brackets its output with a token that is random per invocation, so two dumps of an identical schema differ on the first line. Left in, this test fails permanently and looks like a real reversibility bug.
+
+**`revertMigrations` lives in `src/deploy.ts`, not in the test.** An irreversible migration found during an incident is a bad time to discover that the rollback path was only ever test code. It also has to empty the ledger: Drizzle decides what to apply from what it finds there, so a ledger still naming migrations the database no longer has means the next `applyMigrations` applies **nothing** — which looks exactly like success and leaves an empty schema.
+
+**Files.** `packages/db/test/migration-reversibility.integration.test.ts`, `packages/db/src/deploy.ts`. **5 assertions.**
 
 ---
 
@@ -2507,7 +2515,7 @@ Four details that decide whether this works:
 
 **How.** Query `information_schema.columns` for every table having a `tenant_id` column. For each, assert `pg_class.relrowsecurity` and `relforcerowsecurity` are both true and that a `tenant_isolation` policy exists. Maintain an explicit `ALLOWLIST` for the deliberate exceptions (`processed_webhooks`, and `tenants` itself), each with a comment explaining why — so exceptions are reviewed, not assumed.
 
-**Tests.** This is the test. Verify it by adding a table without RLS in a scratch commit and watching it fail.
+**Tests.** This is the test.
 
 **Files.** `packages/db/test/rls-coverage.spec.ts`. **~70 test lines.**
 
