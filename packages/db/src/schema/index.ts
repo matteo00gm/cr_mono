@@ -10,6 +10,7 @@ export * from './audit-log.js';
 export * from './conversations.js';
 export * from './memberships.js';
 export * from './product-embeddings.js';
+export * from './outbox.js';
 export * from './processed-webhooks.js';
 export * from './products.js';
 export * from './rate-limit-buckets.js';

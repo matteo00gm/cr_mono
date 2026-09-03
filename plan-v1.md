@@ -2390,6 +2390,10 @@ ALTER TABLE rate_limit_buckets SET (
 
 **Tests.** Insert alongside a product in one transaction; rolling back the product also rolls back the outbox row. That test is the actual guarantee.
 
+**`id` is `bigserial`, not a uuid** *(decision the spec left implicit).* The poller reads in insertion order, and a monotonic key gives it that for free. Random uuids would need a separate ordering column doing the same job, and the partial index would then have to carry it.
+
+**`processed_at` has no default, deliberately.** The queue of work *is* the set of nulls, so any default would empty the queue at the moment of insert — a mistake that reads as a harmless tidy-up and stops every job from ever being published.
+
 **Files.** schema + migration. **~40 lines.**
 
 ---
