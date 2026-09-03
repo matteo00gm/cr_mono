@@ -27,6 +27,7 @@ export type BootstrapRole = 'app_rw' | 'app_migrate';
 const PACKAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BOOTSTRAP_DIR = join(PACKAGE_DIR, 'bootstrap');
 const MIGRATIONS_DIR = join(PACKAGE_DIR, 'migrations');
+const DOWN_DIR = join(MIGRATIONS_DIR, 'down');
 
 /**
  * Rewrites a connection URL to connect as a different role.
@@ -118,6 +119,42 @@ export const applyMigrations = async (url: string): Promise<void> => {
 
   try {
     await migrate(drizzle({ client: sql }), { migrationsFolder: MIGRATIONS_DIR });
+  } finally {
+    await sql.end();
+  }
+};
+
+/**
+ * Rolls the migration chain back to zero, newest first (P0-40).
+ *
+ * Every migration carries a hand-written reverse under `migrations/down/` with
+ * the same filename, and this applies them in descending order — the only
+ * order in which they can work, since a table cannot be dropped before the
+ * grants and policies that reference it.
+ *
+ * The ledger is emptied afterwards rather than row by row. Drizzle's migrator
+ * decides what to apply by comparing timestamps against what it finds there,
+ * so a ledger still claiming migrations that no longer exist in the database
+ * means the next `applyMigrations` silently applies nothing — which looks
+ * exactly like success and leaves an empty schema.
+ *
+ * Used by P0-40's reversibility test. It is deliberately here rather than in
+ * the test: an irreversible migration discovered during an incident is a very
+ * bad time to find out that the rollback path was only ever test code.
+ */
+export const revertMigrations = async (url: string): Promise<void> => {
+  const files = (await readdir(DOWN_DIR))
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .reverse();
+  const sql = postgres(url, { max: 1 });
+
+  try {
+    for (const file of files) {
+      await sql.unsafe(await readFile(join(DOWN_DIR, file), 'utf8')).simple();
+    }
+
+    await sql.unsafe('delete from drizzle.__drizzle_migrations').simple();
   } finally {
     await sql.end();
   }
