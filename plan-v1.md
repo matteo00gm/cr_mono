@@ -2475,7 +2475,13 @@ Four details that decide whether this works:
 
 **Tests.** This is the test.
 
-**Files.** `packages/db/test/role-privileges.spec.ts`. **~90 test lines.**
+**A `GRANT` by a non-owner warns rather than errors** *(finding).* `grant all on products to app_rw`, issued as `app_rw`, does not raise: Postgres emits "no privileges were granted" and the statement *succeeds* as a no-op. An assertion on the error code fails while the security property holds perfectly. So this one asserts the outcome instead — `has_table_privilege('app_rw', 'products', 'TRUNCATE')` is false before and still false after. The general lesson: privilege tests that assert on an error code can pass or fail for reasons unrelated to the privilege, and the durable assertion is on the resulting state.
+
+**Four attacks beyond the spec's list**, each a real path rather than a variation: dropping `tenant_isolation`; **adding** a policy of its own, which matters because permissive policies are OR-ed in Postgres, so one `using (true)` opens a table without touching the existing policy; granting itself privileges; and reading `drizzle.__drizzle_migrations`, the ledger that decides whether a migration re-runs.
+
+**`app_migrate` is asserted to lack `BYPASSRLS` too.** If it had it, `FORCE` would be pointless and a migration run with the wrong context would read across every tenant — the assumption the whole bootstrap/migrations split rests on.
+
+**Files.** `packages/db/test/role-privileges.integration.test.ts`. **11 assertions.**
 
 ---
 
