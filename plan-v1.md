@@ -2457,7 +2457,11 @@ Four details that decide whether this works:
 
 **Tests.** This *is* the test.
 
-**Files.** `packages/db/test/rls-isolation.spec.ts`. **~140 test lines.**
+**Under RLS an `INSERT ... SELECT` degrades to a no-op rather than an error** *(finding).* The first version of the `product_embeddings` seeder read its product id with `insert ... select ... from products where tenant_id = A`. From B's seat that subquery is filtered to nothing, so the insert writes zero rows and raises nothing — a silent success indistinguishable from a policy working, and the one case in the matrix that passed for the wrong reason. It now uses a literal id captured at seed time. The lesson generalises past this file: **any writer built as `INSERT ... SELECT` fails quietly when its tenant context is wrong**, where a `VALUES` insert would raise 42501.
+
+**Each table gets four assertions, not one.** Reads hidden from B; reads *still visible* to A, because a policy hiding everything from everyone would satisfy the first; the `WITH CHECK` rejection on a write carrying A's id; and an UPDATE from B leaving A's rows intact. The append-only three are exempt from the last — `app_rw` holds no UPDATE there at all, which P0-31's suite already asserts.
+
+**Files.** `packages/db/test/rls-isolation.integration.test.ts` — named `.integration.` so it runs in the Docker suite rather than the unit run. **57 assertions across 15 tables.**
 
 ---
 
