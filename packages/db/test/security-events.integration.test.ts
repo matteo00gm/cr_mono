@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { startPostgres } from './support/postgres.js';
+import { createTenant } from './support/tenant.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
 /**
@@ -19,6 +20,8 @@ const INVALID_ENUM = '22P02';
 
 let container: StartedPostgreSqlContainer | undefined;
 let client: DbClient | undefined;
+let admin: DbClient | undefined;
+let adminDb: Database;
 let db: Database;
 let tenantId: string;
 
@@ -27,34 +30,72 @@ beforeAll(async () => {
   container = started.container;
   client = createDbClient(started.roleUrl('app_rw'), { max: 1 });
   db = client.db;
+
+  // Unattributed rows are readable only by a role that bypasses RLS. app_admin
+  // is NOLOGIN by design (P0-21), so the suite uses the container superuser to
+  // stand in for the break-glass path.
+  admin = createDbClient(started.adminUrl, { max: 1 });
+  adminDb = admin.db;
 }, 180_000);
 
 afterAll(async () => {
   await client?.close();
+  await admin?.close();
   await container?.stop();
 }, 60_000);
 
 beforeEach(async () => {
-  const rows = await db.execute(sql`
-    insert into tenants (name, slug)
-    values ('Sec', ${`sec-${String(Date.now())}-${String(Math.random()).slice(2)}`})
-    returning id
-  `);
-  tenantId = String([...rows][0]?.id);
+  tenantId = await createTenant(db, 'sec');
 });
 
 describe('security_events', () => {
   it('records a rejection that has no resolvable tenant', async () => {
-    // The one this table exists for. An invalid pk_ matched no tenant, so
-    // there is nothing to scope the row to — and it is still the row most
-    // worth having.
-    const rows = await db.execute(sql`
+    /*
+     * The row this table exists for. An invalid `pk_` matched no tenant, so
+     * there is nothing to scope it to — and it is still the row most worth
+     * having.
+     *
+     * Written **without RETURNING**, and that is a constraint P0-37 imposes
+     * rather than a stylistic choice. Postgres applies the SELECT policy to a
+     * RETURNING clause, so asking for the row back requires it to be visible
+     * under `USING` — which for an unattributed row it deliberately is not.
+     * The insert then fails with 42501 even though `WITH CHECK` permits it.
+     * P2-16's writer must not use RETURNING for these.
+     */
+    await db.execute(sql`
       insert into security_events (type, origin, public_key, ip)
       values ('INVALID_KEY', 'https://attacker.example', 'pk_bogus', '203.0.113.9')
-      returning id, tenant_id
     `);
 
-    expect([...rows][0]?.tenant_id).toBeNull();
+    // Invisible to the tenant-scoped role...
+    const asTenant = await db.execute(
+      sql`select 1 from security_events where public_key = 'pk_bogus'`,
+    );
+
+    expect([...asTenant]).toHaveLength(0);
+
+    // ...and present for a role that bypasses RLS.
+    const asAdmin = await adminDb.execute(
+      sql`select tenant_id from security_events where public_key = 'pk_bogus'`,
+    );
+
+    expect([...asAdmin]).toHaveLength(1);
+    expect([...asAdmin][0]?.tenant_id).toBeNull();
+  });
+
+  it('refuses to hand an unattributed row back through RETURNING', async () => {
+    // Asserted so the constraint above is a tested fact rather than a comment
+    // someone deletes.
+    const error = await db
+      .execute(
+        sql`
+        insert into security_events (type, public_key) values ('INVALID_KEY', 'pk_returning')
+        returning id
+      `,
+      )
+      .catch((caught: unknown) => caught);
+
+    expect(pgErrorCode(error)).toBe(INSUFFICIENT_PRIVILEGE);
   });
 
   it('records a rejection that does resolve to a tenant', async () => {
@@ -105,7 +146,11 @@ describe('security_events', () => {
       `);
     }
 
-    const rows = await db.execute(sql`
+    // Counted through the admin connection: these rows carry no tenant, so the
+    // strict USING hides them from app_rw. That is a real consequence for
+    // P2-16 — abuse counting across unattributed rejections cannot run as the
+    // application role.
+    const rows = await adminDb.execute(sql`
       select count(*)::int as hits from security_events
       where public_key = 'pk_live_counted' and origin = 'https://a.example'
     `);

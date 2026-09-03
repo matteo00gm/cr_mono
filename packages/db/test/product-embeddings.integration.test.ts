@@ -1,8 +1,9 @@
 import { sql } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { startPostgres, type TestPostgres } from './support/postgres.js';
+import { createTenant, useTenant } from './support/tenant.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
 /**
@@ -42,10 +43,7 @@ beforeAll(async () => {
   client = createDbClient(started.roleUrl('app_rw'), { max: 1 });
   db = client.db;
 
-  const tenant = await db.execute(
-    sql`insert into tenants (name, slug) values ('Embeddings', 'embeddings') returning id`,
-  );
-  tenantId = String([...tenant][0]?.id);
+  tenantId = await createTenant(db, 'embeddings');
 
   const product = await db.execute(sql`
     insert into products (tenant_id, sku, name, wine_type, price_cents, currency, stock_status)
@@ -59,6 +57,18 @@ afterAll(async () => {
   await client?.close();
   await container?.stop();
 }, 60_000);
+
+/**
+ * Re-scope before every test (P0-37).
+ *
+ * The tenant GUC is session state, so any test that creates a second tenant
+ * moves the context and leaves the next one reading as somebody else. Setting
+ * it here makes each test independent of what ran before it, which is what the
+ * shared `tenantId` from `beforeAll` already implied.
+ */
+beforeEach(async () => {
+  await useTenant(db, tenantId);
+});
 
 describe('product_embeddings', () => {
   it('stores and returns a 1024-dimension vector', async () => {
@@ -142,6 +152,11 @@ describe('product_embeddings', () => {
      * so it runs on an app_migrate connection rather than app_rw.
      */
     const migrator = createDbClient(started.roleUrl('app_migrate'), { max: 1 });
+
+    // Its own connection, so it needs its own context. FORCE ROW LEVEL
+    // SECURITY applies to the table owner too — which is the whole reason
+    // FORCE is there — so app_migrate is filtered exactly like app_rw.
+    await useTenant(migrator.db, tenantId);
 
     try {
       await migrator.db.execute(sql`

@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { startPostgres } from './support/postgres.js';
+import { createTenant as createScopedTenant } from './support/tenant.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
 /**
@@ -20,12 +21,15 @@ let container: StartedPostgreSqlContainer | undefined;
 let client: DbClient | undefined;
 let db: Database;
 
-const createTenant = async (slug: string): Promise<string> => {
-  const rows = await db.execute(
-    sql`insert into tenants (name, slug) values (${slug}, ${slug}) returning id`,
-  );
-  return String([...rows][0]?.id);
-};
+/**
+ * Creates a tenant and leaves the session scoped to it (P0-37).
+ *
+ * Delegates rather than inserting directly: `tenants` now carries
+ * `WITH CHECK (id = app.tenant_id)`, so the id has to exist before the row
+ * does. Creating a second tenant therefore *moves* the context — tests that
+ * span two tenants have to say which one they mean, with `useTenant`.
+ */
+const createTenant = (slug: string): Promise<string> => createScopedTenant(db, slug);
 
 interface KeyRow {
   publicKey: string;
@@ -161,10 +165,16 @@ describe('widget_keys', () => {
   it('keeps public keys unique across tenants', async () => {
     // A public key identifies a tenant. Two tenants sharing one is the same
     // failure UNIQUE(origin) prevents on the other side of the handshake.
-    const first = await createTenant('pk-first');
-    const second = await createTenant('pk-second');
+    // Each key is written under its own tenant's context, since WITH CHECK
+    // permits nothing else. Creating the second tenant moves the context, so
+    // the first key is written before that happens. The unique index still
+    // spans both: the second tenant cannot see the first key and is refused
+    // by it anyway, which is exactly the guarantee.
     const key = mintKey();
+    const first = await createTenant('pk-first');
     await insertKey(first, key);
+
+    const second = await createTenant('pk-second');
 
     const error = await insertKey(second, key).catch((caught: unknown) => caught);
 
