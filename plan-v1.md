@@ -2546,6 +2546,16 @@ export const productInsert = createInsertSchema(products, {
 
 **Tests.** Valid payload parses; negative price rejected; a payload containing `tenant_id` has it stripped (assert the parsed result, since Zod strips unknown keys by default — verify the mode is actually strip, not passthrough).
 
+**A `customType` column derives to `z.any()`, and that fails open** *(finding).* `tenants.slug` is `citext`, a `customType`, and drizzle-zod cannot infer anything about one. It produced `z.any()` — so the contract existed, looked derived, and **accepted a number for a slug**. Refining is impossible (`schema.min` does not exist on `ZodAny`), so those columns must be given a schema outright, which is the one sanctioned exception to *refine, never redefine*. `product_embeddings.embedding` is a `customType` too, so this will recur.
+
+The durable fix is not the two schemas but the guard: `contracts.test.ts` walks every exported schema and **fails if any field is `ZodAny`**. Written for the next custom type rather than this one. It caught the read side (`tenantSelect.slug`) after the write side was already fixed — where an `any` would have propagated silently into the widget and dashboard as an untyped field.
+
+**Zod v4 with drizzle-zod 0.8** — `z.uuid()` and `z.email()` are top-level in v4, not `z.string().uuid()`. Worth knowing before copying the spec's v3-shaped example.
+
+**`origin` is validated as a string, not with `.url()`.** The real check is P2-05's normalisation, which must agree with the `tenant_domains_origin_format` CHECK — lowercased scheme and host, no path, no trailing slash. Zod's `.url()` accepts every form that CHECK rejects, so using it would produce a contract that passes and an insert that fails.
+
+**Exported from the package root**, not by deep import, so all three consumers validate against the same shapes. They carry no connection, so they do not weaken the `withTenant`-only export rule.
+
 **Files.** `packages/db/src/contracts/*.ts`, tests. **~120 lines.**
 
 ---
