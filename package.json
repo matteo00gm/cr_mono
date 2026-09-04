@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "AI Sommelier — Multi-Tenant SaaS RAG Platform",
+  "description": "AI Sommelier \u2014 Multi-Tenant SaaS RAG Platform",
   "packageManager": "pnpm@11.24.0",
   "engines": {
     "node": ">=22.13"
@@ -25,7 +25,8 @@
     "format:check": "prettier --check .",
     "clean": "rimraf --glob coverage .turbo \"{apps,packages}/*/dist\" \"{apps,packages}/*/.turbo\" \"{apps,packages}/*/*.tsbuildinfo\"",
     "db:generate": "drizzle-kit generate",
-    "prepare": "husky"
+    "prepare": "husky",
+    "db:seed": "node scripts/db-seed.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [
@@ -47,6 +48,7 @@
     "husky": "^9.1.7",
     "jsdom": "^30.0.1",
     "lint-staged": "^17.4.1",
+    "postgres": "^3.4.9",
     "prettier": "^3.9.6",
     "rimraf": "^6.1.3",
     "sst": "^4.17.1",
