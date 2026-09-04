@@ -183,6 +183,20 @@
       "when": 1788395454063,
       "tag": "0025_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1788505625415,
+      "tag": "0026_auth_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1788505642266,
+      "tag": "0027_memberships_user_fk",
+      "breakpoints": true
     }
   ]
 }

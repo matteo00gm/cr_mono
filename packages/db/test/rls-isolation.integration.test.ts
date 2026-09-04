@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { RLS_POLICIES } from '../src/rls.js';
 import { startPostgres } from './support/postgres.js';
-import { createTenant, useTenant } from './support/tenant.js';
+import { createAuthUser, createTenant, useTenant } from './support/tenant.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
 /**
@@ -29,6 +29,12 @@ const APPEND_ONLY = new Set(['usage_events', 'audit_log', 'security_events']);
 interface SeedContext {
   readonly conversationId: string;
   readonly productId: string;
+  /**
+   * A real `auth_users` row (P0-23a). `memberships.user_id` now references it,
+   * so an invented id is refused with 23503 — which would make the WITH CHECK
+   * assertion below pass for entirely the wrong reason.
+   */
+  readonly userId: string;
 }
 
 /**
@@ -40,9 +46,9 @@ interface SeedContext {
 const INSERTS: Record<string, (tenantId: string, ctx: SeedContext) => SQL> = {
   tenants: (tenantId) =>
     sql`insert into tenants (id, name, slug) values (${tenantId}::uuid, 'x', ${`iso-${tenantId}`})`,
-  memberships: (tenantId) =>
+  memberships: (tenantId, ctx) =>
     sql`insert into memberships (tenant_id, user_id, role)
-        values (${tenantId}::uuid, ${`u-${tenantId}`}, 'EDITOR')`,
+        values (${tenantId}::uuid, ${ctx.userId}, 'EDITOR')`,
   tenant_domains: (tenantId) =>
     sql`insert into tenant_domains (tenant_id, origin, registrable_domain)
         values (${tenantId}::uuid, ${`https://${tenantId.slice(0, 8)}.example`}, 'example.com')`,
@@ -144,9 +150,14 @@ beforeAll(async () => {
     returning id
   `);
 
+  // auth_users carries no policy, so this works under any context — the
+  // property that makes login possible before a tenant is known.
+  const userId = await createAuthUser(db, 'iso');
+
   seedContext = {
     conversationId: String([...conversation][0]?.id),
     productId: String([...product][0]?.id),
+    userId,
   };
 
   for (const { table } of RLS_POLICIES) {

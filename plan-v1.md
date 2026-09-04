@@ -2628,6 +2628,16 @@ ALTER TABLE memberships
   ADD COLUMN user_id text NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE;
 ```
 
+**The column already exists, so this is `ADD CONSTRAINT`, not `ADD COLUMN`** *(correction).* P0-23 shipped `user_id text NOT NULL` four migrations ago precisely so this task would only have to attach the key. `ADD COLUMN` here would fail on an existing column; the down file drops the constraint alone and leaves the column, because rolling this back must not take every tenant's roster with it.
+
+**A fifth table is required: `auth_verifications`** *(addition).* The spec names four. Better Auth will not start without this one — email verification and password reset both write to it — and discovering that at P0-45 would mean a migration in the middle of wiring auth.
+
+**Adding the key broke two integration suites, and that was the point.** `memberships` and the P0-38 isolation matrix both invented user ids, which the foreign key now refuses with 23503. In the isolation matrix that mattered more than it sounds: its `WITH CHECK` assertion expects 42501, and an FK violation would have made it **pass for the wrong reason**. Both now create a real `auth_users` row first, through a `createAuthUser` helper in `test/support`.
+
+**These tables carry no `tenant_id`, and cannot.** Authentication precedes tenant resolution — that is why `memberships` is read afterwards — so there is no context to scope a login query by. They are therefore out of P0-41's scope rather than in its allowlist, the same correction as `processed_webhooks`. The consequence is worth stating plainly: **`app_rw` can read every row in `auth_users`.** That is inherent to authentication rather than a gap, and it is why P0-46 tests these paths directly instead of relying on RLS.
+
+**`email` is `text`, not `citext`**, despite the case-insensitivity argument that made `tenants.slug` citext. Better Auth normalises email itself, and a citext column would silently diverge from what the library believes it stored the moment that normalisation changed.
+
 **These tables are NOT tenant-scoped**, and that has to be handled deliberately rather than discovered: a user can belong to several tenants, so they carry no `tenant_id` and no RLS policy. Add them to the P0-41 allowlist with a written reason, alongside `tenants` and `processed_webhooks`.
 
 **Tests.** Migration applies; the FK cascades on user delete; P0-41's reflection test passes with the new allowlist entries; no table is named with a reserved word.
