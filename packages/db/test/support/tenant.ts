@@ -54,3 +54,22 @@ export const createTenant = async (db: Database, label: string): Promise<string>
 
   return id;
 };
+
+/**
+ * Creates a Better Auth user, for suites that need a membership (P0-23a).
+ *
+ * `memberships.user_id` now carries a foreign key to `auth_users`, so a suite
+ * can no longer invent a user id. Deliberately takes no tenant: authentication
+ * precedes tenant resolution, so `auth_users` has no policy and this works from
+ * any context — including none.
+ */
+export const createAuthUser = async (db: Database, label = 'user'): Promise<string> => {
+  const id = `${label}_${randomUUID().replaceAll('-', '').slice(0, 16)}`;
+
+  await db.execute(sql`
+    insert into auth_users (id, name, email)
+    values (${id}, 'Test User', ${`${id}@example.com`})
+  `);
+
+  return id;
+};

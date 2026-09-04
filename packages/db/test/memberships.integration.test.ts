@@ -32,7 +32,28 @@ let db: Database;
  */
 const createTenant = (slug: string): Promise<string> => createScopedTenant(db, slug);
 
-const addMember = (tenantId: string, userId: string, role = 'EDITOR') =>
+/**
+ * Creates the user first (P0-23a).
+ *
+ * `memberships.user_id` now references `auth_users`, so a suite can no longer
+ * invent an id — the insert is refused with 23503 before any assertion about
+ * memberships is reached. Idempotent on the user, because several tests reuse
+ * one id deliberately to exercise the per-tenant uniqueness.
+ */
+const ensureUser = async (userId: string): Promise<void> => {
+  await db.execute(sql`
+    insert into auth_users (id, name, email) values (${userId}, 'Test User', ${`${userId}@example.com`})
+    on conflict (id) do nothing
+  `);
+};
+
+const addMember = async (tenantId: string, userId: string, role = 'EDITOR') => {
+  await ensureUser(userId);
+
+  return rawAddMember(tenantId, userId, role);
+};
+
+const rawAddMember = (tenantId: string, userId: string, role = 'EDITOR') =>
   db.execute(sql`
     insert into memberships (tenant_id, user_id, role)
     values (${tenantId}::uuid, ${userId}, ${role}::membership_role)

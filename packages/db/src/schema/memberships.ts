@@ -1,5 +1,6 @@
 import { index, pgEnum, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 
+import { authUsers } from './auth.js';
 import { tenants } from './tenants.js';
 
 /**
@@ -39,7 +40,9 @@ export const memberships = pgTable(
      * forward instead would mean settling Better Auth's id strategy, cookie
      * cache and table prefix before P0-45 provides the context for those calls.
      */
-    userId: text('user_id').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => authUsers.id, { onDelete: 'cascade' }),
 
     role: membershipRole('role').notNull(),
 
