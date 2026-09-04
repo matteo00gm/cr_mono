@@ -1105,15 +1105,15 @@ Anti-rot checks in CI, each cheap:
 - **`⛔` marks hard blockers** — a broad set of later work cannot start until these merge.
 - Rows within a phase that share no dependency can go in parallel.
 
-### Where the build actually is — 2026-09-03
+### Where the build actually is — 2026-09-03 (updated)
 
-**`✅` in the `#` column means merged to `main`.** Verified against the tree at `1622d3c`, not from memory: every ✅ row has an artifact on disk, and the database rows have a migration, a hand-written reverse, a unit shape spec and an integration suite.
+**`✅` in the `#` column means merged to `main`.** Verified against the tree at `6a3d2b0`, not from memory: every ✅ row has an artifact on disk, and the database rows have a migration, a hand-written reverse, a unit shape spec and an integration suite.
 
-**Merged:** P0-01 → P0-33, plus P0-21a and P0-21b. **Next in build order: P0-34.**
+**Merged:** P0-01 → P0-41, plus P0-21a and P0-21b. **Next in build order: P0-42.** The one exception in that range is **P0-33a**, added after review and still open — see its row.
 
 **Two low-numbered rows are *not* done**, and their position in the table is misleading: **P0-17a** is blocked on the API Lambda origin and lands with P0-54, and **P0-23a** (Better Auth tables) sits later in dependency order than its number suggests. Neither is an oversight.
 
-**State of `packages/db`:** 14 tables across 12 schema modules, migrations `0000`–`0020` (**the next one is `0021`**), 15 integration suites / 134 tests, 106 unit tests, per-package coverage gates passing, and `pnpm db:generate` reporting no drift.
+**State of `packages/db`:** 17 tables across 15 schema modules, migrations `0000`–`0025` (**the next one is `0026`**), 23 integration suites / 234 tests, 124 unit tests, per-package coverage gates passing, and `pnpm db:generate` reporting no drift. **RLS is live**: enabled and forced on all 15 policy-carrying tables, so any new suite must set tenant context — see `test/support/tenant.ts`.
 
 **Three things that will otherwise mislead you:**
 
@@ -1164,14 +1164,14 @@ Anti-rot checks in CI, each cheap:
 | ✅ P0-32 | 🔒 Migration: `security_events` | | 22 |
 | ✅ P0-33 | Migration: `processed_webhooks` | PK `(provider, event_id)` | 20 |
 | P0-33a | 🔒 Ledger integrity: the grants that make a ledger | append-only is defeated by `DELETE FROM tenants`; `processed_webhooks` has no revoke at all | 30,31,32,33 |
-| P0-34 | 🔒 Migration: `rate_limit_buckets` | for the Postgres limiter (§5.7) | 22 |
-| P0-35 | 🔒 Migration: `token_revocations` | `jti` + expiry, for the sweep job | 22 |
-| P0-36 | Migration: `outbox` | | 26 |
-| P0-37 | ⛔ 🔒 RLS: enable + FORCE + policies | every tenant-scoped table; `USING` **and** `WITH CHECK`; wrap the GUC read in `nullif(..., '')` or an ended transaction leaves `''` and the cast raises 22P02. **`memberships` is not the boilerplate** (P0-23), so the generator needs a per-table override | 22–36 |
-| P0-38 | 🔒 Test: RLS isolation | tenant B's context returns zero of A's rows, per table | 37 |
-| P0-39 | 🔒 Test: role privileges | `app_rw` lacks `BYPASSRLS`, is not table owner, has no DDL | 21,37 |
-| P0-40 | Test: migration up/down/up | on a seeded DB, in CI | 37 |
-| P0-41 | Test: every tenant table has RLS | reflection test that fails when a new table forgets it | 37 |
+| ✅ P0-34 | 🔒 Migration: `rate_limit_buckets` | for the Postgres limiter (§5.7) | 22 |
+| ✅ P0-35 | 🔒 Migration: `token_revocations` | `jti` + expiry, for the sweep job | 22 |
+| ✅ P0-36 | Migration: `outbox` | | 26 |
+| ✅ P0-37 | ⛔ 🔒 RLS: enable + FORCE + policies | every tenant-scoped table; `USING` **and** `WITH CHECK`; wrap the GUC read in `nullif(..., '')` or an ended transaction leaves `''` and the cast raises 22P02. **`memberships` is not the boilerplate** (P0-23), so the generator needs a per-table override | 22–36 |
+| ✅ P0-38 | 🔒 Test: RLS isolation | tenant B's context returns zero of A's rows, per table | 37 |
+| ✅ P0-39 | 🔒 Test: role privileges | `app_rw` lacks `BYPASSRLS`, is not table owner, has no DDL | 21,37 |
+| ✅ P0-40 | Test: migration up/down/up | on a seeded DB, in CI | 37 |
+| ✅ P0-41 | Test: every tenant table has RLS | reflection test that fails when a new table forgets it | 37 |
 | P0-42 | ⛔ `drizzle-zod` contracts | derive + export request/response schemas and types | 26,37 |
 | P0-43 | Seed script + factories | realistic Italian wine fixtures, two tenants | 42 |
 | P0-44 | ⛔ `packages/testing`: Testcontainers | Postgres+pgvector harness, RLS on, per-suite reset | 43 |
