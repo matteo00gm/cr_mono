@@ -2570,7 +2570,21 @@ The durable fix is not the two schemas but the guard: `contracts.test.ts` walks 
 
 **Tests.** Factories produce rows that pass the P0-42 schemas.
 
-**Files.** `packages/testing/src/factories.ts`, `scripts/seed.ts`, fixtures. **~150 lines.**
+**This is the first cross-package import in the repo** *(implementation note).* No package declared `main`, `types` or `exports` — nothing had ever imported another. `packages/db` and `packages/testing` now declare `type: module` and an `exports` map pointing at `dist`, which is what lets `packages/testing` import the contract types. Every later package that consumes another will need the same, and `type: module` also silences the "reparsing as ES module" warning the built output was producing.
+
+**`lint` now depends on `^build`, and that is a standing property of the repo.** Type-aware ESLint cannot resolve a workspace dependency whose `dist` does not exist: the `exports` map points at a `.d.ts` that is not there, every imported type becomes `any`, and the `no-unsafe-*` rules fire on each use. That produced **121 lint errors in `packages/testing`** the first time this ran in CI — none of them about the code, all of them about a missing build.
+
+It passed locally because the working tree already held `dist` from an earlier build. That is the same trap §P0-01's pnpm note records — *verifying an install fix in a tree that already has `node_modules` proves nothing* — with `dist` in place of `node_modules`. **Verify a build-order change by deleting the artifact first:** `rm -rf packages/*/dist` and then run the CI sequence. `typecheck` already had this dependency; `lint` did not, and nothing noticed until a package imported another.
+
+**`makeTenant` returns the id**, rather than leaving it to the database. P0-37 makes that mandatory rather than convenient: `tenants` carries `WITH CHECK (id = app.tenant_id)`, so the caller has to know the id *before* the insert in order to set the context the insert is checked against. A factory that omitted it would be unusable against the schema it targets.
+
+**Slugs are unique by construction.** The `citext` index is global, so a fixed slug means the second tenant in any suite collides — and the failure surfaces as a constraint error that reads like a schema bug rather than a fixture one.
+
+**The Italian fixtures are load-bearing, not decoration.** Accented producers, an apostrophe in `Nero d'Avola`, semicolon-delimited CSV with comma decimals: these are the exact inputs P1-16 and P1-17 exist to survive, and putting them in the ordinary fixtures means those bugs surface in every run rather than only in the suite written to look for them. Completeness is deliberately uneven so P1-12's scoring has range — a fixture set where every row is complete gives that function a single input.
+
+**`scripts/db-seed.mjs`, not `scripts/seed.ts`** *(deviation).* Root scripts in this repo are plain ESM outside every tsconfig, as P0-07 established and `db-deploy.mjs` follows. It seeds **two** tenants, always: a single-tenant database hides every isolation bug, because a missing `WHERE tenant_id` returns the right answer when there is only one tenant's data to return. It connects as `app_rw` and sets the tenant GUC before each write, so it is subject to the same policies the application is — seeding as the migration role would work and would teach exactly the wrong thing.
+
+**Files.** `packages/testing/src/factories.ts`, `scripts/db-seed.mjs`. **~200 lines + 17 assertions.**
 
 ---
 
