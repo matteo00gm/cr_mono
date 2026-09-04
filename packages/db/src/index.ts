@@ -23,3 +23,13 @@ export {
 } from './with-tenant.js';
 
 export type { Database } from './client.js';
+
+/**
+ * The request and response contracts (P0-42).
+ *
+ * Exported from here rather than reached for by deep import, so the widget, the
+ * dashboard and the API all validate against the same shapes — the point of
+ * deriving them at all. They carry no connection and open nothing, so they do
+ * not weaken the `withTenant`-only rule above.
+ */
+export * from './contracts.js';
