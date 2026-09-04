@@ -33,3 +33,21 @@ export type { Database } from './client.js';
  * not weaken the `withTenant`-only rule above.
  */
 export * from './contracts.js';
+
+/**
+ * The deploy-time path (P0-21b), and the one narrowly-named un-scoped export
+ * this file's header anticipates.
+ *
+ * These apply bootstrap and migrations as the roles that own the schema, before
+ * any tenant row exists — there is no tenant context to carry and no policy for
+ * one to satisfy, so `withTenant` would have nothing to say. Exported because
+ * both a deploy and the P0-44 harness need them, and a second copy of the
+ * applying logic is exactly what the P0-21 grant bug came from.
+ */
+export {
+  applyBootstrap,
+  applyMigrations,
+  revertMigrations,
+  withRole,
+  type BootstrapRole,
+} from './deploy.js';
