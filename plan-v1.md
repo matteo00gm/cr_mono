@@ -2598,7 +2598,15 @@ It passed locally because the working tree already held `dist` from an earlier b
 
 **Tests.** A smoke test proving the harness connects as a non-superuser and that RLS is in force.
 
-**Files.** `packages/testing/src/db-harness.ts`. **~110 lines.**
+**The exemption this needed came with a companion rule** *(implementation note).* `packages/testing/src` has to open connections outside `withTenant` — half the harness's job is proving what happens *without* tenant context — so it is exempt from `no-raw-db-outside-with-tenant`. On its own that exemption is a hole: any module could then reach a raw connection by importing the harness. So a new rule, **`no-testing-in-production`**, forbids `apps/**` and every non-test path in `packages/**` from importing `@catalogorosso/testing` at all. The exemption widens what test code can reach, not what ships.
+
+The connection factory is reached through a **`@catalogorosso/db/test-support` subpath**, and that specifier is listed in the raw-db rule's `to` alongside the drivers — a narrowly-named escape is only narrow if using it is checked.
+
+**`truncateAll` runs as the superuser, deliberately.** `app_rw` has no TRUNCATE and P0-39 asserts it never gains one; granting it one so the harness could tidy up would hand the runtime role a way to empty tables it is forbidden to DELETE from, defeating the append-only grants in P0-30 through P0-32. It also skips `drizzle.__drizzle_migrations`: truncating the ledger makes the next `applyMigrations` re-run everything against a schema that already has it.
+
+**`vitest.integration.config.ts` is no longer rooted at `packages/db`.** It now includes `packages/*/test/**/*.integration.test.ts`, since the harness and its smoke test live in `packages/testing`. Scoped to `packages/*` rather than everything, so an integration suite under `apps/` has to widen it deliberately.
+
+**Files.** `packages/testing/src/db-harness.ts`, `.dependency-cruiser.mjs`, `vitest.integration.config.ts`. **~140 lines + 7 assertions.**
 
 ---
 

@@ -75,19 +75,57 @@ export default {
         // no policy for one to satisfy — withTenant would have nothing to say.
         // Named as one file rather than a directory, so this stays a hole for
         // exactly the deploy path and not for whatever lands beside it.
+        // packages/testing/src is exempt from P0-44, and the exemption is only
+        // safe because of `no-testing-in-production` below. The harness starts
+        // a container and hands tests a connection; it cannot do that through
+        // withTenant, because half its job is proving what happens *without*
+        // tenant context. What keeps this from being a hole is that no
+        // production module may import the package at all — so the exemption
+        // widens what test code can reach, not what ships.
         pathNot:
           '^packages/db/src/(client|with-tenant|deploy)[.]ts$' +
           '|^packages/db/src/schema/' +
+          '|^packages/testing/src/' +
           '|(^|/)test/',
       },
       to: {
         // `postgres` is postgres-js, the driver P0-18 actually chose. The
         // original pattern listed only `pg`, so it would have kept passing
         // while the real client was imported anywhere.
+        //
+        // `@catalogorosso/db/test-support` is the subpath that exposes the
+        // connection factory for the harness. It is listed here so reaching it
+        // is caught by the same rule as reaching the driver directly — a
+        // narrowly-named escape is only narrow if using it is checked.
         path:
           '(^|/)node_modules/(pg|postgres|drizzle-orm)(/|$)' +
           '|^(pg|postgres)($|/)' +
-          '|^drizzle-orm($|/)',
+          '|^drizzle-orm($|/)' +
+          '|^@catalogorosso/db/test-support$',
+      },
+    },
+
+    {
+      // The companion to the packages/testing exemption above. Without it, that
+      // exemption would let any module reach a raw connection by importing the
+      // harness — the rule would be satisfied and the guarantee gone.
+      //
+      // Fixture data is the second reason: the factories carry Barolo and
+      // Chianti rows that would be nonsense in a running system, and a
+      // production import of them is a bug whether or not it opens a
+      // connection.
+      name: 'no-testing-in-production',
+      severity: 'error',
+      comment:
+        'Production code must not import @catalogorosso/testing. It carries a container ' +
+        'harness that opens un-scoped connections, and fixture data that has no meaning ' +
+        'outside a test. Test files may import it freely.',
+      from: {
+        path: '^(apps|packages)/',
+        pathNot: '(^|/)test/|^packages/testing/',
+      },
+      to: {
+        path: '^packages/testing/|^@catalogorosso/testing($|/)',
       },
     },
 

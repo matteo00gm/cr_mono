@@ -10,9 +10,12 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     name: 'integration',
-    root: 'packages/db',
     environment: 'node',
-    include: ['test/**/*.integration.test.ts'],
+    // Rooted at the workspace rather than at packages/db, since P0-44 puts the
+    // harness — and its smoke test — in packages/testing. Scoped to packages/*
+    // so an integration suite added under apps/ has to widen this deliberately
+    // rather than being picked up by a glob nobody revisited.
+    include: ['packages/*/test/**/*.integration.test.ts'],
     // Container start dominates; the assertions themselves are milliseconds.
     testTimeout: 60_000,
     hookTimeout: 180_000,
