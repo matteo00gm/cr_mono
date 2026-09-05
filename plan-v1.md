@@ -1190,7 +1190,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P0-47 | ⛔ 🔒 Membership + tenant resolution | tenant derived from `memberships`, never from request | 45 |
 | ✅ P0-48 | 🔒 Test + lint: tenant not from input | no handler may read a tenant id from body/query/header | 47 |
 | ✅ P0-49 | ⛔ 🔒 Capability table + policy module | declarative, OWNER/EDITOR; no inline role checks | 47 |
-| P0-50 | 🔒 Generated role×endpoint matrix test | missing capability entry ⇒ CI failure, not open access | 49 |
+| ✅ P0-50 | 🔒 Generated role×endpoint matrix test | missing capability entry ⇒ CI failure, not open access | 49 |
 | P0-51 | Invite flow | own `invitations` table + single-use token, email via Resend | 49,64 |
 | P0-52 | 🔒 Last-OWNER guard + test | cannot remove or demote the final OWNER | 51 |
 | P0-53 | `audit_log` writer | helper + actor/ip/ua capture | 31,47 |
@@ -2922,9 +2922,21 @@ Implementation: `POST .../members/invite` requires `members:manage`, creates an 
 
 **How.** `audit(tx, { action, target, metadata })` reading actor, ip and user-agent from request context. **Takes the caller's `tx`** so the audit row commits atomically with the action — an audit entry for an action that rolled back is worse than none. Redact metadata through the P0-56 serializer before writing.
 
+**The request context moves from `apps/api` into `packages/core`** *(consequence of "reading actor, ip and user-agent from request context").* It could not stay in the app: P0-52's last-OWNER guard and every other domain rule needs to write audit rows, and no package can import an app. Threading an actor through every call site was the alternative, and it fails the way a threaded logger does — the one path nobody threaded is the one that matters. Nothing in it is HTTP-specific (`node:async_hooks` is not a framework), so the P0-09 rule keeping this package free of HTTP and AWS still holds; the API fills it from a request and the worker will fill it from an SQS message.
+
+**The statement lives in `packages/db`, not `core`** *(the P0-09 rule caught it, exactly as in P0-47).* Writing the insert in `core` meant `core` importing `drizzle-orm`, which `no-raw-db-outside-with-tenant` forbids. The fix was not an exception: db owns the statement, core owns what gets recorded and what is scrubbed out of it.
+
+**`audit_log.ip` is `inet`, so an address is captured only when it is unambiguous.** A multi-entry `x-forwarded-for` resolves to *no* address rather than a guessed one — the same problem P0-46 records against the rate limiter, and here the column would refuse a malformed value at write time, loudly, in the middle of an unrelated action. A row recording a guessed address is worse than one recording none.
+
+**No `RETURNING` on the insert.** `app_rw` holds INSERT on this table and nothing else (P0-31's append-only revoke), and Postgres applies the SELECT policy to a RETURNING clause — so asking for the row back would fail with 42501 on a write that is otherwise permitted. The same finding P2-16 records for `security_events`.
+
+**Redaction matters more here than in a log line.** `audit_log` is append-only at the grant level, so a secret written into it cannot be taken out again short of dropping the tenant. Callers pass whatever describes the action, and "whatever" is how a reset token becomes permanent.
+
+**An unrelated flake was found and fixed while running this.** P0-46's tampered-cookie test mutated a byte with `replace(..., '$1X')`, which is a **no-op whenever the byte was already `X`** — so it passed about 63 times in 64 and would have reported a working signature check on the 64th. It now flips to a character that is definitely different, and asserts the tamper changed the string at all.
+
 **Tests.** Writing inside a rolled-back transaction leaves no audit row. Secrets in metadata are redacted.
 
-**Files.** `packages/core/src/audit.ts`, tests. **~70 lines.**
+**Files.** `packages/core/src/{audit,request-context}.ts`, `packages/db/src/audit.ts`, tests. **~70 lines.**
 
 ---
 

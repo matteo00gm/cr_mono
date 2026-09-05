@@ -13,6 +13,18 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * a mutable module global would attribute one tenant's log lines to another the
  * first time two requests overlap. That is a bug that never reproduces locally
  * and is unfalsifiable in production, so it is worth the machinery.
+ *
+ * **Moved here from `apps/api` by P0-53.** `audit()` records the actor, ip and
+ * user-agent of whoever performed an action, and it lives in this package
+ * because P0-52's last-OWNER guard and every other domain rule needs to write
+ * audit rows — none of which can import an app. Threading an actor through
+ * every call site instead was the alternative, and it fails the same way a
+ * threaded logger does: the one path nobody threaded is the one that matters.
+ *
+ * Nothing here is HTTP-specific. `node:async_hooks` is not a framework, so the
+ * P0-09 rule keeping this package free of HTTP and AWS still holds — the API
+ * fills the context in from a request, and the worker will fill it from an SQS
+ * message.
  */
 
 export interface RequestContext {
@@ -30,6 +42,18 @@ export interface RequestContext {
   tenantId?: string;
   /** Set by P0-45's session middleware, for the same reason. */
   userId?: string;
+
+  /**
+   * Where the request came from, for `audit_log.ip` (P0-53).
+   *
+   * The column is `inet`, which rejects a malformed address at write time — so
+   * this stays optional rather than defaulting to something plausible. An audit
+   * row that records a guessed address is worse than one that records none.
+   */
+  ip?: string;
+
+  /** For `audit_log.user_agent`. Untrusted free text, and treated as such. */
+  userAgent?: string;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();
@@ -66,4 +90,30 @@ export const setRequestUser = (userId: string): boolean => {
   if (!context) return false;
   context.userId = userId;
   return true;
+};
+
+/**
+ * The caller, as an audit row records them.
+ *
+ * Read once at the point of writing rather than captured earlier, because the
+ * user is only known after authentication and the tenant only after resolution
+ * — an actor captured at the start of a request would be anonymous for every
+ * action in it.
+ */
+export interface RequestActor {
+  readonly userId: string | undefined;
+  readonly ip: string | undefined;
+  readonly userAgent: string | undefined;
+  readonly tenantId: string | undefined;
+}
+
+export const getRequestActor = (): RequestActor => {
+  const context = storage.getStore();
+
+  return {
+    userId: context?.userId,
+    ip: context?.ip,
+    userAgent: context?.userAgent,
+    tenantId: context?.tenantId,
+  };
 };

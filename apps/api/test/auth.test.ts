@@ -1,9 +1,9 @@
+import { runWithRequestContext } from '@catalogorosso/core';
 import { Hono } from 'hono';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app.js';
 import { AUTH_PUBLIC_PATH, DASHBOARD_PREFIX, WIDGET_PREFIX } from '../src/routes.js';
-import { runWithRequestContext } from '../src/context.js';
 import type { AppEnv } from '../src/env.js';
 import { requireUser } from '../src/middleware/auth.js';
 import { logger } from '../src/middleware/logger.js';

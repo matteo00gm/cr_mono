@@ -46,6 +46,15 @@ export { InvalidUserIdError, NestedUserContextError, withUser } from './with-use
  */
 export { readMembershipsForUser, type MembershipRole, type UserMembership } from './memberships.js';
 
+/**
+ * The audit insert (P0-53).
+ *
+ * Same reasoning as the membership read above: the statement lives in this
+ * package so no app or domain module has to import a driver. What gets
+ * recorded, and what is scrubbed out of it, stays in `packages/core`.
+ */
+export { insertAuditRow, type AuditRow } from './audit.js';
+
 export type { Database } from './client.js';
 
 /**

@@ -1,8 +1,7 @@
-import { type DomainErrorKind, isDomainError } from '@catalogorosso/core';
+import { getRequestContext, isDomainError, type DomainErrorKind } from '@catalogorosso/core';
 import type { ErrorHandler, MiddlewareHandler, NotFoundHandler } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
-import { getRequestContext } from '../context.js';
 import { logger } from './logger.js';
 
 /**

@@ -112,7 +112,19 @@ describe('session integrity', () => {
 
     expect((await caller.me(cookie)).status).toBe(200);
 
-    const tampered = cookie.replace(/(session_token=.{5})./, '$1X');
+    /*
+     * Flipped to a character that is definitely different, rather than to a
+     * fixed one. `replace(..., '$1X')` is a no-op whenever the byte it lands on
+     * is already `X` — which made this test pass roughly 63 times out of 64 and
+     * report a working signature check on the 64th.
+     */
+    const tampered = cookie.replace(
+      /(session_token=.{5})(.)/,
+      (_match, head: string, char: string) => `${head}${char === 'X' ? 'Y' : 'X'}`,
+    );
+
+    // Guards the guard: a tamper that changed nothing would assert nothing.
+    expect(tampered).not.toBe(cookie);
 
     expect((await caller.me(tampered)).status).toBe(401);
   });

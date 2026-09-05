@@ -1,7 +1,6 @@
-import { UnauthenticatedError } from '@catalogorosso/core';
+import { UnauthenticatedError, setRequestUser } from '@catalogorosso/core';
 import type { Hono, MiddlewareHandler } from 'hono';
 
-import { setRequestUser } from '../context.js';
 import type { AppEnv } from '../env.js';
 
 /**
