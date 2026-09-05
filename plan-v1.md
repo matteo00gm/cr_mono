@@ -5879,7 +5879,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | `AUTH_SECRET` rotation has no runbook | before launch | Rotating signs every seller out and voids outstanding reset links. Needs an ADR in the P0-59 set, not code. See **B2**. |
 | No expiry sweep for sessions or verifications | P1 | Both columns are indexed and nothing scans them. Storage hygiene, not security — expiry is enforced on read. See **C3**. |
 | Renovate security rule covers `packages/core` | **closed** | `matchFileNames` now lists `packages/core/**` beside `packages/security/**`, so `better-auth` updates arrive labelled `security-critical` for a human. See **D7**. |
-| `pnpm add` workspace injection | **closed** | The habit failed once and reached `main` in P0-56. The stale block is removed and a CI grep now catches the placeholder. See **E5**. |
+| Dependency build-script prompt | **closed** | Not a `pnpm add` artefact at all — a plain fresh `install` writes it, so CI regenerated it every run. Now *answered* (`allowBuilds: … false`), which drops `strictDepBuilds` and restores the install-time notification suppression had cost. See **E5**. |
 
 ### ⚠ Open items from the P0-54 → P0-53 chain, in detail
 
@@ -6027,10 +6027,18 @@ There is no fix to make; the lesson is procedural and belongs written down: **be
 
 **E4. Branch protection is still not configured.** Until all **five** checks are required on `main` — `verify`, `test` and now `integration` from `ci.yml`, plus `secrets` and `dependencies` from `security.yml` — every gate in Part 6 is advisory. Requiring a subset leaves the rest advisory, which is the failure mode worth naming: it looks configured.
 
-**E5. The `pnpm add` workspace injection is now a CI check, and the stale block it left behind is gone.** ✅ **closed**
+**E5. The build-script prompt is answered rather than suppressed, and the notification it used to cost is back.** ✅ **closed**
 
-`pnpm add` injects an `allowBuilds:` block of placeholders into `pnpm-workspace.yaml` on every dependency change. It was reverted by hand about a dozen times across the P0-54 → P0-53 chain — **and reached `main` once anyway**, in P0-56. That is the argument for a check rather than a habit, and it is the reason this item exists at all.
+The starting premise was wrong, and CI is what showed it. I had this recorded as "`pnpm add` injects an `allowBuilds:` block that must be reverted before committing" — a habit I had followed a dozen times across the P0-54 → P0-53 chain and failed once, letting the block reach `main` in P0-56.
 
-The block was dead config: `set this to true or false` is not a boolean, so pnpm ignored it entirely, installs worked and CI stayed green. Harmless in effect and wrong in kind — it read as load-bearing, which is precisely what the comment in that same file warns against. It has been removed, and `pnpm install --frozen-lockfile` was verified in CI rather than locally, because this repository has already learned that verifying an install fix in a tree that has `node_modules` proves nothing (see the P0-17 → P0-19 review).
+**It is not `pnpm add`.** A plain `pnpm install --frozen-lockfile` writes the block on any tree without pnpm's cached decision in `node_modules/.modules.yaml` — so CI regenerates it on every run, and the first version of this guard, placed after the install step, could never pass. Reproduced in a fresh worktree, which is the only way to see it: locally, with `node_modules` already present, the file is never touched. The same distinction that made the original `ignoredBuiltDependencies` fix look correct in the P0-17 → P0-19 review and fail in CI.
 
-The guard greps for the placeholder string, which is pnpm's own "fill this in" marker and never a legitimate value — so it cannot false-positive on a real setting, and it fires on exactly the shape `pnpm add` produces. Verified in both directions before merging: it passes on the real file, and fires on the injected block.
+So the block is not something to revert; it is pnpm asking a question. It is now answered — `allowBuilds` with an explicit `false` for each of the four (`cpu-features`, `esbuild`, `protobufjs`, `ssh2`). Three things follow, and the third is the reason to prefer this over what was there:
+
+1. **`strictDepBuilds: false` is gone.** It silenced the error instead of answering it, and with the question answered a clean install succeeds without it. Verified in a fresh worktree.
+2. **Nothing is rewritten.** Post-install and committed states now match, so the tree stays clean across installs.
+3. **The lost notification is restored.** The old comment recorded the cost of suppression plainly: what went with the error was *"the notification that a future dependency wants to run code at install time"*. pnpm still appends a placeholder line for any build-script package it has not been told about, so `ci.yml` now fails on that line — a new dependency wanting to execute during install stops a pull request and asks for a decision. That is a better control than the habit this item started as.
+
+The guard is anchored on the injected line shape (indented key, colon, marker) rather than on a bare substring, because a substring search also matches the comment in `pnpm-workspace.yaml` that explains the check — which it did, on the first attempt. Verified in both directions: it does not fire on the real file, and does fire on an injected block.
+
+Supply-chain protection is unchanged and now explicit rather than incidental: after a fresh install `cpu-features` and `ssh2` have no `build/` directory. Two `.node` files do appear in the tree, from `@rolldown/binding` and `lightningcss` — prebuilt platform binaries shipped inside optional dependencies, not products of a build script.

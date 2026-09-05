@@ -126,23 +126,32 @@ jobs:
           fi
           echo "NODE_ENV is pinned on the API function."
 
-      # `pnpm add` injects an `allowBuilds:` block of placeholders into
-      # pnpm-workspace.yaml on every dependency change. It is dead config —
-      # "set this to true or false" is not a boolean, so pnpm ignores it — but
-      # it reads as load-bearing, which is exactly what the comment in that
-      # file warns against. It reached main once despite being reverted by
-      # hand a dozen times, which is the argument for checking instead.
+      # The notification that a dependency wants to run code at install time.
       #
-      # The placeholder string is pnpm's own "fill this in" marker and is
-      # never a legitimate value, so this cannot false-positive on a real
-      # setting.
-      - name: Assert no unfilled pnpm allowBuilds placeholders
+      # pnpm appends `<package>: set this to true or false` to
+      # pnpm-workspace.yaml for any build-script package it has not been told
+      # about, and it does this on every *fresh* install — not only on
+      # `pnpm add`. So this step runs after `pnpm install` on purpose: it is
+      # reading what pnpm just decided, not what a human committed.
+      #
+      # The four known packages are answered `false` in that file, so a clean
+      # run finds nothing. A new one appearing is exactly the event worth
+      # stopping a pull request for — somebody has to decide whether it may
+      # execute during install, and the placeholder is pnpm asking.
+      #
+      # The placeholder text is pnpm's own marker and is never a legitimate
+      # value, so this cannot false-positive on a real setting.
+      - name: Assert no dependency is asking to run build scripts
         run: |
-          if grep -q "set this to true or false" pnpm-workspace.yaml; then
-            echo "::error::pnpm-workspace.yaml carries an unfilled allowBuilds block. pnpm add injects it; revert the file before committing, or decide each value deliberately"
+          # Anchored on the injected line shape — indented key, colon, marker —
+          # rather than a bare substring, which would also match the comment in
+          # pnpm-workspace.yaml that explains this check.
+          if grep -qE '^[[:space:]]+[A-Za-z0-9_@/.-]+: set this to true or false[[:space:]]*$' pnpm-workspace.yaml; then
+            echo "::error::A dependency wants to run a build script at install time. pnpm has appended it to pnpm-workspace.yaml as an unanswered placeholder — decide whether it may execute, set it to true or false, and commit that."
+            grep -nE '^[[:space:]]+[A-Za-z0-9_@/.-]+: set this to true or false[[:space:]]*$' pnpm-workspace.yaml
             exit 1
           fi
-          echo "pnpm-workspace.yaml carries no unfilled placeholders."
+          echo "no dependency is asking to run build scripts."
 
   test:
     name: Test and coverage gates
