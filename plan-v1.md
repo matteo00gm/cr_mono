@@ -1184,7 +1184,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P0-43 | Seed script + factories | realistic Italian wine fixtures, two tenants | 42 |
 | ✅ P0-44 | ⛔ `packages/testing`: Testcontainers | Postgres+pgvector harness, RLS on, per-suite reset | 43 |
 | ✅ P0-23a | 🔒 Better Auth schema tables | `auth_*` prefix (`user` is a reserved word), text ids, cookie cache; **not** tenant-scoped → P0-41 allowlist | 22 |
-| P0-45 | ⛔ 🔒 Better Auth setup + session middleware | Postgres-backed sessions, no JWKS fetch through NAT; tightly-scoped `withTenant` exception | 42,23a |
+| ✅ P0-45 | ⛔ 🔒 Better Auth setup + session middleware | Postgres-backed sessions, no JWKS fetch through NAT; tightly-scoped `withTenant` exception | 42,23a |
 | P0-64 | ⛔ 🔒 Email infrastructure (Resend) | SPF/DKIM/DMARC, one `sendEmail` seam, **staggered sends** (100/day cap), bounce suppression | 11 |
 | P0-46 | 🔒 Auth security suite | session integrity, **account enumeration incl. timing**, reset-token reuse, auth rate limits, surface isolation | 45 |
 | P0-47 | ⛔ 🔒 Membership + tenant resolution | tenant derived from `memberships`, never from request | 45 |
@@ -2730,7 +2730,23 @@ Migration `0028` is safe precisely because these tables are still empty, which i
 
 **Surface isolation** — an auth cookie presented to `/v1/widget/*` grants nothing; a widget session token presented to `/v1/dashboard/*` grants nothing. Two separate auth systems on one API is exactly where confusion bugs live, so this pair is asserted explicitly.
 
-**Files.** `apps/api/test/auth.spec.ts`. **~200 test lines.**
+**Three linked findings, one root cause: AWS Lambda does not set `NODE_ENV`** *(finding, and the most serious thing this task turned up).* Better Auth reads it with a default of `'development'`, and three behaviours hang off that:
+
+1. **Rate limiting was off.** It resolves `enabled: options.rateLimit?.enabled ?? isProduction`, so every auth endpoint in production would have been unlimited — credential stuffing at whatever rate an attacker can afford, an enumeration oracle on reset, and the 100/day Resend cap (P0-64) burnable by anyone.
+2. **Every caller resolved to `127.0.0.1`.** `getIP` falls back to localhost in development, and the limiter keys on `(ip, path)`. So simply *enabling* limiting without fixing this would have been worse than leaving it off: one shared bucket per path means **one attacker exhausting the sign-in limit locks out every user**. A limiter that cannot tell callers apart is a denial of service wearing a protection's clothes.
+3. The library's own fallback is silent — it logs a warning and carries on.
+
+Fixed on both sides: `rateLimit.enabled: true` and `advanced.ipAddress.ipAddressHeaders` are set explicitly in `packages/core/src/auth.ts` so neither depends on the environment, **and** `NODE_ENV=production` is set on the function in `infra/api.ts` so the root cause is gone too. Asserted by behaviour — a flood from one address gets 429 while a second address is unaffected — not by reading the configuration back, since the configuration is exactly what was wrong.
+
+**Two remaining gaps, both recorded rather than closed.** Better Auth's default limiter storage is a **module-level `Map`**, so it is per Lambda container: at reserved concurrency 10 (P1-48) an attacker gets up to ten times these limits and a recycled container is a clean slate. Closing that means backing it with the P0-34 `rate_limit_buckets` table through the **P2-01** `RateLimiter`. Separately, if `x-forwarded-for` ever arrives with more than one entry, `getIPFromHeader` returns null unless `trustedProxies` is configured — the same shared-bucket failure reached another way, so **P0-17a must confirm what CloudFront actually forwards**.
+
+**`/sign-out` revokes only the presented session**, which is correct and is asserted as such rather than left ambiguous — "sign out everywhere" is `/revoke-sessions`, and both are tested. A reader could reasonably assume the first did the second.
+
+**`Secure` is asserted at the configuration level, not on the wire.** Better Auth drops the flag over plain `http://`, which is what an in-process suite speaks; asserting it there would mean either running the suite against TLS or weakening the production setting to make a test pass. `HttpOnly`, `SameSite=Lax` and `Path` are asserted on the actual `Set-Cookie`.
+
+**The timing assertion is a ratio over repeated runs, with a deliberately wide band.** It is looking for the order-of-magnitude difference a skipped hash produces on the unknown-user path — the classic leak — not for a microsecond side channel. A tight bound would be a flaky test rather than a stronger one, given the suite runs on laptops, in CI and inside a container.
+
+**Files.** `apps/api/test/auth-security.integration.test.ts`, plus the configuration fixes in `packages/core/src/auth.ts` and `infra/api.ts`. **~200 test lines.** *(`.integration.test.ts`, not the `.spec.ts` the Files line names: every property here needs a real database and a real cookie, and the repo's runner discovers integration suites by that suffix.)*
 
 ---
 

@@ -172,6 +172,72 @@ export const createAuth = (options: AuthOptions): AuthInstance =>
        */
       useSecureCookies: true,
       defaultCookieAttributes: { httpOnly: true, sameSite: 'lax', secure: true },
+
+      /**
+       * How the rate limiter tells one caller from another (P0-46).
+       *
+       * `x-forwarded-for` is Better Auth's default and is stated here because
+       * the *consequence* of failing to resolve an IP is not what it sounds
+       * like: `getIP` falls back to a single shared bucket per path, so one
+       * attacker exhausting the sign-in limit locks out **every** user. A
+       * limiter that cannot distinguish callers is a denial of service wearing
+       * a protection's clothes.
+       *
+       * Two things have to hold for this to work in production, and both are
+       * easy to lose:
+       *
+       * 1. `NODE_ENV=production` must be set on the function — see the note in
+       *    `infra/api.ts`. Without it Better Auth's `isDevelopment()` is true
+       *    and *every* request resolves to `127.0.0.1` regardless of headers.
+       * 2. CloudFront must pass the viewer address through. If the header ever
+       *    arrives with more than one entry, `getIPFromHeader` returns null
+       *    unless `trustedProxies` is configured — the same shared-bucket
+       *    failure, reached a different way. Recorded against P0-17a.
+       */
+      ipAddress: { ipAddressHeaders: ['x-forwarded-for'] },
+    },
+
+    /**
+     * Rate limiting, enabled **explicitly** rather than inherited (P0-46).
+     *
+     * This is not a tuning choice, it is a bug fix. Better Auth resolves
+     * `enabled: options.rateLimit?.enabled ?? isProduction`, and its
+     * `isProduction` is `NODE_ENV === 'production'` with a default of
+     * `'development'` — while **AWS Lambda does not set `NODE_ENV` at all**.
+     * Left to the default, every auth endpoint in production would have been
+     * unlimited, and nothing about the deployment would have looked wrong.
+     *
+     * The consequences are the ones the plan already names: an unlimited
+     * password-reset endpoint is both an account-enumeration oracle and a way
+     * to burn the 100/day Resend cap (P0-64), and an unlimited sign-in is
+     * credential stuffing at whatever rate the attacker can afford.
+     *
+     * **The storage is per-container, and that is a real remaining gap.**
+     * Better Auth's default store is in-memory, so with reserved concurrency at
+     * 10 (P1-48) an attacker gets up to ten times these limits, and a container
+     * recycling resets the counter. Closing it means backing this with the
+     * P0-34 `rate_limit_buckets` table through the P2-01 `RateLimiter` — which
+     * is P2-01's job, and is recorded there. What is fixed here is the
+     * difference between a limit that is loose and no limit at all.
+     */
+    rateLimit: {
+      enabled: true,
+      window: 60,
+      max: 100,
+
+      /*
+       * Paths are matched *after* `basePath` is stripped, so these are written
+       * as Better Auth sees them rather than as a caller types them.
+       */
+      customRules: {
+        '/sign-in/email': { window: 60, max: 10 },
+        '/sign-up/email': { window: 60, max: 10 },
+        // Tighter, and for a different reason: each success sends an email
+        // against a 100/day cap, so the limit protects a budget as well as an
+        // account.
+        '/request-password-reset': { window: 300, max: 5 },
+        '/reset-password': { window: 300, max: 10 },
+      },
     },
 
     plugins: [
