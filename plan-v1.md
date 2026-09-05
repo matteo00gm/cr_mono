@@ -1121,17 +1121,17 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 
 **One low-numbered row is *not* done**, and its position in the table is misleading: **P0-17a** was blocked on the API Lambda origin, which P0-54 now provides. It has a second reason to land soon: P0-46 needs to know what CloudFront actually forwards as the client address, or the auth rate limiter degrades to a single shared bucket.
 
-**State of `apps/api`:** two route surfaces, a session guard, tenant resolution, a capability table with a fail-closed boot check, structured logging with allowlist redaction, and a central error handler. 47 unit suites / 433 tests and 30 integration suites / 304 tests across the repo.
+**State of `apps/api`:** two route surfaces, a session guard, tenant resolution, a capability table with a fail-closed boot check, structured logging with allowlist redaction, and a central error handler. 48 unit suites / 433 tests and 30 integration suites / 304 tests across the repo, all of it running in CI.
 
 **State of `packages/db`:** 22 tables across 16 schema modules, migrations `0000`–`0028` (**the next one is `0029`**), 26 integration suites / 258 tests, per-package coverage gates passing, and `pnpm db:generate` reporting no drift. **RLS is live**: enabled and forced on all 15 policy-carrying tables, so any new suite must set tenant context — see `test/support/tenant.ts`. The five `auth_*` tables carry no policy and are out of that count by design (P0-23a).
 
-**State of the repo overall:** 47 unit suites / 433 tests across all packages, plus the integration suites above.
+**State of the repo overall:** 48 unit suites / 433 tests, and 30 integration suites / 304 tests, all running in CI.
 
 **Three things that will otherwise mislead you:**
 
 1. **Nothing has been deployed to AWS.** P0-21a and P0-21b are verified against a container and typechecked; neither has run against a real stage. The proof for them is P0-39 and a first deploy, both outstanding. A green build says nothing about whether the deployed application connects as `app_rw`.
-2. **The integration suite does not run in CI.** `ci.yml` runs lint, typecheck, unit tests and the coverage gates; `pnpm test:integration` needs Docker and is not wired in (see ⚠ Open items). A green PR therefore does *not* mean the 134 integration tests passed — run them locally before trusting a schema change.
-3. **Branch protection is not configured**, so none of those checks blocks a merge yet. They are advisory until the four required checks are set on `main`.
+2. **A green PR now does include the integration suite.** `ci.yml` gained an `integration` job, so all 304 integration tests run on every pull request alongside lint, typecheck, unit tests and the coverage gates. This was not true until recently, and older entries below that say otherwise are describing the state at the time they were written.
+3. **Branch protection is not configured**, so none of those checks blocks a merge yet. They are advisory until all **five** required checks are set on `main`.
 
 ---
 
@@ -5858,7 +5858,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 |---|---|---|
 | P0-17a unblocked | ~~needs the API origin~~ | **Resolved by P0-54**, which creates the `Api` Function URL. The cache behaviour now has an origin to target: `CachingDisabled` managed policy, compression off, >=30s origin read timeout. Note the *streaming* function itself is still P2-29 — P0-17a can add the behaviour against the buffered origin and repoint it, or wait. |
 | CloudFront error mapping vs P4-15 | before the API joins the CDN | `customErrorResponses` is distribution-wide, so SPA 404->200 would turn API 404s into 200 HTML. Split the distribution or move SPA routing into a CloudFront Function. |
-| 🔒 Integration suite not in CI | **next CI change** | Was "later" when this suite was schema shape checks. It is now **304 tests across 30 suites** carrying every RLS isolation assertion, the whole P0-46 adversarial auth suite and P0-48's IDOR test — **none of which runs on a pull request**. See **E1** below. |
+| Integration suite in CI | **closed** | An `integration` job in `ci.yml` runs all 304 tests on every pull request, in parallel with `verify` and `test`. Not yet a *required* check — see **E4**. Detail and the follow-up optimisation in **E1**. |
 | Combined non-prod budget | needs an account-level resource | §5.8 targets $15 across all non-prod, but budgets are created per stage, so N stages can total N x $15 unnoticed. Needs one budget created outside per-stage IaC. |
 | `BudgetAlertEmail` secret unset | per stage | Set for `dev` stage during testing; must be set via `sst secret set BudgetAlertEmail <address>` before deploying any new stage. |
 | NAT: cheapest footprint accepted | **decided (2026-09-01)** | Keep two `t4g.nano` (already the smallest instance) and no auto-replacement while pre-production. Cost is ~$13/month while up — see §5.2a — and hourly, so teardown is the control. |
@@ -5867,7 +5867,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | SST deploy verified | **closed (2026-09-01)** | Deployed and verified on `dev` stage in `eu-west-1` (VPC, NAT, RDS Postgres 16 with TLS, SSM parameters with SecureString decryption, SNS Topic + subscription, Budgets). Cleanly torn down with `sst remove` to avoid idle costs. |
 | Bedrock model access confirmed | **closed (2026-09-01)** | Confirmed active in `eu-west-1` via AWS CLI: `amazon.nova-lite-v1:0` (chat/pairing LLM) and `amazon.titan-embed-text-v2:0` (vector embeddings). |
 | OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |
-| Branch protection not configured | repository settings | **All four** checks must be required on `main` before any gate in Part 6 blocks a merge: `verify` and `test` from ci.yml, `secrets` and `dependencies` from security.yml. Requiring a subset leaves the rest advisory. GitHub offers only checks it has recently observed, so each becomes selectable after its first run — revisit this list whenever a job is added. |
+| Branch protection not configured | repository settings | **All five** checks must be required on `main` before any gate in Part 6 blocks a merge: `verify`, `test` and `integration` from ci.yml, `secrets` and `dependencies` from security.yml. Requiring a subset leaves the rest advisory. GitHub offers only checks it has recently observed, so each becomes selectable after its first run — revisit this list whenever a job is added. |
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |
 | Turbo remote cache not enabled | repository secrets | `TURBO_TOKEN` / `TURBO_TEAM` are referenced by the workflow but unset, so Turbo uses its local cache only. Harmless; wire it when CI wall-clock starts to matter. |
 | Coverage bars now measure real code | **closed (2026-09-01)** | No longer 100% of nothing: `packages/core` 22/22 statements and `packages/db` 33/33 across 3 files, both at 100% against their 90% bars. `apps/*`, `packages/security` and `packages/testing` are still stubs, so their bars stay unexercised until code lands. |
@@ -6007,15 +6007,17 @@ The real gap is narrower and still worth closing. There is a `packages/security/
 
 #### E. Process and tooling
 
-**E1. The integration suite still does not run in CI, and it now carries most of the security assertions.** 🔒
+**E1. The integration suite now runs in CI.** ✅ **closed**
 
-`pnpm test:integration` is **304 tests across 30 suites**, including every RLS isolation assertion, the whole P0-46 adversarial auth suite, the P0-48 IDOR behavioural test, and the P0-47 proof that `withUser` is bounded by policy. **None of it runs on a pull request.** CI runs `pnpm test` — unit only.
+`pnpm test:integration` is **304 tests across 30 suites**, and until now none of it ran on a pull request — CI ran `pnpm test`, which is unit only. That was a reasonable "later" when the suite was schema shape checks. It stopped being defensible once it carried every RLS isolation assertion, the P0-46 adversarial auth suite, P0-47's proof that `withUser` is bounded by policy, and P0-48's IDOR behavioural test: the assertions that catch a tenant-isolation regression were exactly the ones not running.
 
-This was a reasonable "later" when the integration suite was schema shape checks. It is not any more: the assertions that would catch a tenant-isolation regression are exactly the ones not running.
+Closed by an `integration` job in `ci.yml`. Three decisions in it worth keeping:
 
-What closes it: a second CI job running `pnpm test:integration`. GitHub runners have Docker, so this is a job definition plus the container pull time (~30s for `pgvector/pgvector:0.8.0-pg16`, cached between runs). Keep it separate from the unit job so the fast loop stays fast, and do not make it `needs:` the unit job — a failure in one should not hide the other.
+- **No `needs:`.** It runs in parallel with `verify` and `test`, for the reason already written at the top of that file: chaining would hide an isolation failure behind a lint failure and cost a round trip to learn something CI could have reported at once.
+- **`pnpm build` first, and it is required rather than incidental.** The suites import `@catalogorosso/testing`, `@catalogorosso/db` and `@catalogorosso/core` by package name, which resolve to `dist` — without a build they fail at import with `Cannot find module`, several layers from the cause.
+- **The image is not cached.** Restoring ~430 MB from the Actions cache is not reliably faster than pulling it, and a stale entry would silently test the wrong Postgres.
 
-When: **next CI change.** This is the highest-value open item in this section.
+**Two things left open by this, deliberately.** It is not a *required* check yet — see **E4**, where branch protection is not configured at all, and a check that turns out flaky and is already required trains people to route around it. Add it to that list once a few runs have been observed. And the per-suite cost stands: each of the 30 files starts its own container and applies bootstrap plus all 29 migrations, ~4s apiece. If the wall clock ever becomes a problem, the fix is to bootstrap and migrate **once** into a template database in `globalSetup` and have each suite `CREATE DATABASE … TEMPLATE …` (~100ms), which is a P0-44 harness refactor deserving its own PR — not a bigger `timeout-minutes`.
 
 **E2. Turbo's local cache can hide a broken intermediate commit.**
 
@@ -6025,6 +6027,6 @@ There is no fix to make; the lesson is procedural and belongs written down: **be
 
 **E3. `pnpm typecheck:infra` is local-only.** It needs `sst install` to generate `.sst/platform/config.d.ts` first, and that download is the cost of enforcing it in CI. Every infra invariant is therefore guarded by CI greps rather than by types — see **A3**, and the existing NAT and `app_rw` assertions.
 
-**E4. Branch protection is still not configured.** Until all four checks are required on `main` (`verify` and `test` from `ci.yml`, `secrets` and `dependencies` from `security.yml`), every gate in Part 6 is advisory. Add **E1**'s integration job to that list when it exists.
+**E4. Branch protection is still not configured.** Until all **five** checks are required on `main` — `verify`, `test` and now `integration` from `ci.yml`, plus `secrets` and `dependencies` from `security.yml` — every gate in Part 6 is advisory. Requiring a subset leaves the rest advisory, which is the failure mode worth naming: it looks configured.
 
 **E5. `pnpm add` rewrites `pnpm-workspace.yaml`.** Every dependency change injects an `allowBuilds:` block that must be reverted before committing. It bit this chain roughly a dozen times. A `postinstall` guard, or a CI assertion that the file matches its committed form, would turn a habit into a check.

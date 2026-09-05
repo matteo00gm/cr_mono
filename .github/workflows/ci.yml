@@ -146,3 +146,52 @@ jobs:
       # so per-package thresholds cannot live in Vitest config at all.
       - name: Enforce coverage gates
         run: pnpm coverage:check
+
+  # Real Postgres, via Testcontainers. Separate from `test` and deliberately
+  # not behind `needs:` — for the same reason `verify` and `test` run in
+  # parallel: chaining would hide an isolation failure behind a lint failure
+  # and cost a round trip to learn something we could have reported at once.
+  #
+  # This was "later" for a long time, and stopped being defensible. The suite
+  # is no longer schema shape checks: it carries every RLS isolation
+  # assertion, the P0-46 adversarial auth suite, P0-47's proof that `withUser`
+  # is bounded by policy, and P0-48's IDOR behavioural test. Those are exactly
+  # the assertions that catch a tenant-isolation regression, and none of them
+  # ran on a pull request.
+  integration:
+    name: Integration tests (Postgres)
+    runs-on: ubuntu-latest
+    # Each of the 30 suite files starts its own container and applies
+    # bootstrap plus every migration, so the expected wall clock is a couple of
+    # minutes. This is a hang guard, not a budget — if it is ever approached,
+    # the fix is the template-database change described in P0-44, not a bigger
+    # number here.
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Required, not incidental. The suites import `@catalogorosso/testing`,
+      # `@catalogorosso/db` and `@catalogorosso/core` by package name, which
+      # resolve to `dist` — without a build they fail at import with
+      # "Cannot find module", several layers from the cause.
+      - name: Build
+        run: pnpm build
+
+      # No Docker setup step: `ubuntu-latest` ships with the daemon running,
+      # and Testcontainers pulls the image itself. The image is pinned to
+      # pgvector/pgvector:0.8.0-pg16 (P0-44) — pinned *low*, so a capability
+      # that works here works on the version RDS actually offers.
+      #
+      # Deliberately not cached. Restoring a ~430 MB image from the Actions
+      # cache is not reliably faster than pulling it, and a stale cache entry
+      # would silently test the wrong Postgres.
+      - name: Integration tests
+        run: pnpm test:integration
