@@ -27,7 +27,8 @@
     "db:generate": "drizzle-kit generate",
     "prepare": "husky",
     "db:seed": "node scripts/db-seed.mjs",
-    "adr:check": "node scripts/check-adrs.mjs"
+    "adr:check": "node scripts/check-adrs.mjs",
+    "agents:check": "node scripts/check-agents-md.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [

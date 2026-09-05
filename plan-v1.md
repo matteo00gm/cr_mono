@@ -1204,7 +1204,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P0-57 | `apps/dashboard`: Vite+Preact | routing, Better Auth client, layout shell | 42,45 |
 | P0-58 | SST: dashboard static deploy | S3 + CloudFront behaviour, cache invalidation | 17,57 |
 | ✅ P0-59 | ⛔ `docs/` scaffold + ADR system | template, index, ~15 ADRs seeded from Locked Decisions | 01 |
-| P0-60 | ⛔ `AGENTS.md` + the invariants | root + per-package; the prohibitions a model cannot infer (§8.3) | 59 |
+| ✅ P0-60 | ⛔ `AGENTS.md` + the invariants | root + per-package; the prohibitions a model cannot infer (§8.3) | 59 |
 | P0-61 | PR template + commitlint + rationale check | required `## Why`, conventional commits, generated CHANGELOG | 06 |
 | P0-62 | ⛔ OpenAPI generation + drift check | from route table + `drizzle-zod`; route missing description/capability/example fails CI | 42,54 |
 | P0-63 | Generated typed API client | widget + dashboard import it; makes endpoint usage find-referenceable (§8.4) | 62 |
@@ -3137,9 +3137,19 @@ Per-package files are shorter still: purpose, its own invariants, and where its 
 
 Symlink or duplicate to `CLAUDE.md` for tools that look for that name.
 
+**Invariants are wrapped, so the citation check joins continuation lines first** *(implementation note).* Most invariants are two or three lines long and carry their task id on the last one. Checking line by line would reject nearly every wrapped rule, so bullets are reassembled before the id is looked for — the kind of detail that decides whether a check is usable or gets disabled.
+
+**A section reference does not satisfy the citation requirement on its own.** `§3.7` says where a rule came from; `P3-08` says who to ask about it. Several invariants carry both, and that is the intended shape.
+
+**`CLAUDE.md` is checked for drift, not just existence** *(addition).* The row says "symlink or duplicate". A duplicate that is allowed to drift is worse than neither file, because the two disagree and nothing says which is current — so the check requires them identical. Windows makes symlinks awkward enough that a copy plus a check is the more portable answer.
+
+**The checker asserts itself in four directions**, like P0-59's and P0-48's: verified that it passes on the real tree and fires on a package missing its file, an invariant with no task id, a drifted `CLAUDE.md`, and a root file over the line budget.
+
+**The root file's line budget is enforced, not suggested.** 116 lines against a 200 limit. The point of these files is that they are read in full before a change; a file that gets skimmed has the same effect as no file, and models truncate as readily as people skim.
+
 **Tests.** A check that every invariant line cites a task id, and that every package has an `AGENTS.md` — the same reflection pattern as P0-41, so a new package cannot skip it.
 
-**Files.** `AGENTS.md`, `packages/*/AGENTS.md`, `scripts/check-agents-md.mjs`. **~180 lines.**
+**Files.** `AGENTS.md`, `CLAUDE.md`, `{apps,packages}/*/AGENTS.md`, `scripts/check-agents-md.mjs`, CI step. **~180 lines.**
 
 ---
 
