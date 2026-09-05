@@ -1194,7 +1194,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P0-51 | Invite flow | own `invitations` table + single-use token, email via Resend | 49,64 |
 | P0-52 | 🔒 Last-OWNER guard + test | cannot remove or demote the final OWNER | 51 |
 | P0-53 | `audit_log` writer | helper + actor/ip/ua capture | 31,47 |
-| P0-54 | ⛔ `apps/api`: Hono + Lambda | Function URL, BUFFERED handler, route groups | 42 |
+| ✅ P0-54 | ⛔ `apps/api`: Hono + Lambda | Function URL, BUFFERED handler, route groups | 42 |
 | P0-55 | API: error handler + logging | structured JSON, `tenant_id` + `request_id` on every line | 54 |
 | P0-56 | 🔒 Log redaction serializer | **allowlist**, not denylist; test with secrets and PII fixtures | 55 |
 | P0-57 | `apps/dashboard`: Vite+Preact | routing, Better Auth client, layout shell | 42,45 |
@@ -2872,9 +2872,21 @@ Implementation: `POST .../members/invite` requires `members:manage`, creates an 
 
 **How.** `pino` at `info`. AsyncLocalStorage holds `{ requestId, tenantId }` so every log line carries them without threading a logger through call sites. Error handler: map known domain errors to status codes, everything else to a 500 with a **generic body plus the `requestId`** — the caller gets the id, the log gets the detail. Never serialize an error object into a response.
 
+**Hono rethrows a thrown non-`Error` instead of calling `onError`, so a third middleware is required** *(finding).* Verified in the pinned 4.13.5 source, since it is not documented: `compose.js` guards its catch with `err instanceof Error && onError`, and `hono-base.js#handleError` does the same. `throw 'oops'` and `throw { code: 42 }` are legal JavaScript and libraries do it — a string from a validator, a rejected non-Error from a driver — and such a value **escapes the app entirely**: the invocation fails, the caller gets the Lambda runtime's raw 502, and the envelope, the request id and every disclosure rule below are bypassed at once. `normaliseThrown()` wraps it in an `Error` carrying the original as `cause`, and is registered *inside* `requestContext()` so the resulting 500 still has a real request id.
+
+**The domain errors live in `packages/core/src/errors.ts` and carry no status codes** *(addition; the Files line named only the two middleware).* They have to live in a package, because P0-52's last-OWNER guard and every other core rule needs to throw them and packages cannot import apps. They carry no HTTP status because the same failure means different things to different callers: "no such product for this tenant" is a 404 to the API and a dropped SQS message to the worker, and a status baked into the throw site forces the second caller to unpick the first one's decision. The mapping is a `Record<DomainErrorKind, ContentfulStatusCode>` in the API, so **adding a kind without deciding its status is a typecheck failure** — the same rule as the P0-49 capability map.
+
+**A `DomainError`'s message is part of the API contract; nothing else's is.** That asymmetry is the whole safety property: a domain message was written for the caller and is returned verbatim, and everything else is an error nobody vetted for disclosure — its `.message` can hold a connection string or a fragment of another tenant's row, and a driver error routinely does. `isDomainError` is therefore structural rather than `instanceof` alone, because two copies of the module in one bundle would otherwise turn a genuine 404 into a 500 with the caller's message swallowed.
+
+**The request id is generated, never read from the request** *(decision).* An `X-Request-Id` from the caller is attacker-controlled: it lets one client stamp every request with the same value, or reuse the id from somebody else's error report. AWS's `x-amzn-trace-id` is logged alongside for edge correlation, because that one is not ours to invent.
+
+**404 uses the same envelope as every other failure.** Hono's default is the plain string `404 Not Found`, so a client parsing responses as JSON gets a syntax error on the most common failure there is — and reports it as "the API returned garbage" rather than "that route does not exist".
+
+**Domain errors log at `warn`, not `error`.** A 404 or a 409 is the system working; logging expected outcomes at error level is how an alert on the error rate stops meaning anything, and then how a real incident goes unnoticed.
+
 **Tests.** A thrown domain error maps correctly; an unexpected error returns a generic 500 whose body contains no stack trace but does contain the request id.
 
-**Files.** `apps/api/src/middleware/{error,logger}.ts`. **~100 lines.**
+**Files.** `packages/core/src/errors.ts`, `apps/api/src/context.ts`, `apps/api/src/middleware/{error,logger}.ts`. **~100 lines.** *(`context.ts` holds the AsyncLocalStorage, kept out of `logger.ts` because P0-45 and P0-47 write to it and neither has anything to do with logging.)*
 
 ---
 

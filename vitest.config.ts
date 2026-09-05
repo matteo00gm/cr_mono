@@ -40,6 +40,19 @@ const project = (root: string, environment: 'node' | 'jsdom') => ({
 
 export default defineConfig({
   test: {
+    env: {
+      /*
+       * The API logs a line per request and one per handled error, so a full
+       * run would bury the report under several hundred JSON lines and make a
+       * failure genuinely hard to find.
+       *
+       * This silences only the process logger. The suites that assert on log
+       * *output* build their own logger from the exported `loggerOptions` with
+       * an explicit level, so they are unaffected — which is the reason those
+       * options are exported separately in the first place.
+       */
+      LOG_LEVEL: 'silent',
+    },
     projects: [
       ...NODE_PROJECTS.map((root) => project(root, 'node')),
       ...DOM_PROJECTS.map((root) => project(root, 'jsdom')),
