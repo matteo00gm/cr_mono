@@ -85,6 +85,25 @@ export const api = new sst.aws.Function('Api', {
     BUILD_SHA: process.env.GITHUB_SHA ?? '',
 
     /**
+     * `NODE_ENV=production`, and it is load-bearing for security rather than
+     * for bundle size (P0-46).
+     *
+     * **AWS Lambda does not set `NODE_ENV`.** Better Auth reads it with a
+     * default of `'development'`, and two of its behaviours hang off that:
+     *
+     * 1. Rate limiting resolves to `enabled: ?? isProduction`, so every auth
+     *    endpoint would have been unlimited. `packages/core` now sets
+     *    `enabled: true` explicitly, so this is belt and braces there.
+     * 2. `getIP` falls back to `127.0.0.1` for *every* request in development,
+     *    which is the dangerous one: with limiting on and all callers sharing
+     *    one bucket, a single attacker exhausting the sign-in limit locks out
+     *    every user. The limiter becomes a denial of service.
+     *
+     * Nothing about either would have looked wrong in a deployment.
+     */
+    NODE_ENV: 'production',
+
+    /**
      * Read from SSM at synth time and injected, rather than fetched per cold
      * start.
      *

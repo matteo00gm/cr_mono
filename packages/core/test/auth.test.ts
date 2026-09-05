@@ -31,8 +31,15 @@ interface ConfiguredAuth {
     readonly advanced?: {
       useSecureCookies?: boolean;
       defaultCookieAttributes?: { httpOnly?: boolean; sameSite?: string; secure?: boolean };
+      ipAddress?: { ipAddressHeaders?: string[] };
     };
     readonly plugins?: { id: string }[];
+    readonly rateLimit?: {
+      enabled?: boolean;
+      window?: number;
+      max?: number;
+      customRules?: Record<string, { window: number; max: number }>;
+    };
   };
 }
 
@@ -127,6 +134,54 @@ describe('basePath', () => {
     expect(configure({ basePath: '/somewhere/else/auth' }).options.basePath).toBe(
       '/somewhere/else/auth',
     );
+  });
+});
+
+describe('rate limiting', () => {
+  it('is enabled explicitly, never inherited from NODE_ENV', () => {
+    /*
+     * A bug fix, not a tuning choice. Better Auth resolves
+     * `enabled: options.rateLimit?.enabled ?? isProduction`, and its
+     * `isProduction` is `NODE_ENV === 'production'` with a default of
+     * `'development'` — while **AWS Lambda does not set `NODE_ENV`**. Left at
+     * the default, every auth endpoint in production would have been unlimited
+     * and nothing about the deployment would have looked wrong.
+     */
+    expect(configure().options.rateLimit?.enabled).toBe(true);
+  });
+
+  it('limits password reset harder than sign-in', () => {
+    // Reset is tighter because each success spends an email against the
+    // 100/day Resend cap (P0-64) — the limit protects a budget as well as an
+    // account. An unlimited reset endpoint is also an enumeration oracle.
+    const rules = configure().options.rateLimit?.customRules ?? {};
+    const perMinute = (rule?: { window: number; max: number }): number =>
+      rule === undefined ? Infinity : (rule.max / rule.window) * 60;
+
+    expect(perMinute(rules['/request-password-reset'])).toBeLessThan(
+      perMinute(rules['/sign-in/email']),
+    );
+  });
+
+  it('names the paths as Better Auth sees them, with basePath stripped', () => {
+    // A rule keyed `/v1/dashboard/auth/sign-in/email` would match nothing and
+    // silently leave that endpoint on the default limit.
+    for (const path of Object.keys(configure().options.rateLimit?.customRules ?? {})) {
+      expect(path.startsWith('/v1/')).toBe(false);
+    }
+  });
+});
+
+describe('client IP resolution', () => {
+  it('is configured, because the fallback is a single shared bucket', () => {
+    /*
+     * The consequence is not what it sounds like. When `getIP` cannot resolve
+     * an address it does not disable limiting — it puts every caller in one
+     * bucket per path, so one attacker exhausting the sign-in limit locks out
+     * **every** user. A limiter that cannot tell callers apart is a denial of
+     * service wearing a protection's clothes.
+     */
+    expect(configure().options.advanced?.ipAddress?.ipAddressHeaders).toEqual(['x-forwarded-for']);
   });
 });
 
