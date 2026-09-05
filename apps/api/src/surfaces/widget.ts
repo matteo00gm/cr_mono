@@ -1,5 +1,7 @@
 import { Hono } from 'hono';
 
+import type { AppEnv } from '../env.js';
+
 /**
  * The widget surface — `/v1/widget/*` (P0-54).
  *
@@ -12,9 +14,15 @@ import { Hono } from 'hono';
  * the other direction: a public CORS middleware mounted on a shared root would
  * apply to the authenticated dashboard endpoints as well, which is how a
  * cross-origin page ends up able to read a seller's catalogue.
+ *
+ * **Better Auth is never mounted here, and no route on this surface reads a
+ * session cookie.** Two authentication systems on one API is exactly where
+ * confusion bugs live, so P0-46 asserts the pair explicitly in both directions:
+ * an auth cookie presented here grants nothing, and a widget token presented to
+ * the dashboard grants nothing.
  */
-export const createWidgetApp = (): Hono => {
-  const app = new Hono();
+export const createWidgetApp = (): Hono<AppEnv> => {
+  const app = new Hono<AppEnv>();
 
   /** See the note on the dashboard surface marker. */
   app.get('/', (c) => c.json({ surface: 'widget' as const }));

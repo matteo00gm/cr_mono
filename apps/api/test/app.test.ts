@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app.js';
+import { fakeAuth } from './support/auth.js';
 import { createDashboardApp } from '../src/surfaces/dashboard.js';
 import { createWidgetApp } from '../src/surfaces/widget.js';
 
@@ -19,7 +20,7 @@ afterEach(() => {
 
 describe('GET /v1/health', () => {
   it('answers 200 with a status', async () => {
-    const response = await createApp().request('/v1/health');
+    const response = await createApp({ auth: fakeAuth() }).request('/v1/health');
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ status: 'ok' });
@@ -30,7 +31,7 @@ describe('GET /v1/health', () => {
     // thing that is running" is, and nothing else in the response answers it.
     vi.stubEnv('BUILD_SHA', 'c0ffee1');
 
-    const response = await createApp().request('/v1/health');
+    const response = await createApp({ auth: fakeAuth() }).request('/v1/health');
 
     expect(await response.json()).toMatchObject({ sha: 'c0ffee1' });
   });
@@ -43,7 +44,7 @@ describe('GET /v1/health', () => {
      */
     vi.stubEnv('BUILD_SHA', '');
 
-    const response = await createApp().request('/v1/health');
+    const response = await createApp({ auth: fakeAuth() }).request('/v1/health');
 
     expect(await response.json()).toMatchObject({ sha: 'unknown' });
   });
@@ -52,7 +53,7 @@ describe('GET /v1/health', () => {
     // A `/health` at the root would answer on the Function URL but never
     // through the edge (§5.1 routes `/v1/*` to this Lambda), so the check
     // would pass while every real caller's path was broken.
-    const app = createApp();
+    const app = createApp({ auth: fakeAuth() });
 
     expect((await app.request('/health')).status).toBe(404);
     expect((await app.request('/v1/health')).status).toBe(200);
@@ -61,20 +62,20 @@ describe('GET /v1/health', () => {
 
 describe('route surfaces', () => {
   it('mounts the dashboard and the widget at their own prefixes', async () => {
-    const app = createApp();
+    const app = createApp({ auth: fakeAuth() });
 
     expect(await (await app.request('/v1/dashboard')).json()).toEqual({ surface: 'dashboard' });
     expect(await (await app.request('/v1/widget')).json()).toEqual({ surface: 'widget' });
   });
 
   it('mounts sub-app paths under the prefix', async () => {
-    // What every real route will look like. The marker above sits at the bare
-    // prefix, so on its own it would not prove that nested paths compose.
-    const dashboard = createDashboardApp();
-    dashboard.get('/products', (c) => c.text('catalogue'));
+    // What every real route will look like. The markers above sit at the bare
+    // prefix, so on their own they would not prove that nested paths compose.
+    const sub = new Hono();
+    sub.get('/products', (c) => c.text('catalogue'));
 
     const app = new Hono();
-    app.route('/v1/dashboard', dashboard);
+    app.route('/v1/dashboard', sub);
 
     expect((await app.request('/v1/dashboard/products')).status).toBe(200);
   });
@@ -83,12 +84,15 @@ describe('route surfaces', () => {
     /*
      * Recorded because it is surprising rather than because it matters:
      * `app.route(prefix, sub)` maps the sub-app's `/` to `prefix` exactly, so
-     * `/v1/dashboard/` is a 404 while `/v1/dashboard` is a 200. Harmless — no
-     * real endpoint lives at the bare prefix — but worth pinning, so that if a
-     * future Hono release starts accepting both, that is a visible change here
-     * and not a silent widening of the routing surface.
+     * `/v1/widget/` does not reach the marker while `/v1/widget` does. Harmless
+     * — no real endpoint lives at the bare prefix — but worth pinning, so a
+     * future Hono release accepting both is a visible change here rather than a
+     * silent widening of the routing surface.
+     *
+     * Asserted on the widget, because the dashboard now answers 401 to any
+     * unmatched path rather than 404 — see the note in `auth.test.ts`.
      */
-    expect((await createApp().request('/v1/dashboard/')).status).toBe(404);
+    expect((await createApp({ auth: fakeAuth() }).request('/v1/widget/')).status).toBe(404);
   });
 
   it('keeps one surface middleware out of the other', async () => {
@@ -165,14 +169,16 @@ describe('route surfaces', () => {
     // Distinguishes *which* app answered, not merely that something did —
     // the distinction that matters when the bug is one surface replying for
     // the other (P0-46's surface-isolation group builds on this).
-    const dashboard = await (await createApp().request('/v1/dashboard')).json();
-    const widget = await (await createApp().request('/v1/widget')).json();
+    const dashboard = await (await createApp({ auth: fakeAuth() }).request('/v1/dashboard')).json();
+    const widget = await (await createApp({ auth: fakeAuth() }).request('/v1/widget')).json();
 
     expect(dashboard).not.toEqual(widget);
   });
 
-  it('404s on an unknown path under a known surface', async () => {
-    expect((await createApp().request('/v1/dashboard/nope')).status).toBe(404);
+  it('404s on an unknown path under an unguarded surface', async () => {
+    // The widget has no session guard, so an unmatched path is simply absent.
+    // The dashboard deliberately answers 401 first — `auth.test.ts` says why.
+    expect((await createApp({ auth: fakeAuth() }).request('/v1/widget/nope')).status).toBe(404);
   });
 });
 
@@ -180,14 +186,16 @@ describe('the surface factories', () => {
   it('each report their own name, so a test can tell which app answered', async () => {
     // The distinction that matters when the bug being hunted is one surface
     // replying for the other, rather than nothing replying at all.
-    expect(await (await createDashboardApp().request('/')).json()).toEqual({
+    expect(await (await createDashboardApp({ auth: fakeAuth() }).request('/')).json()).toEqual({
       surface: 'dashboard',
     });
     expect(await (await createWidgetApp().request('/')).json()).toEqual({ surface: 'widget' });
   });
 
   it('hand back a new instance each time', () => {
-    expect(createDashboardApp()).not.toBe(createDashboardApp());
+    expect(createDashboardApp({ auth: fakeAuth() })).not.toBe(
+      createDashboardApp({ auth: fakeAuth() }),
+    );
     expect(createWidgetApp()).not.toBe(createWidgetApp());
   });
 });
@@ -201,8 +209,8 @@ describe('createApp', () => {
      * duplicate routes where the first wins and the second is dead code that
      * reads as live.
      */
-    const first = createApp();
-    const second = createApp();
+    const first = createApp({ auth: fakeAuth() });
+    const second = createApp({ auth: fakeAuth() });
 
     expect(first).not.toBe(second);
 

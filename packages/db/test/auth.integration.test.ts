@@ -85,8 +85,13 @@ describe('auth tables', () => {
       values (${`sess_${randomUUID()}`}, ${userId}, ${randomUUID()}, now() + interval '1 day')
     `);
     await db.execute(sql`
-      insert into auth_accounts (id, user_id, account_id, provider_id, password)
-      values (${`acct_${randomUUID()}`}, ${userId}, ${userId}, 'credential', 'argon2-hash')
+      insert into auth_accounts (id, user_id, account_id, provider_id, issuer, password)
+      values (
+        ${`acct_${randomUUID()}`}, ${userId}, ${userId}, 'credential',
+        -- Required since Better Auth 1.7 (P0-45). What identifies an account is
+        -- (issuer, account_id), because one provider can front several issuers.
+        'local:credential', 'argon2-hash'
+      )
     `);
 
     await db.execute(sql`delete from auth_users where id = ${userId}`);

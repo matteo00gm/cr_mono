@@ -82,10 +82,26 @@ export default {
         // tenant context. What keeps this from being a hole is that no
         // production module may import the package at all — so the exemption
         // widens what test code can reach, not what ships.
+        //
+        // src/auth-db.ts is exempt from P0-45, and it is the file that *is* the
+        // second sanctioned path: it hands Better Auth's adapter an un-scoped
+        // connection. Exempt for the same reason as deploy.ts — there is no
+        // tenant context to set, because authentication is what happens before
+        // a tenant is known — and named as one file so this stays a hole for
+        // exactly the auth adapter.
+        //
+        // packages/core/src/auth.ts is the single consumer of the
+        // `@catalogorosso/db/auth` subpath, and the ONLY one. This is the
+        // "tightly-scoped withTenant exception" P0-45 requires. Adding a second
+        // file here should be treated as a design change, not a config tweak:
+        // every additional name is another place a query can be issued with no
+        // tenant, and the point of one sanctioned path is that there is one
+        // thing to audit.
         pathNot:
-          '^packages/db/src/(client|with-tenant|deploy)[.]ts$' +
+          '^packages/db/src/(client|with-tenant|deploy|auth-db)[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
+          '|^packages/core/src/auth[.]ts$' +
           '|(^|/)test/',
       },
       to: {
@@ -94,14 +110,18 @@ export default {
         // while the real client was imported anywhere.
         //
         // `@catalogorosso/db/test-support` is the subpath that exposes the
-        // connection factory for the harness. It is listed here so reaching it
-        // is caught by the same rule as reaching the driver directly — a
-        // narrowly-named escape is only narrow if using it is checked.
+        // connection factory for the harness, and `@catalogorosso/db/auth` the
+        // one that exposes the un-scoped connection for the Better Auth
+        // adapter. Both are listed here so reaching them is caught by the same
+        // rule as reaching the driver directly — a narrowly-named escape is
+        // only narrow if using it is checked. Without this line the `/auth`
+        // subpath would be importable from anywhere, since the rule's targets
+        // are the driver packages and `@catalogorosso/db` is not one of them.
         path:
           '(^|/)node_modules/(pg|postgres|drizzle-orm)(/|$)' +
           '|^(pg|postgres)($|/)' +
           '|^drizzle-orm($|/)' +
-          '|^@catalogorosso/db/test-support$',
+          '|^@catalogorosso/db/(test-support|auth)$',
       },
     },
 

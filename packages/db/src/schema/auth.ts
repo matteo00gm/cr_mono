@@ -1,4 +1,4 @@
-import { boolean, index, pgTable, text, timestamp, unique } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, pgTable, text, timestamp, unique } from 'drizzle-orm/pg-core';
 
 /**
  * Better Auth's tables (P0-23a).
@@ -57,6 +57,17 @@ export const authUsers = pgTable(
     emailVerified: boolean('email_verified').notNull().default(false),
 
     image: text('image'),
+
+    /**
+     * Required by the `twoFactor` plugin, not by us (P0-45).
+     *
+     * Better Auth 1.7.2 merges a `twoFactorEnabled` field into the *user* model
+     * when that plugin is registered, and its own enable/disable endpoints
+     * write to it. Mounting the plugin without this column fails at the first
+     * `updateUser`, which is a runtime failure in the middle of MFA setup
+     * rather than a startup one.
+     */
+    twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
 
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -122,6 +133,19 @@ export const authAccounts = pgTable(
     accountId: text('account_id').notNull(),
     providerId: text('provider_id').notNull(),
 
+    /**
+     * What actually identifies an account, as of Better Auth 1.7 (P0-45).
+     *
+     * `createLocalAccountIssuer('credential')` for email/password;
+     * `createOAuthAccountIssuer(provider.id)` — the OIDC issuer — for the rest.
+     * It exists because `provider_id` is not specific enough: one generic-OAuth
+     * provider can front several issuers (two Keycloak realms, two Okta orgs),
+     * and the same `account_id` in each is a *different person*.
+     *
+     * Required, and not in the P0-23a spec, which predates the 1.7 change.
+     */
+    issuer: text('issuer').notNull(),
+
     accessToken: text('access_token'),
     refreshToken: text('refresh_token'),
     idToken: text('id_token'),
@@ -142,8 +166,17 @@ export const authAccounts = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
   (table) => [
-    /** One account per provider per user — linking twice is a bug, not a fact. */
-    unique('auth_accounts_provider_account_unique').on(table.providerId, table.accountId),
+    /**
+     * One account per *issuer* per external id — not per provider.
+     *
+     * P0-23a keyed this on `(provider_id, account_id)`, which is too strict now
+     * that `issuer` exists: it would reject the same `account_id` arriving from
+     * two Keycloak realms behind one provider, which are two different people.
+     * `(issuer, account_id)` is the pair Better Auth 1.7 actually looks accounts
+     * up by (`internalAdapter.findAccountByKey`), so it is the pair the database
+     * should enforce.
+     */
+    unique('auth_accounts_issuer_account_unique').on(table.issuer, table.accountId),
 
     index('auth_accounts_user_idx').on(table.userId),
   ],
@@ -198,6 +231,23 @@ export const authTwoFactor = pgTable(
 
     /** Hashed, never plain: a backup code is a password with a short life. */
     backupCodes: text('backup_codes').notNull(),
+
+    /**
+     * The three fields below are the plugin's own, and they are the reason
+     * P0-45 needed a migration despite P0-23a creating this table (P0-45).
+     *
+     * `verified` distinguishes a secret that has been proven against a real
+     * code from one merely generated — enrolling without it means a user can
+     * lock themselves out with a misconfigured authenticator app.
+     *
+     * `failedVerificationCount` and `lockedUntil` are the plugin's brute-force
+     * guard. A six-digit TOTP is 10^6 codes with a ±1-step window, which is
+     * guessable at speed without a lockout, so these are load-bearing rather
+     * than bookkeeping.
+     */
+    verified: boolean('verified').notNull().default(true),
+    failedVerificationCount: integer('failed_verification_count').notNull().default(0),
+    lockedUntil: timestamp('locked_until', { withTimezone: true, mode: 'date' }),
 
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },

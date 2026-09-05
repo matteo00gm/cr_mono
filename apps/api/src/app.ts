@@ -1,7 +1,10 @@
 import process from 'node:process';
 import { Hono } from 'hono';
 
+import type { AppEnv } from './env.js';
+import type { AuthPort } from './middleware/auth.js';
 import { errorHandler, normaliseThrown, notFoundHandler } from './middleware/error.js';
+import { DASHBOARD_PREFIX, WIDGET_PREFIX } from './routes.js';
 import { requestContext } from './middleware/logger.js';
 import { createDashboardApp } from './surfaces/dashboard.js';
 import { createWidgetApp } from './surfaces/widget.js';
@@ -31,8 +34,21 @@ import { createWidgetApp } from './surfaces/widget.js';
  * duplicate routes, where the first registration wins and the second is dead
  * code that looks live.
  */
-export const createApp = (): Hono => {
-  const app = new Hono();
+export interface AppOptions {
+  /**
+   * The configured Better Auth instance.
+   *
+   * Required rather than optional, and a narrow port rather than the library's
+   * own type. Optional would mean an app that silently serves the dashboard
+   * with no authentication when the wiring is wrong, which is the one failure
+   * mode nothing downstream could detect; the port means the suite hands in a
+   * fake and needs neither a container nor a `DATABASE_URL`.
+   */
+  readonly auth: AuthPort;
+}
+
+export const createApp = ({ auth }: AppOptions): Hono<AppEnv> => {
+  const app = new Hono<AppEnv>();
 
   /*
    * Registered first, and that is load-bearing rather than tidy. Hono matches
@@ -80,8 +96,8 @@ export const createApp = (): Hono => {
    */
   app.get('/v1/health', (c) => c.json({ status: 'ok' as const, sha: buildSha() }));
 
-  app.route('/v1/dashboard', createDashboardApp());
-  app.route('/v1/widget', createWidgetApp());
+  app.route(DASHBOARD_PREFIX, createDashboardApp({ auth }));
+  app.route(WIDGET_PREFIX, createWidgetApp());
 
   return app;
 };

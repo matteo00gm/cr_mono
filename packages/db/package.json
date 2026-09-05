@@ -25,6 +25,10 @@
     "./test-support": {
       "types": "./dist/client.d.ts",
       "default": "./dist/client.js"
+    },
+    "./auth": {
+      "types": "./dist/auth-db.d.ts",
+      "default": "./dist/auth-db.js"
     }
   },
   "files": [

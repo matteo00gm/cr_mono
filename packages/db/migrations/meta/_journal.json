@@ -197,6 +197,13 @@
       "when": 1788505642266,
       "tag": "0027_memberships_user_fk",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1788572055666,
+      "tag": "0028_better_auth_1_7_fields",
+      "breakpoints": true
     }
   ]
 }

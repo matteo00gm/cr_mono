@@ -1119,9 +1119,9 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 
 **One low-numbered row is *not* done**, and its position in the table is misleading: **P0-17a** was blocked on the API Lambda origin, which P0-54 now provides.
 
-**State of `packages/db`:** 22 tables across 16 schema modules, migrations `0000`–`0027` (**the next one is `0028`**), 25 integration suites / 248 tests, per-package coverage gates passing, and `pnpm db:generate` reporting no drift. **RLS is live**: enabled and forced on all 15 policy-carrying tables, so any new suite must set tenant context — see `test/support/tenant.ts`. The five `auth_*` tables carry no policy and are out of that count by design (P0-23a).
+**State of `packages/db`:** 22 tables across 16 schema modules, migrations `0000`–`0028` (**the next one is `0029`**), 26 integration suites / 258 tests, per-package coverage gates passing, and `pnpm db:generate` reporting no drift. **RLS is live**: enabled and forced on all 15 policy-carrying tables, so any new suite must set tenant context — see `test/support/tenant.ts`. The five `auth_*` tables carry no policy and are out of that count by design (P0-23a).
 
-**State of the repo overall:** 31 unit suites / 184 tests across all packages, plus the integration suites above.
+**State of the repo overall:** 38 unit suites / 302 tests across all packages, plus the integration suites above. `apps/api` exists as of P0-54 and carries the two route surfaces, the error handler, structured logging and the session guard.
 
 **Three things that will otherwise mislead you:**
 
@@ -1196,7 +1196,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P0-53 | `audit_log` writer | helper + actor/ip/ua capture | 31,47 |
 | ✅ P0-54 | ⛔ `apps/api`: Hono + Lambda | Function URL, BUFFERED handler, route groups | 42 |
 | ✅ P0-55 | API: error handler + logging | structured JSON, `tenant_id` + `request_id` on every line | 54 |
-| P0-56 | 🔒 Log redaction serializer | **allowlist**, not denylist; test with secrets and PII fixtures | 55 |
+| ✅ P0-56 | 🔒 Log redaction serializer | **allowlist**, not denylist; test with secrets and PII fixtures | 55 |
 | P0-57 | `apps/dashboard`: Vite+Preact | routing, Better Auth client, layout shell | 42,45 |
 | P0-58 | SST: dashboard static deploy | S3 + CloudFront behaviour, cache invalidation | 17,57 |
 | P0-59 | ⛔ `docs/` scaffold + ADR system | template, index, ~15 ADRs seeded from Locked Decisions | 01 |
@@ -2685,9 +2685,28 @@ Middleware attaches `{ userId }` and **nothing else** — no tenant, no role. Th
 
 **The `withTenant` exception, which must be scoped tightly.** Better Auth queries `auth_*` tables **outside** any tenant context, because you must identify the user before you can resolve their tenant. That is a second sanctioned path to the database and therefore exactly the kind of thing that erodes the P0-19 invariant. Contain it: the adapter gets its own narrowly-scoped accessor, P0-09's dependency-cruiser rule gains one explicit exception naming that file, and a comment states why. An exception with a written reason survives review; an unexplained one becomes precedent.
 
+**Better Auth 1.7.2 needs four columns P0-23a could not have known about, so this task carries a migration** *(finding).* Obtained from the library's own `getAuthTables()` rather than by reading docs, after the first attempt failed at runtime:
+
+- `auth_accounts.issuer` **(required)** — new in 1.7, where account identity became `(issuer, account_id)`. It exists because `provider_id` is not specific enough: one generic-OAuth provider can front several issuers (two Keycloak realms, two Okta orgs) and the same `account_id` in each is a *different person*. **P0-23a's `(provider_id, account_id)` unique constraint is therefore too strict and is replaced** — it would reject the second realm's user as a duplicate.
+- `auth_users.two_factor_enabled`, and `verified` / `failed_verification_count` / `locked_until` on `auth_two_factor` — the `twoFactor` plugin merges the first into the *user* model and owns the other three. The last two are its brute-force guard: a six-digit TOTP with a ±1-step window is guessable at speed without a lockout.
+
+Migration `0028` is safe precisely because these tables are still empty, which is the same argument P0-23a made for creating `auth_two_factor` up front — adding it later is a data migration against a table holding secrets.
+
+**`basePath` must be the *mounted* path, not `/auth`** *(finding, and the reason this task grew an integration suite).* Hono hands Better Auth `c.req.raw`, whose URL is not rewritten by the mount, so a `basePath` of `/auth` matches nothing once the app sits under `/v1/dashboard` and **every auth endpoint 404s**. It is also what reset and OAuth callback URLs are built from, so a merely route-correct value still emails people links that go nowhere. The first draft had it wrong and **the entire unit suite stayed green**, because the fake `getSession` never exercised the mount — which is why `vitest.integration.config.ts` was widened to `{apps,packages}/*` and `apps/api/test/auth.integration.test.ts` now drives the real library against real Postgres.
+
+**The P0-64 placeholder must resolve, not throw** *(decision, and a security one).* Better Auth calls `sendResetPassword` **only when the address belongs to a real user**. A stub that threw would make password reset 500 for real addresses and 200 for made-up ones — **an account-enumeration oracle manufactured by the placeholder itself**, and precisely what P0-46's enumeration group exists to prevent. It therefore logs at error and resolves, and there is a test asserting the two responses are identical.
+
+**`createAuth` is a factory returning a narrow interface, not the module-level `auth` object sketched above** *(correction).* The singleton would build the drizzle adapter at import time, so merely importing the module from the worker or a test opens a client, and it would bake in a `sendResetPassword` no call site can see. The narrow return type is not stylistic either: the fully inferred type reaches into zod's internals, which pnpm's isolated `node_modules` makes unnameable, and **declaration emit fails outright with TS2742**. Narrowing to the two members the application uses fixes the build and keeps a library swap to one file. `apps/api` declares the same two as its own port, so its tests need neither a container nor a `DATABASE_URL`.
+
+**The `withTenant` exception, as built.** The un-scoped accessor is `packages/db/src/auth-db.ts`, reachable only as the `@catalogorosso/db/auth` subpath — the same treatment as `/test-support`. That subpath is **named in the P0-09 rule's targets**, so importing it is a violation by default, with exactly one exception: `packages/core/src/auth.ts`. Verified by adding a second importer in a scratch commit and confirming `pnpm boundaries` fails. Without the subpath in the rule's `to` pattern the exception would have been unenforceable, since the rule's targets are driver packages and `@catalogorosso/db` is not one of them.
+
+**The dashboard now answers 401 before 404 on any unmatched path** *(consequence worth stating).* The guard matches `*`, so an anonymous caller cannot tell a route that exists from one that does not — otherwise the dashboard's whole route table is enumerable without signing in. Same reasoning as §3.5's "cross-tenant id returns 404, not 403", read in the other direction. Public routes on that surface (`/auth/*` and the surface marker) sit **above** the guard, and both halves of that ordering are asserted.
+
+**Infra arrived here too**, as P0-54 recorded it would: the API function joins the VPC (RDS has no inbound path from outside it), and gains `DATABASE_URL` plus a generated `auth/secret` SSM parameter, granted through `parameterReadPermissions` so the deploy-time paths stay refused. `AUTH_BASE_URL` is the CloudFront domain rather than the Function URL — a reset link pointing at the raw origin would bypass the edge and break when the origin moved.
+
 **Tests.** P0-46.
 
-**Files.** `packages/core/src/auth.ts`, `apps/api/src/middleware/auth.ts`, dependency-cruiser exception. **~130 lines.**
+**Files.** `packages/core/src/auth.ts`, `packages/db/src/auth-db.ts`, `apps/api/src/{env,routes}.ts`, `apps/api/src/middleware/auth.ts`, migration `0028` + reverse, dependency-cruiser exception, `infra/{api,config}.ts`. **~130 lines.**
 
 ---
 

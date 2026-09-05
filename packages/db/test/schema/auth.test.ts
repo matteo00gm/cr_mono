@@ -88,10 +88,49 @@ describe('auth_accounts', () => {
     expect(users.columns.map((column) => column.name)).not.toContain('password');
   });
 
-  it('refuses the same provider account twice', () => {
-    expect(accounts.uniqueConstraints.map((c) => c.name)).toContain(
-      'auth_accounts_provider_account_unique',
-    );
+  it('is unique on (issuer, account_id), not on (provider_id, account_id)', () => {
+    /*
+     * Changed in P0-45, and the looser key is the correct one.
+     *
+     * Better Auth 1.7 scopes account identity by `issuer` because `provider_id`
+     * is not specific enough: one generic-OAuth provider can front several
+     * issuers — two Keycloak realms, two Okta orgs — and the same `account_id`
+     * in each belongs to a *different person*. The P0-23a constraint would have
+     * rejected the second of them as a duplicate.
+     */
+    const names = accounts.uniqueConstraints.map((c) => c.name);
+
+    expect(names).toContain('auth_accounts_issuer_account_unique');
+    expect(names).not.toContain('auth_accounts_provider_account_unique');
+  });
+
+  it('requires an issuer', () => {
+    // Not optional: an account row with no issuer cannot be looked up by
+    // `findAccountByKey`, so it is a row nobody can ever sign in with.
+    const issuer = accounts.columns.find((column) => column.name === 'issuer');
+
+    expect(issuer?.notNull).toBe(true);
+  });
+});
+
+describe('the fields Better Auth 1.7 requires', () => {
+  it('carries the twoFactor plugin columns P0-23a could not have known about', () => {
+    /*
+     * The plugin merges `twoFactorEnabled` into the *user* model and needs
+     * three of its own on `auth_two_factor`. P0-23a created that table before
+     * the plugin was wired, so none of them existed — and the failure would
+     * have been a runtime one in the middle of MFA enrolment.
+     *
+     * `failedVerificationCount` and `lockedUntil` are the brute-force guard: a
+     * six-digit TOTP with a ±1-step window is guessable at speed without one,
+     * so they are load-bearing rather than bookkeeping.
+     */
+    const twoFactor = getTableConfig(authTwoFactor).columns.map((c) => c.name);
+
+    expect(users.columns.map((c) => c.name)).toContain('two_factor_enabled');
+    expect(twoFactor).toContain('verified');
+    expect(twoFactor).toContain('failed_verification_count');
+    expect(twoFactor).toContain('locked_until');
   });
 });
 
