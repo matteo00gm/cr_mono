@@ -98,7 +98,7 @@ export default {
         // tenant, and the point of one sanctioned path is that there is one
         // thing to audit.
         pathNot:
-          '^packages/db/src/(client|with-tenant|deploy|auth-db)[.]ts$' +
+          '^packages/db/src/(client|with-tenant|with-user|deploy|auth-db|memberships)[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
           '|^packages/core/src/auth[.]ts$' +

@@ -1,10 +1,12 @@
 import process from 'node:process';
 import { createAuth } from '@catalogorosso/core';
+import { readMembershipsForUser } from '@catalogorosso/db';
 import { startTestDatabase, type TestDatabase } from '@catalogorosso/testing';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/app.js';
+
 import { AUTH_PUBLIC_PATH, DASHBOARD_PREFIX, WIDGET_PREFIX } from '../src/routes.js';
 
 /**
@@ -62,6 +64,10 @@ beforeAll(async () => {
         return Promise.resolve();
       },
     }),
+
+    // The real thing, under RLS — the `memberships` policy admits exactly
+    // the caller's own rows when only `app.user_id` is set (P0-47).
+    readMemberships: readMembershipsForUser,
   });
 }, 180_000);
 

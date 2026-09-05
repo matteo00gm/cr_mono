@@ -22,6 +22,30 @@ export {
   type DbTransaction,
 } from './with-tenant.js';
 
+/**
+ * The user-scoped read for tenant resolution (P0-47).
+ *
+ * Exported from here alongside `withTenant` rather than hidden behind a
+ * subpath, because it is **not** an exception to the rule above — it is a
+ * second scoped context, and everything it can reach is still under RLS. The
+ * `memberships` policy admits `user_id = app.user_id` on read and nothing else
+ * does, so this context can see exactly the caller's own membership rows.
+ * Contrast `@catalogorosso/db/auth`, which really does hand out an un-scoped
+ * connection and is therefore gated by the P0-09 rule.
+ */
+export { InvalidUserIdError, NestedUserContextError, withUser } from './with-user.js';
+
+/**
+ * The membership read itself, so no app has to write the query.
+ *
+ * It lives here rather than in `apps/api` because writing it there would mean
+ * the app importing `drizzle-orm`, which the P0-09 rule forbids — and the right
+ * answer to that was to put the query where queries belong, not to add an
+ * exception. The decision made *with* these rows stays in `packages/core`,
+ * which has no database at all.
+ */
+export { readMembershipsForUser, type MembershipRole, type UserMembership } from './memberships.js';
+
 export type { Database } from './client.js';
 
 /**

@@ -1,7 +1,9 @@
+import type { MembershipReader } from '@catalogorosso/core';
 import { Hono } from 'hono';
 
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
+import { resolveTenant } from '../middleware/tenant.js';
 import { AUTH_ROUTE_PREFIX } from '../routes.js';
 
 /**
@@ -18,7 +20,13 @@ import { AUTH_ROUTE_PREFIX } from '../routes.js';
  * `Access-Control-Allow-Credentials: false`). Two instances make that
  * structural instead of a thing reviewers have to notice.
  */
-export const createDashboardApp = ({ auth }: { auth: AuthPort }): Hono<AppEnv> => {
+export interface DashboardOptions {
+  readonly auth: AuthPort;
+  /** Reads the caller's memberships, under RLS. See `src/memberships.ts`. */
+  readonly readMemberships: MembershipReader;
+}
+
+export const createDashboardApp = ({ auth, readMemberships }: DashboardOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
   /*
@@ -52,15 +60,43 @@ export const createDashboardApp = ({ auth }: { auth: AuthPort }): Hono<AppEnv> =
   app.use('*', requireUser(auth));
 
   /**
-   * Who the caller is — and deliberately not what they can do.
+   * Who the caller is, and which wineries they belong to.
    *
-   * The smallest possible proof that the session middleware works end to end,
-   * and the route the dashboard shell (P0-57) needs before it can render
-   * anything. P0-47 extends this with the tenant and role once those are
-   * resolved from `memberships`; it does not belong here, because a role is a
-   * property of a membership rather than of a user.
+   * **Above tenant resolution, deliberately.** A user with more than one
+   * membership has to pick one, and they cannot pick from a list they are not
+   * allowed to fetch — so this route has to work without an active tenant. It
+   * is the dashboard shell's bootstrap call (P0-57).
+   *
+   * It reports no role at top level, on purpose. A role belongs to a
+   * membership, not to a user, and a `role` field beside `userId` is the shape
+   * that invites somebody to cache it per user and hand an EDITOR on one
+   * winery OWNER powers on another.
    */
-  app.get('/me', (c) => c.json({ userId: c.get('userId') }));
+  app.get('/me', async (c) => {
+    const memberships = await readMemberships(c.get('userId'));
+
+    return c.json({ userId: c.get('userId'), memberships });
+  });
+
+  /*
+   * ---- Everything below this line is scoped to one winery ----------------
+   *
+   * `tenantId` and `role` come from a single `memberships` row and are the only
+   * source a handler may use. A route added above this call has no tenant, and
+   * a `c.get('tenantId')` in it is undefined at runtime while typechecking
+   * perfectly — which is why the routes that need one live below.
+   */
+  app.use('*', resolveTenant(readMemberships));
+
+  /**
+   * The active winery, as resolved — not as requested.
+   *
+   * Small, and it earns its place: it is the assertion P0-48 hangs off. A test
+   * signs in as a member of tenant A, sends `x-active-tenant: B`, and reads the
+   * effective tenant back from here — an assertion on returned data rather than
+   * on a mock.
+   */
+  app.get('/context', (c) => c.json({ tenantId: c.get('tenantId'), role: c.get('role') }));
 
   return app;
 };

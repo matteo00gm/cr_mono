@@ -1186,7 +1186,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P0-23a | 🔒 Better Auth schema tables | `auth_*` prefix (`user` is a reserved word), text ids, cookie cache; **not** tenant-scoped → P0-41 allowlist | 22 |
 | ✅ P0-45 | ⛔ 🔒 Better Auth setup + session middleware | Postgres-backed sessions, no JWKS fetch through NAT; tightly-scoped `withTenant` exception | 42,23a |
 | P0-64 | ⛔ 🔒 Email infrastructure (Resend) | SPF/DKIM/DMARC, one `sendEmail` seam, **staggered sends** (100/day cap), bounce suppression | 11 |
-| P0-46 | 🔒 Auth security suite | session integrity, **account enumeration incl. timing**, reset-token reuse, auth rate limits, surface isolation | 45 |
+| ✅ P0-46 | 🔒 Auth security suite | session integrity, **account enumeration incl. timing**, reset-token reuse, auth rate limits, surface isolation | 45 |
 | P0-47 | ⛔ 🔒 Membership + tenant resolution | tenant derived from `memberships`, never from request | 45 |
 | P0-48 | 🔒 Test + lint: tenant not from input | no handler may read a tenant id from body/query/header | 47 |
 | P0-49 | ⛔ 🔒 Capability table + policy module | declarative, OWNER/EDITOR; no inline role checks | 47 |
@@ -2766,9 +2766,28 @@ WHERE user_id = $1 AND tenant_id = $2;      -- one row, or nothing
 ```
 No row → **404, not 403** (§3.5, so tenant existence is not an enumeration oracle). One row → both values come from it, together.
 
+**No un-scoped read is needed, because P0-37 already wrote the policy for this** *(the design decision this task turns on).* Reading `memberships` before a tenant is known looks like it demands either an un-scoped connection — a second hole beside the Better Auth one, and a much wider one, since `memberships` is the table authorisation is built on — or a `SECURITY DEFINER` function, which is the same thing wearing a hat. Neither is necessary. The policy is deliberately not the boilerplate:
+
+```sql
+USING      (tenant_id = app.tenant_id OR user_id = app.user_id)
+WITH CHECK (tenant_id = app.tenant_id)
+```
+
+So `withUser(userId, …)` sets **only** `app.user_id` and RLS then admits exactly the caller's own membership rows — not another user's, not another tenant's, and nothing in any other table, since no other policy reads that GUC. Asserted against a real container rather than reasoned about, including the case that matters: two users sharing one winery, so a policy that leaked by *tenant* instead of by user would be caught. Note what `WITH CHECK` omits: writing stays tenant-scoped, so this context can read a membership and can never create one — otherwise any authenticated user could insert themselves into any tenant.
+
+**`withUser` is exported from `packages/db`'s main entry, unlike `@catalogorosso/db/auth`** — and the difference is the point. It is not an exception to the P0-19 rule; it is a second *scoped* context, and everything it reaches is still under RLS. Only the Better Auth accessor really hands out an un-scoped connection, and only that one is gated.
+
+**The active-tenant header is not signed, deliberately.** Signing would protect a value that is re-checked against the database on every request anyway — adding a key to rotate and a failure mode to debug in exchange for nothing. The security property comes from the re-validation, not from the transport, and a stale header (membership since revoked) takes the same path as a forged one.
+
+**Zero memberships is 403; a tenant the caller does not belong to is 404.** Both are in the spec and the contrast is easy to lose. Nothing is being *named* in the first case, so there is no existence to leak — and a 404 would send an invited-then-revoked user looking for a broken URL. In the second, §3.5 applies: a 403 for a real winery and a 404 for a made-up one lets anyone with an account map which tenant ids exist.
+
+**Several memberships and no selection is refused, not guessed** *(the spec is silent).* Defaulting to the first would silently write to a winery the user did not mean, and "first" is whatever the query planner felt like. The dashboard learns its options from `/me`, which is therefore mounted **above** this middleware — a user with several memberships cannot choose from a list they are not allowed to fetch.
+
+**The P0-09 rule caught the first draft, and the fix was not an exception.** Writing the membership query in `apps/api` meant the app importing `drizzle-orm`, which `no-raw-db-outside-with-tenant` forbids. Rather than widening the rule, the query moved to `packages/db/src/memberships.ts` where queries belong. The layering that fell out is better than the one intended: **db** owns the query, **core** owns the decision and has no database at all, **api** wires them together.
+
 **Tests.** P0-48.
 
-**Files.** `apps/api/src/middleware/tenant.ts`. **~90 lines.**
+**Files.** `packages/db/src/{with-user,memberships}.ts`, `packages/core/src/members.ts`, `apps/api/src/middleware/tenant.ts`, `apps/api/src/env.ts`. **~90 lines.**
 
 ---
 

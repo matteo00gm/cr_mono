@@ -1,3 +1,5 @@
+import type { Role } from '@catalogorosso/core';
+
 /**
  * The Hono context variables every handler can read (P0-45).
  *
@@ -20,5 +22,18 @@ export interface AppEnv {
   Variables: {
     /** Set by `requireUser`. Absent on the widget surface, always. */
     userId: string;
+
+    /**
+     * Set by `resolveTenant`, from a `memberships` row — never from the
+     * request. Every database call scopes on this and nothing else.
+     */
+    tenantId: string;
+
+    /**
+     * From the **same** membership row as `tenantId`, and that pairing is the
+     * point. A role read separately, or cached per user, grants somebody who is
+     * EDITOR on one winery and OWNER on another the higher role on both.
+     */
+    role: Role;
   };
 }

@@ -1,8 +1,10 @@
 import process from 'node:process';
 import { createAuth } from '@catalogorosso/core';
+import { readMembershipsForUser } from '@catalogorosso/db';
 import { handle } from 'hono/aws-lambda';
 
 import { createApp } from './app.js';
+
 import { logger } from './middleware/logger.js';
 import { AUTH_PUBLIC_PATH } from './routes.js';
 
@@ -69,6 +71,6 @@ export const auth = createAuth({
 });
 
 /** Built once per container, so route registration is not per-invocation work. */
-export const handler = handle(createApp({ auth }));
+export const handler = handle(createApp({ auth, readMemberships: readMembershipsForUser }));
 
 export { createApp } from './app.js';
