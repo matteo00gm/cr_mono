@@ -1109,19 +1109,25 @@ Anti-rot checks in CI, each cheap:
 
 **`✅` in the `#` column means merged to `main`.** Verified against the tree at `6a3d2b0`, not from memory: every ✅ row has an artifact on disk, and the database rows have a migration, a hand-written reverse, a unit shape spec and an integration suite.
 
-**Merged:** P0-01 → P0-44, plus P0-21a, P0-21b and P0-23a. **Next in build order: P0-54**, not P0-45 — see below. The one exception in that range is **P0-33a**, added after review and still open — see its row.
+**Merged:** P0-01 → P0-44, plus P0-21a, P0-21b and P0-23a. The one exception in that range is **P0-33a**, added after review and still open — see its row.
 
-**The build order stops following the row numbers here, and the reason is worth stating once.** P0-45 through P0-53 are all application code that mounts on `apps/api`, and `apps/api` is built by **P0-54** — nine rows further down. Its own dependency (P0-42) has been merged since, so P0-54 is unblocked and everything above it is not. The order actually being built is:
+**Built and in review, as one stacked chain:** P0-54, P0-55, P0-56, P0-45, P0-46, P0-47, P0-48, P0-49, P0-50, P0-53. Each is its own PR, based on the previous, and **they must be merged bottom-up in that order** — the ✅ on those rows means "written and green", not "on `main`".
+
+**The build order stops following the row numbers here, and the reason is worth stating once.** P0-45 through P0-53 are all application code that mounts on `apps/api`, and `apps/api` is built by **P0-54** — nine rows further down. Its own dependency (P0-42) was already merged, so P0-54 was unblocked and everything above it was not. The order actually built is:
 
 > **P0-54 → P0-55 → P0-56 → P0-45 → P0-46 → P0-47 → P0-48 → P0-49 → P0-50 → P0-53**
 
-P0-55 and P0-56 come before P0-45 because the error handler must be in place before the first route that can fail in an interesting way, and because P0-53 redacts through P0-56. **P0-64 (Resend) and the two rows depending on it (P0-51, P0-52) are held back**: they need an API key in SSM and a verified sending domain, neither of which can be produced from this repo. P0-45's `sendResetPassword` is wired to a seam with a no-op default until then.
+P0-55 and P0-56 come before P0-45 because the error handler must be in place before the first route that can fail in an interesting way, and because P0-53 redacts through P0-56. **P0-64 (Resend) and the two rows depending on it (P0-51, P0-52) are held back**: they need an API key in SSM and a verified sending domain, neither of which can be produced from this repo. P0-45's `sendResetPassword` is a required argument rather than a defaulted one, and the API supplies a placeholder that logs and resolves — see P0-45 for why it must not throw.
 
-**One low-numbered row is *not* done**, and its position in the table is misleading: **P0-17a** was blocked on the API Lambda origin, which P0-54 now provides.
+**Next in build order after this chain: P0-51 and P0-52** once P0-64 is possible, and **P0-57** (`apps/dashboard`), whose dependencies P0-42 and P0-45 are now both satisfied.
+
+**One low-numbered row is *not* done**, and its position in the table is misleading: **P0-17a** was blocked on the API Lambda origin, which P0-54 now provides. It has a second reason to land soon: P0-46 needs to know what CloudFront actually forwards as the client address, or the auth rate limiter degrades to a single shared bucket.
+
+**State of `apps/api`:** two route surfaces, a session guard, tenant resolution, a capability table with a fail-closed boot check, structured logging with allowlist redaction, and a central error handler. 47 unit suites / 433 tests and 30 integration suites / 304 tests across the repo.
 
 **State of `packages/db`:** 22 tables across 16 schema modules, migrations `0000`–`0028` (**the next one is `0029`**), 26 integration suites / 258 tests, per-package coverage gates passing, and `pnpm db:generate` reporting no drift. **RLS is live**: enabled and forced on all 15 policy-carrying tables, so any new suite must set tenant context — see `test/support/tenant.ts`. The five `auth_*` tables carry no policy and are out of that count by design (P0-23a).
 
-**State of the repo overall:** 38 unit suites / 302 tests across all packages, plus the integration suites above. `apps/api` exists as of P0-54 and carries the two route surfaces, the error handler, structured logging and the session guard.
+**State of the repo overall:** 47 unit suites / 433 tests across all packages, plus the integration suites above.
 
 **Three things that will otherwise mislead you:**
 
