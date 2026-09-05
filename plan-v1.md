@@ -1195,7 +1195,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P0-52 | 🔒 Last-OWNER guard + test | cannot remove or demote the final OWNER | 51 |
 | P0-53 | `audit_log` writer | helper + actor/ip/ua capture | 31,47 |
 | ✅ P0-54 | ⛔ `apps/api`: Hono + Lambda | Function URL, BUFFERED handler, route groups | 42 |
-| P0-55 | API: error handler + logging | structured JSON, `tenant_id` + `request_id` on every line | 54 |
+| ✅ P0-55 | API: error handler + logging | structured JSON, `tenant_id` + `request_id` on every line | 54 |
 | P0-56 | 🔒 Log redaction serializer | **allowlist**, not denylist; test with secrets and PII fixtures | 55 |
 | P0-57 | `apps/dashboard`: Vite+Preact | routing, Better Auth client, layout shell | 42,45 |
 | P0-58 | SST: dashboard static deploy | S3 + CloudFront behaviour, cache invalidation | 17,57 |
@@ -2898,9 +2898,20 @@ Implementation: `POST .../members/invite` requires `members:manage`, creates an 
 
 **How.** Pino serializers where objects are reduced to an explicit set of safe keys and everything else becomes `[redacted]`. Pattern-scrub the remaining strings for `sk_live_`, `pk_live_`, `eyJ` (JWT prefix), `Bearer `, and email addresses. Applies to error metadata and audit metadata too.
 
+**This lives in `packages/security`, not `apps/api`** *(correction).* The Files line below is not achievable as written: **P0-53 redacts audit metadata through this serializer, and `packages/core/src/audit.ts` cannot import an app** — the P0-09 boundary rule forbids it, and rightly. A second copy of the rules for audit rows is exactly how the two drift, so the module moves to `packages/security/src/redact.ts` where both callers can reach it. Two things follow, both good: it inherits the **100% branch coverage bar** that a 🔒 module should carry anyway, and P2-33's pre-prompt PII scrubbing gets `scrubString` for free rather than reinventing it.
+
+**Two pino behaviours defeat the redaction if left at their defaults, and neither is documented** *(findings, both verified by probing the pinned build).*
+
+1. **`formatters.log` runs *before* serializers**, and pino's default `err` serializer then rewrites the key from the original `Error` — silently discarding whatever the formatter produced and emitting an unredacted `message` and `stack`. A connection string quoted in a driver error reaches CloudWatch in full. The default serializer is therefore replaced with the identity function, and `serialiseError` does the work inside the formatter.
+2. **`msg` never reaches `formatters.log` at all** — the message string is assembled afterwards, so `logger.info('failed with token sk_live_…')` is published verbatim. Only the `hooks.logMethod` hook can reach the message argument, so the scrubbing runs there as well.
+
+**`message` and `code` are deliberately *not* allowlisted.** The allowlist applies at every depth for every caller, so a key added for one call site governs every other use of that name — and a visitor's chat message is a `message` (PII, §3.7) while an email verification code is a `code` (P0-64). Errors reach the log through `serialiseError` instead, which is a path only errors take, and the allowlist has its own guard test asserting these names stay out of it.
+
+**Key-shaped fixtures are built at runtime, in `packages/testing/src/secrets.ts`** *(addition).* A literal `sk_live_` plus 24 characters anywhere in this tree is found by the P0-08 history scan and cannot be edited out once pushed — the plan's own warning about a scanner flagging itself. They are shared rather than local because P0-46 and P2-13 will need the same shapes. Note the fixtures use `[...].join('_')` rather than a template literal: `@typescript-eslint/no-unnecessary-template-expression` flags `${'live'}` and offers to inline it, and `eslint --fix` in the pre-commit hook would take that offer, reintroducing the literal.
+
 **Tests.** Fixture objects containing a secret key, a JWT, a password field, an email, and a nested secret are all redacted. **A newly added unknown field is redacted by default** — that assertion is the point of the whole PR.
 
-**Files.** `apps/api/src/middleware/redact.ts`, tests. **~90 lines.**
+**Files.** `packages/security/src/redact.ts`, `packages/testing/src/secrets.ts`, logger wiring in `apps/api`, tests. **~90 lines.**
 
 ---
 

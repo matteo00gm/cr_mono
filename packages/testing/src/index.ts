@@ -7,3 +7,4 @@
  */
 export * from './db-harness.js';
 export * from './factories.js';
+export * from './secrets.js';
