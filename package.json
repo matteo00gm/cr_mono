@@ -28,7 +28,8 @@
     "prepare": "husky",
     "db:seed": "node scripts/db-seed.mjs",
     "adr:check": "node scripts/check-adrs.mjs",
-    "agents:check": "node scripts/check-agents-md.mjs"
+    "agents:check": "node scripts/check-agents-md.mjs",
+    "changelog": "node scripts/changelog.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [
@@ -40,6 +41,7 @@
     ]
   },
   "devDependencies": {
+    "@commitlint/cli": "^21.2.2",
     "@eslint/js": "^10.0.1",
     "@testcontainers/postgresql": "^12.1.0",
     "@vitest/coverage-v8": "^4.1.11",

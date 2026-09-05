@@ -1205,7 +1205,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P0-58 | SST: dashboard static deploy | S3 + CloudFront behaviour, cache invalidation | 17,57 |
 | ✅ P0-59 | ⛔ `docs/` scaffold + ADR system | template, index, ~15 ADRs seeded from Locked Decisions | 01 |
 | ✅ P0-60 | ⛔ `AGENTS.md` + the invariants | root + per-package; the prohibitions a model cannot infer (§8.3) | 59 |
-| P0-61 | PR template + commitlint + rationale check | required `## Why`, conventional commits, generated CHANGELOG | 06 |
+| ✅ P0-61 | PR template + commitlint + rationale check | required `## Why`, conventional commits, generated CHANGELOG | 06 |
 | P0-62 | ⛔ OpenAPI generation + drift check | from route table + `drizzle-zod`; route missing description/capability/example fails CI | 42,54 |
 | P0-63 | Generated typed API client | widget + dashboard import it; makes endpoint usage find-referenceable (§8.4) | 62 |
 
@@ -3163,9 +3163,25 @@ Symlink or duplicate to `CLAUDE.md` for tools that look for that name.
 
 Add one rule with teeth: **a PR that contradicts an existing ADR must reference the superseding ADR in its body.** Not automatable in general, so make it a line in the PR checklist and a reviewer's responsibility.
 
+**Not `@commitlint/config-conventional`** *(correction, and the row contradicts the rest of the plan).* This repository has a convention already — roughly forty commits of `P0-NN: what changed, in plain words`, which the plan itself mandates — and conventional commits would reject every one of them. The choice is not arbitrary either way: conventional commits earn their keep through automated semver and changelog grouping, and this is a private monorepo where every package is `private: true` at `0.0.0` and nothing is published. What `feat`/`fix`/`chore` would buy is grouping, and the **task id groups better** — it points at a specification saying what the change was *for*. So commitlint enforces the convention that exists, in two shapes: a task id, or a short capitalised area (`CI:`, `Plan:`, `Deps:`) for changes belonging to no backlog row.
+
+**Renovate was reconfigured rather than exempted.** Its default `chore(deps): …` would fail the rule, and an exemption would leave two conventions in one history. `commitMessagePrefix: "Deps:"` makes its PRs conform.
+
+**`header-max-length` is 100, not the conventional 72.** These subjects say what changed in plain words rather than naming a type; the longest so far is 90. Truncating them to fit a limit borrowed from a different workflow would cost the thing that makes them worth reading.
+
+**A commit body is not required, deliberately.** The bar is that the reasoning is written down, and this row's mechanism for that is the pull request template, where a reviewer actually reads it. Requiring a body at the hook would only produce commits whose body is `.`.
+
+**The `## Why` check tests for prose, not for the heading** *(implementation note).* A template nobody fills is worse than no template, because it manufactures the appearance of process — the headings are all there and the reviewer skims past them. So the check strips HTML comments (the template's own guidance is not authorship) and applies a low length floor, which catches "see title" without pretending a script can measure quality. **The unfilled template itself fails the check**, which is the property that makes it real.
+
+**The PR body reaches the check by environment variable, never by shell interpolation.** A pull request body is attacker-supplied text, and `run: echo "${{ github.event.pull_request.body }}"` is a script injection with a well-known shape.
+
+**`footer-leading-blank` is off, and the first commit written under this config is why** *(finding).* commitlint parses any line beginning `word:` as the start of a footer. The commit bodies here are prose that routinely quotes configuration — `run: echo …`, `Status: Accepted` — so a paragraph explaining a YAML snippet becomes a "footer" and the prose after it is reported as a body with no leading blank. It rejected the very commit that introduced it. A rule that fires on correct commits is a rule people bypass with `--no-verify`, which switches off the gitleaks and lint-staged hooks at the same time — so the cost of keeping it is a security control, and the cost of dropping it is an unreported malformed trailer.
+
+**Changelog generation is written and tested but wired to nothing** *(scope note).* There is no release: nothing is published and there is no version to cut. It groups by task id rather than by commit type, for the same reason the convention does. Tested from fixture subjects rather than from `git log`, since a test whose expected output is whatever the repository currently contains can only ever pass.
+
 **Tests.** A non-conventional commit is rejected by the hook; a PR with an empty `## Why` fails CI; changelog generation produces expected output from fixture commits.
 
-**Files.** `.github/pull_request_template.md`, `commitlint.config.js`, CI step, changelog config. **~90 lines.**
+**Files.** `.github/pull_request_template.md`, `commitlint.config.js`, `.husky/commit-msg`, `scripts/check-pr-why.mjs`, `scripts/changelog.mjs`, CI step. **~90 lines.**
 
 ---
 
