@@ -5757,18 +5757,115 @@ The fix that *appeared* to work was `ignoredBuiltDependencies` in `pnpm-workspac
 
 What that setting changes, precisely: pnpm **still refuses to run the scripts** — confirmed by the absence of any native build output after a clean install. Only the error is silenced, so the supply-chain protection is intact and what is lost is the *notification* that a future dependency wants to run code at install time. Renovate and the P0-08 audit gate remain the compensating controls. Do not list the unused keys alongside it: config that reads as load-bearing while doing nothing is worse than no config.
 
+### P0-20 to P0-44, and P0-23a — recorded in Part 10, not here
+
+No entries below for that range, and that is a convention change rather than an omission. Those tasks are database work, and every deviation they produced is a statement about a table — so each was written into its own Part 10 section, beside the schema it describes, where somebody reading about `memberships` will actually find it. Searching Part 10 for _(correction)_ and _(finding)_ returns them.
+
+The chain below reverts to logging here as well, because it spans nine files across four packages and no single Part 10 section owns it.
+
+### P0-54 · `apps/api` — three SST defaults were wrong
+
+- **Δ** `architecture`, `runtime` and `memory` all set explicitly. Checked against the pinned v4.17.1 source rather than the docs: SST defaults to `x86_64` (~20% more per GB-second for identical work), `nodejs24.x` (a runtime nothing in this repo has been tested against) and `1024 MB` (double the figure every §5.2a projection rests on).
+- **+** `streaming: false` written down although it is already the default. Flipping a function to `RESPONSE_STREAM` changes the response envelope for every route it serves and needs a different CloudFront cache behaviour.
+- **Δ** Two surface files rather than route groups. `createDashboardApp` and `createWidgetApp` return separate `Hono` instances, because middleware on a shared parent runs for both children — and P2-08's permissive CORS handler reaching the authenticated dashboard is how a cross-origin page reads a seller's catalogue.
+- **+** A test asserting Hono runs middleware in **registration order**, so a `use()` below the `get()` it guards never runs. Undocumented, and the route's own functional tests all still pass when it happens.
+- **Δ** Health at `/v1/health`, not `/health`. §5.1 routes `/v1/*` to this Lambda; a root path answers on the Function URL but never through the edge, so the check would pass while every real caller's path was broken.
+- **⚠** Reserved concurrency deliberately unset — see the open items.
+
+### P0-55 · Error handler — Hono drops non-`Error` throws
+
+- **🔒 Δ** `normaliseThrown()` added. `compose.js` guards its catch with `err instanceof Error && onError`, so `throw 'oops'` **escapes the app entirely**: the invocation fails, the caller gets the runtime's raw 502, and the envelope, the request id and every disclosure rule are bypassed at once. Verified in the pinned 4.13.5 source; not documented.
+- **Δ** Domain errors live in `packages/core/src/errors.ts` and carry **no status codes**. They have to live in a package — P0-52's guard and every other core rule throws them, and packages cannot import apps — and no status, because the same failure means different things to different callers. The map is a `Record<DomainErrorKind, …>`, so adding a kind without deciding its status is a typecheck failure.
+- **🔒 +** `isDomainError` is structural, not `instanceof` alone. Two copies of the module in one bundle would otherwise turn a genuine 404 into a 500 with the caller's message swallowed.
+- **🔒 Δ** The request id is generated, never read from the request. A caller-supplied `X-Request-Id` lets one client stamp every request with the same value, or reuse the id from somebody else's error report.
+- **+** 404 uses the same JSON envelope as every other failure; Hono's default plain-text body gives a JSON client a syntax error on the most common failure there is.
+- **+** Domain errors log at `warn`. Logging expected outcomes at error level is how an alert on the error rate stops meaning anything.
+
+### P0-56 · Log redaction — two pino defaults route around it
+
+- **Δ** Lives in `packages/security`, not `apps/api`. The spec's own placement makes its own requirement impossible: P0-53 redacts audit metadata through this serializer, and `packages/core` cannot import an app.
+- **🔒 Δ** Pino's default `err` serializer replaced with the identity function. `formatters.log` runs **before** serializers, and the default then rewrites the key from the original `Error` — discarding whatever the formatter produced and emitting an unredacted `message` and `stack`.
+- **🔒 Δ** `hooks.logMethod` added. `msg` is assembled after the formatter runs, so `logger.info('failed with token sk_live_…')` is otherwise published verbatim.
+- **Δ** `message` and `code` deliberately absent from the allowlist. It applies at every depth for every caller, and a visitor's chat message is a `message` while an email verification code is a `code`. A guard test asserts they stay out.
+- **+** `packages/testing/src/secrets.ts` — key-shaped fixtures built at runtime, because a literal `sk_live_` plus 24 characters is found by the P0-08 history scan and cannot be edited out once pushed. They use `[...].join('_')` rather than a template literal, because `eslint --fix` in the pre-commit hook would inline `${'live'}`.
+
+### P0-45 · Better Auth — the mount path, and four missing columns
+
+- **🔒 Δ** `basePath` is the **mounted** path (`/v1/dashboard/auth`), not `/auth`. Hono hands over `c.req.raw`, whose URL is not rewritten by the mount, so the shorter value matches nothing and every auth endpoint 404s — and it is what reset links are built from, so a route-correct value still emails links that go nowhere. The first draft had it wrong and **the whole unit suite stayed green**.
+- **+** `vitest.integration.config.ts` widened to `{apps,packages}/*`, the deliberate widening its own comment asked for. Better Auth's wiring cannot be verified against a fake.
+- **Δ** Migration `0028`, which P0-23a's spec could not have anticipated. Obtained from the library's own `getAuthTables()` after a runtime failure: `auth_accounts.issuer` (1.7 scopes account identity by issuer, so **P0-23a's `(provider_id, account_id)` unique constraint is too strict** and is replaced), plus `two_factor_enabled` on the user and `verified` / `failed_verification_count` / `locked_until` on `auth_two_factor`.
+- **🔒 Δ** The P0-64 placeholder **resolves rather than throwing**. Better Auth calls `sendResetPassword` only when the address belongs to a real user, so a stub that threw would 500 for real addresses and 200 for made-up ones — an account-enumeration oracle manufactured by the placeholder.
+- **Δ** `createAuth` is a factory returning a narrow two-member interface. The sketched singleton opens a connection at import; and the fully inferred type reaches into zod's internals, which pnpm's isolated `node_modules` makes unnameable — declaration emit fails with TS2742.
+- **🔒 +** The `withTenant` exception is enforced, not just declared: `@catalogorosso/db/auth` is named in the P0-09 rule's targets with exactly one exempt importer. Verified by planting a second one and watching `pnpm boundaries` fail.
+- **Δ** The dashboard now answers **401 before 404** on any unmatched path, so an anonymous caller cannot map the route table.
+
+### P0-46 · Auth security suite — three ways Lambda disarms it
+
+- **🔒 Δ** **AWS Lambda does not set `NODE_ENV`**, and Better Auth reads it with a default of `'development'`. Rate limiting resolves to `enabled: ?? isProduction`, so every auth endpoint in production would have been **unlimited**.
+- **🔒 Δ** Fixing only that would have been worse. `getIP` falls back to `127.0.0.1` in development and the limiter keys on `(ip, path)` — so enabling limiting alone puts every caller in **one shared bucket per path**, and one attacker exhausting the sign-in limit locks out every user.
+- **Δ** Fixed on both sides: `rateLimit.enabled` and `advanced.ipAddress.ipAddressHeaders` set explicitly so neither depends on the environment, **and** `NODE_ENV=production` set on the function so the root cause is gone.
+- **+** The suite calls from a different IP per group, because Better Auth's memory store is **module-level** and shared across every instance in the process — building a second app does not reset it.
+- **+** `/sign-out` revokes only the presented session, asserted as such rather than left ambiguous; "sign out everywhere" is `/revoke-sessions`, and both are tested.
+- **Δ** `Secure` asserted at the configuration level, not on the wire: Better Auth drops it over plain `http://`, which is what an in-process suite speaks.
+- **⚠** Two gaps recorded rather than closed — see the open items.
+
+### P0-47 · Tenant resolution — the un-scoped read was unnecessary
+
+- **Δ** No un-scoped connection, and no `SECURITY DEFINER`. P0-37 had already written `USING (tenant_id = app.tenant_id OR user_id = app.user_id)` on `memberships`, so `withUser` sets only `app.user_id` and RLS returns exactly the caller's own rows.
+- **🔒 +** That bound asserted against a real container, including the case that would otherwise pass while proving nothing: **two users sharing one winery**, so a policy leaking by tenant instead of by user is caught. Also asserted — a user context can read no other table, and cannot write a membership at all, because `WITH CHECK` stays tenant-only.
+- **Δ** `withUser` is exported from the db package's **main entry**, unlike `@catalogorosso/db/auth`. It is a second _scoped_ context, not an exception.
+- **Δ** The membership query moved to `packages/db`. The P0-09 rule caught the first draft — writing it in `apps/api` meant the app importing `drizzle-orm` — and the fix was not an exception. The layering that fell out is better than the one intended: **db owns queries, core owns decisions and has no database at all, api wires them**.
+- **Δ** Zero memberships is 403; a tenant the caller does not belong to is 404. Both are in the spec and the contrast is easy to lose.
+- **Δ** Several memberships with no selection is refused rather than guessed; `/me` is mounted above the middleware so the caller can fetch the list they must choose from.
+- **Δ** The active-tenant header is **not signed** — signing protects a value re-checked against the database on every request anyway.
+
+### P0-48 · Tenant never from input — the rule needed rewriting for Hono
+
+- **Δ** The spec names Express accessors (`req.body`, `req.query`, …) and **none exist here**. A rule written against the wrong framework's API matches nothing while looking exactly like protection.
+- **🔒 +** The rule matches a **named constant** passed to `header()`/`query()`/`param()`, not just a literal. Without it, hoisting `'x-tenant-id'` into a `const` sidesteps it and the file-level exception becomes decorative.
+- **Δ** Deliberately does _not_ flag `membership.tenantId` or `context.tenantId`. The first draft's bare selector produced **six false positives in existing, correct code**, and a rule that catches everything gets disabled.
+- **+** The rule asserts itself, over fixtures for every forbidden shape, every allowed shape, the exception, and the exception's boundary. Fixtures are written to real paths because `lintText` on a synthetic path fails in the project service **before any rule runs** — which would have made the suite pass while testing nothing.
+- **⚠** Its limit is recorded with a test: matching on identifier names means `const H = 'x-tenant-id'` slips through.
+- **+** The behavioural half uses **two real tenants, both with members** — a test where the other tenant did not exist would pass against an implementation that trusted the request and simply found nothing.
+
+### P0-49 · Capability table — a declaration you cannot forget
+
+- **Δ** `Role` moved from `packages/core` to `packages/security`. P0-53's `audit()` is in core and must scrub through security's redaction, so `core → security` has to exist — had the table imported `Role` from core, `no-circular` would refuse both.
+- **Δ** "No capability" is an explicit `publicRoute(reason)` carrying a written sentence, not an absence. `assertEveryRouteDeclared` runs inside `createApp()`, so an undeclared route **throws while the container is initialising** and the previous version keeps serving.
+- **+** Access declarations live in a table beside the routes rather than inline, so they can be enumerated, diffed and cross-checked — which is what P0-50 walks and P0-62 will read.
+- **Note.** The boot check proves every route has an _entry_, not that the entry is _enforced_. That is P0-50's question.
+
+### P0-50 · RBAC matrix — enumeration catches one failure of three
+
+- **🔒 +** `requireCapability` returns a guard **carrying the capability it enforces**, read back off `app.routes` (Hono records one entry per handler). Without it, a route declared in the table but never guarded — or guarded with the _wrong_ capability — is invisible whenever every role holds the capability involved, which is true of `catalog:read` today.
+- **+** The live route set cannot exercise the deny branch at all, so the suite mounts the real surface with one extra OWNER-only route and checks both directions, **plus a negative control** without the guard. A route that 403'd for everyone would otherwise look identical to one that 403s for the right people.
+- **Δ** The assertion is on 403 specifically, not on 2xx: a route may legitimately answer 404 or 422 for unrelated reasons, and demanding 200 turns every change into an RBAC failure.
+- **+** Orphaned table entries fail too — a declaration for a route that no longer exists makes the table stop describing the system.
+
+### P0-53 · Audit writer — and the context it had to be able to read
+
+- **Δ** The request context moved from `apps/api` to `packages/core`. P0-52's guard and every other domain rule writes audit rows, and no package can import an app. Nothing in it is HTTP-specific.
+- **Δ** The statement lives in `packages/db` — the P0-09 rule caught it again, exactly as in P0-47, and the fix was again not an exception.
+- **Δ** `audit_log.ip` is `inet`, so an address is captured only when unambiguous. A multi-entry `x-forwarded-for` resolves to **no** address rather than a guessed one.
+- **🔒 Δ** No `RETURNING` on the insert. `app_rw` holds INSERT and nothing else after P0-31's revoke, and Postgres applies the SELECT policy to a RETURNING clause — the same finding P2-16 records for `security_events`.
+- **+** Rollback asserted against a real container, with the rollback caused by a real failure rather than an explicit `ROLLBACK`, because that is the shape the production path has.
+- **🔒 Fixed in passing.** P0-46's tampered-cookie test mutated a byte with `replace(…, '$1X')` — **a no-op whenever the byte was already `X`**, so it passed roughly 63 times in 64 and would have reported a working signature check on the 64th.
+- **+** `LOG_LEVEL=silent` added to the integration config, without which a real failure is buried under several hundred JSON lines.
+
 ### ⚠ Open items
+
+This register is the index. **Everything the P0-54 → P0-53 chain left open is written out at length in the section that follows it**, with what it costs, what closes it and when — items are cross-referenced as **A1**, **E1** and so on.
 
 | Item | Owner | Note |
 |---|---|---|
 | P0-17a unblocked | ~~needs the API origin~~ | **Resolved by P0-54**, which creates the `Api` Function URL. The cache behaviour now has an origin to target: `CachingDisabled` managed policy, compression off, >=30s origin read timeout. Note the *streaming* function itself is still P2-29 — P0-17a can add the behaviour against the buffered origin and repoint it, or wait. |
 | CloudFront error mapping vs P4-15 | before the API joins the CDN | `customErrorResponses` is distribution-wide, so SPA 404->200 would turn API 404s into 200 HTML. Split the distribution or move SPA routing into a CloudFront Function. |
-| Integration suite not in CI | later | `pnpm test:integration` needs Docker and runs separately from `pnpm test`. GitHub runners have Docker; add it as its own job so the unit loop stays fast. |
+| 🔒 Integration suite not in CI | **next CI change** | Was "later" when this suite was schema shape checks. It is now **304 tests across 30 suites** carrying every RLS isolation assertion, the whole P0-46 adversarial auth suite and P0-48's IDOR test — **none of which runs on a pull request**. See **E1** below. |
 | Combined non-prod budget | needs an account-level resource | §5.8 targets $15 across all non-prod, but budgets are created per stage, so N stages can total N x $15 unnoticed. Needs one budget created outside per-stage IaC. |
 | `BudgetAlertEmail` secret unset | per stage | Set for `dev` stage during testing; must be set via `sst secret set BudgetAlertEmail <address>` before deploying any new stage. |
 | NAT: cheapest footprint accepted | **decided (2026-09-01)** | Keep two `t4g.nano` (already the smallest instance) and no auto-replacement while pre-production. Cost is ~$13/month while up — see §5.2a — and hourly, so teardown is the control. |
 | NAT auto-replacement before prod | **P6 / pre-launch** | A dead NAT takes down Stripe, Resend and domain verification with nothing to restore it. Acceptable pre-production, not at launch. Cheapest fix is a CloudWatch `StatusCheckFailed_System` alarm with the `ec2:recover` action; the thorough one is an ASG of size 1. |
-| Infra typecheck needs `sst install` in CI | later | `pnpm typecheck:infra` is local-only until CI runs `sst install` first; that download is the cost of enforcing it. |
+| Infra typecheck needs `sst install` in CI | later | `pnpm typecheck:infra` is local-only until CI runs `sst install` first; that download is the cost of enforcing it. Consequence: every infra invariant is guarded by a CI grep rather than by types — see **A3** and **E3**. |
 | SST deploy verified | **closed (2026-09-01)** | Deployed and verified on `dev` stage in `eu-west-1` (VPC, NAT, RDS Postgres 16 with TLS, SSM parameters with SecureString decryption, SNS Topic + subscription, Budgets). Cleanly torn down with `sst remove` to avoid idle costs. |
 | Bedrock model access confirmed | **closed (2026-09-01)** | Confirmed active in `eu-west-1` via AWS CLI: `amazon.nova-lite-v1:0` (chat/pairing LLM) and `amazon.titan-embed-text-v2:0` (vector embeddings). |
 | OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |
@@ -5776,3 +5873,160 @@ What that setting changes, precisely: pnpm **still refuses to run the scripts** 
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |
 | Turbo remote cache not enabled | repository secrets | `TURBO_TOKEN` / `TURBO_TEAM` are referenced by the workflow but unset, so Turbo uses its local cache only. Harmless; wire it when CI wall-clock starts to matter. |
 | Coverage bars now measure real code | **closed (2026-09-01)** | No longer 100% of nothing: `packages/core` 22/22 statements and `packages/db` 33/33 across 3 files, both at 100% against their 90% bars. `apps/*`, `packages/security` and `packages/testing` are still stubs, so their bars stay unexercised until code lands. |
+| 🔒 Auth rate limiting is per-container | **before public sign-in** | Better Auth's default store is a module-level `Map`, so the real limit is N x the configured one and a container recycle resets it. Needs P2-01's Postgres-backed limiter. See **A1**. |
+| 🔒 CloudFront client-IP forwarding unconfirmed | **P0-17a, before launch** | A multi-entry `x-forwarded-for` resolves to null, which is not "no limit" but **one shared bucket per path** — one attacker locks out every user. See **A2**. |
+| 🔒 `NODE_ENV=production` unasserted | next infra change | It is load-bearing for rate limiting and IP resolution, and removing it is silent. Needs a CI grep like the NAT and `app_rw` ones. See **A3**. |
+| 🔒 Password reset sends no email | **P0-64, before real signups** | The placeholder logs and resolves — deliberately, since throwing would create an enumeration oracle. So the failure is quiet. See **A4**. |
+| Reserved concurrency unset | **P1-48, before traffic** | §5.1 says 40, P1-48 says 10; P1-48 is right. Unbounded is worse than either. Interacts with **A1**. See **B1**. |
+| `AUTH_SECRET` rotation has no runbook | before launch | Rotating signs every seller out and voids outstanding reset links. Needs an ADR in the P0-59 set, not code. See **B2**. |
+| No expiry sweep for sessions or verifications | P1 | Both columns are indexed and nothing scans them. Storage hygiene, not security — expiry is enforced on read. See **C3**. |
+| `packages/core` has no Renovate security rule | small | `better-auth` is a production dep so it never auto-merges — that part is fine. But `packages/security/**` gets a `security-critical` label at every update level and `packages/core/**`, which now holds the auth config, does not. See **D7**. |
+| `pnpm add` rewrites `pnpm-workspace.yaml` | tooling | Injects an `allowBuilds:` block on every dependency change; must be reverted before committing. A CI assertion would turn a habit into a check. See **E5**. |
+
+### ⚠ Open items from the P0-54 → P0-53 chain, in detail
+
+The table above is a register; this section is the detail behind the entries that came out of building `apps/api`. Each item states **what is wrong**, **what it costs if ignored**, **what closes it**, and **when it has to close**. They are ordered by when, not by size.
+
+Nothing here is a bug in code that shipped — everything below is either a deliberate gap with a named successor, or a configuration fact that only becomes dangerous under conditions that do not exist yet. What makes them worth writing down is that most are **invisible from behaviour**: the system works, and works incorrectly, in a way no test currently fails on.
+
+---
+
+#### A. Must close before the API takes untrusted traffic
+
+**A1. Auth rate limiting is per-container, so the real limit is N times the configured one.** 🔒
+
+Better Auth's default limiter stores counters in a module-level `Map` (`api/rate-limiter/index.mjs`), which in Lambda means **per container**. Two consequences, and the second is worse than the first:
+
+- At reserved concurrency 10 (P1-48), ten warm containers give an attacker up to ten times each configured limit — so `/sign-in/email` at 10/minute is really up to 100/minute.
+- **A container recycle resets the counter to zero.** An attacker who can provoke scaling, or who simply waits, gets a clean slate. Lockouts and backoff therefore cannot be reasoned about at all.
+
+What closes it: back the limiter with the P0-34 `rate_limit_buckets` table through **P2-01**'s `RateLimiter`, wired in as Better Auth's `rateLimit.customStorage`. P2-01 already plans the token bucket and the concurrency suite; this is the adapter plus the wiring.
+
+When: **before any public sign-in endpoint is reachable.** Until then the control is that nothing is deployed.
+
+**A2. The client IP must resolve, or the limiter becomes a global lockout.** 🔒
+
+`getIP` resolves the caller from `x-forwarded-for`, and `getIPFromHeader` returns **null when the header carries more than one entry** unless `advanced.ipAddress.trustedProxies` is configured. A null IP does not disable limiting — it puts every caller in **one shared bucket per path**. One attacker exhausting the sign-in limit then locks out every user of the product.
+
+Two things have to be true in the deployed stack, and neither is verified today:
+
+1. `NODE_ENV=production` is set on the function. Without it Better Auth's `isDevelopment()` is true and `getIP` returns `127.0.0.1` for **every** request regardless of headers — the same shared bucket, reached a different way. It is set in `infra/api.ts`; see **A3**.
+2. CloudFront forwards the viewer address in a form that resolves to a single entry. **This is unconfirmed.** CloudFront appends the viewer IP to any client-supplied `X-Forwarded-For`, so a caller who sends their own header produces a two-entry list — and the limiter degrades for everyone from that moment.
+
+What closes it: **P0-17a**, when it configures the origin request policy. Either forward `CloudFront-Viewer-Address` and read the IP from it (set by CloudFront, not forgeable), or set `trustedProxies` to CloudFront's published ranges so the right-most non-proxy entry is taken. The first is simpler and does not need a range list kept current.
+
+When: **with P0-17a, and before launch.** A deployed smoke test that sends `X-Forwarded-For: 1.2.3.4` and asserts the limiter still buckets per-caller is the acceptance criterion.
+
+**A3. `NODE_ENV=production` is load-bearing for security and nothing asserts it.** 🔒
+
+AWS Lambda does not set `NODE_ENV`. Better Auth reads it with a default of `'development'`, and two behaviours hang off that — rate-limit enablement and IP resolution (**A1**, **A2**). `infra/api.ts` sets it explicitly, and `packages/core/src/auth.ts` additionally sets `rateLimit.enabled` and `ipAddressHeaders` so neither depends on it.
+
+The gap is that **removing the environment variable is silent**. Nothing fails; limiting degrades. `pnpm typecheck:infra` does not run in CI (see **E3**), so even a config regression is unguarded.
+
+What closes it: a CI grep on `infra/api.ts` asserting `NODE_ENV: 'production'`, in the same style as the existing "no managed NAT" and "database/url is built from app_rw" assertions in `ci.yml`. Cheap, and exactly the shape of guard this repo already uses for invariants that only exist in infra.
+
+When: **next infra change.** It is five lines of workflow.
+
+**A4. Password reset is wired to a placeholder that sends nothing.** 🔒
+
+`apps/api/src/index.ts` supplies a `sendResetPassword` that logs at error level and resolves. A user who requests a reset gets a 200 and **no email, ever**.
+
+It resolves rather than throwing on purpose: Better Auth calls the seam only when the address belongs to a real user, so a throwing stub would 500 for real addresses and 200 for made-up ones — an account-enumeration oracle manufactured by the stub. That decision is correct and should not be revisited; the consequence is that the failure is *quiet*, which is why it is written here.
+
+What closes it: **P0-64**. It needs a Resend API key in SSM at `/sommelier/<stage>/email/api_key` and a verified sending domain with SPF, DKIM and DMARC — neither producible from this repository.
+
+When: **before any real user can sign up.** Until then, the log line `password reset requested but no email transport is configured` is the only signal.
+
+---
+
+#### B. Must close before real traffic, for reasons other than security
+
+**B1. Reserved concurrency is unset, and the plan contradicts itself about the value.**
+
+`infra/api.ts` sets no `concurrency`. §5.1 says 40; **P1-48** says cap at 10 while on `t4g.micro`. P1-48 is right — each concurrent Lambda holds a Postgres connection, and 40 against that instance class is a self-inflicted connection exhaustion that looks like an outage rather than a limit.
+
+Leaving it unset is safe only because nothing is deployed. An unbounded function against a `t4g.micro` is worse than either figure.
+
+What closes it: **P1-48**, setting `concurrency: { reserved: 10 }`.
+
+When: **before the function serves traffic.** Note this interacts with **A1**: raising concurrency multiplies the per-container rate limit, so the two should be revisited together.
+
+**B2. Rotating `AUTH_SECRET` invalidates every session and every outstanding reset token, and there is no runbook.**
+
+The secret is generated by `random.RandomPassword` and mirrored to SSM. Pulumi keeps it stable across deploys unless the resource is replaced — so rotation is possible but is a **user-visible event**: every signed-in seller is signed out, and every reset link already emailed stops working.
+
+There is no documented procedure, no staged rotation, and no way to roll two secrets at once (Better Auth takes a single `secret`).
+
+What closes it: an ADR in the **P0-59** set describing when rotation is warranted (suspected compromise), what it costs, and the sequence — rotate, deploy, announce. Staged rotation would need a second secret in the config and is not worth building before it is needed.
+
+When: **before launch**, as documentation rather than code.
+
+---
+
+#### C. Deferred by dependency — nothing to decide, only to sequence
+
+**C1. `apps/api` has no streaming function.** `/v1/widget/chat` needs its own `RESPONSE_STREAM` Function URL (**P2-29**), because invoke mode is a property of the function rather than the route. `infra/api.ts` states `streaming: false` explicitly so the split stays deliberate.
+
+**C2. CloudFront has no API origin behaviours yet.** **P0-17a** is unblocked as of P0-54 and now carries a second job — see **A2**. It also has to resolve the hazard P0-17 recorded: `customErrorResponses` is distribution-wide, so the SPA's 404→200 rewrite would turn every genuine API 404 into a 200 carrying HTML, silently breaking P4-15 and §3.5's 404-not-403 rule.
+
+**C3. No expiry sweep for sessions or verification tokens.** `auth_sessions.expires_at` and `auth_verifications.expires_at` both carry indexes (P0-23a) and nothing scans them. Expiry is enforced *on read*, so this is a storage-growth and hygiene issue rather than a security one — an expired session is refused whether or not its row is still there. A periodic worker job belongs with the other scheduled work in P1.
+
+**C4. TOTP is configured but exercised only at the schema level.** The `twoFactor` plugin is registered and its four columns exist (migration `0028`), but no enrolment or verification path is tested. **P4-11** owns OWNER MFA and carries the three details that matter: backup codes single-use and hashed, a ±1-step window with replay rejected, and the step-up check reading the database rather than the cookie cache.
+
+**C5. `audit()` has no callers.** It is a helper waiting for the actions worth auditing — **P0-51** (invites), **P0-52** (last-OWNER guard), and the domain and key management rows. Its own tests cover the writer; nothing yet proves an audited action writes a row, because no action is audited.
+
+**C6. `audit_log` has no reader.** §4.2 defers the browsable view, not the record. Until **P4** builds a screen, reading it is a direct query and a runbook — and there is no runbook.
+
+---
+
+#### D. Known limits, accepted deliberately
+
+Each of these is a trade that was made rather than a thing forgotten. They are recorded so that a future reader can disagree with the trade rather than rediscover it.
+
+**D1. The session cookie cache lets a revocation lag by up to five minutes.** `SESSION_COOKIE_CACHE_SECONDS = 300`. An OWNER removing somebody has up to that long before it takes effect on a cached read. The alternative is a database round-trip on every authenticated request. P0-46 asserts the *bound* rather than the behaviour, so the cost stays measured; P4-11's step-up check reads the database directly to bypass it entirely for privilege-escalating actions.
+
+**D2. The P0-48 lint rule cannot see through a constant named to hide the intent.** It matches identifier *names*, so `const H = 'x-tenant-id'` slips past — there is a test asserting exactly that. Widening it to every `header()` call would flag `x-amzn-trace-id` and be turned off within a week. The behavioural half of P0-48 is what covers the gap, which is why the row insists on both.
+
+**D3. The capability table is mostly unexercised.** Seven of eight capabilities have no route yet; only `catalog:read` is wired. P0-50 reports the gap explicitly rather than letting it be invisible, and asserts the deny branch against a synthetic OWNER-only route with a negative control — because the live route set cannot exercise it at all.
+
+**D4. `/v1/dashboard/context` uses `catalog:read` as a stand-in.** It reports the resolved tenant and role, which is not really a catalogue read. It exists as the assertion target for P0-48 and the matrix. When real routes arrive, either give it its own capability or fold it into `/me`.
+
+**D5. `Secure` on auth cookies is asserted in configuration, not on the wire.** Better Auth drops the flag over plain `http://`, which is what an in-process suite speaks. Asserting it there would mean either running the suite against TLS or weakening the production setting to make a test pass. `HttpOnly`, `SameSite=Lax` and `Path` *are* asserted on the actual `Set-Cookie`.
+
+**D6. The active-tenant header is unsigned.** Signing would protect a value that is re-validated against `memberships` on every request, adding a key to rotate for no security gain. The property comes from the re-validation. Recorded because "unsigned header" reads like an oversight and is not one.
+
+**D7. `packages/core` now holds security-critical dependencies and has no Renovate rule; `packages/security` does.**
+
+Checked rather than assumed, and the first version of this item was wrong. `better-auth` is a *production* dependency, and `renovate.json` auto-merges only devDependencies (patch/pin/digest) and GitHub Action digests — so it was never on the auto-merge path, and P0-45's requirement that it stay off one is satisfied by construction.
+
+The real gap is narrower and still worth closing. There is a `packages/security/**` rule that refuses auto-merge and adds a `security-critical` label at every update level, with a note explaining it matches nothing until that package declares its own dependencies — still true, since `packages/security` has no external ones. Meanwhile **`packages/core` has become the package that holds the authentication configuration**, and `better-auth` sits in its manifest with no such rule. Extend `matchFileNames` to `packages/core/**`, or name `better-auth` explicitly, so its updates arrive labelled and are read rather than merely not-auto-merged.
+
+**D8. `SAFE_KEYS` governs every depth for every caller.** Adding a key to the P0-56 allowlist for one call site opens it everywhere — `message` and `code` are the live examples of names that look harmless and are not. There is a guard test asserting those two stay out. Any addition deserves the same treatment.
+
+**D9. P0-33a remains open, and is the oldest item here.** Append-only at the grant level is defeated by `DELETE FROM tenants` cascading into `audit_log`, and `processed_webhooks` has no revoke at all. It needs a decision **before P5**, and now has a second reason to matter: P0-53's writer means audit rows will actually start accumulating.
+
+---
+
+#### E. Process and tooling
+
+**E1. The integration suite still does not run in CI, and it now carries most of the security assertions.** 🔒
+
+`pnpm test:integration` is **304 tests across 30 suites**, including every RLS isolation assertion, the whole P0-46 adversarial auth suite, the P0-48 IDOR behavioural test, and the P0-47 proof that `withUser` is bounded by policy. **None of it runs on a pull request.** CI runs `pnpm test` — unit only.
+
+This was a reasonable "later" when the integration suite was schema shape checks. It is not any more: the assertions that would catch a tenant-isolation regression are exactly the ones not running.
+
+What closes it: a second CI job running `pnpm test:integration`. GitHub runners have Docker, so this is a job definition plus the container pull time (~30s for `pgvector/pgvector:0.8.0-pg16`, cached between runs). Keep it separate from the unit job so the fast loop stays fast, and do not make it `needs:` the unit job — a failure in one should not hide the other.
+
+When: **next CI change.** This is the highest-value open item in this section.
+
+**E2. Turbo's local cache can hide a broken intermediate commit.**
+
+P0-47 was pushed with a typecheck error in `packages/db`, and CI caught it while local `pnpm turbo run typecheck` passed — the package had a cached result from before the offending edit. The stack had to be rebased to fix it at the source.
+
+There is no fix to make; the lesson is procedural and belongs written down: **before pushing a branch that will be reviewed on its own, run the failing-est thing you have from a cold cache.** `pnpm turbo run lint typecheck --force` costs seconds and would have caught it.
+
+**E3. `pnpm typecheck:infra` is local-only.** It needs `sst install` to generate `.sst/platform/config.d.ts` first, and that download is the cost of enforcing it in CI. Every infra invariant is therefore guarded by CI greps rather than by types — see **A3**, and the existing NAT and `app_rw` assertions.
+
+**E4. Branch protection is still not configured.** Until all four checks are required on `main` (`verify` and `test` from `ci.yml`, `secrets` and `dependencies` from `security.yml`), every gate in Part 6 is advisory. Add **E1**'s integration job to that list when it exists.
+
+**E5. `pnpm add` rewrites `pnpm-workspace.yaml`.** Every dependency change injects an `allowBuilds:` block that must be reverted before committing. It bit this chain roughly a dozen times. A `postinstall` guard, or a CI assertion that the file matches its committed form, would turn a habit into a check.
