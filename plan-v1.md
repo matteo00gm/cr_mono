@@ -1187,7 +1187,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P0-45 | ⛔ 🔒 Better Auth setup + session middleware | Postgres-backed sessions, no JWKS fetch through NAT; tightly-scoped `withTenant` exception | 42,23a |
 | P0-64 | ⛔ 🔒 Email infrastructure (Resend) | SPF/DKIM/DMARC, one `sendEmail` seam, **staggered sends** (100/day cap), bounce suppression | 11 |
 | ✅ P0-46 | 🔒 Auth security suite | session integrity, **account enumeration incl. timing**, reset-token reuse, auth rate limits, surface isolation | 45 |
-| P0-47 | ⛔ 🔒 Membership + tenant resolution | tenant derived from `memberships`, never from request | 45 |
+| ✅ P0-47 | ⛔ 🔒 Membership + tenant resolution | tenant derived from `memberships`, never from request | 45 |
 | P0-48 | 🔒 Test + lint: tenant not from input | no handler may read a tenant id from body/query/header | 47 |
 | P0-49 | ⛔ 🔒 Capability table + policy module | declarative, OWNER/EDITOR; no inline role checks | 47 |
 | P0-50 | 🔒 Generated role×endpoint matrix test | missing capability entry ⇒ CI failure, not open access | 49 |
@@ -2799,9 +2799,21 @@ So `withUser(userId, …)` sets **only** `app.user_id` and RLS then admits exact
 
 **How.** Test: authenticate as a user in tenant A, send requests carrying `tenantId: B` in body, query, and an `X-Tenant-Id` header, and assert the effective tenant remains A in every case (assert on returned data, not on a mock). Lint: `no-restricted-syntax` banning member access named `tenantId` on `req.body`/`req.query`/`req.params`/`req.headers` inside `apps/api`. Neither alone is sufficient — the test catches behaviour, the rule catches the next author.
 
+**The rule had to be rewritten for Hono** *(correction).* The spec names Express accessors — `req.body`, `req.query`, `req.params`, `req.headers` — and none of them exist here. A rule written against the wrong framework's API would have matched nothing while looking exactly like protection, which is worse than no rule. The selectors target `c.req.query()`, `c.req.param()`, `c.req.header()` and `c.req.valid()` instead, plus member access on request-shaped objects.
+
+**The rule also matches a *named constant* passed to those calls**, not just a string literal. Without that it is sidestepped by hoisting `'x-tenant-id'` into a `const`, and the single file-level exception for `middleware/tenant.ts` would be decorative rather than load-bearing.
+
+**It deliberately does not flag `membership.tenantId` or `context.tenantId`.** The first draft used a bare `MemberExpression[property.name='tenantId']`, which flagged the *resolved* value handlers are supposed to use — six false positives in existing, correct code. A rule that catches everything gets disabled, and a disabled rule protects nothing, so the selector is scoped to request-shaped objects.
+
+**Its limit is recorded rather than papered over.** Matching on identifier *names* means `const H = 'x-tenant-id'` slips through, and there is a test asserting exactly that. Widening to every `header()` call would flag `x-amzn-trace-id` and be turned off within a week. This is precisely why the row asks for both halves: the rule catches the next author, the behavioural test catches the code.
+
+**The lint rule asserts itself** *(addition).* A rule that silently stops matching is indistinguishable from a clean codebase — the same reasoning P0-08 applies to the secret scanner, and the same fix. `tenant-from-input.test.ts` runs ESLint over fixtures for every forbidden shape, every allowed shape, the exception, and the exception's boundary. It is the plan's "verify by adding an unprotected route in a scratch commit" made permanent instead of done once. Note the fixtures are written to real paths: `lintText` on a synthetic path fails in the type-aware project service before any rule runs, which would have made the whole suite pass while testing nothing.
+
+**The behavioural test uses two *real* tenants, both with members.** A test where the other tenant did not exist would pass against an implementation that trusted the request and simply found nothing — the failure has to be indistinguishable from success for the assertion to mean anything. It also asserts that a real-but-forbidden tenant and an invented one return byte-identical bodies (modulo the request id), which is the §3.5 property the 404 exists for.
+
 **Tests.** This is the test.
 
-**Files.** `apps/api/test/tenant-resolution.spec.ts`, ESLint rule addition. **~110 lines.**
+**Files.** `apps/api/test/tenant-from-input.{test,integration.test}.ts`, ESLint rule addition. **~110 lines.**
 
 ---
 
