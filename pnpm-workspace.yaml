@@ -2,6 +2,12 @@ packages:
   - 'apps/*'
   - 'packages/*'
 
+allowBuilds:
+  cpu-features: set this to true or false
+  esbuild: set this to true or false
+  protobufjs: set this to true or false
+  ssh2: set this to true or false
+
 # Do not fail the install when a dependency ships a build script we are not
 # running.
 #

@@ -9,10 +9,12 @@
   },
   "dependencies": {
     "@catalogorosso/core": "workspace:*",
+    "@catalogorosso/security": "workspace:*",
     "hono": "^4.13.5",
     "pino": "^10.3.1"
   },
   "devDependencies": {
+    "@catalogorosso/testing": "workspace:*",
     "@types/node": "^26.4.0"
   }
 }

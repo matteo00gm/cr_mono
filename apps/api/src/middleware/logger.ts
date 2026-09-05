@@ -4,6 +4,8 @@ import type { MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
 import { pino, type Logger, type LoggerOptions } from 'pino';
 
+import { redactLogObject, scrubString } from '@catalogorosso/security';
+
 import { getRequestContext, runWithRequestContext } from '../context.js';
 
 /**
@@ -31,6 +33,50 @@ export const loggerOptions: LoggerOptions = {
   // read by humans next to CloudWatch's own timestamps far more often than
   // they are parsed by a machine that cares about the extra bytes.
   timestamp: pino.stdTimeFunctions.isoTime,
+
+  /**
+   * The allowlist redaction (P0-56), applied to the merged object of every
+   * single log call.
+   *
+   * `formatters.log` is the only hook that sees every logged object, which is
+   * why the redaction lives here rather than in per-key serializers: a
+   * serializer protects the keys somebody registered one for, and the next key
+   * added leaks by default — the exact failure mode an allowlist exists to
+   * prevent.
+   */
+  formatters: { log: redactLogObject },
+
+  /**
+   * Pino's default `err` serializer, deliberately switched off.
+   *
+   * Verified by probing the pinned build: `formatters.log` runs *before*
+   * serializers, and the default `err` serializer then rewrites the key from
+   * the original `Error` — so it silently discards whatever the formatter
+   * produced and emits an unredacted `message` and `stack`. With the redaction
+   * in place and this left at its default, a connection string in a driver
+   * error still reaches CloudWatch.
+   *
+   * The identity function hands the formatter's own output straight through;
+   * `redact.ts#serialiseError` has already reduced the error to type, scrubbed
+   * message, scrubbed stack and cause.
+   */
+  serializers: { err: (value: unknown) => value },
+
+  /**
+   * The message string, which `formatters.log` never sees.
+   *
+   * Confirmed the same way: `msg` is assembled after the formatter runs, so a
+   * `logger.info('failed with token sk_live_…')` would be published verbatim.
+   * This hook is the only place the message argument can be reached.
+   */
+  hooks: {
+    logMethod(args, method) {
+      method.apply(
+        this,
+        args.map((arg) => (typeof arg === 'string' ? scrubString(arg) : arg)) as typeof args,
+      );
+    },
+  },
 
   /**
    * The request context, injected into every line without any call site
