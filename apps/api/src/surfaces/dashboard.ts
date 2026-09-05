@@ -1,6 +1,8 @@
 import type { MembershipReader } from '@catalogorosso/core';
 import { publicRoute, requires, type RouteAccess } from '@catalogorosso/security';
+import { contextResponse, meResponse, surfaceResponse } from '@catalogorosso/api-client';
 import { Hono } from 'hono';
+import { z } from 'zod';
 
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
@@ -132,6 +134,18 @@ export interface RouteDoc {
   readonly description: string;
   /** A representative success body. Concrete values, never `"string"`. */
   readonly example: unknown;
+  /**
+   * The success response, as a schema (P0-63).
+   *
+   * Required, and this is what makes a generated client worth having: the types
+   * both consumers compile against come from here, so a breaking change to a
+   * response fails typecheck in the widget and the dashboard at build time
+   * rather than surfacing as a runtime error in a seller's storefront.
+   *
+   * An example alone cannot do that. It says what one answer looked like, not
+   * what any answer must look like.
+   */
+  readonly response: z.ZodType;
 }
 
 export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, RouteDoc>([
@@ -148,6 +162,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'caller - or a test - can prove *which* application answered, rather than only ' +
         'that something did. Carries no tenant, user or catalogue data.',
       example: { surface: 'dashboard' },
+      response: surfaceResponse,
     },
   ],
   [
@@ -172,6 +187,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
           { tenantId: 'c3d5a881-6b12-4f77-9a10-6b124f779a10', role: 'EDITOR' },
         ],
       },
+      response: meResponse,
     },
   ],
   [
@@ -185,6 +201,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'role comes from that same row, so a user who is EDITOR on one winery and OWNER ' +
         'on another gets the right one for the winery in play.',
       example: { tenantId: '9f2c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a', role: 'EDITOR' },
+      response: contextResponse,
     },
   ],
 ]);
@@ -198,3 +215,13 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
 export const DASHBOARD_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map(
   [...DASHBOARD_ROUTES].map(([key, doc]) => [key, doc.access]),
 );
+
+/**
+ * A route's response as JSON Schema, for the OpenAPI document (P0-62, P0-63).
+ *
+ * Converted here rather than in `scripts/gen-openapi.mjs` because this is where
+ * `zod` is a declared dependency — a script reaching for it through pnpm's
+ * isolated `node_modules` would resolve by luck.
+ */
+export const responseJsonSchema = (doc: RouteDoc): unknown =>
+  z.toJSONSchema(doc.response, { io: 'output' });

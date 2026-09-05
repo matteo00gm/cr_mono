@@ -34,7 +34,8 @@ const die = (msg) => reportDie('OpenAPI generation failed: ' + msg);
  * requirement the integration suite has, and for the same reason.
  */
 const { createApp } = await import('../apps/api/dist/app.js');
-const { DASHBOARD_ROUTES } = await import('../apps/api/dist/surfaces/dashboard.js');
+const { DASHBOARD_ROUTES, responseJsonSchema } =
+  await import('../apps/api/dist/surfaces/dashboard.js');
 const { DASHBOARD_PREFIX, WIDGET_PREFIX } = await import('../apps/api/dist/routes.js');
 const { registeredRoutes, routeKey } = await import('../apps/api/dist/middleware/capability.js');
 
@@ -82,6 +83,7 @@ for (const endpoint of endpoints) {
   if (!doc.summary?.trim()) problems.push(`${endpoint.key}: empty summary`);
   if (!doc.description?.trim()) problems.push(`${endpoint.key}: empty description`);
   if (doc.example === undefined) problems.push(`${endpoint.key}: no example`);
+  if (!doc.response) problems.push(`${endpoint.key}: no response schema`);
 }
 
 for (const key of DASHBOARD_ROUTES.keys()) {
@@ -146,7 +148,14 @@ const operationFor = (endpoint, doc) => {
     responses: sortedEntries({
       200: {
         description: doc.summary,
-        content: { 'application/json': { example: doc.example } },
+        content: {
+          'application/json': {
+            // The schema is what P0-63's client compiles against; the example
+            // is what a human reads. Both, because neither replaces the other.
+            schema: responseJsonSchema(doc),
+            example: doc.example,
+          },
+        },
       },
       401: errorResponse,
       403: errorResponse,

@@ -68,6 +68,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@catalogorosso/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
       '@catalogorosso/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -80,6 +83,9 @@ importers:
       pino:
         specifier: ^10.3.1
         version: 10.3.1
+      zod:
+        specifier: ^4.5.4
+        version: 4.5.4
     devDependencies:
       '@catalogorosso/db':
         specifier: workspace:*
@@ -99,6 +105,16 @@ importers:
   apps/widget: {}
 
   apps/worker: {}
+
+  packages/api-client:
+    dependencies:
+      zod:
+        specifier: ^4.5.4
+        version: 4.5.4
+    devDependencies:
+      '@types/node':
+        specifier: ^26.4.0
+        version: 26.4.0
 
   packages/core:
     dependencies:

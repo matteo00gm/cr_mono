@@ -1207,7 +1207,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P0-60 | ⛔ `AGENTS.md` + the invariants | root + per-package; the prohibitions a model cannot infer (§8.3) | 59 |
 | ✅ P0-61 | PR template + commitlint + rationale check | required `## Why`, conventional commits, generated CHANGELOG | 06 |
 | ✅ P0-62 | ⛔ OpenAPI generation + drift check | from route table + `drizzle-zod`; route missing description/capability/example fails CI | 42,54 |
-| P0-63 | Generated typed API client | widget + dashboard import it; makes endpoint usage find-referenceable (§8.4) | 62 |
+| ✅ P0-63 | Generated typed API client | widget + dashboard import it; makes endpoint usage find-referenceable (§8.4) | 62 |
 
 ### P1 — Catalog and model bake-off
 
@@ -3221,9 +3221,21 @@ It also delivers the contract testing promised in §6.1 as a side effect: a brea
 
 **How.** `openapi-typescript` + a thin typed fetch wrapper, emitted into `packages/db` or its own tiny package. The widget's copy must stay small — generate **types only** for it and keep the runtime wrapper hand-written and minimal, or the bundle budget in P3-05 suffers. A lint rule forbids raw `fetch` to our own API outside the client, which is what keeps the map complete. Add `scripts/api-consumers.mjs` emitting an endpoint→call-site table into `docs/api/consumers.md`, regenerated in CI.
 
+**The types are shared, not generated** *(deviation, and it delivers the row's property more directly).* The row asks for `openapi-typescript` against the emitted document. That indirection buys nothing here: every consumer is TypeScript in this repository, so the *same* schema module can be imported by the server that produces a response and by the clients that consume it — and then a breaking change fails typecheck in all three at build time, which is what the row is actually after. A generation step would add a drift check to guard a translation that need not happen. The schemas live in `packages/api-client/src/responses.ts` because the boundary rules forbid a package importing an app; `apps/api`'s route table imports them, and the OpenAPI document is a third projection of the same source.
+
+**A response shape is not a table shape.** These schemas are hand-written rather than derived with `drizzle-zod` (P0-42), deliberately: conflating the two is how a column rename becomes a public API change.
+
+**The client parses rather than casts.** A cast would hand a component an object missing a field and the failure would surface as a `TypeError` three layers in, with no mention of the API. Parsing fails at the boundary and names the field.
+
+**A new package exercises the onboarding checks, and they worked** *(observation).* `packages/api-client` was refused by the P0-07 coverage gate until it had a bar, and by P0-60's check until it had an `AGENTS.md`. Both are the reflection pattern doing what it was built for.
+
+**The `no-restricted-syntax` conflict is the finding worth keeping** *(finding).* Adding the raw-`fetch` rule as its own config block **silently disabled P0-48's tenant rule**: ESLint flat config *replaces* a rule when a later object configures it again rather than merging, and both blocks matched `apps/api`. P0-48's self-test caught it immediately — which is precisely the argument for a lint rule that asserts itself. `apps/api` now carries both selector sets in one array, and everything else carries a narrower block.
+
+**Generated artifacts are excluded from Prettier** *(consequence).* `lint-staged` runs `prettier --write` on every staged `.json` and `.md`, so the drift checks would have failed on the very commit that introduced them.
+
 **Tests.** Generated types compile against real handlers; a deliberately mismatched response shape fails typecheck (verify in a scratch commit); the consumer map lists a known call site; the lint rule catches a raw `fetch`.
 
-**Files.** `scripts/gen-client.ts`, `scripts/api-consumers.mjs`, ESLint rule, CI. **~130 lines.**
+**Files.** `packages/api-client/**`, `scripts/api-consumers.mjs`, ESLint rule, CI steps. **~130 lines.** *(No `gen-client.ts` — see the first note.)*
 
 ---
 

@@ -1,0 +1,26 @@
+{
+  "name": "@catalogorosso/api-client",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "@types/node": "^26.4.0"
+  },
+  "dependencies": {
+    "zod": "^4.5.4"
+  }
+}

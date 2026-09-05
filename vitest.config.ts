@@ -16,6 +16,7 @@ import { defineConfig } from 'vitest/config';
 
 /** Server-side code: plain Node, no DOM. */
 const NODE_PROJECTS = [
+  'packages/api-client',
   'packages/core',
   'packages/db',
   'packages/security',

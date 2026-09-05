@@ -15,3 +15,12 @@ plan-v1.md
 # so formatting it here would produce a diff on the next generate and back
 # again on the next format — a loop with no winner.
 packages/db/migrations/meta/
+
+# Generated artifacts (P0-62, P0-63).
+#
+# Both are compared byte-for-byte against a regeneration in CI, so anything
+# that rewrites them breaks that check — and lint-staged runs prettier --write
+# on every staged .json and .md, so this is not hypothetical: the drift check
+# would fail on the commit that introduced it.
+docs/api/openapi.json
+docs/api/consumers.md

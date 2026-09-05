@@ -245,6 +245,12 @@ jobs:
       - name: Check the OpenAPI document is current
         run: pnpm openapi:check
 
+      # The endpoint -> call-site map (P0-63). Derived from the calls
+      # themselves, so it cannot fall behind — and complete only because the
+      # lint rule forbids raw `fetch` to our own API outside the client.
+      - name: Check the API consumer map is current
+        run: pnpm consumers:check
+
       - name: Test with coverage
         run: pnpm test:coverage
 

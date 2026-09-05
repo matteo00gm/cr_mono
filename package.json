@@ -31,7 +31,9 @@
     "agents:check": "node scripts/check-agents-md.mjs",
     "changelog": "node scripts/changelog.mjs",
     "openapi": "node scripts/gen-openapi.mjs",
-    "openapi:check": "node scripts/gen-openapi.mjs --check"
+    "openapi:check": "node scripts/gen-openapi.mjs --check",
+    "consumers": "node scripts/api-consumers.mjs",
+    "consumers:check": "node scripts/api-consumers.mjs --check"
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [
