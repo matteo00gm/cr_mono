@@ -108,6 +108,42 @@ jobs:
           fi
           echo "database/url is built from app_rw; master credentials are on their own path."
 
+      # Better Auth reads NODE_ENV, and AWS Lambda does not set it. Two of its
+      # behaviours hang off that, and both fail open-ish rather than closed:
+      # rate limiting resolves to `enabled: ?? isProduction`, so every auth
+      # endpoint would be unlimited; and `getIP` falls back to 127.0.0.1 for
+      # every request, which is worse than no limit — it puts all callers in
+      # one shared bucket per path, so one attacker locks out every user.
+      #
+      # packages/core sets both options explicitly so neither depends on the
+      # environment. This guards the third leg: removing the variable is
+      # completely silent, and `typecheck:infra` does not run here.
+      - name: Assert the API function pins NODE_ENV=production
+        run: |
+          if ! grep -qE "NODE_ENV: *'production'" infra/api.ts; then
+            echo "::error::infra/api.ts must set NODE_ENV=production — see P0-46; Lambda does not set it, and Better Auth then disables auth rate limiting and resolves every caller to 127.0.0.1"
+            exit 1
+          fi
+          echo "NODE_ENV is pinned on the API function."
+
+      # `pnpm add` injects an `allowBuilds:` block of placeholders into
+      # pnpm-workspace.yaml on every dependency change. It is dead config —
+      # "set this to true or false" is not a boolean, so pnpm ignores it — but
+      # it reads as load-bearing, which is exactly what the comment in that
+      # file warns against. It reached main once despite being reverted by
+      # hand a dozen times, which is the argument for checking instead.
+      #
+      # The placeholder string is pnpm's own "fill this in" marker and is
+      # never a legitimate value, so this cannot false-positive on a real
+      # setting.
+      - name: Assert no unfilled pnpm allowBuilds placeholders
+        run: |
+          if grep -q "set this to true or false" pnpm-workspace.yaml; then
+            echo "::error::pnpm-workspace.yaml carries an unfilled allowBuilds block. pnpm add injects it; revert the file before committing, or decide each value deliberately"
+            exit 1
+          fi
+          echo "pnpm-workspace.yaml carries no unfilled placeholders."
+
   test:
     name: Test and coverage gates
     runs-on: ubuntu-latest

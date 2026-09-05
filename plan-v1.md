@@ -1197,7 +1197,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P0-50 | 🔒 Generated role×endpoint matrix test | missing capability entry ⇒ CI failure, not open access | 49 |
 | P0-51 | Invite flow | own `invitations` table + single-use token, email via Resend | 49,64 |
 | P0-52 | 🔒 Last-OWNER guard + test | cannot remove or demote the final OWNER | 51 |
-| P0-53 | `audit_log` writer | helper + actor/ip/ua capture | 31,47 |
+| ✅ P0-53 | `audit_log` writer | helper + actor/ip/ua capture | 31,47 |
 | ✅ P0-54 | ⛔ `apps/api`: Hono + Lambda | Function URL, BUFFERED handler, route groups | 42 |
 | ✅ P0-55 | API: error handler + logging | structured JSON, `tenant_id` + `request_id` on every line | 54 |
 | ✅ P0-56 | 🔒 Log redaction serializer | **allowlist**, not denylist; test with secrets and PII fixtures | 55 |
@@ -5873,13 +5873,13 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Coverage bars now measure real code | **closed (2026-09-01)** | No longer 100% of nothing: `packages/core` 22/22 statements and `packages/db` 33/33 across 3 files, both at 100% against their 90% bars. `apps/*`, `packages/security` and `packages/testing` are still stubs, so their bars stay unexercised until code lands. |
 | 🔒 Auth rate limiting is per-container | **before public sign-in** | Better Auth's default store is a module-level `Map`, so the real limit is N x the configured one and a container recycle resets it. Needs P2-01's Postgres-backed limiter. See **A1**. |
 | 🔒 CloudFront client-IP forwarding unconfirmed | **P0-17a, before launch** | A multi-entry `x-forwarded-for` resolves to null, which is not "no limit" but **one shared bucket per path** — one attacker locks out every user. See **A2**. |
-| 🔒 `NODE_ENV=production` unasserted | next infra change | It is load-bearing for rate limiting and IP resolution, and removing it is silent. Needs a CI grep like the NAT and `app_rw` ones. See **A3**. |
+| `NODE_ENV=production` asserted in CI | **closed** | A grep in `ci.yml`, matching the NAT and `app_rw` assertions. Verified to fire when the line is removed. See **A3**. |
 | 🔒 Password reset sends no email | **P0-64, before real signups** | The placeholder logs and resolves — deliberately, since throwing would create an enumeration oracle. So the failure is quiet. See **A4**. |
 | Reserved concurrency unset | **P1-48, before traffic** | §5.1 says 40, P1-48 says 10; P1-48 is right. Unbounded is worse than either. Interacts with **A1**. See **B1**. |
 | `AUTH_SECRET` rotation has no runbook | before launch | Rotating signs every seller out and voids outstanding reset links. Needs an ADR in the P0-59 set, not code. See **B2**. |
 | No expiry sweep for sessions or verifications | P1 | Both columns are indexed and nothing scans them. Storage hygiene, not security — expiry is enforced on read. See **C3**. |
-| `packages/core` has no Renovate security rule | small | `better-auth` is a production dep so it never auto-merges — that part is fine. But `packages/security/**` gets a `security-critical` label at every update level and `packages/core/**`, which now holds the auth config, does not. See **D7**. |
-| `pnpm add` rewrites `pnpm-workspace.yaml` | tooling | Injects an `allowBuilds:` block on every dependency change; must be reverted before committing. A CI assertion would turn a habit into a check. See **E5**. |
+| Renovate security rule covers `packages/core` | **closed** | `matchFileNames` now lists `packages/core/**` beside `packages/security/**`, so `better-auth` updates arrive labelled `security-critical` for a human. See **D7**. |
+| `pnpm add` workspace injection | **closed** | The habit failed once and reached `main` in P0-56. The stale block is removed and a CI grep now catches the placeholder. See **E5**. |
 
 ### ⚠ Open items from the P0-54 → P0-53 chain, in detail
 
@@ -5915,15 +5915,13 @@ What closes it: **P0-17a**, when it configures the origin request policy. Either
 
 When: **with P0-17a, and before launch.** A deployed smoke test that sends `X-Forwarded-For: 1.2.3.4` and asserts the limiter still buckets per-caller is the acceptance criterion.
 
-**A3. `NODE_ENV=production` is load-bearing for security and nothing asserts it.** 🔒
+**A3. `NODE_ENV=production` is asserted in CI.** ✅ **closed**
 
 AWS Lambda does not set `NODE_ENV`. Better Auth reads it with a default of `'development'`, and two behaviours hang off that — rate-limit enablement and IP resolution (**A1**, **A2**). `infra/api.ts` sets it explicitly, and `packages/core/src/auth.ts` additionally sets `rateLimit.enabled` and `ipAddressHeaders` so neither depends on it.
 
-The gap is that **removing the environment variable is silent**. Nothing fails; limiting degrades. `pnpm typecheck:infra` does not run in CI (see **E3**), so even a config regression is unguarded.
+The gap was that **removing the environment variable is completely silent**: nothing fails, limiting degrades, and `pnpm typecheck:infra` does not run in CI (**E3**) so even a config regression was unguarded. `ci.yml` now greps for it, in the same style as the existing "no managed NAT" and "`database/url` is built from `app_rw`" assertions — the pattern this repository already uses for invariants that live only in infra.
 
-What closes it: a CI grep on `infra/api.ts` asserting `NODE_ENV: 'production'`, in the same style as the existing "no managed NAT" and "database/url is built from app_rw" assertions in `ci.yml`. Cheap, and exactly the shape of guard this repo already uses for invariants that only exist in infra.
-
-When: **next infra change.** It is five lines of workflow.
+Verified in both directions before merging: the assertion passes against the real file, and fires when the line is deleted. A guard that cannot fail is not a guard.
 
 **A4. Password reset is wired to a placeholder that sends nothing.** 🔒
 
@@ -5993,11 +5991,11 @@ Each of these is a trade that was made rather than a thing forgotten. They are r
 
 **D6. The active-tenant header is unsigned.** Signing would protect a value that is re-validated against `memberships` on every request, adding a key to rotate for no security gain. The property comes from the re-validation. Recorded because "unsigned header" reads like an oversight and is not one.
 
-**D7. `packages/core` now holds security-critical dependencies and has no Renovate rule; `packages/security` does.**
+**D7. `packages/core` and `packages/security` both carry a Renovate security rule.** ✅ **closed**
 
-Checked rather than assumed, and the first version of this item was wrong. `better-auth` is a *production* dependency, and `renovate.json` auto-merges only devDependencies (patch/pin/digest) and GitHub Action digests — so it was never on the auto-merge path, and P0-45's requirement that it stay off one is satisfied by construction.
+Checked rather than assumed, and the first version of this item was wrong. `better-auth` is a _production_ dependency, and `renovate.json` auto-merges only devDependencies (patch/pin/digest) and GitHub Action digests — so it was never on the auto-merge path, and P0-45's requirement that it stay off one was satisfied by construction.
 
-The real gap is narrower and still worth closing. There is a `packages/security/**` rule that refuses auto-merge and adds a `security-critical` label at every update level, with a note explaining it matches nothing until that package declares its own dependencies — still true, since `packages/security` has no external ones. Meanwhile **`packages/core` has become the package that holds the authentication configuration**, and `better-auth` sits in its manifest with no such rule. Extend `matchFileNames` to `packages/core/**`, or name `better-auth` explicitly, so its updates arrive labelled and are read rather than merely not-auto-merged.
+The real gap was narrower: a `packages/security/**` rule refused auto-merge and added a `security-critical` label at every update level, while `packages/core` — which P0-45 made the home of the authentication configuration, `better-auth` included — had none. `matchFileNames` now covers both. The label is the point rather than the refusal: these updates arrive marked for a human, instead of merely not being auto-merged.
 
 **D8. `SAFE_KEYS` governs every depth for every caller.** Adding a key to the P0-56 allowlist for one call site opens it everywhere — `message` and `code` are the live examples of names that look harmless and are not. There is a guard test asserting those two stay out. Any addition deserves the same treatment.
 
@@ -6029,4 +6027,10 @@ There is no fix to make; the lesson is procedural and belongs written down: **be
 
 **E4. Branch protection is still not configured.** Until all **five** checks are required on `main` — `verify`, `test` and now `integration` from `ci.yml`, plus `secrets` and `dependencies` from `security.yml` — every gate in Part 6 is advisory. Requiring a subset leaves the rest advisory, which is the failure mode worth naming: it looks configured.
 
-**E5. `pnpm add` rewrites `pnpm-workspace.yaml`.** Every dependency change injects an `allowBuilds:` block that must be reverted before committing. It bit this chain roughly a dozen times. A `postinstall` guard, or a CI assertion that the file matches its committed form, would turn a habit into a check.
+**E5. The `pnpm add` workspace injection is now a CI check, and the stale block it left behind is gone.** ✅ **closed**
+
+`pnpm add` injects an `allowBuilds:` block of placeholders into `pnpm-workspace.yaml` on every dependency change. It was reverted by hand about a dozen times across the P0-54 → P0-53 chain — **and reached `main` once anyway**, in P0-56. That is the argument for a check rather than a habit, and it is the reason this item exists at all.
+
+The block was dead config: `set this to true or false` is not a boolean, so pnpm ignored it entirely, installs worked and CI stayed green. Harmless in effect and wrong in kind — it read as load-bearing, which is precisely what the comment in that same file warns against. It has been removed, and `pnpm install --frozen-lockfile` was verified in CI rather than locally, because this repository has already learned that verifying an install fix in a tree that has `node_modules` proves nothing (see the P0-17 → P0-19 review).
+
+The guard greps for the placeholder string, which is pnpm's own "fill this in" marker and never a legitimate value — so it cannot false-positive on a real setting, and it fires on exactly the shape `pnpm add` produces. Verified in both directions before merging: it passes on the real file, and fires on the injected block.

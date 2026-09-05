@@ -38,8 +38,8 @@
       "addLabels": ["major"]
     },
     {
-      "description": "Never auto-merge anything packages/security depends on, at any update level. Note: this matches nothing until that package declares its own dependencies, since they all currently live in the root manifest — the rule is here so it is already in place on the day it starts to matter.",
-      "matchFileNames": ["packages/security/**"],
+      "description": "Never auto-merge anything packages/security or packages/core depends on, at any update level. packages/core was added when P0-45 put the Better Auth configuration there: it now holds better-auth itself, which is in the security-critical path and belongs on a watch list rather than in any auto-merge group. Note this is belt and braces for production dependencies — the automerge rules above only cover devDependencies and Action digests — but the label is the point, so these updates arrive marked for a human rather than merely not-auto-merged.",
+      "matchFileNames": ["packages/security/**", "packages/core/**"],
       "automerge": false,
       "addLabels": ["security-critical"]
     }
