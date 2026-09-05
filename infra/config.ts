@@ -94,6 +94,27 @@ export const appMigratePasswordParameter = secureParameter(
 );
 
 /**
+ * The Better Auth signing secret (P0-45).
+ *
+ * `random.RandomPassword` rather than a value in the repository, for the same
+ * reason as the role passwords: a secret in git is a secret in every clone and
+ * every CI log, and rotating it means editing code. 64 characters with no
+ * special characters — it is used as an HMAC key, so length is what matters and
+ * punctuation only risks quoting problems in a shell somewhere.
+ *
+ * Rotating it invalidates every session and every outstanding password-reset
+ * token at once, which is the intended behaviour in a compromise and a nasty
+ * surprise otherwise. Pulumi keeps the value stable across deploys unless the
+ * resource is replaced.
+ */
+const authSecretValue = new random.RandomPassword('AuthSecret', {
+  length: 64,
+  special: false,
+});
+
+export const authSecret = secureParameter('AuthSecret', 'auth/secret', authSecretValue.result);
+
+/**
  * Paths that exist for the deploy path and for break-glass, and that no
  * application function may be granted.
  *
