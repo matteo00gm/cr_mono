@@ -1,6 +1,8 @@
 import process from 'node:process';
 import { Hono } from 'hono';
 
+import type { MembershipReader } from '@catalogorosso/core';
+
 import type { AppEnv } from './env.js';
 import type { AuthPort } from './middleware/auth.js';
 import { errorHandler, normaliseThrown, notFoundHandler } from './middleware/error.js';
@@ -35,6 +37,9 @@ import { createWidgetApp } from './surfaces/widget.js';
  * code that looks live.
  */
 export interface AppOptions {
+  /** Reads the caller's memberships, under RLS. See `src/memberships.ts`. */
+  readonly readMemberships: MembershipReader;
+
   /**
    * The configured Better Auth instance.
    *
@@ -47,7 +52,7 @@ export interface AppOptions {
   readonly auth: AuthPort;
 }
 
-export const createApp = ({ auth }: AppOptions): Hono<AppEnv> => {
+export const createApp = ({ auth, readMemberships }: AppOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
   /*
@@ -96,7 +101,7 @@ export const createApp = ({ auth }: AppOptions): Hono<AppEnv> => {
    */
   app.get('/v1/health', (c) => c.json({ status: 'ok' as const, sha: buildSha() }));
 
-  app.route(DASHBOARD_PREFIX, createDashboardApp({ auth }));
+  app.route(DASHBOARD_PREFIX, createDashboardApp({ auth, readMemberships }));
   app.route(WIDGET_PREFIX, createWidgetApp());
 
   return app;

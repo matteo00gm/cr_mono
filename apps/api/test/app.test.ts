@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app.js';
-import { fakeAuth } from './support/auth.js';
+import { fakeAuth, oneMembership } from './support/auth.js';
 import { createDashboardApp } from '../src/surfaces/dashboard.js';
 import { createWidgetApp } from '../src/surfaces/widget.js';
 
@@ -20,7 +20,10 @@ afterEach(() => {
 
 describe('GET /v1/health', () => {
   it('answers 200 with a status', async () => {
-    const response = await createApp({ auth: fakeAuth() }).request('/v1/health');
+    const response = await createApp({
+      auth: fakeAuth(),
+      readMemberships: oneMembership(),
+    }).request('/v1/health');
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ status: 'ok' });
@@ -31,7 +34,10 @@ describe('GET /v1/health', () => {
     // thing that is running" is, and nothing else in the response answers it.
     vi.stubEnv('BUILD_SHA', 'c0ffee1');
 
-    const response = await createApp({ auth: fakeAuth() }).request('/v1/health');
+    const response = await createApp({
+      auth: fakeAuth(),
+      readMemberships: oneMembership(),
+    }).request('/v1/health');
 
     expect(await response.json()).toMatchObject({ sha: 'c0ffee1' });
   });
@@ -44,7 +50,10 @@ describe('GET /v1/health', () => {
      */
     vi.stubEnv('BUILD_SHA', '');
 
-    const response = await createApp({ auth: fakeAuth() }).request('/v1/health');
+    const response = await createApp({
+      auth: fakeAuth(),
+      readMemberships: oneMembership(),
+    }).request('/v1/health');
 
     expect(await response.json()).toMatchObject({ sha: 'unknown' });
   });
@@ -53,7 +62,7 @@ describe('GET /v1/health', () => {
     // A `/health` at the root would answer on the Function URL but never
     // through the edge (§5.1 routes `/v1/*` to this Lambda), so the check
     // would pass while every real caller's path was broken.
-    const app = createApp({ auth: fakeAuth() });
+    const app = createApp({ auth: fakeAuth(), readMemberships: oneMembership() });
 
     expect((await app.request('/health')).status).toBe(404);
     expect((await app.request('/v1/health')).status).toBe(200);
@@ -62,7 +71,7 @@ describe('GET /v1/health', () => {
 
 describe('route surfaces', () => {
   it('mounts the dashboard and the widget at their own prefixes', async () => {
-    const app = createApp({ auth: fakeAuth() });
+    const app = createApp({ auth: fakeAuth(), readMemberships: oneMembership() });
 
     expect(await (await app.request('/v1/dashboard')).json()).toEqual({ surface: 'dashboard' });
     expect(await (await app.request('/v1/widget')).json()).toEqual({ surface: 'widget' });
@@ -92,7 +101,13 @@ describe('route surfaces', () => {
      * Asserted on the widget, because the dashboard now answers 401 to any
      * unmatched path rather than 404 — see the note in `auth.test.ts`.
      */
-    expect((await createApp({ auth: fakeAuth() }).request('/v1/widget/')).status).toBe(404);
+    expect(
+      (
+        await createApp({ auth: fakeAuth(), readMemberships: oneMembership() }).request(
+          '/v1/widget/',
+        )
+      ).status,
+    ).toBe(404);
   });
 
   it('keeps one surface middleware out of the other', async () => {
@@ -169,8 +184,14 @@ describe('route surfaces', () => {
     // Distinguishes *which* app answered, not merely that something did —
     // the distinction that matters when the bug is one surface replying for
     // the other (P0-46's surface-isolation group builds on this).
-    const dashboard = await (await createApp({ auth: fakeAuth() }).request('/v1/dashboard')).json();
-    const widget = await (await createApp({ auth: fakeAuth() }).request('/v1/widget')).json();
+    const dashboard = await (
+      await createApp({ auth: fakeAuth(), readMemberships: oneMembership() }).request(
+        '/v1/dashboard',
+      )
+    ).json();
+    const widget = await (
+      await createApp({ auth: fakeAuth(), readMemberships: oneMembership() }).request('/v1/widget')
+    ).json();
 
     expect(dashboard).not.toEqual(widget);
   });
@@ -178,7 +199,13 @@ describe('route surfaces', () => {
   it('404s on an unknown path under an unguarded surface', async () => {
     // The widget has no session guard, so an unmatched path is simply absent.
     // The dashboard deliberately answers 401 first — `auth.test.ts` says why.
-    expect((await createApp({ auth: fakeAuth() }).request('/v1/widget/nope')).status).toBe(404);
+    expect(
+      (
+        await createApp({ auth: fakeAuth(), readMemberships: oneMembership() }).request(
+          '/v1/widget/nope',
+        )
+      ).status,
+    ).toBe(404);
   });
 });
 
@@ -186,15 +213,21 @@ describe('the surface factories', () => {
   it('each report their own name, so a test can tell which app answered', async () => {
     // The distinction that matters when the bug being hunted is one surface
     // replying for the other, rather than nothing replying at all.
-    expect(await (await createDashboardApp({ auth: fakeAuth() }).request('/')).json()).toEqual({
+    expect(
+      await (
+        await createDashboardApp({ auth: fakeAuth(), readMemberships: oneMembership() }).request(
+          '/',
+        )
+      ).json(),
+    ).toEqual({
       surface: 'dashboard',
     });
     expect(await (await createWidgetApp().request('/')).json()).toEqual({ surface: 'widget' });
   });
 
   it('hand back a new instance each time', () => {
-    expect(createDashboardApp({ auth: fakeAuth() })).not.toBe(
-      createDashboardApp({ auth: fakeAuth() }),
+    expect(createDashboardApp({ auth: fakeAuth(), readMemberships: oneMembership() })).not.toBe(
+      createDashboardApp({ auth: fakeAuth(), readMemberships: oneMembership() }),
     );
     expect(createWidgetApp()).not.toBe(createWidgetApp());
   });
@@ -209,8 +242,8 @@ describe('createApp', () => {
      * duplicate routes where the first wins and the second is dead code that
      * reads as live.
      */
-    const first = createApp({ auth: fakeAuth() });
-    const second = createApp({ auth: fakeAuth() });
+    const first = createApp({ auth: fakeAuth(), readMemberships: oneMembership() });
+    const second = createApp({ auth: fakeAuth(), readMemberships: oneMembership() });
 
     expect(first).not.toBe(second);
 

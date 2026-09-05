@@ -13,7 +13,7 @@ import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app.js';
-import { fakeAuth } from './support/auth.js';
+import { fakeAuth, oneMembership } from './support/auth.js';
 import {
   errorHandler,
   normaliseThrown,
@@ -187,13 +187,16 @@ describe('the request id', () => {
   });
 
   it('is present on successful responses too', async () => {
-    const response = await createApp({ auth: fakeAuth() }).request('/v1/health');
+    const response = await createApp({
+      auth: fakeAuth(),
+      readMemberships: oneMembership(),
+    }).request('/v1/health');
 
     expect(response.headers.get(REQUEST_ID_HEADER)).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it('differs between requests', async () => {
-    const app = createApp({ auth: fakeAuth() });
+    const app = createApp({ auth: fakeAuth(), readMemberships: oneMembership() });
     const ids = new Set<string | null>();
     for (let i = 0; i < 5; i += 1) {
       ids.add((await app.request('/v1/health')).headers.get(REQUEST_ID_HEADER));
@@ -209,7 +212,10 @@ describe('the request id', () => {
      * from somebody else's error report — both of which defeat the only thing
      * this field is for.
      */
-    const response = await createApp({ auth: fakeAuth() }).request('/v1/health', {
+    const response = await createApp({
+      auth: fakeAuth(),
+      readMemberships: oneMembership(),
+    }).request('/v1/health', {
       headers: { [REQUEST_ID_HEADER]: 'chosen-by-the-caller' },
     });
 
@@ -225,7 +231,10 @@ describe('404', () => {
      * and reports it as "the API returned garbage" rather than "that route
      * does not exist".
      */
-    const response = await createApp({ auth: fakeAuth() }).request('/v1/nope');
+    const response = await createApp({
+      auth: fakeAuth(),
+      readMemberships: oneMembership(),
+    }).request('/v1/nope');
 
     expect(response.status).toBe(404);
     expect(response.headers.get('content-type')).toContain('application/json');
@@ -233,7 +242,10 @@ describe('404', () => {
   });
 
   it('carries a request id, like everything else', async () => {
-    const response = await createApp({ auth: fakeAuth() }).request('/v1/nope');
+    const response = await createApp({
+      auth: fakeAuth(),
+      readMemberships: oneMembership(),
+    }).request('/v1/nope');
 
     expect((await bodyOf(response)).error.requestId).toMatch(/^[0-9a-f-]{36}$/);
   });
@@ -252,7 +264,7 @@ describe('errors thrown inside a mounted surface', () => {
 
     // Mounted on the widget prefix: the dashboard's session guard would reject
     // an anonymous request before the route could throw anything.
-    const app = createApp({ auth: fakeAuth() });
+    const app = createApp({ auth: fakeAuth(), readMemberships: oneMembership() });
     app.route('/v1/widget', surface);
 
     const response = await app.request('/v1/widget/explode');

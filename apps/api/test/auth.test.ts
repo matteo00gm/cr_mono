@@ -10,7 +10,7 @@ import { logger } from '../src/middleware/logger.js';
 import { loggerOptions } from '../src/middleware/logger.js';
 import { createDashboardApp } from '../src/surfaces/dashboard.js';
 import { createWidgetApp } from '../src/surfaces/widget.js';
-import { fakeAuth, signedIn } from './support/auth.js';
+import { fakeAuth, signedIn, oneMembership } from './support/auth.js';
 import { pino, type Logger, type LoggerOptions } from 'pino';
 
 /**
@@ -30,7 +30,7 @@ const body = async (response: Response): Promise<Record<string, unknown>> =>
 describe('the auth mount', () => {
   it('serves Better Auth under /auth on the dashboard', async () => {
     const auth = fakeAuth();
-    const app = createApp({ auth });
+    const app = createApp({ auth, readMemberships: oneMembership() });
 
     const response = await app.request(`${AUTH_PUBLIC_PATH}/sign-in/email`, {
       method: 'POST',
@@ -58,9 +58,12 @@ describe('the auth mount', () => {
      */
     const auth = fakeAuth({ user: null });
 
-    const response = await createApp({ auth }).request(`${AUTH_PUBLIC_PATH}/sign-up`, {
-      method: 'POST',
-    });
+    const response = await createApp({ auth, readMemberships: oneMembership() }).request(
+      `${AUTH_PUBLIC_PATH}/sign-up`,
+      {
+        method: 'POST',
+      },
+    );
 
     expect(response.status).toBe(200);
     expect(auth.sessionReads()).toBe(0);
@@ -75,9 +78,12 @@ describe('the auth mount', () => {
      */
     const auth = fakeAuth();
 
-    const response = await createApp({ auth }).request(`${WIDGET_PREFIX}/auth/sign-in/email`, {
-      method: 'POST',
-    });
+    const response = await createApp({ auth, readMemberships: oneMembership() }).request(
+      `${WIDGET_PREFIX}/auth/sign-in/email`,
+      {
+        method: 'POST',
+      },
+    );
 
     expect(response.status).toBe(404);
     expect(auth.handled).toEqual([]);
@@ -86,7 +92,7 @@ describe('the auth mount', () => {
   it('leaves the widget surface with no session read at all', async () => {
     const auth = fakeAuth();
 
-    await createApp({ auth }).request('/v1/widget');
+    await createApp({ auth, readMemberships: oneMembership() }).request('/v1/widget');
 
     expect(auth.sessionReads()).toBe(0);
   });
@@ -94,30 +100,41 @@ describe('the auth mount', () => {
 
 describe('requireUser', () => {
   it('rejects a request with no session', async () => {
-    const response = await createApp({ auth: fakeAuth() }).request('/v1/dashboard/me');
+    const response = await createApp({
+      auth: fakeAuth(),
+      readMemberships: oneMembership(),
+    }).request('/v1/dashboard/me');
 
     expect(response.status).toBe(401);
     expect((await body(response)).error).toMatchObject({ code: 'unauthenticated' });
   });
 
   it('attaches the user id to a request that has one', async () => {
-    const response = await createApp({ auth: signedIn('user_matteo') }).request('/v1/dashboard/me');
+    const response = await createApp({
+      auth: signedIn('user_matteo'),
+      readMemberships: oneMembership(),
+    }).request('/v1/dashboard/me');
 
     expect(response.status).toBe(200);
-    expect(await body(response)).toEqual({ userId: 'user_matteo' });
+    expect(await body(response)).toMatchObject({ userId: 'user_matteo' });
   });
 
-  it('attaches the user and nothing else', async () => {
+  it('puts no role beside the user id', async () => {
     /*
-     * The constraint the plan states twice. Tenant and role are P0-47's, read
-     * together from one `memberships` row — and a role attached here would be a
-     * property of the *user*, which is wrong: somebody who is EDITOR on one
-     * winery and OWNER on another is entirely legitimate, and caching their
-     * role per user grants them OWNER on both.
+     * The constraint the plan states twice. A role belongs to a *membership*,
+     * not to a user — somebody who is EDITOR on one winery and OWNER on another
+     * is entirely legitimate, and a `role` field beside `userId` is the shape
+     * that invites caching it per user and granting them OWNER on both.
+     *
+     * `/me` lists memberships, each carrying its own role; there is no role at
+     * the top level and there must not be one.
      */
-    const response = await createApp({ auth: signedIn() }).request('/v1/dashboard/me');
+    const response = await createApp({
+      auth: signedIn(),
+      readMemberships: oneMembership(),
+    }).request('/v1/dashboard/me');
 
-    expect(Object.keys(await body(response))).toEqual(['userId']);
+    expect(Object.keys(await body(response)).sort()).toEqual(['memberships', 'userId']);
   });
 
   it('answers 401 before 404 on an unknown dashboard path', async () => {
@@ -130,7 +147,7 @@ describe('requireUser', () => {
      * this surface answers the same way, which is the same reasoning as §3.5's
      * "cross-tenant id returns 404, not 403" — read in the other direction.
      */
-    const app = createApp({ auth: fakeAuth() });
+    const app = createApp({ auth: fakeAuth(), readMemberships: oneMembership() });
 
     expect((await app.request('/v1/dashboard/me')).status).toBe(401);
     expect((await app.request('/v1/dashboard/no-such-route')).status).toBe(401);
@@ -141,7 +158,9 @@ describe('requireUser', () => {
     // sit above the guard on purpose, and must stay reachable.
     const auth = fakeAuth();
 
-    expect((await createApp({ auth }).request('/v1/dashboard')).status).toBe(200);
+    expect(
+      (await createApp({ auth, readMemberships: oneMembership() }).request('/v1/dashboard')).status,
+    ).toBe(200);
     expect(auth.sessionReads()).toBe(0);
   });
 
@@ -150,7 +169,7 @@ describe('requireUser', () => {
     // reads by the number of matching handlers.
     const auth = signedIn();
 
-    await createApp({ auth }).request('/v1/dashboard/me');
+    await createApp({ auth, readMemberships: oneMembership() }).request('/v1/dashboard/me');
 
     expect(auth.sessionReads()).toBe(1);
   });
@@ -208,7 +227,10 @@ describe('the dashboard surface in isolation', () => {
   it('guards its own routes even when mounted somewhere unexpected', async () => {
     // The guard belongs to the surface, not to where it happens to be mounted.
     const app = new Hono();
-    app.route('/somewhere/else', createDashboardApp({ auth: fakeAuth() }));
+    app.route(
+      '/somewhere/else',
+      createDashboardApp({ auth: fakeAuth(), readMemberships: oneMembership() }),
+    );
 
     // No error handler on this bare parent, so the domain error surfaces as
     // Hono's own 500 rather than a 401 — what matters is that the guarded route
@@ -240,6 +262,7 @@ describe('a failing session read', () => {
         handler: () => Promise.resolve(new Response()),
         api: { getSession: () => Promise.reject(new Error('connection terminated')) },
       },
+      readMemberships: oneMembership(),
     });
 
     const response = await app.request('/v1/dashboard/me');

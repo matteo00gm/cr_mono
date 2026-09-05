@@ -1,3 +1,5 @@
+import type { MembershipReader } from '@catalogorosso/core';
+
 import type { AuthPort } from '../../src/middleware/auth.js';
 
 /**
@@ -60,3 +62,22 @@ export const fakeAuth = (options: FakeAuthOptions = {}): FakeAuth => {
 /** A signed-in session, for the routes that need one. */
 export const signedIn = (id = 'user_matteo'): FakeAuth =>
   fakeAuth({ user: { id, email: 'matteo@example.com' } });
+
+/**
+ * A membership reader backed by a plain array (P0-47).
+ *
+ * The middleware's job is to decide *which* membership applies and to refuse
+ * when none does; where the rows came from is the database's job, and the
+ * integration suite proves RLS returns the right ones. Splitting the two keeps
+ * the decision testable in milliseconds.
+ */
+export const memberships =
+  (rows: readonly { tenantId: string; role: 'OWNER' | 'EDITOR' }[] = []): MembershipReader =>
+  () =>
+    Promise.resolve(rows);
+
+/** The common case: one winery, no choice to make. */
+export const oneMembership = (
+  tenantId = '11111111-1111-1111-1111-111111111111',
+  role: 'OWNER' | 'EDITOR' = 'OWNER',
+): MembershipReader => memberships([{ tenantId, role }]);
