@@ -69,6 +69,13 @@ for (const endpoint of endpoints) {
 
   const doc = DASHBOARD_ROUTES.get(endpoint.key);
   if (!doc) {
+    /*
+     * Unreachable in practice, and kept anyway. `createApp` runs P0-49's boot
+     * check, which throws on an undeclared route before this ever executes —
+     * verified by planting one. This branch is the second line of a defence
+     * that currently has a first, and it stops being redundant the moment a
+     * route is declared for access but not documented.
+     */
     problems.push(`${endpoint.key}: served by the router, absent from DASHBOARD_ROUTES`);
     continue;
   }

@@ -1206,7 +1206,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P0-59 | ⛔ `docs/` scaffold + ADR system | template, index, ~15 ADRs seeded from Locked Decisions | 01 |
 | ✅ P0-60 | ⛔ `AGENTS.md` + the invariants | root + per-package; the prohibitions a model cannot infer (§8.3) | 59 |
 | ✅ P0-61 | PR template + commitlint + rationale check | required `## Why`, conventional commits, generated CHANGELOG | 06 |
-| P0-62 | ⛔ OpenAPI generation + drift check | from route table + `drizzle-zod`; route missing description/capability/example fails CI | 42,54 |
+| ✅ P0-62 | ⛔ OpenAPI generation + drift check | from route table + `drizzle-zod`; route missing description/capability/example fails CI | 42,54 |
 | P0-63 | Generated typed API client | widget + dashboard import it; makes endpoint usage find-referenceable (§8.4) | 62 |
 
 ### P1 — Catalog and model bake-off
@@ -3197,9 +3197,17 @@ Two CI checks, mirroring patterns already proven in this plan:
 - **Drift:** regenerate and `git diff --exit-code`. A stale committed artifact fails the build.
 - **Completeness:** every route has a description and at least one example, or the build fails — the same mechanism that makes the capability matrix trustworthy (P0-50). Without it, routes accumulate with empty descriptions and the reference becomes decorative.
 
+**The route table grew rather than gaining a sibling** *(design detail).* `summary`, `description` and `example` live beside the access declaration in `DASHBOARD_ROUTES`, and `DASHBOARD_ROUTE_ACCESS` is derived from it. Two tables that must agree are two tables that will not — and one table means the boot check (P0-49), the RBAC matrix (P0-50) and this generator all walk the same thing.
+
+**The completeness check is bidirectional, and only one direction is reachable today** *(finding).* A route served but undocumented is caught by P0-49's boot check, which throws inside `createApp` *before* the generator's own check runs — verified by planting one. The generator's branch for it is kept as a second line of defence and marked as currently unreachable, rather than left looking like a check that fires. The other direction — an entry describing a route nothing serves — is reachable and does fire; that is the one that rots quietly, because a stale entry is not a bug until somebody trusts it.
+
+**Full OpenAPI meta-schema validation is not done** *(deviation).* The row asks that the emitted document validate against the OpenAPI schema. The assertions here are structural instead: version, info, unique operation ids, a documented success and both refusals per operation, a concrete example rather than `"string"`, and a stated capability. The reasoning is that this document is *generated* from a narrow set of shapes, so it cannot contain the class of mistake a human writing YAML makes; what it can contain is a generator bug, which the structural assertions catch equally well. Adding a validator remains cheap if a wider shape is ever emitted — recorded so it is a decision rather than an oversight.
+
+**Determinism is asserted, not assumed.** Every level is sorted and a test regenerates twice and compares bytes. Unstable key ordering makes the drift check fail for no reason, and a check that fails spuriously gets disabled — which is precisely how a generated artifact stops being generated.
+
 **Tests.** Generation is deterministic across runs (unstable key ordering would make the drift check fail spuriously and get disabled, which is how these die); a route without a description fails; the emitted document validates against the OpenAPI schema.
 
-**Files.** `scripts/gen-openapi.ts`, route metadata, CI steps. **~140 lines.**
+**Files.** `scripts/gen-openapi.mjs`, route metadata in `apps/api/src/surfaces/dashboard.ts`, `docs/api/openapi.json`, CI step. **~140 lines.**
 
 ---
 
