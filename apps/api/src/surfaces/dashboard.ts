@@ -1,10 +1,12 @@
 import type { MembershipReader } from '@catalogorosso/core';
+import { publicRoute, requires, type RouteAccess } from '@catalogorosso/security';
 import { Hono } from 'hono';
 
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
+import { requireCapability, routeKey } from '../middleware/capability.js';
 import { resolveTenant } from '../middleware/tenant.js';
-import { AUTH_ROUTE_PREFIX } from '../routes.js';
+import { AUTH_ROUTE_PREFIX, DASHBOARD_PREFIX } from '../routes.js';
 
 /**
  * The dashboard surface — `/v1/dashboard/*` (P0-54, P0-45).
@@ -96,7 +98,45 @@ export const createDashboardApp = ({ auth, readMemberships }: DashboardOptions):
    * effective tenant back from here — an assertion on returned data rather than
    * on a mock.
    */
-  app.get('/context', (c) => c.json({ tenantId: c.get('tenantId'), role: c.get('role') }));
+  app.get('/context', requireCapability('catalog:read'), (c) =>
+    c.json({ tenantId: c.get('tenantId'), role: c.get('role') }),
+  );
 
   return app;
 };
+
+/**
+ * What every dashboard route requires, keyed by `METHOD <mounted path>` (P0-49).
+ *
+ * **Separate from the registrations above, deliberately.** A capability
+ * declared inline is a capability that disappears with the route it decorated;
+ * a table can be enumerated, diffed and cross-checked — which is what
+ * `assertEveryRouteDeclared` does at boot, and what P0-50's role×endpoint
+ * matrix walks. Adding a route without adding a line here is a **startup
+ * failure**, not a silent default to open.
+ *
+ * The paths carry the mount prefix because that is how Hono reports them from
+ * `app.routes`; deriving both from the same constant is what stops the two
+ * drifting when the surface moves.
+ */
+export const DASHBOARD_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map<
+  string,
+  RouteAccess
+>([
+  [
+    routeKey('GET', DASHBOARD_PREFIX),
+    publicRoute(
+      'Surface marker. Reports which app answered and nothing else — no tenant, ' +
+        'no user, no data. P0-46 uses it to prove the two surfaces are distinct.',
+    ),
+  ],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/me`),
+    publicRoute(
+      'Authenticated but pre-tenant, by necessity: a user with several memberships ' +
+        'cannot choose from a list they are not allowed to fetch. It returns only the ' +
+        "caller's own identity and memberships, which RLS scopes to them (P0-47).",
+    ),
+  ],
+  [routeKey('GET', `${DASHBOARD_PREFIX}/context`), requires('catalog:read')],
+]);

@@ -1188,7 +1188,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P0-64 | ⛔ 🔒 Email infrastructure (Resend) | SPF/DKIM/DMARC, one `sendEmail` seam, **staggered sends** (100/day cap), bounce suppression | 11 |
 | ✅ P0-46 | 🔒 Auth security suite | session integrity, **account enumeration incl. timing**, reset-token reuse, auth rate limits, surface isolation | 45 |
 | ✅ P0-47 | ⛔ 🔒 Membership + tenant resolution | tenant derived from `memberships`, never from request | 45 |
-| P0-48 | 🔒 Test + lint: tenant not from input | no handler may read a tenant id from body/query/header | 47 |
+| ✅ P0-48 | 🔒 Test + lint: tenant not from input | no handler may read a tenant id from body/query/header | 47 |
 | P0-49 | ⛔ 🔒 Capability table + policy module | declarative, OWNER/EDITOR; no inline role checks | 47 |
 | P0-50 | 🔒 Generated role×endpoint matrix test | missing capability entry ⇒ CI failure, not open access | 49 |
 | P0-51 | Invite flow | own `invitations` table + single-use token, email via Resend | 49,64 |
@@ -2838,9 +2838,19 @@ export const CAPABILITIES = {
 ```
 `can(role, capability)` is a pure function. Route definitions declare a required capability; the middleware denies when absent. **A route with no declared capability must fail closed** — throw at startup rather than defaulting to open, so the mistake is a boot failure and not a silent hole.
 
+**`Role` moves from `packages/core` to `packages/security`** *(correction, and it prevents a cycle).* The capability table needs `Role`, and P0-53's `audit()` — which lives in `core` — must scrub through `security`'s redaction. Had the table imported `Role` from `core`, the two packages would point at each other and the P0-09 `no-circular` rule would refuse both. Authorization vocabulary belongs on the security side anyway; `core` re-exports it so callers still need only one import for `Membership` and its role.
+
+**"No declared capability" is an explicit declaration, not an absence** *(design detail the row leaves open).* `publicRoute(reason)` takes a written sentence, so the only way to have an unguarded route is to say out loud why — something a reviewer can disagree with, unlike a missing entry nobody noticed. `assertEveryRouteDeclared` runs inside `createApp()`, which means an undeclared route **throws while the Lambda container is initialising**: the deployment fails and the previous version keeps serving. There is a test that adds a route to the real app and asserts it stops booting.
+
+**Access declarations live in a table beside the routes, not inline on them.** A capability declared inline disappears with the route it decorated; a table can be enumerated, diffed and cross-checked — which is exactly what P0-50's matrix walks. The keys carry the mount prefix because that is how `app.routes` reports them, and both are derived from the same constant so they cannot drift.
+
+**The boot check only proves every route has an *entry*.** Whether that entry is *enforced* is a different question, and it is P0-50's — a declaration nobody wired to a `requireCapability` call would pass here. The two rows are complementary rather than overlapping, which is worth stating because the boot check looks like it covers more than it does.
+
+**Denial is 403, and that is not in tension with §3.5.** The caller is a member of this tenant and already knows the resource exists; hiding the refusal would only stop them understanding why their own account cannot do something. §3.5's 404 is for a *tenant* they have no membership in, which P0-47 answered before this middleware runs. The refusal names the missing capability but not the roles that hold it — enumerating those is a map of the authorisation model.
+
 **Tests.** `can()` truth table; a route registered without a capability throws at startup.
 
-**Files.** `packages/security/src/capabilities.ts`, middleware. **~80 lines.**
+**Files.** `packages/security/src/capabilities.ts`, `apps/api/src/middleware/capability.ts`, the access table in `apps/api/src/surfaces/dashboard.ts`. **~80 lines.**
 
 ---
 

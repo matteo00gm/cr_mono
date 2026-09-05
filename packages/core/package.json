@@ -19,6 +19,7 @@
   ],
   "dependencies": {
     "@catalogorosso/db": "workspace:*",
+    "@catalogorosso/security": "workspace:*",
     "better-auth": "^1.7.2",
     "zod": "^4.5.4"
   },
