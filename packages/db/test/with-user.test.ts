@@ -21,7 +21,9 @@ const TENANT = 'a0000000-0000-4000-8000-000000000001';
 
 const createMockDb = () => {
   const statements: unknown[] = [];
-  const execute = vi.fn((statement: unknown) => {
+  // Return type annotated rather than inferred: `Promise.resolve([])` infers
+  // `never[]`, so a later test that resolves real rows cannot override it.
+  const execute = vi.fn((statement: unknown): Promise<unknown[]> => {
     statements.push(statement);
     return Promise.resolve([]);
   });
