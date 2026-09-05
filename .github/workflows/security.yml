@@ -69,11 +69,34 @@ jobs:
           fi
           echo "custom rule fired as expected"
 
+      # Added with the rule itself (P0-64 prep). The default rules do catch a
+      # Resend key when it happens to sit next to a variable named for it, via
+      # the fuzzy generic-api-key rule — and miss it bare in a file or under
+      # any other variable name, which are the placements that actually occur.
+      - name: Prove the Resend rule fires
+        run: |
+          d="$RUNNER_TEMP/resendtest"
+          mkdir -p "$d"
+          # Bare, with no naming hint, which is the case the default rules miss.
+          printf 're_%s_%s' "$(openssl rand -hex 4)" "$(openssl rand -hex 12)" > "$d/fixture.txt"
+          if gitleaks dir "$d" --config .gitleaks.toml --redact --no-banner; then
+            echo "::error::the Resend rule did not fire; a re_ key could be committed"
+            exit 1
+          fi
+          echo "Resend rule fired as expected"
+
       - name: Prove it does not fire on ordinary code
         run: |
           d="$RUNNER_TEMP/cleantest"
           mkdir -p "$d"
-          printf 'export const price = 12.5;' > "$d/clean.ts"
+          # Identifiers that end in the letters the Resend rule keys on. Without
+          # its word-boundary anchor, `pre_`, `core_` and `score_` all match.
+          {
+            echo 'export const price = 12.5;'
+            echo 'const pre_computed = 1;'
+            echo 'export const core_id = 2;'
+            echo 'const score_total = 3;'
+          } > "$d/clean.ts"
           gitleaks dir "$d" --config .gitleaks.toml --redact --no-banner
 
       # --redact keeps any finding out of the log. Without it the gate reports
