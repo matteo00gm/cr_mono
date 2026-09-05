@@ -41,6 +41,30 @@ regex = '''pk_live_[A-Za-z0-9]{24,}'''
 keywords = ["pk_live_"]
 tags = ["catalogorosso", "publishable-key"]
 
+# Resend, the transactional email provider (P0-64).
+#
+# Added because the default rules do not reliably catch this shape. Tested
+# against a synthetic key in three placements: assigned to a variable named
+# `resendKey` it was caught, but only by the fuzzy `generic-api-key` rule
+# reacting to the variable name — bare in a text file, or assigned to a
+# variable called anything else, it went through untouched.
+#
+# That is the wrong way round for a scanner. A secret should be caught because
+# of what it *is*, not because of what the surrounding code happened to be
+# called, and the placements that slipped past are the realistic ones: a value
+# pasted into a config file, or into a fixture.
+#
+# Shape is `re_` + a short id + `_` + the secret. The bounds are loose because
+# the provider does not document them. The leading word-boundary anchor is
+# what keeps this off `pre_`, `core_` and every other identifier that merely
+# ends in those two letters.
+[[rules]]
+id = "resend-api-key"
+description = "Resend API key (re_) — server-side only, never in a repo"
+regex = '''\bre_[A-Za-z0-9]{6,}_[A-Za-z0-9]{16,}'''
+keywords = ["re_"]
+tags = ["resend", "secret-key", "critical"]
+
 # --- Allowlist ----------------------------------------------------------------
 #
 # The 24-character floor above is what keeps documentation safe: the plan's own
