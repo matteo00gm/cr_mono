@@ -234,6 +234,17 @@ jobs:
           fi
           echo "dist is clean."
 
+      # The API reference is generated from the route table, so a difference
+      # means the API changed and the reference did not (P0-62). Hand-written
+      # API docs are the fastest-rotting artifact in a codebase; this one cannot
+      # rot, because CI regenerates it and compares.
+      #
+      # In the `test` job because it needs `pnpm build` — the generator imports
+      # the built application to enumerate routes from the router rather than
+      # from a list somebody maintains.
+      - name: Check the OpenAPI document is current
+        run: pnpm openapi:check
+
       - name: Test with coverage
         run: pnpm test:coverage
 
