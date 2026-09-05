@@ -1156,7 +1156,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P0-15 | SST: SSM paths + IAM | per-Lambda roles scoped to their parameter paths only | 11 |
 | ✅ P0-16 | SST: Budgets alarm | per stage; fail-loud if non-prod exceeds $15 | 11 |
 | ✅ P0-17 | SST: CloudFront skeleton | distribution + origins, no behaviours yet | 11 |
-| P0-17a | SST: chat behaviour (streaming) | `CachingDisabled` + compression off + ≥30s read timeout — **CloudFront buffers SSE otherwise**. **Blocked on the API Lambda origin** — a cache behaviour needs an origin to target, so this cannot land before P0-54 | 17, API origin |
+| ✅ P0-17a | SST: chat behaviour (streaming) | `CachingDisabled` + compression off + ≥30s read timeout — **CloudFront buffers SSE otherwise**. **Blocked on the API Lambda origin** — a cache behaviour needs an origin to target, so this cannot land before P0-54 | 17, API origin |
 | ✅ P0-18 | ⛔ `packages/db`: Drizzle + pool | connection factory, env-driven config | 02,14 |
 | ✅ P0-19 | ⛔ 🔒 `withTenant()` helper | opens tx, `SET LOCAL app.tenant_id`, the **only** sanctioned DB entry point | 18 |
 | ✅ P0-20 | Migration tooling + extensions | drizzle-kit, the `bootstrap/` vs `migrations/` split, down-file convention; `vector`, `pg_trgm`, `unaccent`, **`citext`**; confirm `halfvec` available | 18 |
@@ -4329,9 +4329,19 @@ X-Accel-Buffering: no
 - **Allowed methods** including `POST`.
 - **Origin read timeout ≥ 30 s.** Default is 30 s and the hard ceiling is 60 s without a quota increase — worth knowing, because a slow generation plus P2-27's repair retry can approach it. Cap total handler time below the CloudFront timeout so we emit a clean `error` event rather than letting CloudFront return an opaque 504.
 
-**Tests.** Deployed smoke test asserting time-to-first-byte is far below total response time against a stub that streams a token per second — that ratio is the only assertion that actually proves streaming survives the edge. Add the same assertion to P3-18.
+**The origin read timeout is not a behaviour property** *(correction).* This row lists it beside the cache policy and compression as though all three were set on the behaviour. `originReadTimeout` belongs to the **origin**, so behaviours sharing an origin share its timeout and none of them can raise it. That is harmless today — the only origin is the BUFFERED function, which times out at 10s, so its 30s is slack. **P2-29 must add a second origin** for the RESPONSE_STREAM function with `originReadTimeout: 60` and repoint the chat behaviour at it; it needs its own origin regardless, being a separate Function URL.
 
-**Files.** `infra/cdn.ts`. **~60 lines.**
+**The `customErrorResponses` hazard is removed, not worked around** *(closes the P0-17 warning).* SPA routing is now a CloudFront Function on the S3 behaviour that rewrites extensionless paths to `/index.html`. A function is attached per behaviour where an error response is distribution-wide, so the API cannot be affected by it — and rewriting on the way *in* means S3 returns 200 for a request it can serve, leaving no error to map. A CI assertion refuses `customErrorResponses` in `infra/cdn.ts`, because it is the obvious way to do SPA routing and every tutorial reaches for it.
+
+**A second CloudFront Function pins `X-Forwarded-For`, which is what settles open item A2** *(addition).* Better Auth reads that header and its `getIPFromHeader` returns **null** on more than one entry — and CloudFront *appends* the viewer address to any client-supplied value, so a caller who sends their own header produces exactly that. A null IP is not "no limit": it puts every caller in one shared bucket per path, so one attacker exhausting the sign-in limit locks out every user. The function overwrites the header with `event.viewer.ip`, which CloudFront sets and a request cannot influence. Overwriting rather than configuring a trusted-proxy list makes the value unforgeable and leaves nothing to keep current.
+
+**The API function and the distribution are circularly dependent, and the cycle is broken deliberately** *(finding).* CloudFront needs the Function URL as an origin; the function needs the distribution's domain for `AUTH_BASE_URL`, since a reset link pointing at the raw Function URL bypasses the edge and breaks when the origin moves. Neither can be created first. `AUTH_BASE_URL` is therefore an operator-set `sst.Secret`, exactly as `BudgetAlertEmail` is — `sst secret set AuthBaseUrl https://<domain>` once per stage after the first deploy. It becomes a constant the day a custom domain exists.
+
+**Widget bundle behaviours must be *inserted*, not appended** *(note for P3).* CloudFront takes the first matching behaviour, not the most specific. `/v1/w.js` and `/v1/widget-*.js` are more specific than the `/v1/*` rule added here, so appending them means they never match and the bundles are served by the API Lambda as JSON 404s.
+
+**Tests.** Deployed smoke test asserting time-to-first-byte is far below total response time against a stub that streams a token per second — that ratio is the only assertion that actually proves streaming survives the edge. Add the same assertion to P3-18. **Not written here:** there is no streaming endpoint to point it at until P2-29, and nothing is deployed. The behaviour, its policies and the two functions are verified by `typecheck:infra` and by review only — see the open items.
+
+**Files.** `infra/cdn.ts`, `infra/api.ts`, `sst.config.ts`, CI assertion. **~60 lines.**
 
 ---
 
@@ -5902,18 +5912,15 @@ What closes it: back the limiter with the P0-34 `rate_limit_buckets` table throu
 
 When: **before any public sign-in endpoint is reachable.** Until then the control is that nothing is deployed.
 
-**A2. The client IP must resolve, or the limiter becomes a global lockout.** 🔒
+**A2. The client IP is pinned at the edge; unverified until a deploy.** 🔒 *(partly closed)*
 
-`getIP` resolves the caller from `x-forwarded-for`, and `getIPFromHeader` returns **null when the header carries more than one entry** unless `advanced.ipAddress.trustedProxies` is configured. A null IP does not disable limiting — it puts every caller in **one shared bucket per path**. One attacker exhausting the sign-in limit then locks out every user of the product.
+Better Auth reads `x-forwarded-for` and its `getIPFromHeader` returns **null** on more than one entry. A null IP does not disable limiting — it puts every caller in **one shared bucket per path**, so one attacker exhausting the sign-in limit locks out every user. CloudFront *appends* the viewer address to any client-supplied `X-Forwarded-For`, so a caller sending their own header produced exactly that.
 
-Two things have to be true in the deployed stack, and neither is verified today:
+**P0-17a closes the mechanism.** A CloudFront Function on every API behaviour overwrites the header with `event.viewer.ip`, which CloudFront sets and a request cannot influence. Overwriting rather than configuring a trusted-proxy list makes the value unforgeable and leaves no proxy ranges to keep current.
 
-1. `NODE_ENV=production` is set on the function. Without it Better Auth's `isDevelopment()` is true and `getIP` returns `127.0.0.1` for **every** request regardless of headers — the same shared bucket, reached a different way. It is set in `infra/api.ts`; see **A3**.
-2. CloudFront forwards the viewer address in a form that resolves to a single entry. **This is unconfirmed.** CloudFront appends the viewer IP to any client-supplied `X-Forwarded-For`, so a caller who sends their own header produces a two-entry list — and the limiter degrades for everyone from that moment.
+**What remains is verification, and it needs a deploy.** Nothing here has run against real CloudFront. The acceptance test is a request through the distribution carrying `X-Forwarded-For: 1.2.3.4`, asserting the limiter still buckets per caller rather than globally — and that the origin sees a single-entry header holding the true viewer address. Until then this is reasoned, not measured.
 
-What closes it: **P0-17a**, when it configures the origin request policy. Either forward `CloudFront-Viewer-Address` and read the IP from it (set by CloudFront, not forgeable), or set `trustedProxies` to CloudFront's published ranges so the right-most non-proxy entry is taken. The first is simpler and does not need a range list kept current.
-
-When: **with P0-17a, and before launch.** A deployed smoke test that sends `X-Forwarded-For: 1.2.3.4` and asserts the limiter still buckets per-caller is the acceptance criterion.
+The other half, `NODE_ENV=production`, is closed and asserted in CI — see **A3**.
 
 **A3. `NODE_ENV=production` is asserted in CI.** ✅ **closed**
 
@@ -5963,7 +5970,7 @@ When: **before launch**, as documentation rather than code.
 
 **C1. `apps/api` has no streaming function.** `/v1/widget/chat` needs its own `RESPONSE_STREAM` Function URL (**P2-29**), because invoke mode is a property of the function rather than the route. `infra/api.ts` states `streaming: false` explicitly so the split stays deliberate.
 
-**C2. CloudFront has no API origin behaviours yet.** **P0-17a** is unblocked as of P0-54 and now carries a second job — see **A2**. It also has to resolve the hazard P0-17 recorded: `customErrorResponses` is distribution-wide, so the SPA's 404→200 rewrite would turn every genuine API 404 into a 200 carrying HTML, silently breaking P4-15 and §3.5's 404-not-403 rule.
+**C2. CloudFront now has API behaviours.** ✅ **closed by P0-17a.** The distribution carries the Lambda Function URL as an origin, a `/v1/widget/chat` behaviour with caching and compression disabled, and a general `/v1/*` behaviour. The P0-17 hazard is removed rather than worked around: SPA routing moved to a CloudFront Function scoped to the S3 behaviour, `customErrorResponses` is gone, and CI refuses to let it back. Two things it hands forward — P2-29 must add its own origin to raise the read timeout, and P3 must *insert* the widget-bundle behaviours ahead of `/v1/*` rather than append them.
 
 **C3. No expiry sweep for sessions or verification tokens.** `auth_sessions.expires_at` and `auth_verifications.expires_at` both carry indexes (P0-23a) and nothing scans them. Expiry is enforced *on read*, so this is a storage-growth and hygiene issue rather than a security one — an expired session is refused whether or not its row is still there. A periodic worker job belongs with the other scheduled work in P1.
 

@@ -118,6 +118,23 @@ jobs:
       # packages/core sets both options explicitly so neither depends on the
       # environment. This guards the third leg: removing the variable is
       # completely silent, and `typecheck:infra` does not run here.
+      # P0-17 recorded this hazard and P0-17a removed it, which is exactly the
+      # kind of fix that comes back: `customErrorResponses` is the obvious way
+      # to do SPA routing, and every tutorial reaches for it.
+      #
+      # It is distribution-wide rather than per-behaviour, so with API paths on
+      # this distribution it turns every genuine API 404 into a 200 carrying
+      # dashboard HTML — silently breaking §3.5's "a cross-tenant id returns
+      # 404", in the direction that looks like success. SPA routing is a
+      # CloudFront Function scoped to the S3 behaviour instead.
+      - name: Assert CloudFront maps no error responses distribution-wide
+        run: |
+          if grep -qE "^[[:space:]]*customErrorResponses:" infra/cdn.ts; then
+            echo "::error::infra/cdn.ts sets customErrorResponses — see P0-17a; it is distribution-wide, so it turns every API 404 into a 200 carrying dashboard HTML. Use a CloudFront Function on the S3 behaviour instead."
+            exit 1
+          fi
+          echo "no distribution-wide error mapping."
+
       - name: Assert the API function pins NODE_ENV=production
         run: |
           if ! grep -qE "NODE_ENV: *'production'" infra/api.ts; then

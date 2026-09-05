@@ -83,7 +83,10 @@ export default $config({
     await import('./infra/database');
     await import('./infra/config');
     await import('./infra/budgets');
-    await import('./infra/cdn');
+    // api before cdn: the distribution takes the Function URL as an origin.
+    // The reverse dependency is deliberately absent — see AUTH_BASE_URL in
+    // infra/api.ts for why that cycle cannot be closed.
     await import('./infra/api');
+    await import('./infra/cdn');
   },
 });

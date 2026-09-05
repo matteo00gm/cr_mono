@@ -2,8 +2,16 @@
 
 import process from 'node:process';
 
-import { distribution } from './cdn';
 import { authSecret, databaseUrl, parameterReadPermissions } from './config';
+
+/**
+ * The public origin Better Auth builds absolute URLs against.
+ *
+ * A secret rather than a config value only because `sst.Secret` is the
+ * mechanism this app already has for operator-supplied per-stage values; the
+ * domain itself is not sensitive.
+ */
+const authBaseUrl = new sst.Secret('AuthBaseUrl', 'https://localhost');
 import { vpc } from './vpc';
 
 /**
@@ -119,11 +127,23 @@ export const api = new sst.aws.Function('Api', {
     /**
      * What Better Auth builds password-reset and OAuth callback URLs against.
      *
-     * The CloudFront distribution's domain, not the Function URL: a reset link
-     * pointing at the raw Lambda origin would work exactly once, until the
-     * origin moved, and would bypass the edge entirely.
+     * **An operator-set secret, and it has to be** *(P0-17a finding).* The
+     * obvious value is the CloudFront domain — a reset link pointing at the raw
+     * Function URL would bypass the edge and break the moment the origin moved.
+     * But reading `distribution.domainName` here creates a **circular
+     * dependency**: CloudFront needs this function's URL as an origin, and this
+     * function would need CloudFront's domain. Neither can be created first.
+     *
+     * That cycle is inherent to the topology rather than an artefact of how it
+     * is written, so it is broken deliberately: the value is supplied out of
+     * band, exactly as `BudgetAlertEmail` is.
+     *
+     * Set it once per stage, after the first deploy tells you the domain:
+     *   `sst secret set AuthBaseUrl https://d111111abcdef8.cloudfront.net`
+     * It becomes a constant the day a custom domain exists, at which point this
+     * stops being a manual step at all.
      */
-    AUTH_BASE_URL: $interpolate`https://${distribution.domainName}`,
+    AUTH_BASE_URL: authBaseUrl.value,
   },
 
   /**
