@@ -1109,11 +1109,19 @@ Anti-rot checks in CI, each cheap:
 
 **`✅` in the `#` column means merged to `main`.** Verified against the tree at `6a3d2b0`, not from memory: every ✅ row has an artifact on disk, and the database rows have a migration, a hand-written reverse, a unit shape spec and an integration suite.
 
-**Merged:** P0-01 → P0-41, plus P0-21a and P0-21b. **Next in build order: P0-42.** The one exception in that range is **P0-33a**, added after review and still open — see its row.
+**Merged:** P0-01 → P0-44, plus P0-21a, P0-21b and P0-23a. **Next in build order: P0-54**, not P0-45 — see below. The one exception in that range is **P0-33a**, added after review and still open — see its row.
 
-**Two low-numbered rows are *not* done**, and their position in the table is misleading: **P0-17a** is blocked on the API Lambda origin and lands with P0-54, and **P0-23a** (Better Auth tables) sits later in dependency order than its number suggests. Neither is an oversight.
+**The build order stops following the row numbers here, and the reason is worth stating once.** P0-45 through P0-53 are all application code that mounts on `apps/api`, and `apps/api` is built by **P0-54** — nine rows further down. Its own dependency (P0-42) has been merged since, so P0-54 is unblocked and everything above it is not. The order actually being built is:
 
-**State of `packages/db`:** 17 tables across 15 schema modules, migrations `0000`–`0025` (**the next one is `0026`**), 23 integration suites / 234 tests, 124 unit tests, per-package coverage gates passing, and `pnpm db:generate` reporting no drift. **RLS is live**: enabled and forced on all 15 policy-carrying tables, so any new suite must set tenant context — see `test/support/tenant.ts`.
+> **P0-54 → P0-55 → P0-56 → P0-45 → P0-46 → P0-47 → P0-48 → P0-49 → P0-50 → P0-53**
+
+P0-55 and P0-56 come before P0-45 because the error handler must be in place before the first route that can fail in an interesting way, and because P0-53 redacts through P0-56. **P0-64 (Resend) and the two rows depending on it (P0-51, P0-52) are held back**: they need an API key in SSM and a verified sending domain, neither of which can be produced from this repo. P0-45's `sendResetPassword` is wired to a seam with a no-op default until then.
+
+**One low-numbered row is *not* done**, and its position in the table is misleading: **P0-17a** was blocked on the API Lambda origin, which P0-54 now provides.
+
+**State of `packages/db`:** 22 tables across 16 schema modules, migrations `0000`–`0027` (**the next one is `0028`**), 25 integration suites / 248 tests, per-package coverage gates passing, and `pnpm db:generate` reporting no drift. **RLS is live**: enabled and forced on all 15 policy-carrying tables, so any new suite must set tenant context — see `test/support/tenant.ts`. The five `auth_*` tables carry no policy and are out of that count by design (P0-23a).
+
+**State of the repo overall:** 31 unit suites / 184 tests across all packages, plus the integration suites above.
 
 **Three things that will otherwise mislead you:**
 
@@ -1172,10 +1180,10 @@ Anti-rot checks in CI, each cheap:
 | ✅ P0-39 | 🔒 Test: role privileges | `app_rw` lacks `BYPASSRLS`, is not table owner, has no DDL | 21,37 |
 | ✅ P0-40 | Test: migration up/down/up | on a seeded DB, in CI | 37 |
 | ✅ P0-41 | Test: every tenant table has RLS | reflection test that fails when a new table forgets it | 37 |
-| P0-42 | ⛔ `drizzle-zod` contracts | derive + export request/response schemas and types | 26,37 |
-| P0-43 | Seed script + factories | realistic Italian wine fixtures, two tenants | 42 |
-| P0-44 | ⛔ `packages/testing`: Testcontainers | Postgres+pgvector harness, RLS on, per-suite reset | 43 |
-| P0-23a | 🔒 Better Auth schema tables | `auth_*` prefix (`user` is a reserved word), text ids, cookie cache; **not** tenant-scoped → P0-41 allowlist | 22 |
+| ✅ P0-42 | ⛔ `drizzle-zod` contracts | derive + export request/response schemas and types | 26,37 |
+| ✅ P0-43 | Seed script + factories | realistic Italian wine fixtures, two tenants | 42 |
+| ✅ P0-44 | ⛔ `packages/testing`: Testcontainers | Postgres+pgvector harness, RLS on, per-suite reset | 43 |
+| ✅ P0-23a | 🔒 Better Auth schema tables | `auth_*` prefix (`user` is a reserved word), text ids, cookie cache; **not** tenant-scoped → P0-41 allowlist | 22 |
 | P0-45 | ⛔ 🔒 Better Auth setup + session middleware | Postgres-backed sessions, no JWKS fetch through NAT; tightly-scoped `withTenant` exception | 42,23a |
 | P0-64 | ⛔ 🔒 Email infrastructure (Resend) | SPF/DKIM/DMARC, one `sendEmail` seam, **staggered sends** (100/day cap), bounce suppression | 11 |
 | P0-46 | 🔒 Auth security suite | session integrity, **account enumeration incl. timing**, reset-token reuse, auth rate limits, surface isolation | 45 |
@@ -2840,9 +2848,19 @@ Implementation: `POST .../members/invite` requires `members:manage`, creates an 
 
 **How.** Hono app with two sub-apps mounted at `/v1/dashboard` and `/v1/widget` — **separate instances**, because they need entirely different middleware stacks (the widget path must never mount Better Auth, and the dashboard path must never mount the public CORS handler). Export via `hono/aws-lambda`'s `handle`. SST `Function` with `url: true`, arm64, 512 MB, Node 22. Health endpoint returning build SHA.
 
+**Three SST defaults differ from what this row specifies, and all three are now set explicitly** *(correction).* Verified against the pinned v4.17.1 source rather than the docs, as `sst.config.ts` requires: `architecture` defaults to `"x86_64"` (`function.ts:1769`), `runtime` to `"nodejs24.x"` (`:1844`), and `memory` to `"1024 MB"` (`:1888`). Every one of them would have been wrong quietly — x86_64 costs ~20% more per GB-second for identical work, 1024 MB doubles the figure §5.2a's projections are built from, and nodejs24.x would run the application on a runtime nothing in this repo has been tested against. `streaming: false` is written down too, though it is already the default: it resolves to `invokeMode: "BUFFERED"` (`:2744`), and a flip to `RESPONSE_STREAM` changes the response envelope for every route the function serves.
+
+**Reserved concurrency is deliberately *not* set here, and §5.1 and P1-48 disagree about it.** §5.1 says 40; P1-48 says cap at 10 while on `t4g.micro`, because each concurrent Lambda holds a Postgres connection and 40 against that instance is a self-inflicted outage. P1-48 is right and owns the setting. Leaving it unset now is safe only because nothing is deployed — **P1-48 must land before this function takes real traffic.**
+
+**VPC placement and the `database/url` grant are not here either.** They arrive with P0-45, the first task whose code opens a connection. Putting a function in private subnets before it needs to be there buys cold-start latency for nothing.
+
+**This unblocks P0-17a**, which needed a Function URL origin for its cache behaviour to target.
+
+**Hono runs middleware in registration order, so a `use()` below a `get()` never runs.** Recorded here because it is a security trap rather than a curiosity: P0-45's session middleware or P0-49's capability check registered below the route it guards is an endpoint silently serving unauthenticated traffic, while every functional test of that endpoint still passes. Pinned by an assertion in `app.test.ts`, and it is part of why P0-50 enumerates routes from the router rather than from memory.
+
 **Tests.** Integration test hitting the health route through the Hono app directly (no AWS needed).
 
-**Files.** `apps/api/src/index.ts`, `infra/api.ts`. **~90 lines.**
+**Files.** `apps/api/src/{index,app}.ts`, `apps/api/src/surfaces/{dashboard,widget}.ts`, `infra/api.ts`. **~90 lines.** *(The surface files are the "separate instances" requirement made structural: the composition root mounts, and neither surface can reach the other's middleware.)*
 
 ---
 
@@ -5614,7 +5632,7 @@ What that setting changes, precisely: pnpm **still refuses to run the scripts** 
 
 | Item | Owner | Note |
 |---|---|---|
-| P0-17a blocked | needs the API origin | The streaming chat behaviour needs a Lambda Function URL origin to target. Land it with P0-54, using the `CachingDisabled` managed policy and a >=30s origin read timeout. |
+| P0-17a unblocked | ~~needs the API origin~~ | **Resolved by P0-54**, which creates the `Api` Function URL. The cache behaviour now has an origin to target: `CachingDisabled` managed policy, compression off, >=30s origin read timeout. Note the *streaming* function itself is still P2-29 — P0-17a can add the behaviour against the buffered origin and repoint it, or wait. |
 | CloudFront error mapping vs P4-15 | before the API joins the CDN | `customErrorResponses` is distribution-wide, so SPA 404->200 would turn API 404s into 200 HTML. Split the distribution or move SPA routing into a CloudFront Function. |
 | Integration suite not in CI | later | `pnpm test:integration` needs Docker and runs separately from `pnpm test`. GitHub runners have Docker; add it as its own job so the unit loop stays fast. |
 | Combined non-prod budget | needs an account-level resource | §5.8 targets $15 across all non-prod, but budgets are created per stage, so N stages can total N x $15 unnoticed. Needs one budget created outside per-stage IaC. |
