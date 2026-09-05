@@ -23,16 +23,35 @@ import type { AppEnv } from '../env.js';
  * refusal would only stop them understanding why their own account cannot do
  * something. §3.5's 404 is for a *tenant* they have no membership in, which
  * P0-47 already answered before this middleware ever runs.
+ *
+ * **The returned guard carries the capability it enforces** (P0-50), and that
+ * tag is not decoration. Hono records one `app.routes` entry per handler, so the
+ * matrix can find this middleware on a route and read back *which* capability is
+ * actually wired — catching a route declared in the access table but never
+ * guarded, and a route guarded with the wrong capability. Neither is visible
+ * from behaviour alone when every role happens to hold the capability involved.
  */
-export const requireCapability =
-  (capability: Capability): MiddlewareHandler<AppEnv> =>
-  async (c, next) => {
+export interface CapabilityGuard extends MiddlewareHandler<AppEnv> {
+  readonly capability: Capability;
+}
+
+export const requireCapability = (capability: Capability): CapabilityGuard => {
+  const guard: MiddlewareHandler<AppEnv> = async (c, next) => {
     if (!can(c.get('role'), capability)) {
       throw new ForbiddenError(`This role cannot ${capability.replace(':', ' ')}.`);
     }
 
     await next();
   };
+
+  return Object.assign(guard, { capability });
+};
+
+/** The capability a handler enforces, or `undefined` if it is not a guard. */
+export const capabilityOf = (handler: unknown): Capability | undefined =>
+  typeof handler === 'function' && 'capability' in handler
+    ? (handler as CapabilityGuard).capability
+    : undefined;
 
 /**
  * A route the router knows about, as Hono reports it.
@@ -41,10 +60,21 @@ export const requireCapability =
  * path — so they are filtered out. What is left is the set of concrete
  * endpoints, with the mount prefix already applied.
  */
-export const registeredRoutes = (app: Hono<AppEnv>): readonly { method: string; path: string }[] =>
+export interface RegisteredRoute {
+  readonly method: string;
+  readonly path: string;
+  /** Set when this entry is a `requireCapability` guard rather than a handler. */
+  readonly capability: Capability | undefined;
+}
+
+export const registeredRoutes = (app: Hono<AppEnv>): readonly RegisteredRoute[] =>
   app.routes
     .filter((route) => !route.path.includes('*'))
-    .map((route) => ({ method: route.method, path: route.path }));
+    .map((route) => ({
+      method: route.method,
+      path: route.path,
+      capability: capabilityOf(route.handler),
+    }));
 
 export const routeKey = (method: string, path: string): string => `${method} ${path}`;
 

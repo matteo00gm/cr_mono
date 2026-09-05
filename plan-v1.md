@@ -1189,7 +1189,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P0-46 | 🔒 Auth security suite | session integrity, **account enumeration incl. timing**, reset-token reuse, auth rate limits, surface isolation | 45 |
 | ✅ P0-47 | ⛔ 🔒 Membership + tenant resolution | tenant derived from `memberships`, never from request | 45 |
 | ✅ P0-48 | 🔒 Test + lint: tenant not from input | no handler may read a tenant id from body/query/header | 47 |
-| P0-49 | ⛔ 🔒 Capability table + policy module | declarative, OWNER/EDITOR; no inline role checks | 47 |
+| ✅ P0-49 | ⛔ 🔒 Capability table + policy module | declarative, OWNER/EDITOR; no inline role checks | 47 |
 | P0-50 | 🔒 Generated role×endpoint matrix test | missing capability entry ⇒ CI failure, not open access | 49 |
 | P0-51 | Invite flow | own `invitations` table + single-use token, email via Resend | 49,64 |
 | P0-52 | 🔒 Last-OWNER guard + test | cannot remove or demote the final OWNER | 51 |
@@ -2862,9 +2862,21 @@ export const CAPABILITIES = {
 
 **How.** Import the route table, iterate `routes × roles`, and for each call the endpoint with a session of that role, asserting allow or deny against `CAPABILITIES`. Then the part that gives it teeth: assert every registered route appears in the capability map, so **adding a route without a capability fails CI**. *(Note for P4-03a and any other route performing outbound fetches: those also need the `guardedFetch` agent, not just a capability entry.)* Use a minimal valid payload per route from the P0-42 schemas so failures are authorization failures and not validation noise.
 
+**Three distinct failures, not one** *(the row reads as though "every route has a capability entry" were the whole job).* Enumerating routes and comparing against the map catches a route with **no entry**. It does not catch a route whose entry is **never wired to a guard**, or one wired to the **wrong** capability — and neither is visible from behaviour whenever every role happens to hold the capability involved, which is true of `catalog:read` today.
+
+So `requireCapability` returns a guard **carrying the capability it enforces**, and the matrix reads it back off `app.routes` (Hono records one entry per handler). That turns "declared but unenforced" and "enforced with the wrong capability" into test failures rather than things nobody can see.
+
+**The live route set cannot exercise the deny branch, so the matrix builds one that can.** Every capability currently declared on a route is `catalog:read`, which both roles hold — meaning the generated matrix only ever asserts *allowed*, and a `requireCapability` quietly reduced to `next()` would sail through it. A separate group mounts the real dashboard surface with one extra OWNER-only route and checks both directions, **plus a negative control**: the same route without its guard, admitting the EDITOR. Without that control, a route that 403'd for everyone would look identical to one that 403s for the right people.
+
+**The assertion is on 403 specifically, not on 2xx.** A route may legitimately answer 404 or 422 for reasons unrelated to authorisation, and demanding a 200 would turn every unrelated change into an RBAC failure. The question being asked is only: *was the caller refused for who they are?*
+
+**The matrix also asserts the table has no orphaned entries.** A declaration for a route that no longer exists is not a security hole, but it makes the table stop describing the system — and a table nobody trusts is a table nobody checks against. P0-62's OpenAPI generation reads the same table.
+
+**Verification is in-process rather than in a scratch commit.** The row suggests adding an unprotected route by hand; the suite does it in a test instead, so the check runs on every CI run rather than once. The same reasoning as P0-08's secret-scanner self-test and P0-48's lint-rule self-test.
+
 **Tests.** This is the test. Verify by adding an unprotected route in a scratch commit.
 
-**Files.** `apps/api/test/rbac-matrix.spec.ts`. **~120 test lines.**
+**Files.** `apps/api/test/rbac-matrix.test.ts`. **~120 test lines.** *(`.test.ts`, not `.spec.ts`: the runner discovers unit suites by that suffix, and nothing here needs a container.)*
 
 ---
 
