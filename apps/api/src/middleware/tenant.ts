@@ -1,11 +1,11 @@
 import {
   ACTIVE_TENANT_HEADER,
   resolveMembership,
+  setRequestTenant,
   type MembershipReader,
 } from '@catalogorosso/core';
 import type { MiddlewareHandler } from 'hono';
 
-import { setRequestTenant } from '../context.js';
 import type { AppEnv } from '../env.js';
 
 /**

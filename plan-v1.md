@@ -1109,19 +1109,25 @@ Anti-rot checks in CI, each cheap:
 
 **`✅` in the `#` column means merged to `main`.** Verified against the tree at `6a3d2b0`, not from memory: every ✅ row has an artifact on disk, and the database rows have a migration, a hand-written reverse, a unit shape spec and an integration suite.
 
-**Merged:** P0-01 → P0-44, plus P0-21a, P0-21b and P0-23a. **Next in build order: P0-54**, not P0-45 — see below. The one exception in that range is **P0-33a**, added after review and still open — see its row.
+**Merged:** P0-01 → P0-44, plus P0-21a, P0-21b and P0-23a. The one exception in that range is **P0-33a**, added after review and still open — see its row.
 
-**The build order stops following the row numbers here, and the reason is worth stating once.** P0-45 through P0-53 are all application code that mounts on `apps/api`, and `apps/api` is built by **P0-54** — nine rows further down. Its own dependency (P0-42) has been merged since, so P0-54 is unblocked and everything above it is not. The order actually being built is:
+**Built and in review, as one stacked chain:** P0-54, P0-55, P0-56, P0-45, P0-46, P0-47, P0-48, P0-49, P0-50, P0-53. Each is its own PR, based on the previous, and **they must be merged bottom-up in that order** — the ✅ on those rows means "written and green", not "on `main`".
+
+**The build order stops following the row numbers here, and the reason is worth stating once.** P0-45 through P0-53 are all application code that mounts on `apps/api`, and `apps/api` is built by **P0-54** — nine rows further down. Its own dependency (P0-42) was already merged, so P0-54 was unblocked and everything above it was not. The order actually built is:
 
 > **P0-54 → P0-55 → P0-56 → P0-45 → P0-46 → P0-47 → P0-48 → P0-49 → P0-50 → P0-53**
 
-P0-55 and P0-56 come before P0-45 because the error handler must be in place before the first route that can fail in an interesting way, and because P0-53 redacts through P0-56. **P0-64 (Resend) and the two rows depending on it (P0-51, P0-52) are held back**: they need an API key in SSM and a verified sending domain, neither of which can be produced from this repo. P0-45's `sendResetPassword` is wired to a seam with a no-op default until then.
+P0-55 and P0-56 come before P0-45 because the error handler must be in place before the first route that can fail in an interesting way, and because P0-53 redacts through P0-56. **P0-64 (Resend) and the two rows depending on it (P0-51, P0-52) are held back**: they need an API key in SSM and a verified sending domain, neither of which can be produced from this repo. P0-45's `sendResetPassword` is a required argument rather than a defaulted one, and the API supplies a placeholder that logs and resolves — see P0-45 for why it must not throw.
 
-**One low-numbered row is *not* done**, and its position in the table is misleading: **P0-17a** was blocked on the API Lambda origin, which P0-54 now provides.
+**Next in build order after this chain: P0-51 and P0-52** once P0-64 is possible, and **P0-57** (`apps/dashboard`), whose dependencies P0-42 and P0-45 are now both satisfied.
+
+**One low-numbered row is *not* done**, and its position in the table is misleading: **P0-17a** was blocked on the API Lambda origin, which P0-54 now provides. It has a second reason to land soon: P0-46 needs to know what CloudFront actually forwards as the client address, or the auth rate limiter degrades to a single shared bucket.
+
+**State of `apps/api`:** two route surfaces, a session guard, tenant resolution, a capability table with a fail-closed boot check, structured logging with allowlist redaction, and a central error handler. 47 unit suites / 433 tests and 30 integration suites / 304 tests across the repo.
 
 **State of `packages/db`:** 22 tables across 16 schema modules, migrations `0000`–`0028` (**the next one is `0029`**), 26 integration suites / 258 tests, per-package coverage gates passing, and `pnpm db:generate` reporting no drift. **RLS is live**: enabled and forced on all 15 policy-carrying tables, so any new suite must set tenant context — see `test/support/tenant.ts`. The five `auth_*` tables carry no policy and are out of that count by design (P0-23a).
 
-**State of the repo overall:** 38 unit suites / 302 tests across all packages, plus the integration suites above. `apps/api` exists as of P0-54 and carries the two route surfaces, the error handler, structured logging and the session guard.
+**State of the repo overall:** 47 unit suites / 433 tests across all packages, plus the integration suites above.
 
 **Three things that will otherwise mislead you:**
 
@@ -1190,7 +1196,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P0-47 | ⛔ 🔒 Membership + tenant resolution | tenant derived from `memberships`, never from request | 45 |
 | ✅ P0-48 | 🔒 Test + lint: tenant not from input | no handler may read a tenant id from body/query/header | 47 |
 | ✅ P0-49 | ⛔ 🔒 Capability table + policy module | declarative, OWNER/EDITOR; no inline role checks | 47 |
-| P0-50 | 🔒 Generated role×endpoint matrix test | missing capability entry ⇒ CI failure, not open access | 49 |
+| ✅ P0-50 | 🔒 Generated role×endpoint matrix test | missing capability entry ⇒ CI failure, not open access | 49 |
 | P0-51 | Invite flow | own `invitations` table + single-use token, email via Resend | 49,64 |
 | P0-52 | 🔒 Last-OWNER guard + test | cannot remove or demote the final OWNER | 51 |
 | P0-53 | `audit_log` writer | helper + actor/ip/ua capture | 31,47 |
@@ -2922,9 +2928,21 @@ Implementation: `POST .../members/invite` requires `members:manage`, creates an 
 
 **How.** `audit(tx, { action, target, metadata })` reading actor, ip and user-agent from request context. **Takes the caller's `tx`** so the audit row commits atomically with the action — an audit entry for an action that rolled back is worse than none. Redact metadata through the P0-56 serializer before writing.
 
+**The request context moves from `apps/api` into `packages/core`** *(consequence of "reading actor, ip and user-agent from request context").* It could not stay in the app: P0-52's last-OWNER guard and every other domain rule needs to write audit rows, and no package can import an app. Threading an actor through every call site was the alternative, and it fails the way a threaded logger does — the one path nobody threaded is the one that matters. Nothing in it is HTTP-specific (`node:async_hooks` is not a framework), so the P0-09 rule keeping this package free of HTTP and AWS still holds; the API fills it from a request and the worker will fill it from an SQS message.
+
+**The statement lives in `packages/db`, not `core`** *(the P0-09 rule caught it, exactly as in P0-47).* Writing the insert in `core` meant `core` importing `drizzle-orm`, which `no-raw-db-outside-with-tenant` forbids. The fix was not an exception: db owns the statement, core owns what gets recorded and what is scrubbed out of it.
+
+**`audit_log.ip` is `inet`, so an address is captured only when it is unambiguous.** A multi-entry `x-forwarded-for` resolves to *no* address rather than a guessed one — the same problem P0-46 records against the rate limiter, and here the column would refuse a malformed value at write time, loudly, in the middle of an unrelated action. A row recording a guessed address is worse than one recording none.
+
+**No `RETURNING` on the insert.** `app_rw` holds INSERT on this table and nothing else (P0-31's append-only revoke), and Postgres applies the SELECT policy to a RETURNING clause — so asking for the row back would fail with 42501 on a write that is otherwise permitted. The same finding P2-16 records for `security_events`.
+
+**Redaction matters more here than in a log line.** `audit_log` is append-only at the grant level, so a secret written into it cannot be taken out again short of dropping the tenant. Callers pass whatever describes the action, and "whatever" is how a reset token becomes permanent.
+
+**An unrelated flake was found and fixed while running this.** P0-46's tampered-cookie test mutated a byte with `replace(..., '$1X')`, which is a **no-op whenever the byte was already `X`** — so it passed about 63 times in 64 and would have reported a working signature check on the 64th. It now flips to a character that is definitely different, and asserts the tamper changed the string at all.
+
 **Tests.** Writing inside a rolled-back transaction leaves no audit row. Secrets in metadata are redacted.
 
-**Files.** `packages/core/src/audit.ts`, tests. **~70 lines.**
+**Files.** `packages/core/src/{audit,request-context}.ts`, `packages/db/src/audit.ts`, tests. **~70 lines.**
 
 ---
 

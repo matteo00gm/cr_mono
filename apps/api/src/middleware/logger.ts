@@ -1,3 +1,4 @@
+import { getRequestContext, runWithRequestContext, type RequestContext } from '@catalogorosso/core';
 import { randomUUID } from 'node:crypto';
 import process from 'node:process';
 import type { MiddlewareHandler } from 'hono';
@@ -5,8 +6,6 @@ import { routePath } from 'hono/route';
 import { pino, type Logger, type LoggerOptions } from 'pino';
 
 import { redactLogObject, scrubString } from '@catalogorosso/security';
-
-import { getRequestContext, runWithRequestContext } from '../context.js';
 
 /**
  * Structured logging (P0-55).
@@ -108,6 +107,33 @@ export const loggerOptions: LoggerOptions = {
  */
 export const logger: Logger = pino(loggerOptions);
 
+/**
+ * The single client address, or nothing.
+ *
+ * A multi-entry `x-forwarded-for` cannot be trusted without knowing which hops
+ * are ours (the same problem P0-46 records against the rate limiter), and a
+ * value that is not an address at all would be refused by the `inet` column.
+ * Both cases resolve to no address rather than a wrong one.
+ */
+const clientIp = (header: string | undefined): { ip?: string } => {
+  if (header === undefined) return {};
+
+  const entries = header.split(',').map((entry) => entry.trim());
+  const [only] = entries;
+
+  return entries.length === 1 && only !== undefined && /^[0-9a-fA-F.:]+$/.test(only)
+    ? { ip: only }
+    : {};
+};
+
+/**
+ * Present or absent, never `undefined` — `exactOptionalPropertyTypes` treats
+ * "the key is there holding undefined" as a different thing from "no key", and
+ * only the second is what an absent header means.
+ */
+const userAgent = (header: string | undefined): { userAgent?: string } =>
+  header === undefined ? {} : { userAgent: header };
+
 /** The header the request id is echoed on, so a caller can quote it in a report. */
 export const REQUEST_ID_HEADER = 'x-request-id';
 
@@ -135,7 +161,22 @@ export const requestContext =
      * is for. AWS's own `x-amzn-trace-id` is logged alongside for correlation
      * with the edge, because that one is not ours to invent.
      */
-    const context = { requestId: randomUUID() };
+    const context: RequestContext = {
+      requestId: randomUUID(),
+
+      /*
+       * Captured here so `audit()` can record them without every call site
+       * knowing about HTTP (P0-53).
+       *
+       * `x-forwarded-for` is the same header the rate limiter resolves callers
+       * by, and it can carry a list once a proxy appends to it — so only a
+       * single, well-formed-looking entry is kept. `audit_log.ip` is `inet` and
+       * rejects anything else at write time, and an audit row recording a
+       * guessed address is worse than one recording none.
+       */
+      ...clientIp(c.req.header('x-forwarded-for')),
+      ...userAgent(c.req.header('user-agent')),
+    };
 
     await runWithRequestContext(context, async () => {
       const startedAt = Date.now();

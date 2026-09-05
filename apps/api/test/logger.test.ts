@@ -1,8 +1,14 @@
+import {
+  getRequestContext,
+  runWithRequestContext,
+  setRequestTenant,
+  setRequestUser,
+  type RequestContext,
+} from '@catalogorosso/core';
 import { Hono } from 'hono';
 import { pino, type Logger, type LoggerOptions } from 'pino';
 import { describe, expect, it } from 'vitest';
 
-import { runWithRequestContext, setRequestTenant, setRequestUser } from '../src/context.js';
 import { loggerOptions, requestContext } from '../src/middleware/logger.js';
 
 /**
@@ -143,6 +149,53 @@ describe('setRequestTenant / setRequestUser outside a request', () => {
       expect(setRequestTenant('11111111-1111-1111-1111-111111111111')).toBe(true);
       expect(setRequestUser('user_abc')).toBe(true);
     });
+  });
+});
+
+describe('the client address, for audit rows', () => {
+  const contextFor = async (headers: Record<string, string>): Promise<RequestContext> => {
+    let captured: RequestContext | undefined;
+    const app = new Hono();
+    app.use('*', requestContext());
+    app.get('/', (c) => {
+      captured = getRequestContext();
+      return c.text('ok');
+    });
+
+    await app.request('/', { headers });
+
+    return captured ?? { requestId: 'none' };
+  };
+
+  it('keeps a single well-formed address', async () => {
+    expect((await contextFor({ 'x-forwarded-for': '203.0.113.7' })).ip).toBe('203.0.113.7');
+  });
+
+  it('drops a multi-entry header rather than guessing which hop is the client', async () => {
+    /*
+     * The same problem P0-46 records against the rate limiter: without knowing
+     * which hops are ours, no entry in the list is trustworthy. `audit_log.ip`
+     * is `inet` and a row recording a guessed address is worse than one
+     * recording none — so this resolves to nothing.
+     */
+    expect(
+      (await contextFor({ 'x-forwarded-for': '203.0.113.7, 198.51.100.2' })).ip,
+    ).toBeUndefined();
+  });
+
+  it('drops a value that is not an address at all', async () => {
+    // The `inet` column would refuse it at write time, loudly, in the middle of
+    // an unrelated action.
+    expect((await contextFor({ 'x-forwarded-for': 'not-an-address' })).ip).toBeUndefined();
+  });
+
+  it('leaves it absent when the header is missing', async () => {
+    expect((await contextFor({})).ip).toBeUndefined();
+  });
+
+  it('records the user agent when there is one, and nothing when there is not', async () => {
+    expect((await contextFor({ 'user-agent': 'Firefox/1' })).userAgent).toBe('Firefox/1');
+    expect((await contextFor({})).userAgent).toBeUndefined();
   });
 });
 

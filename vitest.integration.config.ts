@@ -12,6 +12,16 @@ export default defineConfig({
     name: 'integration',
     environment: 'node',
     /*
+     * Same reason as the unit config: the API logs a line per request and one
+     * per handled error, and the auth suites deliberately produce hundreds of
+     * refusals — enough to bury the actual failure in the report.
+     *
+     * Only the process logger is silenced. Suites that assert on log *output*
+     * build their own logger from the exported `loggerOptions` with an explicit
+     * level, which is why those options are exported separately.
+     */
+    env: { LOG_LEVEL: 'silent' },
+    /*
      * Rooted at the workspace rather than at packages/db, since P0-44 puts the
      * harness — and its smoke test — in packages/testing.
      *

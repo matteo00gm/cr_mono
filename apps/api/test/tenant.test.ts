@@ -1,10 +1,9 @@
-import { ACTIVE_TENANT_HEADER } from '@catalogorosso/core';
+import { ACTIVE_TENANT_HEADER, getRequestContext } from '@catalogorosso/core';
 import { describe, expect, it } from 'vitest';
 
 import { Hono } from 'hono';
 
 import { createApp } from '../src/app.js';
-import { getRequestContext } from '../src/context.js';
 import type { AppEnv } from '../src/env.js';
 import { requireUser } from '../src/middleware/auth.js';
 import { requestContext } from '../src/middleware/logger.js';
