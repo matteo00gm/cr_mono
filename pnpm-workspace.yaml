@@ -2,31 +2,44 @@ packages:
   - 'apps/*'
   - 'packages/*'
 
+# Dependency build scripts: answered, not suppressed.
+#
+# pnpm 11 blocks dependency build scripts by default and then exits non-zero to
+# make you acknowledge them — including on `install --frozen-lockfile`, so an
+# unacknowledged package fails every CI job at the install step and nothing
+# after it runs. Four arrive transitively and none is needed: cpu-features (an
+# optional native accelerator for ssh2), ssh2 (its native build is an
+# optimisation), protobufjs (a codegen postinstall we do not depend on), and
+# esbuild (a prebuilt binary is downloaded either way).
+#
+# `false` is a decision, and writing it here is what makes the decision stick.
+# The alternative this replaced was `strictDepBuilds: false`, which silenced the
+# error without answering the question — and left a real cost, recorded at the
+# time: the *notification* that some future dependency wants to run code at
+# install time was lost along with the error.
+#
+# That notification is now back, and it is the reason to prefer this shape.
+# pnpm appends a placeholder line — `<package>: set this to true or false` — for
+# any build-script package it has not been told about, and `ci.yml` fails on
+# that placeholder. So a new dependency wanting to run code at install time
+# stops a pull request and asks for an answer, which is exactly the event worth
+# hearing about.
+#
+# Verified in a fresh worktree rather than in a tree that already had
+# node_modules — the distinction this repository has already been burned by,
+# see the P0-17 to P0-19 review. With these four answered, a clean
+# `pnpm install --frozen-lockfile` succeeds, rewrites nothing, and leaves no
+# build output: cpu-features and ssh2 have no `build/` directory afterwards.
+# (Two `.node` files do appear in the tree, from @rolldown/binding and
+# lightningcss — those are prebuilt platform binaries shipped inside optional
+# dependencies, not products of a build script.)
+#
+# `onlyBuiltDependencies` and `ignoredBuiltDependencies` were both tried, in
+# this file and in package.json's `pnpm` field. Neither suppresses the error and
+# neither stops the placeholder rewrite. Listing them would be config that reads
+# as load-bearing while doing nothing.
 allowBuilds:
-  cpu-features: set this to true or false
-  esbuild: set this to true or false
-  protobufjs: set this to true or false
-  ssh2: set this to true or false
-
-# Do not fail the install when a dependency ships a build script we are not
-# running.
-#
-# pnpm 11 blocks dependency build scripts by default and then exits non-zero
-# to make you acknowledge them — including on `install --frozen-lockfile`, so
-# without this every CI job fails the moment such a package appears. Three
-# arrive under @testcontainers/postgresql and none is needed: cpu-features (an
-# optional native accelerator for ssh2), ssh2 (native build is an optimisation)
-# and protobufjs (a codegen postinstall we do not depend on).
-#
-# What this does and does not change, because the distinction matters: pnpm
-# still refuses to execute those scripts — verified by the absence of any native
-# build output afterwards. Only the error is silenced. So the supply-chain
-# protection is intact and what is lost is the *notification* that some future
-# dependency wanted to run code at install time. Renovate PRs and the P0-08
-# audit gate remain the compensating controls.
-#
-# Note `onlyBuiltDependencies` and `ignoredBuiltDependencies` were both tried,
-# in this file and in package.json's `pnpm` field. Neither suppresses the error
-# in pnpm 11.24; only this setting does. Listing them anyway would be config
-# that reads as load-bearing while doing nothing.
-strictDepBuilds: false
+  cpu-features: false
+  esbuild: false
+  protobufjs: false
+  ssh2: false
