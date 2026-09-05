@@ -1109,11 +1109,9 @@ Anti-rot checks in CI, each cheap:
 
 **`✅` in the `#` column means merged to `main`.** Verified against the tree at `6a3d2b0`, not from memory: every ✅ row has an artifact on disk, and the database rows have a migration, a hand-written reverse, a unit shape spec and an integration suite.
 
-**Merged:** P0-01 → P0-44, plus P0-21a, P0-21b and P0-23a. The one exception in that range is **P0-33a**, added after review and still open — see its row.
+**Merged:** P0-01 → P0-56, in the order below rather than by row number. The exceptions inside that range are **P0-33a** (added after review, still open — see its row), **P0-17a** (was blocked on the API origin, which P0-54 now provides), and **P0-51, P0-52 and P0-64**, which are held back on an external dependency — see the note two paragraphs down.
 
-**Built and in review, as one stacked chain:** P0-54, P0-55, P0-56, P0-45, P0-46, P0-47, P0-48, P0-49, P0-50, P0-53. Each is its own PR, based on the previous, and **they must be merged bottom-up in that order** — the ✅ on those rows means "written and green", not "on `main`".
-
-**The build order stops following the row numbers here, and the reason is worth stating once.** P0-45 through P0-53 are all application code that mounts on `apps/api`, and `apps/api` is built by **P0-54** — nine rows further down. Its own dependency (P0-42) was already merged, so P0-54 was unblocked and everything above it was not. The order actually built is:
+**The build order stopped following the row numbers here, and the reason is worth stating once.** P0-45 through P0-53 are all application code that mounts on `apps/api`, and `apps/api` is built by **P0-54** — nine rows further down. Its own dependency (P0-42) was already merged, so P0-54 was unblocked and everything above it was not. The order actually built, and merged, was:
 
 > **P0-54 → P0-55 → P0-56 → P0-45 → P0-46 → P0-47 → P0-48 → P0-49 → P0-50 → P0-53**
 
