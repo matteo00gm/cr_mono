@@ -1,6 +1,8 @@
 import process from 'node:process';
 import { Hono } from 'hono';
 
+import { errorHandler, normaliseThrown, notFoundHandler } from './middleware/error.js';
+import { requestContext } from './middleware/logger.js';
 import { createDashboardApp } from './surfaces/dashboard.js';
 import { createWidgetApp } from './surfaces/widget.js';
 
@@ -31,6 +33,37 @@ import { createWidgetApp } from './surfaces/widget.js';
  */
 export const createApp = (): Hono => {
   const app = new Hono();
+
+  /*
+   * Registered first, and that is load-bearing rather than tidy. Hono matches
+   * handlers in registration order, so middleware added below a route never
+   * runs for it (P0-54) — a request context opened after the routes would give
+   * a suite that passes and a production system whose logs carry no tenant.
+   *
+   * This is also the one thing the parent app legitimately owns: it is not
+   * surface-specific, and every request on both surfaces needs it.
+   */
+  app.use('*', requestContext());
+
+  /*
+   * Immediately inside the request context, and before every route.
+   *
+   * Hono rethrows a thrown non-`Error` instead of calling `onError`, so without
+   * this a `throw 'oops'` anywhere in the product escapes the app entirely and
+   * the caller gets the Lambda runtime's raw 502 — bypassing the envelope, the
+   * request id and the disclosure rules all at once. Inside the context
+   * middleware rather than outside it, so the resulting 500 still carries a
+   * real request id.
+   */
+  app.use('*', normaliseThrown());
+
+  /*
+   * `onError` and `notFound` are not middleware and are order-independent, but
+   * they belong beside the middleware they cooperate with: both read the
+   * request id out of the context opened above.
+   */
+  app.onError(errorHandler);
+  app.notFound(notFoundHandler);
 
   /**
    * Health, under `/v1/` deliberately.
