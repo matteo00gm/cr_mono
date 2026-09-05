@@ -26,6 +26,8 @@ const UNIQUE_VIOLATION = '23505';
 
 let container: StartedPostgreSqlContainer | undefined;
 let client: DbClient | undefined;
+let admin: DbClient | undefined;
+let adminDb: Database;
 let db: Database;
 let tenantId: string;
 
@@ -36,10 +38,17 @@ beforeAll(async () => {
   // As app_rw: the grants under test are the ones the application actually has.
   client = createDbClient(started.roleUrl('app_rw'), { max: 1 });
   db = client.db;
+
+  // The cascade below is a property of the foreign key, not of the runtime
+  // role — and since P0-33a revoked DELETE on `tenants` from app_rw, only a
+  // role that still holds it can exercise the cascade at all.
+  admin = createDbClient(started.adminUrl, { max: 1 });
+  adminDb = admin.db;
 }, 180_000);
 
 afterAll(async () => {
   await client?.close();
+  await admin?.close();
   await container?.stop();
 }, 60_000);
 
@@ -105,13 +114,40 @@ describe('usage_events', () => {
     expect(Number(row?.total)).toBe(2500);
   });
 
-  it('goes with its tenant', async () => {
+  it('cannot be erased by deleting its tenant as app_rw', async () => {
+    /*
+     * Inverted by P0-33a, and this is the ledger where it matters most.
+     *
+     * `usage_events` is what the tenant is billed from. The revoke above makes
+     * it append-only for app_rw — and `DELETE FROM tenants` cascaded straight
+     * through it, because a referential cascade is not permission-checked
+     * against the invoking role. Cancelling a subscription must not destroy the
+     * record of what was owed.
+     */
     await insertEvent();
-    // A deleted tenant must not leave billing rows behind: they reference a
-    // tenant that cannot be looked up, and every margin report counts them.
-    await db.execute(sql`delete from tenants where id = ${tenantId}::uuid`);
 
-    const rows = await db.execute(
+    const error = await db
+      .execute(sql`delete from tenants where id = ${tenantId}::uuid`)
+      .catch((caught: unknown) => caught);
+
+    expect(pgErrorCode(error)).toBe(INSUFFICIENT_PRIVILEGE);
+
+    const kept = await db.execute(
+      sql`select 1 from usage_events where tenant_id = ${tenantId}::uuid`,
+    );
+    expect([...kept]).toHaveLength(1);
+  });
+
+  it('still cascades for a role that may delete a tenant', async () => {
+    // The foreign key is unchanged; only who may trigger it is. A deleted
+    // tenant must not leave billing rows referencing something unlookupable —
+    // that clean-up is now P7-08's, running as a role that holds DELETE.
+    await insertEvent();
+    await adminDb.execute(sql`delete from tenants where id = ${tenantId}::uuid`);
+
+    // Read as admin, which bypasses RLS: this has to prove the rows are gone,
+    // not merely invisible to a tenant context whose tenant no longer exists.
+    const rows = await adminDb.execute(
       sql`select 1 from usage_events where tenant_id = ${tenantId}::uuid`,
     );
 

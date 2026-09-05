@@ -112,6 +112,58 @@ describe('migration up / down / up', () => {
     expect(after).toBe(before);
   }, 180_000);
 
+  it('restores the revokes on the way back up', async () => {
+    /*
+     * `dumpSchema` is taken with `--no-privileges`, so the comparison above
+     * cannot see grants at all — and grants are exactly what several of these
+     * migrations *are*. A revoke that silently failed to re-apply on a redeploy
+     * would leave every assertion in this file green while the ledgers it
+     * protects became rewritable again.
+     *
+     * Asserted separately rather than by dropping `--no-privileges`, because
+     * the dump would then also carry ownership and default-privilege noise that
+     * differs run to run. The dump answers "are the objects the same"; this
+     * answers "can the runtime role still not do the things it must not".
+     */
+    const denied: readonly [string, string][] = [
+      // P0-33a: the parent revoke that makes the three ledgers below real,
+      // since a referential cascade is not permission-checked against the
+      // invoking role.
+      ['tenants', 'DELETE'],
+      ['usage_events', 'UPDATE'],
+      ['usage_events', 'DELETE'],
+      ['audit_log', 'UPDATE'],
+      ['audit_log', 'DELETE'],
+      ['security_events', 'UPDATE'],
+      ['security_events', 'DELETE'],
+      ['processed_webhooks', 'UPDATE'],
+      ['processed_webhooks', 'DELETE'],
+    ];
+
+    for (const [table, privilege] of denied) {
+      const rows = await db.execute(
+        sql`select has_table_privilege('app_rw', ${table}, ${privilege}) as allowed`,
+      );
+
+      expect([...rows][0]?.allowed, `${table}.${privilege}`).toBe(false);
+    }
+
+    // And the writes that must survive, so this cannot pass by revoking
+    // everything.
+    for (const [table, privilege] of [
+      ['tenants', 'INSERT'],
+      ['audit_log', 'INSERT'],
+      ['usage_events', 'INSERT'],
+      ['processed_webhooks', 'INSERT'],
+    ] as const) {
+      const rows = await db.execute(
+        sql`select has_table_privilege('app_rw', ${table}, ${privilege}) as allowed`,
+      );
+
+      expect([...rows][0]?.allowed, `${table}.${privilege}`).toBe(true);
+    }
+  }, 180_000);
+
   it('leaves no enum behind when its table is dropped', async () => {
     /*
      * Asserted separately because the dump comparison above would catch it

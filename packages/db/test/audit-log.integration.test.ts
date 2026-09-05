@@ -24,6 +24,8 @@ const INVALID_TEXT = '22P02';
 
 let container: StartedPostgreSqlContainer | undefined;
 let client: DbClient | undefined;
+let admin: DbClient | undefined;
+let adminDb: Database;
 let db: Database;
 let tenantId: string;
 
@@ -32,10 +34,17 @@ beforeAll(async () => {
   container = started.container;
   client = createDbClient(started.roleUrl('app_rw'), { max: 1 });
   db = client.db;
+
+  // The cascade below is a property of the foreign key, not of the runtime
+  // role — and since P0-33a revoked DELETE on `tenants` from app_rw, only a
+  // role that still holds it can exercise the cascade at all.
+  admin = createDbClient(started.adminUrl, { max: 1 });
+  adminDb = admin.db;
 }, 180_000);
 
 afterAll(async () => {
   await client?.close();
+  await admin?.close();
   await container?.stop();
 }, 60_000);
 
@@ -109,12 +118,39 @@ describe('audit_log', () => {
     expect([...rows][0]?.metadata).toEqual({ reason: 'manual' });
   });
 
-  it('goes with its tenant', async () => {
+  it('cannot be erased by deleting its tenant as app_rw', async () => {
+    /*
+     * This assertion used to say the opposite, and that was the P0-33a finding.
+     *
+     * The revoke above makes this table append-only for app_rw — and it was
+     * defeated entirely by `DELETE FROM tenants`, because a referential cascade
+     * is **not** permission-checked against the invoking role. One statement the
+     * runtime role held erased the record of who deleted the tenant: the exact
+     * thing the revoke exists to protect, removed by the role it constrains.
+     *
+     * P0-33a revoked DELETE on `tenants` from app_rw, so the cascade is now
+     * unreachable from the application at all.
+     */
     await write();
-    await db.execute(sql`delete from tenants where id = ${tenantId}::uuid`);
+
+    const error = await db
+      .execute(sql`delete from tenants where id = ${tenantId}::uuid`)
+      .catch((caught: unknown) => caught);
+
+    expect(pgErrorCode(error)).toBe(INSUFFICIENT_PRIVILEGE);
 
     const rows = await db.execute(sql`select 1 from audit_log where tenant_id = ${tenantId}::uuid`);
+    expect([...rows]).toHaveLength(1);
+  });
 
+  it('still cascades for a role that may delete a tenant', async () => {
+    // The foreign key is unchanged; only who may trigger it is. GDPR erasure
+    // (P7-08) runs as such a role, which is the deliberate path P0-33a chose.
+    await adminDb.execute(sql`delete from tenants where id = ${tenantId}::uuid`);
+
+    const rows = await adminDb.execute(
+      sql`select 1 from audit_log where tenant_id = ${tenantId}::uuid`,
+    );
     expect([...rows]).toHaveLength(0);
   });
 });

@@ -23,6 +23,8 @@ const NOT_NULL_VIOLATION = '23502';
 
 let container: StartedPostgreSqlContainer | undefined;
 let client: DbClient | undefined;
+let admin: DbClient | undefined;
+let adminDb: Database;
 let db: Database;
 let tenantId: string;
 
@@ -31,10 +33,17 @@ beforeAll(async () => {
   container = started.container;
   client = createDbClient(started.roleUrl('app_rw'), { max: 1 });
   db = client.db;
+
+  // The cascade below is a property of the foreign key, not of the runtime
+  // role — and since P0-33a revoked DELETE on `tenants` from app_rw, only a
+  // role that still holds it can exercise the cascade at all.
+  admin = createDbClient(started.adminUrl, { max: 1 });
+  adminDb = admin.db;
 }, 180_000);
 
 afterAll(async () => {
   await client?.close();
+  await admin?.close();
   await container?.stop();
 }, 60_000);
 
@@ -92,7 +101,10 @@ describe('token_revocations', () => {
 
   it('goes with its tenant', async () => {
     await revoke('jti-tenant');
-    await db.execute(sql`delete from tenants where id = ${tenantId}::uuid`);
+    // As admin, for the reason in the outbox suite: this asserts the foreign
+    // key, and app_rw no longer holds DELETE on `tenants` (P0-33a). A
+    // revocation list for a tenant that no longer exists revokes nothing.
+    await adminDb.execute(sql`delete from tenants where id = ${tenantId}::uuid`);
 
     const rows = await db.execute(sql`select 1 from token_revocations where jti = 'jti-tenant'`);
 

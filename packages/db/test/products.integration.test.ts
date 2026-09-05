@@ -22,6 +22,8 @@ const NUMERIC_OUT_OF_RANGE = '22003';
 
 let container: StartedPostgreSqlContainer | undefined;
 let client: DbClient | undefined;
+let admin: DbClient | undefined;
+let adminDb: Database;
 let db: Database;
 let tenantId: string;
 
@@ -48,11 +50,19 @@ beforeAll(async () => {
   container = started.container;
   client = createDbClient(started.roleUrl('app_rw'), { max: 1 });
   db = client.db;
+
+  // The cascade these suites assert is a property of the foreign key, not of
+  // the runtime role — and P0-33a revoked DELETE on `tenants` from app_rw, so
+  // only a role that still holds it can trigger the cascade at all.
+  admin = createDbClient(started.adminUrl, { max: 1 });
+  adminDb = admin.db;
+
   tenantId = await createTenant('catalogo');
 }, 180_000);
 
 afterAll(async () => {
   await client?.close();
+  await admin?.close();
   await container?.stop();
 }, 60_000);
 
@@ -232,7 +242,7 @@ describe('products', () => {
     const doomed = await createTenant('catalogo-doomed');
     await insertMinimal(doomed, 'SKU-CASCADE');
 
-    await db.execute(sql`delete from tenants where id = ${doomed}::uuid`);
+    await adminDb.execute(sql`delete from tenants where id = ${doomed}::uuid`);
 
     const rows = await db.execute(sql`select 1 from products where tenant_id = ${doomed}::uuid`);
     expect([...rows]).toHaveLength(0);

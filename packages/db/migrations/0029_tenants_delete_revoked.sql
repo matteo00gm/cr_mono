@@ -1,0 +1,26 @@
+-- The revoke that makes three append-only ledgers actually append-only (P0-33a).
+--
+-- `usage_events`, `audit_log` and `security_events` each REVOKE UPDATE, DELETE
+-- from app_rw, and each cascades from `tenants`. P0-21's default privileges
+-- leave app_rw holding DELETE on `tenants` — and **a referential cascade is not
+-- permission-checked against the invoking role**. So one statement available to
+-- the runtime role removed the billing ledger, the record of who deleted the
+-- tenant, and the security events describing attacks on it: the three things
+-- those revokes exist to protect, defeated by the role they constrain.
+--
+-- Revoking on the *parent* rather than adjusting each child's foreign key is
+-- the point. `ON DELETE SET NULL` or `RESTRICT` has to be decided per table and
+-- applied per table, so the next ledger somebody adds forgets it. One choke
+-- point covers everything that cascades from here, including tables not yet
+-- written.
+--
+-- **What this decides, stated plainly: tenant deletion leaves the application.**
+-- It is no longer reachable from a request handler. GDPR erasure (P7-08) runs
+-- as a role that holds DELETE, and that is correct rather than a cost — erasure
+-- is irreversible and legally significant, so it should take a deliberate path.
+-- It is also right for billing: cancelling a subscription must not destroy
+-- `usage_events`, which is the record of what the tenant owed.
+--
+-- SELECT, INSERT and UPDATE stay. The application still creates tenants and
+-- edits their settings; it just cannot erase one.
+REVOKE DELETE ON tenants FROM app_rw;
