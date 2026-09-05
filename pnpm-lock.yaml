@@ -102,6 +102,9 @@ importers:
       '@catalogorosso/db':
         specifier: workspace:*
         version: link:../db
+      '@catalogorosso/security':
+        specifier: workspace:*
+        version: link:../security
       better-auth:
         specifier: ^1.7.2
         version: 1.7.2(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(kysely@0.29.5)(postgres@3.4.9))(vitest@4.1.11)

@@ -1,3 +1,5 @@
+import type { Role } from '@catalogorosso/security';
+
 import { ForbiddenError, InvalidRequestError, NotFoundError } from './errors.js';
 
 /**
@@ -15,7 +17,16 @@ import { ForbiddenError, InvalidRequestError, NotFoundError } from './errors.js'
  * never trusted.
  */
 
-export type Role = 'OWNER' | 'EDITOR';
+/**
+ * Re-exported, not redefined.
+ *
+ * `Role` is authorization vocabulary and lives in `packages/security` beside
+ * the capability table (P0-49) — one definition, so a third role cannot be
+ * added in one place and missed in the other. It is re-exported here because
+ * `Membership` carries one and callers should not need two imports for one
+ * concept.
+ */
+export type { Role };
 
 export interface Membership {
   readonly tenantId: string;

@@ -5,10 +5,11 @@ import type { MembershipReader } from '@catalogorosso/core';
 
 import type { AppEnv } from './env.js';
 import type { AuthPort } from './middleware/auth.js';
+import { assertEveryRouteDeclared } from './middleware/capability.js';
 import { errorHandler, normaliseThrown, notFoundHandler } from './middleware/error.js';
 import { DASHBOARD_PREFIX, WIDGET_PREFIX } from './routes.js';
 import { requestContext } from './middleware/logger.js';
-import { createDashboardApp } from './surfaces/dashboard.js';
+import { createDashboardApp, DASHBOARD_ROUTE_ACCESS } from './surfaces/dashboard.js';
 import { createWidgetApp } from './surfaces/widget.js';
 
 /**
@@ -103,6 +104,22 @@ export const createApp = ({ auth, readMemberships }: AppOptions): Hono<AppEnv> =
 
   app.route(DASHBOARD_PREFIX, createDashboardApp({ auth, readMemberships }));
   app.route(WIDGET_PREFIX, createWidgetApp());
+
+  /*
+   * Fails closed, at boot (P0-49).
+   *
+   * Every dashboard route must say what it requires — a capability, or
+   * `publicRoute(reason)` with a written reason. A route that says nothing
+   * throws here, while the Lambda container is still initialising, so the
+   * deployment fails loudly and the previous version keeps serving. The
+   * alternative is that an undeclared route defaults to open, ships, and is
+   * found by whoever goes looking.
+   *
+   * Checked after both mounts rather than inside the surface, because
+   * `app.routes` only carries the prefixed paths once the sub-app has been
+   * mounted — the form P0-50's matrix also walks.
+   */
+  assertEveryRouteDeclared(app, DASHBOARD_ROUTE_ACCESS, DASHBOARD_PREFIX);
 
   return app;
 };
