@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { DomainError } from '../src/errors.js';
+import { ConflictError, DomainError, NotFoundError } from '../src/errors.js';
 import {
   ACTIVE_TENANT_HEADER,
+  assertMemberWriteSucceeded,
   resolveMembership,
   type Membership,
   type MembershipReader,
@@ -167,5 +168,44 @@ describe('no memberships at all', () => {
     expect(
       await kindOf(resolveMembership({ userId: 'user_1', requestedTenantId: A, read: reader() })),
     ).toBe('forbidden');
+  });
+});
+
+describe('assertMemberWriteSucceeded (P0-52)', () => {
+  it('returns quietly on success', () => {
+    expect(() => {
+      assertMemberWriteSucceeded('changed');
+    }).not.toThrow();
+  });
+
+  it('answers 404-shaped for a member who is not in this winery', () => {
+    /*
+     * NotFoundError, not ForbiddenError (§3.5). A user who belongs to another
+     * winery and a user id that does not exist must be indistinguishable, or an
+     * owner of one tenant can probe which accounts belong to another.
+     */
+    expect(() => {
+      assertMemberWriteSucceeded('no-such-member');
+    }).toThrow(NotFoundError);
+  });
+
+  it('explains the way through when the guard fires', () => {
+    let thrown: unknown;
+    try {
+      assertMemberWriteSucceeded('would-remove-last-owner');
+    } catch (error: unknown) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(ConflictError);
+
+    /*
+     * A DomainError's message *is* the API contract and reaches the caller
+     * verbatim (P0-55), so this asserts the content rather than only the type.
+     * An owner who has just been refused needs the next step, not a diagnosis:
+     * promote somebody first.
+     */
+    expect((thrown as Error).message).toContain('no owner');
+    expect((thrown as Error).message).toContain('Promote another member to OWNER first');
   });
 });

@@ -121,7 +121,7 @@ export default {
         // audit.ts: they import `sql` to write statements and take the
         // connection from their caller, opening nothing.
         pathNot:
-          '^packages/db/src/(client|with-tenant|with-user|with-invitation|deploy|auth-db|memberships|audit|users|invitations)[.]ts$' +
+          '^packages/db/src/(client|with-tenant|with-user|with-invitation|deploy|auth-db|memberships|members-write|audit|users|invitations)[.]ts$' +
           '|^packages/db/src/email-suppressions[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
