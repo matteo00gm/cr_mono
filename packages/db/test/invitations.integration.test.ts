@@ -37,15 +37,39 @@ let container: StartedPostgreSqlContainer | undefined;
 let client: DbClient | undefined;
 let db: Database;
 
-/** Seeds a tenant and a user, as the migration role, outside RLS. */
+/**
+ * Seeds the two wineries and three users.
+ *
+ * Each tenant row is inserted **inside `withTenant` for its own id**, because
+ * `tenants` carries `WITH CHECK (id = app.tenant_id)`: the row has to satisfy
+ * the policy it is creating the context for. That is the same shape signup uses
+ * in production, and a bare insert is rejected — which is how the first version
+ * of this file failed in CI, correctly.
+ *
+ * `withTenant` rather than the suite's session-level `useTenant` helper because
+ * this client has a pool of four for the concurrency test, so a session GUC
+ * would be set on whichever connection happened to serve that statement.
+ * `SET LOCAL` inside a transaction is pool-safe.
+ */
 const seed = async (): Promise<void> => {
-  await db.execute(sql`
-    INSERT INTO tenants (id, name, slug) VALUES
-      (${TENANT_A}::uuid, 'Cantina Rossi', 'cantina-rossi'),
-      (${TENANT_B}::uuid, 'Cantina Verdi', 'cantina-verdi')
-    ON CONFLICT DO NOTHING
-  `);
+  for (const [id, name, slug] of [
+    [TENANT_A, 'Cantina Rossi', 'cantina-rossi'],
+    [TENANT_B, 'Cantina Verdi', 'cantina-verdi'],
+  ] as const) {
+    await withTenant(
+      id,
+      (tx) =>
+        tx.execute(sql`
+          INSERT INTO tenants (id, name, slug)
+          VALUES (${id}::uuid, ${name}, ${slug})
+          ON CONFLICT DO NOTHING
+        `),
+      db,
+    );
+  }
 
+  // `auth_users` carries no policy — authentication precedes tenant
+  // resolution — so this works from any context, including none.
   await db.execute(sql`
     INSERT INTO auth_users (id, name, email) VALUES
       ('user_matteo', 'Matteo', 'matteo@cantina.example'),
