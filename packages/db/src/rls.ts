@@ -46,9 +46,12 @@ const boilerplate = (table: string): RlsPolicy => ({
 /**
  * Every table carrying a policy, in migration order.
  *
- * Three are not the boilerplate, and each says why. `processed_webhooks` and
- * `rate_limit_buckets` are absent on purpose: neither has a `tenant_id`, so
- * there is nothing to scope them by — see their schema modules.
+ * Three are not the boilerplate, and each says why. `processed_webhooks`,
+ * `rate_limit_buckets` and `email_suppressions` are absent on purpose: none has
+ * a `tenant_id`, so there is nothing to scope them by — see their schema
+ * modules. For `email_suppressions` (P0-64) the absence is the protection
+ * rather than a gap in it: the sending reputation a suppression defends belongs
+ * to the domain, so a bounce one tenant caused has to stop every tenant.
  */
 export const RLS_POLICIES: readonly RlsPolicy[] = [
   {

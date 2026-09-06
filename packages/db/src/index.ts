@@ -84,3 +84,19 @@ export {
   withRole,
   type BootstrapRole,
 } from './deploy.js';
+
+/**
+ * The email suppression list (P0-64).
+ *
+ * Same reasoning as the audit insert above. The table is global rather than
+ * tenant-scoped — a bounce is a fact about an address, and the reputation it
+ * protects is the sending domain's — so these carry no tenant context and
+ * `withTenant` has nothing to scope. What that means for a send, and what the
+ * caller is told when one is refused, lives in `packages/core`.
+ */
+export {
+  isSuppressed,
+  suppressAddress,
+  unsuppressAddress,
+  type SuppressionRow,
+} from './email-suppressions.js';

@@ -3085,6 +3085,31 @@ Always send a **plaintext alternative**; HTML-only mail scores worse with spam f
 
 **Files.** `packages/core/src/email/*`, templates, webhook handler, tests. **~180 lines.** *Split: transport + templates, and bounce webhook + suppression, are two PRs if review is heavy.*
 
+**As built — the split was taken, and this row is the first half.** What shipped: `normaliseAddress`, the block renderer, the six templates in both locales, the transport port with its Resend and log implementations, `chooseTransport`, `createSendEmail`, and the `email_suppressions` table with its read and write. What did not: the webhook that *populates* that table, which is now **P0-64b** below. The seam refuses to mail a suppressed address today; nothing yet records one.
+
+Four departures from the text above, each because building it made the reason concrete:
+
+- **Templates return blocks, not strings.** Every template produces a small `Block[]` and one renderer turns that into both parts. Two properties fall out that six independent template functions could not hold: escaping happens in exactly one place — and it must, because `tenantName` is seller-supplied text interpolated into mail sent to somebody else — and **no template is capable of producing HTML without plaintext**, which turns "always send a plaintext alternative" from a rule people follow into a shape they cannot express otherwise.
+- **Link schemes are validated, not just escaped.** Escaping does nothing to `javascript:` in an `href`; the quotes are already fine. `UnsafeEmailUrlError` rejects anything that is not `http`/`https`, which also catches the realistic mistake — a caller passing a relative dashboard path, producing a dead link on a send that reports success.
+- **The staging guard is per recipient, not per stage.** `chooseTransport` returns a wrapper that routes each message to the log transport unless that specific address is on an explicit allowlist. A stage-level flag would have satisfied the row's wording and been one careless deploy from mailing a customer list; an address list can only ever reach the addresses on it.
+- **Backoff carries full jitter, with the random source injected.** The row asks for retry on 429 with backoff and does not mention jitter. It matters here because the sends that hit the cap arrive as a batch — period rollover mails every tenant at once — and a batch that all backs off by the same interval retries in lockstep and hits the per-second limit together.
+
+**The suppression table is deliberately global.** `email_suppressions` has no `tenant_id`, so it joins `processed_webhooks` and `rate_limit_buckets` as a table with no RLS policy. That is the protection rather than a gap in it: the reputation a suppression defends belongs to the sending domain, so a bounce one winery caused has to stop every winery mailing that address. Unlike the P0-33a ledgers it keeps `UPDATE`/`DELETE` for `app_rw` — a mailbox that was full last month is a customer who cannot reset their password this month, and the alternative to `unsuppressAddress` is somebody doing it by hand in a production console.
+
+**⚠ Domain authentication and the API key are outside the code and remain open.** SPF, DKIM and DMARC on the sending domain, and the `ResendApiKey` parameter, are operator work that no test can stand in for. Until they are done the production path has never sent a message — the seam is exercised end to end against a fake, and the log transport is what runs everywhere else. Tracked as **E7**.
+
+---
+
+### P0-64b · Bounce and complaint webhook
+
+**What.** The inbound half of P0-64: a signed webhook endpoint that receives Resend's `email.bounced` and `email.complained` events and writes them to `email_suppressions` through `suppressAddress`.
+
+**Why it is its own row.** It needs something the repository does not have yet — a webhook surface. `apps/api` serves exactly two prefixes, both authenticated by session or by origin-bound token, and an endpoint authenticated by a provider's signature is a third with its own rules: no session, no tenant, verified by HMAC over the raw body, and idempotent because providers redeliver. P0-33's Stripe webhook needs the same surface, so building it once for both is the cheaper order.
+
+**Until it lands** the suppression list is only ever written by hand. The send path already consults it, so nothing changes when the writer arrives; what is missing is the *input*, which means a hard-bounced address keeps being mailed and the bounce-rate alarm has nothing to alarm on. That is the reason this is a near-term row rather than a nicety.
+
+**Tests.** A bounce event suppresses the address; a redelivery of the same event does not move `suppressed_at`; an event with a bad signature is rejected and writes nothing; a complaint suppresses too.
+
 ---
 
 ### P0-59 · `docs/` scaffold and ADR system ⛔
@@ -5960,6 +5985,8 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Renovate security rule covers `packages/core` | **closed** | `matchFileNames` now lists `packages/core/**` beside `packages/security/**`, so `better-auth` updates arrive labelled `security-critical` for a human. See **D7**. |
 | Plan not yet split into `docs/architecture/` | P0-59 deferred | The ADR half of P0-59 shipped; the split did not. Six thousand lines reorganised with no test, invalidating every `plan-v1.md` reference in commit messages, As-Built entries and open items, and conflicting with every open PR. Worth doing when the PR queue is empty — not as a rider on the ADR system. |
 | Dependency build-script prompt | **closed** | Not a `pnpm add` artefact at all — a plain fresh `install` writes it, so CI regenerated it every run. Now *answered* (`allowBuilds: … false`), which drops `strictDepBuilds` and restores the install-time notification suppression had cost. See **E5**. |
+| Sending domain not authenticated | P0-64 open | SPF, DKIM and DMARC are operator work no test replaces. Until they exist the production path has never sent a message and account recovery does not work. See **E6**. |
+| Suppression list has no writer | P0-64b | The table and the send-path check shipped; the bounce webhook did not, because it needs a signed-webhook surface `apps/api` does not have yet. See **E7**. |
 
 ### ⚠ Open items from the P0-54 → P0-53 chain, in detail
 
@@ -6125,3 +6152,21 @@ So the block is not something to revert; it is pnpm asking a question. It is now
 The guard is anchored on the injected line shape (indented key, colon, marker) rather than on a bare substring, because a substring search also matches the comment in `pnpm-workspace.yaml` that explains the check — which it did, on the first attempt. Verified in both directions: it does not fire on the real file, and does fire on an injected block.
 
 Supply-chain protection is unchanged and now explicit rather than incidental: after a fresh install `cpu-features` and `ssh2` have no `build/` directory. Two `.node` files do appear in the tree, from `@rolldown/binding` and `lightningcss` — prebuilt platform binaries shipped inside optional dependencies, not products of a build script.
+
+**E6. The email seam exists; the sending domain does not.** ⛔ *(P0-64)*
+
+`sendEmail` is built, tested and wired to nothing that can reach a real inbox. Three things stand between it and a delivered message, and none of them is code:
+
+1. **SPF, DKIM and DMARC on the sending domain.** Start DMARC at `p=none` with reporting, read a week of reports, then move to `p=quarantine`. The order matters — going straight to `quarantine` on an unverified alignment is how a first campaign lands entirely in spam folders. The row is explicit that this comes *before* anything real is sent, because the provider is rarely the problem and the unauthenticated domain usually is.
+2. **The `ResendApiKey` parameter**, set for the stage through `sst secret set` reading from stdin rather than from a shell argument. Until it exists, `resendTransport` cannot be constructed and the log transport is what runs — which is the correct failure, but it is a failure.
+3. **A verified `from` address on that domain.** Resend rejects a `from` outside a verified domain with a 403, which `resendTransport` classifies as non-retryable — so the symptom is a clean, immediate, correctly-reported failure rather than a hang. That is the intended behaviour and it is still a non-working product.
+
+**What it costs while open.** Nothing in staging, by construction: `chooseTransport` routes everything but an explicitly allowlisted address to the log. In production it is the difference between having account recovery and not having it — a self-hosted auth stack whose reset mail cannot leave the building locks out the first customer who forgets a password (§P0-45), and there is no second channel.
+
+**What closes it.** The three items above, then one real send to an allowlisted address from the `dev` stage with the address on the allowlist, checked for SPF/DKIM/DMARC pass in the receiving client's headers. Reading the headers is the whole test — a message that arrives is not evidence of alignment, only of not being blocked yet.
+
+**E7. Nothing writes to the suppression list.** ⛔ *(P0-64b)*
+
+The table, the read and the send-path check all exist; the webhook that records a bounce does not. So the list is empty and stays empty, which makes the suppression check a no-op in practice however well it is tested.
+
+This is deliberate — the inbound half needs a signed-webhook surface `apps/api` does not have, and P0-33's Stripe handler needs the same one — but the consequence should not be understated: **until P0-64b lands, a hard-bounced address is mailed again on the next send**, and repeated sends to dead addresses are the specific behaviour that moves a sending domain onto filter lists. It matters more once **E6** closes, not less: today nothing is being sent at all, so nothing is accumulating.
