@@ -1,6 +1,14 @@
 {
   "extends": "../../tsconfig.base.json",
-  /* Lint + typecheck project: sees tests, emits nothing. */
+  /*
+   * Lint + typecheck project: sees tests, emits nothing — and unlike every
+   * other package here, that is the *only* tsconfig it has.
+   *
+   * A browser app is bundled, not `tsc --build`-emitted: Vite produces `dist`
+   * (P0-57), so an emit project alongside it would write a second, unused copy
+   * of the same modules and put this app in the root reference graph for no
+   * reason. `typecheck` is the real type gate; `build` is the bundle.
+   */
   "compilerOptions": {
     "noEmit": true,
     "jsx": "react-jsx",

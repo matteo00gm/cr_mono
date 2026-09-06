@@ -3089,6 +3089,32 @@ Zero rows returned means refused. There is no path through this package that per
 
 **Files.** `apps/dashboard/*`. **~180 lines.** *(Scaffold-heavy but mostly boilerplate; splitting hurts reviewability more than it helps.)*
 
+**As built.** The scaffold is boilerplate as predicted; four things in it are not, and each was found by building rather than by reading the row.
+
+**The nav gate is UX, not security — and the module says so at the top.** The row's own note makes this point in one line; `src/nav.ts` opens with a paragraph, because this is the file a future reader is most likely to mistake for an authorization layer. Hiding *Fatturazione* from an `EDITOR` saves them a click that would be refused; it does not stop them reaching it, because a bundle shipped to a browser is readable, editable and re-runnable by whoever receives it. The consequence is spelled out: **a change here is never a fix for an authorization problem** — that fix is in `DASHBOARD_ROUTES` (P0-49), and adding a second `can()` here would hide the symptom.
+
+The gate is derived from `can()` rather than from a hand-written role list, and a test asserts *that* rather than only the outcome — the failure it catches is a capability granted to `EDITOR` in `packages/security` while the nav keeps hiding the section.
+
+**Both clients are built on demand, not at module scope.** `createAuthClient` resolves its base URL at construction and **throws on a relative one**, so `createAuthClient({ baseURL: '/v1/dashboard/auth' })` at module scope took the entire component suite down on import — before a single test ran. The URL is now absolute (still same-origin: CloudFront serves the bundle and the API from one host) and built lazily, so importing this module for `chooseActive` — a pure function with no network in it — does not require a working `location`.
+
+The API client got the same treatment for a different reason: `createClient` captures `globalThis.fetch` at construction, so a module-level instance freezes whichever `fetch` existed at first import. Invisible in a browser; wrong everywhere else.
+
+**Choosing a winery is a preference, and it fails closed.** The active tenant lives in `localStorage` rather than a cookie, because the server re-validates it against a `memberships` row on every request (P0-47) — a stale or edited value fails rather than granting anything, which is what makes it safe to keep where the user can edit it. Two rules are tested directly: a remembered id that is no longer a membership is **ignored rather than replaced by the first one** (falling back to "first" would silently move somebody into a different winery, and the next thing they edited would land there), and several memberships with no memory shows a picker rather than guessing.
+
+Switching wineries **reloads** rather than re-rendering. Every screen's data is scoped to the active tenant, so switching invalidates all of it at once — and a reload cannot leave one component holding the previous tenant's rows, which would show a seller another winery's catalogue looking exactly like theirs.
+
+**Three pieces of shared configuration had to change, and each was a gate that would otherwise have passed vacuously.**
+
+- `vitest.config.ts` collected `test/**/*.test.ts` only, so a `.tsx` component suite would have been reported as passing while collecting nothing.
+- Coverage included `src/**/*.ts` only, so the dashboard's bar would have been met by whatever plain-`.ts` modules happened to exist — a gate passing on a package whose actual code it never looked at. `src/main.tsx` is excluded by name (an entry point that calls `render` has no branch to cover), narrowly enough that the exclusion cannot grow to cover a component.
+- ESLint's "tooling configs are in no tsconfig" block matched the repository root only, so `apps/dashboard/vite.config.ts` fell through to the default project and reported four rules as needing `strictNullChecks`. Now a recursive glob.
+
+**Δ The dashboard has one tsconfig, not two.** Every other package carries a lint/typecheck config and an emit config; a browser app is bundled rather than `tsc --build`-emitted, so an emit project beside Vite would write a second unused copy of every module and put this app in the root reference graph for nothing. `typecheck` is the real type gate; `build` is `vite build`. The app is no longer referenced from the root `tsconfig.json`.
+
+**+ It is the first real consumer of P0-63's client**, so `docs/api/consumers.md` now lists an endpoint instead of none. That map is derived from the calls themselves and is complete only because raw `fetch` to our own API is a lint error outside the client — a rule that had nothing to protect until this row.
+
+**⚠ The screens are placeholders**, which is the row's scope: it is the shell every dashboard screen mounts into, not the screens. The one that matters most is the members page, because P0-51's roster writes and P0-52's guard both exist with nothing calling them — see **E8**.
+
 ---
 
 ### P0-58 · SST: dashboard static deploy
