@@ -37,13 +37,35 @@ beforeAll(async () => {
   client = createDbClient(started.roleUrl('app_rw'), { max: 4 });
   db = client.db;
 
-  await db.execute(sql`
-    INSERT INTO tenants (id, name, slug) VALUES
-      (${TENANT}::uuid, 'Cantina Rossi', 'cantina-rossi'),
-      (${OTHER}::uuid, 'Cantina Verdi', 'cantina-verdi')
-    ON CONFLICT DO NOTHING
-  `);
+  /*
+   * Each tenant row goes in inside `withTenant` for its own id, because
+   * `tenants` carries `WITH CHECK (id = app.tenant_id)` — the row has to
+   * satisfy the policy it is creating the context for. A bare insert is
+   * refused with 42501, which is how P0-51's first version of this seed failed
+   * in CI.
+   *
+   * `withTenant` rather than the suite's session-level `useTenant`, because
+   * this client keeps a pool of four for the concurrency tests below and a
+   * session GUC would land on whichever connection served the statement.
+   */
+  for (const [id, name, slug] of [
+    [TENANT, 'Cantina Rossi', 'cantina-rossi'],
+    [OTHER, 'Cantina Verdi', 'cantina-verdi'],
+  ] as const) {
+    await withTenant(
+      id,
+      (tx) =>
+        tx.execute(sql`
+          INSERT INTO tenants (id, name, slug)
+          VALUES (${id}::uuid, ${name}, ${slug})
+          ON CONFLICT DO NOTHING
+        `),
+      db,
+    );
+  }
 
+  // `auth_users` carries no policy — authentication precedes tenant
+  // resolution — so this works from any context, including none.
   await db.execute(sql`
     INSERT INTO auth_users (id, name, email) VALUES
       ('user_a', 'A', 'a@cantina.example'),
