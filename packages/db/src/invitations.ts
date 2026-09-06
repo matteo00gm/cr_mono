@@ -55,6 +55,21 @@ export const insertInvitation = async (
   tx: DbTransaction,
   invitation: NewInvitation,
 ): Promise<string | undefined> => {
+  /*
+   * An ISO string with an explicit cast, never the `Date` itself.
+   *
+   * postgres-js binds prepared-statement parameters as text and throws
+   * ERR_INVALID_ARG_TYPE when a Date reaches it through a raw sql template —
+   * drizzle's query *builder* converts one, its sql *tag* does not. The throw
+   * is at bind time against a real connection, so no unit test with a fake
+   * transaction can see it. CI's Postgres is what found it.
+   *
+   * Hoisted out of the template on purpose: a block comment inside one is
+   * literal text, and the backticks this explanation wants would end the
+   * string. That cost a parse error before it cost anything else.
+   */
+  const expiresAt = invitation.expiresAt.toISOString();
+
   const rows = await tx.execute(sql`
     INSERT INTO invitations (tenant_id, email, role, token_hash, invited_by, expires_at)
     VALUES (
@@ -63,7 +78,7 @@ export const insertInvitation = async (
       ${invitation.role},
       ${invitation.tokenHash},
       ${invitation.invitedBy},
-      ${invitation.expiresAt}
+      ${expiresAt}::timestamptz
     )
     ON CONFLICT (tenant_id, email) WHERE accepted_at IS NULL AND revoked_at IS NULL
     DO NOTHING

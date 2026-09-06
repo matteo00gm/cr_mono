@@ -94,6 +94,26 @@ describe('insertInvitation', () => {
     expect(await insertInvitation(tx, invitation)).toBeUndefined();
   });
 
+  it('binds the expiry as a string, never as a Date', async () => {
+    /*
+     * postgres-js binds prepared-statement parameters as text and throws
+     * `ERR_INVALID_ARG_TYPE` when a `Date` reaches it through a raw `sql`
+     * template — drizzle's query builder converts one, its `sql` tag does not.
+     *
+     * The throw happens at bind time against a real connection, so the fake
+     * transaction in this file cannot reproduce it; CI found it. What *can* be
+     * asserted here is the property that avoids it, which is enough to stop the
+     * next author reverting the `toISOString()` as noise.
+     */
+    const { tx, statements } = capturing([{ id: 'inv_1' }]);
+    await insertInvitation(tx, invitation);
+
+    for (const bound of params(statements[0])) {
+      expect(bound).not.toBeInstanceOf(Date);
+    }
+    expect(params(statements[0])).toContain('2026-09-13T00:00:00.000Z');
+  });
+
   it('conflicts only on rows that are still open', async () => {
     const { tx, statements } = capturing([{ id: 'inv_1' }]);
     await insertInvitation(tx, invitation);
