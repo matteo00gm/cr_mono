@@ -6049,7 +6049,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | 🔒 Auth rate limiting is per-container | **before public sign-in** | Better Auth's default store is a module-level `Map`, so the real limit is N x the configured one and a container recycle resets it. Needs P2-01's Postgres-backed limiter. See **A1**. |
 | 🔒 CloudFront client-IP forwarding unconfirmed | **P0-17a, before launch** | A multi-entry `x-forwarded-for` resolves to null, which is not "no limit" but **one shared bucket per path** — one attacker locks out every user. See **A2**. |
 | `NODE_ENV=production` asserted in CI | **closed** | A grep in `ci.yml`, matching the NAT and `app_rw` assertions. Verified to fire when the line is removed. See **A3**. |
-| 🔒 Password reset sends no email | **P0-64, before real signups** | The placeholder logs and resolves — deliberately, since throwing would create an enumeration oracle. So the failure is quiet. See **A4**. |
+| Password reset sends no email | **closed (2026-09-06)** | The placeholder is replaced by the P0-64 seam, wired at the composition root. Non-production stages render the whole message to the log, so the reset link is recoverable locally for the first time. Still resolves rather than throwing on a suppressed address, which is what keeps the two responses identical. See **A4**, **E9**. |
 | Reserved concurrency unset | **P1-48, before traffic** | §5.1 says 40, P1-48 says 10; P1-48 is right. Unbounded is worse than either. Interacts with **A1**. See **B1**. |
 | `AUTH_SECRET` rotation has no runbook | before launch | Rotating signs every seller out and voids outstanding reset links. Needs an ADR in the P0-59 set, not code. See **B2**. |
 | No expiry sweep for sessions or verifications | P1 | Both columns are indexed and nothing scans them. Storage hygiene, not security — expiry is enforced on read. See **C3**. |
@@ -6060,7 +6060,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Suppression list has no writer | P0-64b | The table and the send-path check shipped; the bounce webhook did not, because it needs a signed-webhook surface `apps/api` does not have yet. See **E7**. |
 | Invitations cannot be revoked | P0-51 open | The column and the index shipped and are tested; the endpoint did not, because it belongs with the members page rather than ahead of it. A mistaken invitation stays live for seven days. See **E8**. |
 | Roster cannot be changed from the API | P0-52 open | The last-OWNER guard and the writes it protects shipped and are tested to three concurrency cases; no endpoint calls them, because the member-management screen is P0-57. See **E8**. |
-| 🔒 Composition root wires no email or members port | **P0-64/P0-51, before launch** | `apps/api/src/index.ts` still passes only `auth` and `readMemberships`, so password reset sends nothing and the invite endpoints answer 500 through their fail-loud default. Both suites are green because both test their own seams. See **E9**. |
+| Composition root wires email and members | **closed (2026-09-06)** | `buildDependencies` in `composition.ts`, asserted by identity against the fail-loud placeholder — a shape check would have passed on the broken version. `index.ts` is now environment reading only. See **E9**. |
 
 ### ⚠ Open items from the P0-54 → P0-53 chain, in detail
 
@@ -6101,17 +6101,13 @@ The gap was that **removing the environment variable is completely silent**: not
 
 Verified in both directions before merging: the assertion passes against the real file, and fires when the line is deleted. A guard that cannot fail is not a guard.
 
-**A4. Password reset is wired to a placeholder that sends nothing.** 🔒
+**A4. Password reset is wired to the email seam.** ✅ **closed (2026-09-06)**
 
-`apps/api/src/index.ts` supplies a `sendResetPassword` that logs at error level and resolves. A user who requests a reset gets a 200 and **no email, ever**.
+The placeholder logged and resolved. It resolved rather than throwing for a good reason — Better Auth calls `sendResetPassword` only when the address belongs to a real user, so a sender that threw would make reset 500 for real addresses and 200 for invented ones, an enumeration oracle manufactured by the error path — and that reasoning is now inherited by the real sender rather than lost with the stub: `sendEmail` returns a `suppressed` outcome instead of throwing, precisely for callers shaped like this one.
 
-It resolves rather than throwing on purpose: Better Auth calls the seam only when the address belongs to a real user, so a throwing stub would 500 for real addresses and 200 for made-up ones — an account-enumeration oracle manufactured by the stub. That decision is correct and should not be revisited; the consequence is that the failure is *quiet*, which is why it is written here.
+**What changed.** `buildDependencies` constructs the P0-64 seam and hands it to `createAuth` (**E9**). On any non-production stage the whole rendered message goes to the log transport, so the reset link is recoverable locally — which it was not before, and which is what made the auth flow untestable outside a deployment.
 
-What closes it: **P0-64**. It needs a Resend API key in SSM at `/sommelier/<stage>/email/api_key` and a verified sending domain with SPF, DKIM and DMARC — neither producible from this repository.
-
-When: **before any real user can sign up.** Until then, the log line `password reset requested but no email transport is configured` is the only signal.
-
----
+**What is still open, and it is not this item.** Nothing has authenticated the sending domain, so a *production* reset still cannot leave the building. That is **E6**, and it is operator work no code closes.
 
 #### B. Must close before real traffic, for reasons other than security
 
@@ -6147,13 +6143,15 @@ When: **before launch**, as documentation rather than code.
 
 **C4. TOTP is configured but exercised only at the schema level.** The `twoFactor` plugin is registered and its four columns exist (migration `0028`), but no enrolment or verification path is tested. **P4-11** owns OWNER MFA and carries the three details that matter: backup codes single-use and hashed, a ±1-step window with replay rejected, and the step-up check reading the database rather than the cookie cache.
 
-**C5. `audit()` still has no callers, and P0-51 and P0-52 went in without it.** 🔒
+**C5. Two of the three actions now write audit rows; the third has no caller to write one from.** *(partly closed)*
 
-The helper was written for exactly these actions — invites, role changes, removals — and all three shipped without an audit row. That is a gap in what landed, not a deferral that was reasoned about: nothing in the review of either row asked the question.
+My first reading of this said "P0-51 and P0-52 went in without audit rows", which overstated it. Checking properly splits the item in three, and the split is the useful part:
 
-It matters more for P0-52 than for P0-51. "Who removed this member, and when" is the question an owner asks after somebody loses access, and the `memberships` row is *gone* by then, so there is no record anywhere. A demotion at least leaves the row.
+- **Invite** — a real gap, now closed. `audit(tx, { action: 'member.invited' })` runs inside the same `withTenant` transaction as the row, so the record commits or rolls back with it (P0-53).
+- **Acceptance** — a real gap, now closed, and it needed one extra thing. The accept route sits *above* `resolveTenant` by necessity, so the request context carries no tenant and `audit()` refuses to write without one. The port therefore calls `setRequestTenant(invitation.tenantId)` first — legitimate, because that tenant came out of Postgres via a matched 256-bit token rather than off the wire, so it is the P0-48 guarantee reached another way rather than a shortcut around it. Every log line for the rest of the request carries the tenant as a side benefit.
+- **Role change and removal** — **not a gap.** `setMemberRole` and `removeMember` have no caller outside their own tests; there is no request, so there is no actor, and an `audit()` inside those helpers would sit at the wrong layer *and* break the P0-52 integration suite, which calls them directly inside `withTenant` with no request context. Confirmed by running it. The audit row belongs beside the endpoint that supplies the actor, and those endpoints arrive with **E8**.
 
-What closes it: `audit(tx, ...)` inside the transactions that already exist — `withTenant` for the invite, `withInvitation` for the acceptance, and the roster writes in `members-write.ts`. The helper takes the caller's transaction precisely so the record commits or rolls back with the action (P0-53), so the placement is not a choice: it goes beside the write, inside the same `tx`. Landing with **E8**'s endpoints is the natural moment, since the audit row wants the actor and those endpoints are what supply it.
+**One thing the fix improved beyond closing the gap.** The writer is now injected into the members port rather than imported, which makes the audit row *assertable* — before, it would have been written and nothing would have checked. It also avoids a harness trap worth recording: `audit()` reads the actor from an `AsyncLocalStorage` in `packages/core`, and a test that mocks `@catalogorosso/db` gets a second instance of that module for the importing file's graph, so a context set in the test is invisible in the code under test. That cost a confusing `MissingAuditTenantError` before the cause was found.
 
 **C6. `audit_log` has no reader.** §4.2 defers the browsable view, not the record. Until **P4** builds a screen, reading it is a direct query and a runbook — and there is no runbook.
 
@@ -6271,16 +6269,18 @@ This is deliberate — the inbound half needs a signed-webhook surface `apps/api
 
 **In the meantime**, a mistaken invitation is revoked with one `UPDATE` against the tenant's own rows. That is an operator action, so it belongs in a runbook rather than in a support reply.
 
-**E9. The composition root wires neither the email seam nor the members port.** ⛔ *(P0-64, P0-51)*
+**E9. The composition root wires the email seam and the members port.** ✅ **closed (2026-09-06)**
 
-The most consequential open item in this batch, and the one least visible from the code: `apps/api/src/index.ts` — the actual Lambda entry — still constructs `createApp({ auth, readMemberships })` and nothing else. Two things follow, and both are silent in every test that exists.
+It did not, and the diagnosis is worth keeping because the shape recurs. `apps/api/src/index.ts` constructed `createApp({ auth, readMemberships })` and nothing else, so password reset sent nothing and the invite endpoints answered **500** — verified by building the app exactly as the entry point did and calling the route, rather than by reading the code.
 
-**`sendResetPassword` is still the placeholder.** P0-64 built the seam; nothing replaced the stub with it, so **A4 is not closed by P0-64** as that item anticipated. The stub logs and resolves — correctly, because throwing would make reset 500 for real addresses and 200 for invented ones, which is an enumeration oracle the stub would have manufactured — so the failure is quiet by design and stays quiet.
+**Why every suite was green.** P0-64 was verified against a fake transport, P0-51 against a fake port, and both correctly. Neither said anything about the one place the real implementations meet, and nothing could: `index.ts` did its work at module scope and threw on import without `AUTH_SECRET`, so no test could reach it. The absence of an assertion was itself the cause, not a symptom.
 
-**The invite and accept endpoints answer 500.** `members` is optional on `createApp` and defaults to `unconfiguredMembers`, which rejects every call with `MembersPortNotConfiguredError`. That default is doing exactly what it was built to do: fail loudly and completely rather than appear to work. But nothing has yet supplied the real port, so P0-51 ships as two endpoints that cannot succeed in production.
+**The extraction is most of the fix.** `buildDependencies(config)` in `composition.ts` takes configuration and returns what the app needs; `index.ts` is now the environment reading, which is the part that legitimately cannot be tested without an environment. `test/composition.test.ts` asserts the members port **by identity** — `not.toBe(unconfiguredMembers)` — because a shape check would have passed on the broken version: the fail-loud placeholder has the same shape by construction, which is exactly why it went unnoticed.
 
-**Why it happened, since it is worth not repeating.** P0-64 and P0-51 were each verified against their own seams — a fake transport, a fake port — and both suites are green. Neither says anything about whether the *real* implementations are constructed at the one place that matters. The repository has no assertion on the composition root at all; `apps/api/test/app.test.ts` builds its own app with its own fakes, which is the right thing for testing routes and the reason this gap is invisible.
+**Three decisions inside it.**
 
-**What closes it.** Roughly fifteen lines in `index.ts`: read `ResendApiKey` through the P0-15 loader, build `chooseTransport({ stage, provider: resendTransport(...), log: logTransport() })`, `createSendEmail`, `createMembersPort`, and pass both. It must **not** require the key to be present — `chooseTransport` already routes non-production to the log, and a missing key should degrade to that rather than fail the container. And it needs a test that asserts the composition root supplies a members port at all, since that is the assertion whose absence caused this.
+- **A missing provider key must not stop the container.** The sending domain is not authenticated yet (E6), so every stage runs without one today, and a root that refused to build for want of an email address would take the whole API down. Absent means the log transport — which is also what `chooseTransport` picks for any non-production stage, so the degraded path and the normal path are the same path.
+- **An unset stage defaults to `unknown`, not to `production`.** A missing variable must never be the reason a real customer receives mail from a staging run.
+- **The suppression read on the reset path goes through `withUser`.** `email_suppressions` has no policy, so any connection could read it — but "any connection" is what this repository does not hand out (P0-19). `withUser` is the narrowest sanctioned context on a path where the user is known and the tenant never will be, and it adds no new escape hatch. It cost one field on `ResetPasswordEmail` to carry the user id through.
 
-**Until then**, invitations are unreachable from the API and password reset sends nothing. Neither matters while nothing is deployed; both are launch blockers, and the second one is the same launch blocker **A4** already names.
+**The invite path checks suppression itself**, inside the transaction it already holds, and does not create an invitation for an undeliverable address. The alternative — letting `sendEmail`'s own guard catch it after the commit — leaves a live invitation nobody can accept and an owner told "invited". The port now reports four outcomes rather than a boolean; the HTTP response still flattens three of them to `created: false`, deliberately, because the members screen (**E8**) is what will have somewhere to show the reason and widening the contract before there is a reader means guessing at the shape.

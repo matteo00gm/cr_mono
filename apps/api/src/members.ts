@@ -1,12 +1,15 @@
 import {
+  audit,
   hashInvitationToken,
   invitationIsFor,
   prepareInvite,
+  setRequestTenant,
   type Role,
   type SendEmail,
 } from '@catalogorosso/core';
 import {
   emailIsMember,
+  isSuppressed,
   insertInvitation,
   insertMembershipFromInvitation,
   markInvitationAccepted,
@@ -33,18 +36,33 @@ export interface InviteCommand {
   readonly invitedBy: string;
 }
 
+/**
+ * Why nothing was created, when nothing was.
+ *
+ * Three reasons rather than a boolean, because they are three different things
+ * to tell an owner — and because the caller uses the distinction to decide
+ * whether to send mail at all. Re-sending on every click would make an invite
+ * button a way to mail somebody repeatedly through our sending domain, which is
+ * the behaviour that gets a domain onto a filter list (P0-64).
+ *
+ * The HTTP response still reports a boolean today; the members screen (E8) is
+ * what will have somewhere useful to put the reason.
+ */
+export type InviteOutcome = 'invited' | 'already-member' | 'already-invited' | 'undeliverable';
+
 export interface InviteResult {
-  /**
-   * False when nothing was created — the address is already a member, or an
-   * invitation to it is already open.
-   *
-   * Reported rather than swallowed, because the caller uses it to decide
-   * whether to send mail. Re-sending on every click would make an invite button
-   * a way to mail somebody repeatedly through our sending domain, which is
-   * exactly the behaviour that gets a domain onto a filter list (P0-64).
-   */
+  readonly outcome: InviteOutcome;
   readonly created: boolean;
 }
+
+/** What the invite transaction hands back: a refusal, or what the mail needs. */
+type Opened =
+  | { readonly outcome: Exclude<InviteOutcome, 'invited'> }
+  | {
+      readonly outcome: 'invited';
+      readonly tenantName: string;
+      readonly inviterEmail: string;
+    };
 
 export interface AcceptCommand {
   readonly token: string;
@@ -87,9 +105,27 @@ export interface MembersDeps {
   readonly sendEmail: SendEmail;
   /** Where the invitee lands. The token is appended as the last path segment. */
   readonly acceptUrlBase: string;
+  /**
+   * The audit writer (P0-53), injected.
+   *
+   * A port rather than a direct import for two reasons, and the second is why
+   * it is worth the parameter. `audit()` reads the actor from an
+   * `AsyncLocalStorage` in `packages/core`, and a test that mocks
+   * `@catalogorosso/db` gets a *second* instance of that module for this file's
+   * import graph — so the context the test sets is invisible here, and the call
+   * throws for a reason that has nothing to do with the code.
+   *
+   * More usefully: injecting it is what makes the audit row **assertable**.
+   * Before this it was written and nothing checked that it was.
+   */
+  readonly audit?: typeof audit;
 }
 
-export const createMembersPort = ({ sendEmail, acceptUrlBase }: MembersDeps): MembersPort => ({
+export const createMembersPort = ({
+  sendEmail,
+  acceptUrlBase,
+  audit: record = audit,
+}: MembersDeps): MembersPort => ({
   async invite(command) {
     const prepared = prepareInvite(
       { email: command.email, role: command.role },
@@ -104,8 +140,18 @@ export const createMembersPort = ({ sendEmail, acceptUrlBase }: MembersDeps): Me
      * fails for a customer with no explanation and no way to tell whether they
      * are the problem.
      */
-    const opened = await withTenant(command.tenantId, async (tx) => {
-      if (await emailIsMember(tx, prepared.email)) return undefined;
+    const opened = await withTenant(command.tenantId, async (tx): Promise<Opened> => {
+      if (await emailIsMember(tx, prepared.email)) return { outcome: 'already-member' };
+
+      /*
+       * Checked here rather than left to `sendEmail`'s own guard, and the
+       * difference is not an optimisation. The mail is sent *after* this
+       * transaction commits, so a suppressed address would otherwise leave a
+       * live invitation that can never be delivered — an owner told "invited"
+       * and an invitee who never hears anything. The transaction is already
+       * open and the table needs no scope, so asking now costs one query.
+       */
+      if (await isSuppressed(tx, prepared.email)) return { outcome: 'undeliverable' };
 
       const id = await insertInvitation(tx, {
         email: prepared.email,
@@ -115,7 +161,23 @@ export const createMembersPort = ({ sendEmail, acceptUrlBase }: MembersDeps): Me
         expiresAt: prepared.expiresAt,
       });
 
-      if (id === undefined) return undefined;
+      if (id === undefined) return { outcome: 'already-invited' };
+
+      /*
+       * Recorded inside the same transaction as the row it describes (P0-53).
+       * An audit entry for an invitation that rolled back is worse than none,
+       * because it is a record people will believe — and this is the action an
+       * owner asks about later: who invited this person, and when.
+       *
+       * The address is in `target` rather than `metadata`, so it is the thing
+       * the row is *about* rather than free-form detail that the redaction
+       * allowlist would strip.
+       */
+      await record(tx, {
+        action: 'member.invited',
+        target: prepared.email,
+        metadata: { role: prepared.role, invitationId: id },
+      });
 
       /*
        * The winery's name and the inviter's address are read here rather than
@@ -124,12 +186,13 @@ export const createMembersPort = ({ sendEmail, acceptUrlBase }: MembersDeps): Me
        * the contents of mail we send in their name.
        */
       return {
+        outcome: 'invited',
         tenantName: (await readActiveTenantName(tx)) ?? 'AI Sommelier',
         inviterEmail: (await readUserEmail(tx, command.invitedBy)) ?? 'noreply',
       };
     });
 
-    if (opened === undefined) return { created: false };
+    if (opened.outcome !== 'invited') return { outcome: opened.outcome, created: false };
 
     await sendEmail({
       to: prepared.email,
@@ -146,7 +209,7 @@ export const createMembersPort = ({ sendEmail, acceptUrlBase }: MembersDeps): Me
       },
     });
 
-    return { created: true };
+    return { outcome: 'invited', created: true };
   },
 
   async accept(command) {
@@ -169,6 +232,25 @@ export const createMembersPort = ({ sendEmail, acceptUrlBase }: MembersDeps): Me
         });
 
         await markInvitationAccepted(tx, invitation.id);
+
+        /*
+         * The tenant is put into the request context *here*, and this is the
+         * one route where that does not come from `resolveTenant`.
+         *
+         * It cannot: this endpoint sits above that middleware because the
+         * caller is not yet a member (P0-51). The tenant is nonetheless
+         * resolved — by a 256-bit token matched against a row — so setting it
+         * is not a shortcut around P0-48 but the same guarantee reached another
+         * way. `audit()` needs it, and every log line for the rest of the
+         * request carries it as a side benefit.
+         */
+        setRequestTenant(invitation.tenantId);
+
+        await record(tx, {
+          action: 'member.joined',
+          target: command.userId,
+          metadata: { role: invitation.role, invitationId: invitation.id },
+        });
 
         return { tenantId: invitation.tenantId, role: invitation.role as Role };
       },
