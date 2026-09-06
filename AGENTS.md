@@ -42,10 +42,13 @@ patch will not, because the ORM's own documentation shows the forbidden form.
   `current_setting('app.tenant_id')`, and a query issued without it returns
   nothing, or returns another tenant's rows once somebody "fixes" that with a
   default (P0-19).
-- There are exactly two sanctioned exceptions and both are named in the
-  boundary rules: `@catalogorosso/db/auth` for the Better Auth adapter, which
-  runs before a tenant is known, and `withUser()`, which is a second _scoped_
-  context rather than an un-scoped one (P0-45, P0-47).
+- There is exactly **one** sanctioned un-scoped path, named in the boundary
+  rules: `@catalogorosso/db/auth`, for the Better Auth adapter, which runs
+  before a tenant is known (P0-45). Everything else that looks like an
+  exception is a second _scope_, not an escape from scoping: `withUser()`
+  (P0-47) and `withInvitation()` (P0-51) each set a different GUC and read
+  under a policy that admits it. A new one of those is a design change — every
+  GUC is another way a row becomes visible.
 - Never read a tenant id from request input — body, query, path or header. It
   comes from a `memberships` row for the authenticated user (P0-48).
 - Never hand-write a type that duplicates a table's shape. Contracts are

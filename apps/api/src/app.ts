@@ -5,6 +5,7 @@ import type { MembershipReader } from '@catalogorosso/core';
 
 import type { AppEnv } from './env.js';
 import type { AuthPort } from './middleware/auth.js';
+import type { MembersPort } from './members.js';
 import { assertEveryRouteDeclared } from './middleware/capability.js';
 import { errorHandler, normaliseThrown, notFoundHandler } from './middleware/error.js';
 import { DASHBOARD_PREFIX, WIDGET_PREFIX } from './routes.js';
@@ -51,9 +52,17 @@ export interface AppOptions {
    * fake and needs neither a container nor a `DATABASE_URL`.
    */
   readonly auth: AuthPort;
+
+  /**
+   * Invitations (P0-51). Optional, and the asymmetry with `auth` above is the
+   * point: an absent `auth` would serve the dashboard unauthenticated — silent
+   * and permissive — while an absent members port refuses every call with a
+   * wiring error. See `src/members.ts`.
+   */
+  readonly members?: MembersPort | undefined;
 }
 
-export const createApp = ({ auth, readMemberships }: AppOptions): Hono<AppEnv> => {
+export const createApp = ({ auth, readMemberships, members }: AppOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
   /*
@@ -102,7 +111,7 @@ export const createApp = ({ auth, readMemberships }: AppOptions): Hono<AppEnv> =
    */
   app.get('/v1/health', (c) => c.json({ status: 'ok' as const, sha: buildSha() }));
 
-  app.route(DASHBOARD_PREFIX, createDashboardApp({ auth, readMemberships }));
+  app.route(DASHBOARD_PREFIX, createDashboardApp({ auth, readMemberships, members }));
   app.route(WIDGET_PREFIX, createWidgetApp());
 
   /*

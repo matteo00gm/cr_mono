@@ -231,6 +231,141 @@
             }
           }
         }
+      },
+      "/v1/dashboard/members/accept": {
+        "post": {
+          "summary": "Redeem an invitation",
+          "description": "Exchanges an invitation token for a membership, and returns the membership as written so the dashboard can switch straight into the new winery. The role comes from the invitation the owner created; a role sent in the body is a 400, not a silently ignored field. Every unusable token - unknown, expired, revoked, already redeemed, addressed to somebody else - answers 404 alike, so this cannot be used to discover which invitations exist.\n\nNo capability required. Authenticated but pre-tenant, by necessity: the caller is not yet a member of the winery they are joining - becoming one is what the request does - so tenant resolution would refuse them before the handler ran. The tenant comes from the invitation row, matched by a 256-bit token and set inside the same transaction, so it still comes out of Postgres rather than off the wire.",
+          "operationId": "postV1DashboardMembersAccept",
+          "responses": {
+            "200": {
+              "description": "Redeem an invitation",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "tenantId": {
+                        "type": "string"
+                      },
+                      "role": {
+                        "type": "string",
+                        "enum": [
+                          "OWNER",
+                          "EDITOR"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "tenantId",
+                      "role"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "tenantId": "9f2c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a",
+                    "role": "EDITOR"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/dashboard/members/invite": {
+        "post": {
+          "summary": "Invite somebody to this winery",
+          "description": "Creates a single-use invitation and emails it. The role is chosen here, by a caller who holds members:manage - it is never read from the acceptance request, where the sender would be the person who benefits from it. Re-inviting an address that is already a member, or already has an open invitation, answers 200 with `created: false` rather than an error: the intent is already satisfied, and sending again on every click would mail somebody repeatedly through our domain.\n\nRequires the `members:manage` capability.",
+          "operationId": "postV1DashboardMembersInvite",
+          "x-required-capability": "members:manage",
+          "responses": {
+            "200": {
+              "description": "Invite somebody to this winery",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "email": {
+                        "type": "string"
+                      },
+                      "created": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "email",
+                      "created"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "email": "anna@cantinarossi.example",
+                    "created": true
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   },

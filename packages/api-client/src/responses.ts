@@ -38,10 +38,34 @@ export const meResponse = z.object({
 
 export const contextResponse = membershipSchema;
 
+/**
+ * The answer to an invite (P0-51).
+ *
+ * `created` is false when the address is already a member or already has an
+ * open invitation. Reported rather than hidden behind a 409, because the
+ * owner's intent — make sure this person can get in — is satisfied either way,
+ * and a dashboard that has to explain a conflict that is not one is a worse
+ * experience than one that says "already invited".
+ */
+export const inviteResponse = z.object({
+  email: z.string(),
+  created: z.boolean(),
+});
+
+/**
+ * What redeeming an invitation gives back.
+ *
+ * The membership as written, so the dashboard can switch straight into the new
+ * winery instead of re-fetching `/me` and guessing which entry is new.
+ */
+export const acceptInviteResponse = membershipSchema;
+
 export type Membership = z.infer<typeof membershipSchema>;
 export type SurfaceResponse = z.infer<typeof surfaceResponse>;
 export type MeResponse = z.infer<typeof meResponse>;
 export type ContextResponse = z.infer<typeof contextResponse>;
+export type InviteResponse = z.infer<typeof inviteResponse>;
+export type AcceptInviteResponse = z.infer<typeof acceptInviteResponse>;
 
 /**
  * Every dashboard response, keyed by `METHOD path`.
@@ -53,6 +77,8 @@ export const DASHBOARD_RESPONSES = {
   'GET /v1/dashboard': surfaceResponse,
   'GET /v1/dashboard/me': meResponse,
   'GET /v1/dashboard/context': contextResponse,
+  'POST /v1/dashboard/members/invite': inviteResponse,
+  'POST /v1/dashboard/members/accept': acceptInviteResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

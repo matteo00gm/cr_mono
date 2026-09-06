@@ -5,3 +5,4 @@ export * from './members.js';
 export * from './request-context.js';
 export * from './audit.js';
 export * from './email/index.js';
+export * from './invitations.js';

@@ -1,4 +1,4 @@
--- Reverses the row-level security migration (P0-37).
+-- Reverses 0025_rls.sql.
 
 DROP POLICY IF EXISTS tenant_isolation ON tenants;
 ALTER TABLE tenants NO FORCE ROW LEVEL SECURITY;
