@@ -39,6 +39,16 @@ const THRESHOLDS = {
 
   // Not specified in §6.2 — chosen here, and open to revision.
   'apps/worker': { lines: 85, branches: 85 },
+
+  /*
+   * The deploy-time database path (P0-21b). Its bar is the parameter
+   * handling — the empty-value and missing-parameter branches, which are how a
+   * partial IAM grant surfaces as a named path rather than as a connection
+   * string reading `undefined`. What it *does* after that is `applyBootstrap`
+   * and `applyMigrations`, both covered against real Postgres in
+   * `packages/db`, and neither reachable from a unit test without a container.
+   */
+  'apps/migrator': { lines: 80, branches: 80 },
   'apps/dashboard': { lines: 80, branches: 80 },
   'packages/testing': {
     exempt:

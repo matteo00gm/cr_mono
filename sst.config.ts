@@ -88,5 +88,13 @@ export default $config({
     // infra/api.ts for why that cycle cannot be closed.
     await import('./infra/api');
     await import('./infra/cdn');
+
+    /*
+     * The deploy-time database path (P0-21b). Last, and independent of the
+     * others: it is never invoked by a deploy, only created by one. See
+     * `infra/migrator.ts` for why running migrations automatically is not
+     * wanted.
+     */
+    await import('./infra/migrator');
   },
 });

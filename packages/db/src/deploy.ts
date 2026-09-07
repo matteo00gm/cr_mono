@@ -25,9 +25,33 @@ import postgres from 'postgres';
 export type BootstrapRole = 'app_rw' | 'app_migrate';
 
 const PACKAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
-const BOOTSTRAP_DIR = join(PACKAGE_DIR, 'bootstrap');
-const MIGRATIONS_DIR = join(PACKAGE_DIR, 'migrations');
-const DOWN_DIR = join(MIGRATIONS_DIR, 'down');
+
+/**
+ * Where the SQL lives, overridable by the caller.
+ *
+ * The default resolves from this module's own location, which is right for a
+ * `pnpm` workspace and **wrong inside a bundle**: esbuild collapses the package
+ * into one file, `import.meta.url` becomes `/var/task/bundle.mjs`, and the
+ * default would look for `bootstrap/` beside `/var/`. The migration runner
+ * (P0-21b) copies the two directories into its own artifact and says where they
+ * landed, which is the only reason this is a parameter at all.
+ *
+ * Not read from an environment variable here: this package has no configuration
+ * of its own, and a directory that changes based on ambient state is how a
+ * deploy applies a different set of migrations than the one it was tested with.
+ */
+export interface SqlLocation {
+  /** Contains `0001_roles.sql` and the rest of `bootstrap/`. */
+  readonly bootstrapDir?: string | undefined;
+  /** Contains the numbered migrations, `meta/` and `down/`. */
+  readonly migrationsDir?: string | undefined;
+}
+
+const bootstrapDir = (at: SqlLocation | undefined): string =>
+  at?.bootstrapDir ?? join(PACKAGE_DIR, 'bootstrap');
+
+const migrationsDir = (at: SqlLocation | undefined): string =>
+  at?.migrationsDir ?? join(PACKAGE_DIR, 'migrations');
 
 /**
  * Rewrites a connection URL to connect as a different role.
@@ -88,8 +112,10 @@ export const withRole = (url: string, role: string, password: string): string =>
 export const applyBootstrap = async (
   url: string,
   passwords: Record<BootstrapRole, string>,
+  at?: SqlLocation,
 ): Promise<void> => {
-  const files = (await readdir(BOOTSTRAP_DIR)).filter((f) => f.endsWith('.sql')).sort();
+  const dir = bootstrapDir(at);
+  const files = (await readdir(dir)).filter((f) => f.endsWith('.sql')).sort();
   const sql = postgres(url, { max: 1 });
 
   try {
@@ -98,7 +124,7 @@ export const applyBootstrap = async (
     }
 
     for (const file of files) {
-      await sql.unsafe(await readFile(join(BOOTSTRAP_DIR, file), 'utf8')).simple();
+      await sql.unsafe(await readFile(join(dir, file), 'utf8')).simple();
     }
   } finally {
     await sql.end();
@@ -114,11 +140,11 @@ export const applyBootstrap = async (
  * it creates, and everything about tenant isolation depends on that owner not
  * being `app_rw`.
  */
-export const applyMigrations = async (url: string): Promise<void> => {
+export const applyMigrations = async (url: string, at?: SqlLocation): Promise<void> => {
   const sql = postgres(url, { max: 1 });
 
   try {
-    await migrate(drizzle({ client: sql }), { migrationsFolder: MIGRATIONS_DIR });
+    await migrate(drizzle({ client: sql }), { migrationsFolder: migrationsDir(at) });
   } finally {
     await sql.end();
   }
@@ -142,8 +168,8 @@ export const applyMigrations = async (url: string): Promise<void> => {
  * the test: an irreversible migration discovered during an incident is a very
  * bad time to find out that the rollback path was only ever test code.
  */
-export const revertMigrations = async (url: string): Promise<void> => {
-  const files = (await readdir(DOWN_DIR))
+export const revertMigrations = async (url: string, at?: SqlLocation): Promise<void> => {
+  const files = (await readdir(join(migrationsDir(at), 'down')))
     .filter((f) => f.endsWith('.sql'))
     .sort()
     .reverse();
@@ -151,7 +177,7 @@ export const revertMigrations = async (url: string): Promise<void> => {
 
   try {
     for (const file of files) {
-      await sql.unsafe(await readFile(join(DOWN_DIR, file), 'utf8')).simple();
+      await sql.unsafe(await readFile(join(migrationsDir(at), 'down', file), 'utf8')).simple();
     }
 
     await sql.unsafe('delete from drizzle.__drizzle_migrations').simple();

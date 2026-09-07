@@ -83,6 +83,7 @@ export {
   revertMigrations,
   withRole,
   type BootstrapRole,
+  type SqlLocation,
 } from './deploy.js';
 
 /**
