@@ -89,10 +89,19 @@ describe('the statement itself', () => {
 
     await db.transaction((tx) => consumeBuckets(tx, [{ key, limit: 5, windowSec: 60 }]));
 
+    /*
+     * Epoch seconds out of SQL, for the same reason the implementation reads
+     * them that way — and this assertion is where that lesson was learned
+     * twice. `db.execute` with a raw statement bypasses Drizzle's column
+     * mapping, so a `timestamptz` does not arrive as a `Date`, and the first
+     * version of this line threw `start.getTime is not a function` against a
+     * real database while every unit test agreed with it.
+     */
     const rows = await db.execute(
-      sql`SELECT window_start FROM rate_limit_buckets WHERE bucket_key = ${key}`,
+      sql`SELECT extract(epoch from window_start)::double precision AS epoch
+          FROM rate_limit_buckets WHERE bucket_key = ${key}`,
     );
-    const start = ([...rows][0] as { window_start: Date }).window_start;
+    const epoch = Number(([...rows][0] as { epoch: number | string }).epoch);
 
     /*
      * The boundary is a multiple of the window in epoch seconds. Asserted
@@ -100,7 +109,8 @@ describe('the statement itself', () => {
      * window computed in the application would drift per container, and two
      * concurrent requests would each get a full allowance.
      */
-    expect(Math.floor(start.getTime() / 1000) % 60).toBe(0);
+    expect(Number.isFinite(epoch)).toBe(true);
+    expect(epoch % 60).toBe(0);
   });
 
   it('rolls back every increment when one dimension refuses', async () => {
