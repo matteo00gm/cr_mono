@@ -22,12 +22,31 @@ import type { DbTransaction } from './with-tenant.js';
 const UNIQUE_VIOLATION = '23505';
 
 /**
- * Drizzle wraps a driver error in one of its own, so the SQLSTATE is a level
- * down and the outer message is `Failed query: …`. Matching on that wording
- * would be matching on Drizzle's phrasing, which is neither ours nor stable.
+ * The SQLSTATE, wherever the driver left it.
+ *
+ * **Both levels, and CI is what established that.** `db.execute` with a raw
+ * statement wraps the driver error in a Drizzle one, so the code sits on
+ * `cause`; the query builder lets postgres-js's own `PostgresError` through
+ * untouched, with the code on the error itself. The first version of this
+ * function read only `cause` — and the unit test fabricated a wrapped error, so
+ * the fake and the code agreed with each other and not with Postgres. A
+ * duplicate SKU escaped as a 500 while every unit test stayed green.
+ *
+ * That is the same shape as A1's timestamp bug, from the same cause: a fixture
+ * written from the implementation's assumption rather than from the driver's
+ * behaviour. `products.write.test.ts` now builds both forms and names which
+ * call site produces each.
+ *
+ * The message is never matched on. `Failed query: …` is Drizzle's phrasing,
+ * which is neither ours nor stable.
  */
-const pgErrorCode = (error: unknown): string | undefined =>
-  (error as { cause?: { code?: string } } | undefined)?.cause?.code;
+const pgErrorCode = (error: unknown): string | undefined => {
+  const candidate = error as { code?: unknown; cause?: { code?: unknown } } | undefined;
+  const direct = candidate?.code;
+  const wrapped = candidate?.cause?.code;
+
+  return typeof direct === 'string' ? direct : typeof wrapped === 'string' ? wrapped : undefined;
+};
 
 export type ProductRow = typeof products.$inferSelect;
 
