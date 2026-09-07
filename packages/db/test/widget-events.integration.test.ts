@@ -27,6 +27,8 @@ const EVENT_TYPES = [
 
 let container: StartedPostgreSqlContainer | undefined;
 let client: DbClient | undefined;
+let admin: DbClient | undefined;
+let adminDb: Database;
 let db: Database;
 let tenantId: string;
 
@@ -36,11 +38,18 @@ beforeAll(async () => {
   client = createDbClient(started.roleUrl('app_rw'), { max: 1 });
   db = client.db;
 
+  // The cascade these suites assert is a property of the foreign key, not of
+  // the runtime role — and P0-33a revoked DELETE on `tenants` from app_rw, so
+  // only a role that still holds it can trigger the cascade at all.
+  admin = createDbClient(started.adminUrl, { max: 1 });
+  adminDb = admin.db;
+
   tenantId = await createTenant(db, 'eventi');
 }, 180_000);
 
 afterAll(async () => {
   await client?.close();
+  await admin?.close();
   await container?.stop();
 }, 60_000);
 
@@ -167,7 +176,7 @@ describe('widget_events', () => {
       values (${doomedId}::uuid, 's', 'WIDGET_OPEN')
     `);
 
-    await db.execute(sql`delete from tenants where id = ${doomedId}::uuid`);
+    await adminDb.execute(sql`delete from tenants where id = ${doomedId}::uuid`);
 
     const rows = await db.execute(
       sql`select 1 from widget_events where tenant_id = ${doomedId}::uuid`,

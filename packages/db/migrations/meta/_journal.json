@@ -204,6 +204,20 @@
       "when": 1788572055666,
       "tag": "0028_better_auth_1_7_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1788631011739,
+      "tag": "0029_tenants_delete_revoked",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1788631014101,
+      "tag": "0030_processed_webhooks_append_only",
+      "breakpoints": true
     }
   ]
 }

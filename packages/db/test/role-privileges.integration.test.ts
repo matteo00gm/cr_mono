@@ -105,6 +105,14 @@ describe('app_rw role attributes', () => {
   });
 });
 
+/** Whether app_rw holds a privilege, asked of Postgres rather than inferred. */
+const hasPrivilege = async (table: string, privilege: string): Promise<boolean> => {
+  const rows = await db.execute(
+    sql`select has_table_privilege('app_rw', ${table}, ${privilege}) as allowed`,
+  );
+  return [...rows][0]?.allowed === true;
+};
+
 describe('app_rw privileges', () => {
   it('cannot create a table', async () => {
     // A table app_rw created would be owned by app_rw, and an owner can drop
@@ -167,6 +175,50 @@ describe('app_rw privileges', () => {
     );
 
     expect([...after][0]?.allowed).toBe(false);
+  });
+
+  it('cannot delete a tenant, and so cannot erase a ledger by cascade', async () => {
+    /*
+     * The P0-33a grant, asserted as a privilege rather than only through each
+     * ledger's own suite.
+     *
+     * `usage_events`, `audit_log` and `security_events` all revoke UPDATE and
+     * DELETE from app_rw and all cascade from `tenants` — and a referential
+     * cascade is **not** permission-checked against the invoking role. So while
+     * app_rw held DELETE here, one statement erased the billing ledger, the
+     * record of who deleted the tenant, and the events describing attacks on
+     * it: the three things those revokes exist to protect, defeated by the role
+     * they constrain.
+     *
+     * Revoking on the parent is what makes this cover tables not yet written.
+     * Anything that cascades from `tenants` inherits the protection.
+     */
+    expect(await hasPrivilege('tenants', 'DELETE')).toBe(false);
+  });
+
+  it('may still create and update a tenant', async () => {
+    // The revoke is narrow on purpose: the application still onboards sellers
+    // and edits their settings. It just cannot erase one — that leaves the
+    // application entirely and becomes P7-08's job, running as another role.
+    expect(await hasPrivilege('tenants', 'INSERT')).toBe(true);
+    expect(await hasPrivilege('tenants', 'UPDATE')).toBe(true);
+    expect(await hasPrivilege('tenants', 'SELECT')).toBe(true);
+  });
+
+  it('cannot rewrite the webhook idempotency ledger', async () => {
+    /*
+     * `processed_webhooks` never got a revoke, so the default privileges left
+     * app_rw holding UPDATE and DELETE on the table whose only purpose is to
+     * say "this event has already been applied".
+     *
+     * Deleting a row there means the next redelivery applies a second time —
+     * the double-apply §3.8 describes, against the table that exists to prevent
+     * it. INSERT and SELECT stay: the worker records and checks.
+     */
+    expect(await hasPrivilege('processed_webhooks', 'UPDATE')).toBe(false);
+    expect(await hasPrivilege('processed_webhooks', 'DELETE')).toBe(false);
+    expect(await hasPrivilege('processed_webhooks', 'INSERT')).toBe(true);
+    expect(await hasPrivilege('processed_webhooks', 'SELECT')).toBe(true);
   });
 
   it('cannot read the migration ledger', async () => {
