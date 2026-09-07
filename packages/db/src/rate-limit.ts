@@ -85,23 +85,50 @@ export const consumeBuckets = async (
       )
       ON CONFLICT (bucket_key, window_start)
         DO UPDATE SET count = rate_limit_buckets.count + 1
-      RETURNING count, window_start
+      RETURNING count, extract(epoch from window_start)::double precision AS window_epoch
     `);
 
-    const row = [...rows][0] as { count: number; window_start: Date } | undefined;
+    const row = [...rows][0] as
+      { count: number | string; window_epoch: number | string } | undefined;
     if (row === undefined) {
       throw new Error(`consumeBuckets: no row returned for ${check.key}`);
     }
 
-    const resetAt = new Date(row.window_start.getTime() + check.windowSec * 1000);
+    /*
+     * **Epoch seconds out of SQL, not a timestamp**, and CI is what taught this.
+     * `db.execute` with a raw statement bypasses Drizzle's column mapping, so
+     * the value arrives however postgres-js decided to decode it — which was
+     * not a `Date`, and `row.window_start.getTime()` threw on every call
+     * against a real database while the unit tests stayed green.
+     *
+     * They stayed green because the fake returned a `Date`: I wrote the double
+     * and the code from the same assumption, so they agreed with each other and
+     * not with Postgres. A number crossing the boundary has one representation
+     * and cannot do that.
+     *
+     * `count` is coerced for the same reason — postgres-js returns some numeric
+     * types as strings, and `'11' > 10` is false in JavaScript, which would
+     * silently stop rejecting.
+     */
+    const windowEpoch = Number(row.window_epoch);
+    const count = Number(row.count);
 
-    if (row.count > check.limit) {
+    if (!Number.isFinite(windowEpoch) || !Number.isFinite(count)) {
+      throw new Error(
+        `consumeBuckets: ${check.key} returned a non-numeric count or window ` +
+          `(count=${String(row.count)}, window=${String(row.window_epoch)})`,
+      );
+    }
+
+    const resetAt = new Date((windowEpoch + check.windowSec) * 1000);
+
+    if (count > check.limit) {
       const retryAfterSec = Math.max(1, Math.ceil((resetAt.getTime() - Date.now()) / 1000));
       rejected ??= { allowed: false, remaining: 0, resetAt, retryAfterSec };
       continue;
     }
 
-    const remaining = check.limit - row.count;
+    const remaining = check.limit - count;
     if (tightest === undefined || remaining < tightest.remaining) {
       tightest = { allowed: true, remaining, resetAt };
     }

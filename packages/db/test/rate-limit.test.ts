@@ -49,9 +49,31 @@ const text = (statement: unknown): string =>
 
 const window60 = (key: string, limit: number) => [{ key, limit, windowSec: 60 }];
 
+/**
+ * A row shaped the way postgres-js actually returns one.
+ *
+ * **Strings, deliberately.** The first version of this file returned a `Date`
+ * and a `number`, because the fake and the code were written from the same
+ * assumption — so they agreed with each other and not with Postgres, and
+ * `row.window_start.getTime()` threw on every call against a real database
+ * while every test here stayed green. CI caught it; this helper is what stops
+ * it recurring.
+ *
+ * `db.execute` with a raw statement bypasses Drizzle's column mapping, so
+ * whatever the driver decodes is what arrives — and it returns some numeric
+ * types as strings.
+ */
+const row = (count: number, windowEpochSec: number) => ({
+  count: String(count),
+  window_epoch: String(windowEpochSec),
+});
+
+/** The current window boundary, in epoch seconds, for a 60s window. */
+const nowWindow = () => Math.floor(Date.now() / 60_000) * 60;
+
 describe('the statement', () => {
   it('is one insert-on-conflict, not a read then a write', async () => {
-    const { tx, statements } = capturing([{ count: 1, window_start: new Date() }]);
+    const { tx, statements } = capturing([row(1, nowWindow())]);
     await consumeBuckets(tx, window60('k', 5));
 
     const sql = text(statements[0]);
@@ -66,11 +88,11 @@ describe('the statement', () => {
     expect(sql).toContain('INSERT INTO rate_limit_buckets');
     expect(sql).toContain('ON CONFLICT (bucket_key, window_start)');
     expect(sql).toContain('DO UPDATE SET count = rate_limit_buckets.count + 1');
-    expect(sql).toContain('RETURNING count, window_start');
+    expect(sql).toContain('RETURNING count, extract(epoch from window_start)');
   });
 
   it('computes the window in SQL, never from the caller', async () => {
-    const { tx, statements } = capturing([{ count: 1, window_start: new Date() }]);
+    const { tx, statements } = capturing([row(1, nowWindow())]);
     await consumeBuckets(tx, window60('k', 5));
 
     /*
@@ -87,18 +109,17 @@ describe('the statement', () => {
 
 describe('the decision', () => {
   it('allows while the count is within the limit', async () => {
-    const start = new Date(Math.floor(Date.now() / 60_000) * 60_000);
-    const { tx } = capturing([{ count: 3, window_start: start }]);
+    const { tx } = capturing([row(3, nowWindow())]);
 
     const result = await consumeBuckets(tx, window60('k', 5));
 
     expect(result.allowed).toBe(true);
     expect(result.remaining).toBe(2);
-    expect(result.resetAt).toEqual(new Date(start.getTime() + 60_000));
+    expect(result.resetAt).toEqual(new Date((nowWindow() + 60) * 1000));
   });
 
   it('throws once the count passes the limit, so the transaction rolls back', async () => {
-    const { tx } = capturing([{ count: 6, window_start: new Date() }]);
+    const { tx } = capturing([row(6, nowWindow())]);
 
     /*
      * The throw is a control-flow device, not an error condition: rolling back
@@ -110,8 +131,7 @@ describe('the decision', () => {
   });
 
   it('carries the result on the exception, so the caller needs no second query', async () => {
-    const start = new Date(Math.floor(Date.now() / 60_000) * 60_000);
-    const { tx } = capturing([{ count: 6, window_start: start }]);
+    const { tx } = capturing([row(6, nowWindow())]);
 
     const error = await consumeBuckets(tx, window60('k', 5)).catch((e: unknown) => e);
 
@@ -125,11 +145,7 @@ describe('the decision', () => {
   });
 
   it('reports the tightest dimension, not the loosest', async () => {
-    const start = new Date(Math.floor(Date.now() / 60_000) * 60_000);
-    const { tx } = capturing(
-      [{ count: 1, window_start: start }],
-      [{ count: 1, window_start: start }],
-    );
+    const { tx } = capturing([row(1, nowWindow())], [row(1, nowWindow())]);
 
     const result = await consumeBuckets(tx, [
       { key: 'tight', limit: 2, windowSec: 60 },
@@ -141,11 +157,7 @@ describe('the decision', () => {
   });
 
   it('checks every dimension before refusing, so the refusal names the tightest', async () => {
-    const start = new Date(Math.floor(Date.now() / 60_000) * 60_000);
-    const { tx, statements } = capturing(
-      [{ count: 99, window_start: start }],
-      [{ count: 1, window_start: start }],
-    );
+    const { tx, statements } = capturing([row(99, nowWindow())], [row(1, nowWindow())]);
 
     await consumeBuckets(tx, [
       { key: 'over', limit: 1, windowSec: 60 },
@@ -199,8 +211,7 @@ describe('createRateLimiter', () => {
   };
 
   it('opens a transaction per check', async () => {
-    const start = new Date(Math.floor(Date.now() / 60_000) * 60_000);
-    const { db } = fakeDb([{ count: 1, window_start: start }]);
+    const { db } = fakeDb([row(1, nowWindow())]);
 
     const result = await createRateLimiter(db).check(window60('k', 5));
 
@@ -209,8 +220,7 @@ describe('createRateLimiter', () => {
   });
 
   it('turns the rollback into a rejection result rather than an error', async () => {
-    const start = new Date(Math.floor(Date.now() / 60_000) * 60_000);
-    const { db } = fakeDb([{ count: 9, window_start: start }]);
+    const { db } = fakeDb([row(9, nowWindow())]);
 
     /*
      * `BucketsExceeded` is how the transaction is rolled back — a control-flow
@@ -237,5 +247,52 @@ describe('createRateLimiter', () => {
     await expect(createRateLimiter(db).check(window60('k', 5))).rejects.toThrow(
       /connection refused/,
     );
+  });
+});
+
+describe('what the driver actually returns', () => {
+  /*
+   * These exist because the unit suite and the implementation were written from
+   * the same wrong assumption and agreed with each other. Each case here is a
+   * shape a real database produced, or could.
+   */
+
+  it('rejects on a string count, which JavaScript would otherwise compare wrong', async () => {
+    // `'11' > 10` is false. Without the coercion the limiter silently stops
+    // rejecting the moment the count reaches two digits.
+    const { tx } = capturing([row(11, nowWindow())]);
+
+    await expect(consumeBuckets(tx, window60('k', 10))).rejects.toBeInstanceOf(BucketsExceeded);
+  });
+
+  it('handles a numeric count and window as well as a string one', async () => {
+    // Some drivers, and some column types, decode to numbers. Both must work —
+    // pinning only one is how this broke in the first place.
+    const { tx } = capturing([{ count: 3, window_epoch: nowWindow() }]);
+
+    const result = await consumeBuckets(tx, window60('k', 5));
+    expect(result.allowed).toBe(true);
+    expect(result.remaining).toBe(2);
+  });
+
+  it('refuses a row it cannot read as numbers', async () => {
+    /*
+     * Fails loudly rather than computing `NaN`, which would make every
+     * comparison false and the limiter allow everything — a limiter that fails
+     * open when the database answers unexpectedly is worse than none.
+     */
+    const { tx } = capturing([{ count: 'not-a-number', window_epoch: 'also-not' }]);
+
+    await expect(consumeBuckets(tx, window60('k', 5))).rejects.toThrow(/non-numeric/);
+  });
+
+  it('computes resetAt from the epoch the database reported', async () => {
+    const boundary = nowWindow();
+    const { tx } = capturing([row(1, boundary)]);
+
+    // Derived from the database's own window, not from the local clock — which
+    // is the property that survives clock skew across containers.
+    const result = await consumeBuckets(tx, window60('k', 5));
+    expect(result.resetAt).toEqual(new Date((boundary + 60) * 1000));
   });
 });
