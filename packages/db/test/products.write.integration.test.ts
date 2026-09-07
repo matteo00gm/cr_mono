@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
-import { enqueueEmbedding, insertProduct, updateProduct } from '../src/products.js';
+import { archiveProduct, enqueueEmbedding, insertProduct, updateProduct } from '../src/products.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 import { startPostgres } from './support/postgres.js';
 import { createTenant, useTenant } from './support/tenant.js';
@@ -459,5 +459,138 @@ describe('updateProduct', () => {
     expect(await patch(second.product.id, { sku: VALUES.sku })).toEqual({
       outcome: 'duplicate-sku',
     });
+  });
+});
+
+describe('archiveProduct', () => {
+  const seed = async () => {
+    const result = await inTenant((tx) =>
+      insertProduct(tx, { tenantId, values: VALUES, contentHash: testHash(VALUES) }),
+    );
+    if (result.outcome !== 'created') throw new Error('expected a created product');
+    return result.product;
+  };
+
+  /** A vector for a product, written the way the worker will (P1-37). */
+  const indexProduct = async (productId: string) => {
+    await useTenant(db, tenantId);
+    await db.execute(sql`
+      insert into product_embeddings (tenant_id, product_id, chunk_index, content_hash, embedding, model)
+      values (
+        ${tenantId}::uuid, ${productId}::uuid, 0, 'hash',
+        ${`[${Array.from({ length: 1024 }, () => '0').join(',')}]`}::halfvec(1024),
+        'amazon.titan-embed-text-v2:0'
+      )
+    `);
+  };
+
+  const vectorCount = async (productId: string): Promise<number> => {
+    const rows = await db.execute(
+      sql`select count(*)::int as n from product_embeddings where product_id = ${productId}::uuid`,
+    );
+    return ([...rows][0] as { n: number }).n;
+  };
+
+  it('archives the row rather than deleting it', async () => {
+    const product = await seed();
+
+    const result = await inTenant((tx) => archiveProduct(tx, product.id));
+
+    expect(result).toMatchObject({ outcome: 'archived' });
+
+    /*
+     * **The row survives, and that is the point of the soft delete.** An order
+     * placed last month refers to it, and a catalogue that forgets what it sold
+     * cannot answer a customer's question about their own purchase.
+     */
+    await useTenant(db, tenantId);
+    const rows = await db.execute(sql`select status from products where id = ${product.id}::uuid`);
+    expect(([...rows][0] as { status: string }).status).toBe('ARCHIVED');
+  });
+
+  it('deletes the vectors outright, which the cascade would not do', async () => {
+    /*
+     * **`ON DELETE CASCADE` does not help here**, and this is the assertion
+     * that proves the explicit delete is doing the work: the cascade fires when
+     * the *product row* goes, and this path deliberately keeps it. A reader who
+     * knows the cascade exists is exactly the reader who would assume this was
+     * handled — and the symptom of the assumption is a removed wine that keeps
+     * being recommended.
+     */
+    const product = await seed();
+    await indexProduct(product.id);
+
+    await useTenant(db, tenantId);
+    expect(await vectorCount(product.id)).toBe(1);
+
+    const result = await inTenant((tx) => archiveProduct(tx, product.id));
+
+    expect(result).toMatchObject({ vectorsRemoved: 1 });
+    await useTenant(db, tenantId);
+    expect(await vectorCount(product.id)).toBe(0);
+  });
+
+  it('is idempotent, because a repeated click is not a conflict', async () => {
+    const product = await seed();
+    await indexProduct(product.id);
+
+    await inTenant((tx) => archiveProduct(tx, product.id));
+    const second = await inTenant((tx) => archiveProduct(tx, product.id));
+
+    expect(second).toMatchObject({ outcome: 'archived', vectorsRemoved: 0 });
+  });
+
+  it('leaves both halves alone when the transaction fails afterwards', async () => {
+    const product = await seed();
+    await indexProduct(product.id);
+
+    await expect(
+      inTenant(async (tx) => {
+        await archiveProduct(tx, product.id);
+        throw new Error('something failed after archiving');
+      }),
+    ).rejects.toThrow('something failed after archiving');
+
+    /*
+     * Both, and the vector half is the one that matters: an archive that
+     * committed the row while rolling back the delete would leave a wine that
+     * is hidden from the seller and still recommended to visitors.
+     */
+    await useTenant(db, tenantId);
+    const rows = await db.execute(sql`select status from products where id = ${product.id}::uuid`);
+    expect(([...rows][0] as { status: string }).status).toBe('ACTIVE');
+    expect(await vectorCount(product.id)).toBe(1);
+  });
+
+  it('answers not-found for another winery product', async () => {
+    const product = await seed();
+
+    const other = await createTenant(db, 'nosy-winery');
+    const result = await db.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('app.tenant_id', ${other}, true)`);
+      return archiveProduct(tx, product.id);
+    });
+
+    expect(result).toEqual({ outcome: 'not-found' });
+  });
+
+  it('does not touch another winery vectors for the same id', async () => {
+    /*
+     * Belt and braces on the delete: the `where` clause names only the product
+     * id, so a policy that admitted more rows would let one tenant clear
+     * another's index. RLS is what stops it, and this is the assertion that
+     * RLS is in fact what is stopping it.
+     */
+    const product = await seed();
+    await indexProduct(product.id);
+
+    const other = await createTenant(db, 'other-winery');
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('app.tenant_id', ${other}, true)`);
+      return archiveProduct(tx, product.id);
+    });
+
+    await useTenant(db, tenantId);
+    expect(await vectorCount(product.id)).toBe(1);
   });
 });

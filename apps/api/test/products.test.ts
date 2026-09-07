@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
 import type { CreateProductCommand, ProductsPort } from '../src/products.js';
 import { fakeAuth, oneMembership, signedIn } from './support/auth.js';
+import { productsPort, storedProduct } from './support/products.js';
 
 /**
  * `POST /v1/dashboard/products` (P1-02).
@@ -28,56 +29,19 @@ const VALID = {
   stockStatus: 'IN_STOCK',
 } as const;
 
-/**
- * A row shaped the way the database actually returns one.
- *
- * **`Date` objects, not ISO strings**, and that is the whole value of the
- * fake being typed. The route hands the row to `c.json`, which serialises a
- * `Date` to an ISO string — so a fake carrying strings would agree with the
- * response contract for the wrong reason and prove nothing about what the real
- * path emits. This is the shape A1 got wrong by writing the fake and the code
- * from one assumption.
- */
-const AT = new Date('2026-09-08T09:14:00.000Z');
-
-const stored = (values: Record<string, unknown>): ProductRow =>
-  ({
-    id: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
-    tenantId: TENANT,
-    externalVariantId: null,
-    producer: null,
-    vintage: null,
-    grapeVarieties: null,
-    region: null,
-    denomination: null,
-    styleTags: null,
-    tastingNotes: null,
-    foodPairings: null,
-    alcoholPct: null,
-    stockQty: null,
-    productUrl: null,
-    imageUrl: null,
-    status: 'ACTIVE',
-    contentHash: 'a'.repeat(64),
-    embeddingState: 'PENDING',
-    createdAt: AT,
-    updatedAt: AT,
-    ...values,
-  }) as ProductRow;
-
 const commands: CreateProductCommand[] = [];
 
-const port = (overrides: Partial<ProductsPort> = {}): ProductsPort => ({
-  create: (command) => {
-    commands.push(command);
-    return Promise.resolve({
-      outcome: 'created',
-      product: stored(command.values as unknown as Record<string, unknown>),
-    });
-  },
-  update: () => Promise.reject(new Error('not stubbed')),
-  ...overrides,
-});
+const port = (overrides: Partial<ProductsPort> = {}): ProductsPort =>
+  productsPort({
+    create: (command) => {
+      commands.push(command);
+      return Promise.resolve({
+        outcome: 'created',
+        product: storedProduct(command.values as Partial<ProductRow>),
+      });
+    },
+    ...overrides,
+  });
 
 const app = (role: 'OWNER' | 'EDITOR', products: Partial<ProductsPort> = {}) =>
   createApp({

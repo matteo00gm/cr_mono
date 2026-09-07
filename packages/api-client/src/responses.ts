@@ -221,6 +221,27 @@ export const productCreatedResponse = productSchema;
 export const productUpdatedResponse = productSchema;
 
 /**
+ * The answer to a delete (P1-04).
+ *
+ * **It says what happened rather than returning 204**, and the wording is the
+ * point: `noLongerRecommended` is the property a seller actually cares about,
+ * and it is a different claim from "the row is gone" — the row is not gone. The
+ * dashboard can say "this wine will no longer be recommended" without inferring
+ * it from a status code, which is the sort of inference that goes stale the day
+ * the behaviour changes.
+ *
+ * `vectorsRemoved` is reported because zero is meaningful: it means the wine had
+ * never been indexed, which is a different thing from a delete that failed to
+ * clean up.
+ */
+export const productArchivedResponse = z.object({
+  id: z.string(),
+  status: z.literal('ARCHIVED'),
+  noLongerRecommended: z.literal(true),
+  vectorsRemoved: z.number().int().nonnegative(),
+});
+
+/**
  * Every dashboard response, keyed by `METHOD path`.
  *
  * The client's `request()` is typed off this, so calling an endpoint returns
@@ -239,6 +260,7 @@ export const DASHBOARD_RESPONSES = {
   'POST /v1/dashboard/members/accept': acceptInviteResponse,
   'POST /v1/dashboard/products': productCreatedResponse,
   'PATCH /v1/dashboard/products/:id': productUpdatedResponse,
+  'DELETE /v1/dashboard/products/:id': productArchivedResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;
