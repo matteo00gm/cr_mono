@@ -16,6 +16,7 @@ import { describe, expect, it, vi } from 'vitest';
 const calls: string[] = [];
 const state = {
   isMember: false,
+  suppressed: false,
   insertedId: undefined as string | undefined,
   invitation: undefined as
     | {
@@ -47,6 +48,10 @@ vi.mock('@catalogorosso/db', () => ({
     calls.push('emailIsMember');
     return Promise.resolve(state.isMember);
   },
+  isSuppressed: () => {
+    calls.push('isSuppressed');
+    return Promise.resolve(state.suppressed);
+  },
   insertInvitation: (_tx: unknown, row: { email: string }) => {
     calls.push(`insertInvitation(${row.email})`);
     return Promise.resolve(state.insertedId);
@@ -67,12 +72,27 @@ vi.mock('@catalogorosso/db', () => ({
 const { createMembersPort } = await import('../src/members.js');
 const { hashInvitationToken } = await import('@catalogorosso/core');
 
+/**
+ * The audit rows both paths write (P0-53).
+ *
+ * The writer is injected rather than reached for, which is what makes it
+ * assertable — and what avoids a harness trap: `audit()` reads the actor from
+ * an `AsyncLocalStorage` in `packages/core`, and mocking `@catalogorosso/db`
+ * above gives `members.ts` a second instance of that module, so a context set
+ * here would be invisible there.
+ */
+const audited: { action: string; target?: string | undefined }[] = [];
+
 const TENANT = '11111111-1111-1111-1111-111111111111';
 
 const build = () => {
   const sent: { to: string; props: Record<string, unknown> }[] = [];
 
   const port = createMembersPort({
+    audit: (_tx, entry) => {
+      audited.push({ action: entry.action, target: entry.target });
+      return Promise.resolve();
+    },
     /*
      * Typed through the port's own parameter rather than as the real
      * `SendEmail`, whose generic signature would need a template name to
@@ -91,7 +111,9 @@ const build = () => {
 
 const reset = () => {
   calls.length = 0;
+  audited.length = 0;
   state.isMember = false;
+  state.suppressed = false;
   state.insertedId = 'inv_1';
   state.userEmail = 'anna@cantina.example';
   state.membership = undefined;
@@ -117,7 +139,7 @@ describe('invite', () => {
       invitedBy: 'user_matteo',
     });
 
-    expect(result).toEqual({ created: true });
+    expect(result).toEqual({ outcome: 'invited', created: true });
 
     /*
      * The ordering is the decision, and it is the lesser of two evils. A
@@ -148,7 +170,7 @@ describe('invite', () => {
         role: 'EDITOR',
         invitedBy: 'user_matteo',
       }),
-    ).toEqual({ created: false });
+    ).toMatchObject({ created: false, outcome: 'already-member' });
 
     expect(sent).toHaveLength(0);
     expect(calls).not.toContain('insertInvitation(matteo@cantina.example)');
@@ -167,7 +189,7 @@ describe('invite', () => {
         role: 'EDITOR',
         invitedBy: 'user_matteo',
       }),
-    ).toEqual({ created: false });
+    ).toMatchObject({ created: false, outcome: 'already-invited' });
 
     /*
      * The re-invite no-op, and the reason it matters beyond tidiness: mailing
@@ -175,6 +197,52 @@ describe('invite', () => {
      * repeated messages through our sending domain, which is what puts a domain
      * on a filter list (P0-64).
      */
+    expect(sent).toHaveLength(0);
+  });
+
+  it('records an audit row inside the same transaction as the invitation', async () => {
+    reset();
+    const { port } = build();
+
+    await port.invite({
+      tenantId: TENANT,
+      email: 'anna@cantina.example',
+      role: 'EDITOR',
+      invitedBy: 'user_matteo',
+    });
+
+    /*
+     * P0-53: the row commits or rolls back with the action it describes, which
+     * is why `audit` takes the caller's transaction. "Who invited this person,
+     * and when" is the question an owner asks later, and nothing else records it.
+     */
+    expect(audited).toEqual([{ action: 'member.invited', target: 'anna@cantina.example' }]);
+    expect(calls.indexOf('sendEmail')).toBeGreaterThan(
+      calls.indexOf('insertInvitation(anna@cantina.example)'),
+    );
+  });
+
+  it('creates no invitation for a suppressed address', async () => {
+    reset();
+    state.suppressed = true;
+    const { port, sent } = build();
+
+    const result = await port.invite({
+      tenantId: TENANT,
+      email: 'dead@example.invalid',
+      role: 'EDITOR',
+      invitedBy: 'user_matteo',
+    });
+
+    /*
+     * Checked *before* the insert, not left to `sendEmail`'s own guard. The
+     * mail goes out after the transaction commits, so a suppressed address
+     * would otherwise leave a live invitation that can never be delivered — an
+     * owner told "invited" and an invitee who never hears anything.
+     */
+    expect(result).toMatchObject({ created: false, outcome: 'undeliverable' });
+    expect(calls).not.toContain('insertInvitation(dead@example.invalid)');
+    expect(audited).toEqual([]);
     expect(sent).toHaveLength(0);
   });
 
@@ -215,6 +283,11 @@ describe('accept', () => {
       invitedBy: 'user_matteo',
     });
     expect(calls).toContain('markInvitationAccepted');
+
+    // Recorded inside `withInvitation`'s transaction, beside the membership it
+    // describes. The tenant comes from the invitation row rather than from
+    // `resolveTenant`, which this route sits above by necessity.
+    expect(audited).toEqual([{ action: 'member.joined', target: 'user_anna' }]);
   });
 
   it('looks the invitation up by hash, never by the token itself', async () => {

@@ -230,6 +230,13 @@ export const createDashboardApp = ({
      * intent — "make sure this person can get in" — is already satisfied, and
      * answering 409 to it produces a dashboard that has to explain a conflict
      * that is not one.
+     *
+     * The port distinguishes three reasons for `false` — already a member,
+     * already invited, and undeliverable because the address is suppressed
+     * (P0-64) — and this response flattens them. That is a deliberate hold
+     * rather than an oversight: the members screen (E8) is what will have
+     * somewhere useful to show the reason, and widening the contract before
+     * there is a reader for it means guessing at the shape.
      */
     return c.json({ email: parsed.data.email, created: result.created });
   });

@@ -1,21 +1,26 @@
 import process from 'node:process';
-import { createAuth } from '@catalogorosso/core';
-import { readMembershipsForUser } from '@catalogorosso/db';
 import { handle } from 'hono/aws-lambda';
 
 import { createApp } from './app.js';
-
+import { buildDependencies } from './composition.js';
 import { logger } from './middleware/logger.js';
-import { AUTH_PUBLIC_PATH } from './routes.js';
 
 /**
- * The Lambda entry point, and the composition root (P0-45).
+ * The Lambda entry point (P0-45).
  *
  * Kept apart from `app.ts` so the app itself is reachable without the AWS shim:
  * every test in this package builds a `Hono` instance and calls
  * `app.request(...)`, which needs no event envelope, no context object and no
- * AWS at all. This file is where the real dependencies — configuration, the
- * database, Better Auth — are assembled, and it is the only file that does.
+ * AWS at all.
+ *
+ * **The assembly moved to `composition.ts` (E9), and the move is the fix.**
+ * This file used to construct the dependencies here, at module scope, and throw
+ * on import without `AUTH_SECRET` — so nothing could assert what it built, and
+ * nothing did. Both P0-64's email seam and P0-51's members port were finished,
+ * tested against their own fakes, and wired to nothing: password reset sent
+ * nothing and the invite endpoints answered 500. What is left here is reading
+ * the environment, which is the part that legitimately cannot be tested without
+ * one.
  *
  * `handle`, not `streamHandle`: this function is BUFFERED (§5.1). The streaming
  * chat endpoint gets its own `RESPONSE_STREAM` Function URL in P2-29, because
@@ -33,44 +38,52 @@ const requireEnvironment = (name: string): string => {
 };
 
 /**
- * The P0-64 seam, standing in until Resend is wired.
+ * Optional, and each absence has a defined behaviour rather than a failure.
  *
- * **It resolves rather than throwing, and that is a security decision, not
- * laziness.** Better Auth calls `sendResetPassword` only when the address
- * actually belongs to a user. A placeholder that threw would therefore make
- * password reset 500 for real addresses and 200 for made-up ones — an account
- * enumeration oracle manufactured by the stub itself, and precisely what
- * P0-46's enumeration group exists to prevent. Resolving keeps the two
- * responses identical.
- *
- * The address is deliberately not logged. It would be scrubbed by the P0-56
- * redaction anyway, but a log line that depends on a redaction rule to avoid
- * recording PII is one bad allowlist edit from recording it.
+ * The sending domain is not authenticated yet (E6), so every stage runs without
+ * `RESEND_API_KEY` today — and a composition root that refused to build for want
+ * of an email key would take the whole API down. Absent means the log transport,
+ * which is also what `chooseTransport` picks for any non-production stage.
  */
-const sendResetPassword = (): Promise<void> => {
-  logger.error(
-    { kind: 'email_transport_missing' },
-    'password reset requested but no email transport is configured — see P0-64',
-  );
-  return Promise.resolve();
+const optionalEnvironment = (name: string): string | undefined => {
+  const value = process.env[name]?.trim();
+  return value === undefined || value === '' ? undefined : value;
 };
 
-export const auth = createAuth({
-  secret: requireEnvironment('AUTH_SECRET'),
-  baseUrl: requireEnvironment('AUTH_BASE_URL'),
+const dependencies = buildDependencies({
+  authSecret: requireEnvironment('AUTH_SECRET'),
+  authBaseUrl: requireEnvironment('AUTH_BASE_URL'),
 
   /*
-   * The *mounted* path, not `/auth`. Better Auth is handed the raw `Request`,
-   * whose URL carries the whole path, and it builds reset and callback URLs
-   * from `baseUrl + basePath` — so the sub-app-relative prefix would both
-   * fail to match and email people links that go nowhere.
+   * Defaults to a name that is *not* `production`, so an unset stage logs mail
+   * rather than sending it. The safe direction: a missing variable must never
+   * be the reason a real customer receives a message from a staging run.
    */
-  basePath: AUTH_PUBLIC_PATH,
+  stage: optionalEnvironment('SST_STAGE') ?? 'unknown',
 
-  sendResetPassword,
+  emailFrom: optionalEnvironment('EMAIL_FROM') ?? 'AI Sommelier <noreply@localhost>',
+  resendApiKey: optionalEnvironment('RESEND_API_KEY'),
+
+  /** Comma-separated. The addresses a non-production stage may really mail. */
+  emailAllowlist: optionalEnvironment('EMAIL_ALLOWLIST')
+    ?.split(',')
+    .map((address) => address.trim()),
+
+  onEmailFailure: (failure) => {
+    /*
+     * The alarm P0-64 asks for. Logged rather than thrown, because the caller
+     * that most needs this — password reset — must answer identically whether
+     * or not the message went out, or the difference becomes an account
+     * enumeration oracle. The address is not logged: it would be scrubbed by
+     * the P0-56 redaction anyway, and a log line that depends on an allowlist
+     * rule to avoid recording PII is one bad edit from recording it.
+     */
+    void failure;
+    logger.error({ kind: 'email_send_failed' }, 'a message was abandoned after retries (P0-64)');
+  },
 });
 
 /** Built once per container, so route registration is not per-invocation work. */
-export const handler = handle(createApp({ auth, readMemberships: readMembershipsForUser }));
+export const handler = handle(createApp(dependencies));
 
 export { createApp } from './app.js';

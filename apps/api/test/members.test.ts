@@ -45,7 +45,7 @@ const recording = (
     port: {
       invite: (command) => {
         invites.push(command);
-        return Promise.resolve({ created: true });
+        return Promise.resolve({ outcome: 'invited' as const, created: true });
       },
       accept: (command) => {
         accepts.push(command);
@@ -113,7 +113,7 @@ describe('POST /members/invite', () => {
       auth: signedIn(),
       readMemberships: oneMembership(TENANT, 'OWNER'),
       members: {
-        invite: () => Promise.resolve({ created: false }),
+        invite: () => Promise.resolve({ outcome: 'already-invited' as const, created: false }),
         accept: () => Promise.resolve(undefined),
       },
     });
@@ -221,7 +221,7 @@ describe('POST /members/accept', () => {
       auth: signedIn('user_anna'),
       readMemberships: memberships([]),
       members: {
-        invite: () => Promise.resolve({ created: false }),
+        invite: () => Promise.resolve({ outcome: 'already-invited' as const, created: false }),
         // The port returns `undefined` for unknown, expired, revoked, already
         // redeemed and addressed-to-somebody-else without distinguishing them.
         accept: () => Promise.resolve(undefined),
