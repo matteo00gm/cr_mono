@@ -180,6 +180,20 @@ describe('withWebhookEvent', () => {
   });
 });
 
+/**
+ * The SQLSTATE, not the message.
+ *
+ * Drizzle wraps a driver error in one of its own, so the outer `message` is
+ * `Failed query: …` and the Postgres text is a level down. Asserting on the
+ * wrapper's wording is asserting on Drizzle's phrasing, which is neither ours
+ * nor stable — the same mistake as reading a status code out of a sentence.
+ */
+const pgErrorCode = (error: unknown): string | undefined =>
+  (error as { cause?: { code?: string } } | undefined)?.cause?.code;
+
+/** insufficient_privilege — what a revoked grant looks like from the driver. */
+const INSUFFICIENT_PRIVILEGE = '42501';
+
 describe('the grants, which are what make the ledger a ledger', () => {
   it('refuses to let app_rw delete a claim', async () => {
     /*
@@ -191,8 +205,13 @@ describe('the grants, which are what make the ledger a ledger', () => {
      */
     await claimWebhookEvent(db, { provider: 'resend', eventId: 'msg_permanent' });
 
-    await expect(
-      db.execute(sql`delete from processed_webhooks where event_id = 'msg_permanent'`),
-    ).rejects.toThrow(/permission denied/i);
+    const refusal = await db
+      .execute(sql`delete from processed_webhooks where event_id = 'msg_permanent'`)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(pgErrorCode(refusal)).toBe(INSUFFICIENT_PRIVILEGE);
   });
 });
