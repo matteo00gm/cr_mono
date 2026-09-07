@@ -6,6 +6,7 @@ import type { MembershipReader } from '@catalogorosso/core';
 import type { AppEnv } from './env.js';
 import type { AuthPort } from './middleware/auth.js';
 import type { MembersPort } from './members.js';
+import type { ProductsPort } from './products.js';
 import { assertEveryRouteDeclared } from './middleware/capability.js';
 import { errorHandler, normaliseThrown, notFoundHandler } from './middleware/error.js';
 import { DASHBOARD_PREFIX, WIDGET_PREFIX } from './routes.js';
@@ -72,12 +73,19 @@ export interface AppOptions {
    * manufacturing a header on every call, and a local run that works.
    */
   readonly originSecret?: string | undefined;
+
+  /**
+   * The catalogue (P1-02). Optional on the `members` terms: absent refuses
+   * every call with a wiring error rather than answering plausibly.
+   */
+  readonly products?: ProductsPort | undefined;
 }
 
 export const createApp = ({
   auth,
   readMemberships,
   members,
+  products,
   originSecret,
 }: AppOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
@@ -140,7 +148,7 @@ export const createApp = ({
    */
   app.get('/v1/health', (c) => c.json({ status: 'ok' as const, sha: buildSha() }));
 
-  app.route(DASHBOARD_PREFIX, createDashboardApp({ auth, readMemberships, members }));
+  app.route(DASHBOARD_PREFIX, createDashboardApp({ auth, readMemberships, members, products }));
   app.route(WIDGET_PREFIX, createWidgetApp());
 
   /*

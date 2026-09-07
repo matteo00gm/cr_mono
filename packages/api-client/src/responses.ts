@@ -150,6 +150,64 @@ export type PendingInvitationsResponse = z.infer<typeof pendingInvitationsRespon
 export type RoleChangeResponse = z.infer<typeof roleChangeResponse>;
 export type MemberRemovedResponse = z.infer<typeof memberRemovedResponse>;
 export type InvitationRevokedResponse = z.infer<typeof invitationRevokedResponse>;
+export type Product = z.infer<typeof productSchema>;
+
+/**
+ * A product as the API returns it (P1-02).
+ *
+ * **Written here rather than derived from `productSelect`, and the exception to
+ * "refine, never redefine" is deliberate.** `drizzle-zod` describes the *table*:
+ * `Date` objects, `numeric` as a string, and every column the server owns. What
+ * crosses the wire is JSON — ISO strings for timestamps — so a response typed
+ * from the table would be a contract the server cannot actually satisfy, and
+ * both consumers would compile against a shape they never receive.
+ *
+ * The two are kept honest by `products.test.ts`, which asserts that every key
+ * here exists on the table contract. A column renamed in the schema therefore
+ * fails a test rather than silently producing a response field nothing fills.
+ */
+export const productSchema = z.object({
+  id: z.string(),
+  sku: z.string(),
+  externalVariantId: z.string().nullable(),
+  name: z.string(),
+  producer: z.string().nullable(),
+  vintage: z.number().int().nullable(),
+  wineType: z.string(),
+  grapeVarieties: z.array(z.string()).nullable(),
+  region: z.string().nullable(),
+  denomination: z.string().nullable(),
+  styleTags: z.array(z.string()).nullable(),
+  tastingNotes: z.string().nullable(),
+  foodPairings: z.array(z.string()).nullable(),
+  /** `numeric` crosses the wire as a string, so 13.50 round-trips exactly. */
+  alcoholPct: z.string().nullable(),
+  priceCents: z.number().int(),
+  currency: z.string(),
+  stockStatus: z.enum(['IN_STOCK', 'OUT_OF_STOCK', 'PREORDER']),
+  stockQty: z.number().int().nullable(),
+  productUrl: z.string().nullable(),
+  imageUrl: z.string().nullable(),
+  status: z.enum(['ACTIVE', 'ARCHIVED']),
+  /**
+   * Reported, because it is the answer to the question a seller actually asks
+   * after saving: "is this wine findable yet?" (P1-40 renders it in the grid.)
+   */
+  embeddingState: z.enum(['PENDING', 'INDEXED', 'FAILED', 'STALE']),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+});
+
+/**
+ * The created product, returned in full.
+ *
+ * Not just an id: the server fills in defaults the form never sent — `status`,
+ * `embeddingState`, both timestamps — and a client that had to re-fetch to
+ * learn them would show a row that disagrees with the database for one round
+ * trip. **`contentHash` is deliberately absent**: it is an internal cost
+ * control, and a client that could see it would eventually branch on it.
+ */
+export const productCreatedResponse = productSchema;
 
 /**
  * Every dashboard response, keyed by `METHOD path`.
@@ -168,6 +226,7 @@ export const DASHBOARD_RESPONSES = {
   'DELETE /v1/dashboard/members/:userId': memberRemovedResponse,
   'DELETE /v1/dashboard/members/invitations/:id': invitationRevokedResponse,
   'POST /v1/dashboard/members/accept': acceptInviteResponse,
+  'POST /v1/dashboard/products': productCreatedResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

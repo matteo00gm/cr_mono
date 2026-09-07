@@ -64,7 +64,20 @@ export const productInsert = createInsertSchema(products, {
   sku: (schema) => schema.min(1).max(64),
   name: (schema) => schema.min(1).max(200),
   priceCents: (schema) => schema.int().nonnegative(),
-  stockQty: (schema) => schema.int().nonnegative(),
+  /**
+   * `.nullish()` is not decoration, and removing it reopens a real defect.
+   *
+   * `stock_qty` is nullable with no default, so the schema accepts an omitted
+   * value — but refining a column of that shape drops the optionality from the
+   * *inferred type* while leaving the runtime unchanged. `parse()` then returns
+   * an object whose `stockQty` is `undefined` under a type asserting it cannot
+   * be, and a caller doing arithmetic on it is reading something the compiler
+   * endorsed and the data does not support.
+   *
+   * Restating it here makes the two agree. `contracts.test.ts` pins it with an
+   * assignment that fails `pnpm typecheck` if it drifts back.
+   */
+  stockQty: (schema) => schema.int().nonnegative().nullish(),
 }).omit(SERVER_OWNED);
 
 export const productSelect = createSelectSchema(products);

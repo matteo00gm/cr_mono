@@ -7,3 +7,4 @@ export * from './audit.js';
 export * from './email/index.js';
 export * from './invitations.js';
 export * from './rate-limit.js';
+export * from './catalog/index.js';

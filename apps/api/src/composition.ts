@@ -13,6 +13,7 @@ import type { RateLimiter } from '@catalogorosso/security';
 import { isSuppressed, readMembershipsForUser, withUser } from '@catalogorosso/db';
 
 import { createMembersPort, type MembersPort } from './members.js';
+import { createProductsPort, type ProductsPort } from './products.js';
 import type { AuthPort } from './middleware/auth.js';
 import { AUTH_PUBLIC_PATH } from './routes.js';
 
@@ -110,6 +111,8 @@ export interface Dependencies {
   readonly originSecret?: string | undefined;
   readonly readMemberships: MembershipReader;
   readonly members: MembersPort;
+  /** The catalogue (P1-02). */
+  readonly products: ProductsPort;
   /** Exposed so the wiring is assertable, not because anything else calls it. */
   readonly sendResetPassword: (email: ResetPasswordEmail) => Promise<void>;
 }
@@ -222,6 +225,13 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
       sendEmail: sendEmailWith({ isSuppressed: () => Promise.resolve(false) }),
       acceptUrlBase: config.acceptUrlBase ?? `${config.authBaseUrl}/invito`,
     }),
+
+    /*
+     * Built unconditionally: there is no configuration that makes writing a
+     * product wrong, and every gate in front of it — the session, the tenant,
+     * the capability — is applied before this is reached.
+     */
+    products: createProductsPort(),
 
     sendResetPassword,
   };
