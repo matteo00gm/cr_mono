@@ -1,0 +1,18 @@
+{
+  "name": "@catalogorosso/migrator",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-ssm": "^3.883.0",
+    "@catalogorosso/db": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0"
+  }
+}

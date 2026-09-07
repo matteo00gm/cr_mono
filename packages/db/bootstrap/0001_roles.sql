@@ -82,6 +82,30 @@ GRANT USAGE ON SCHEMA public TO app_rw, app_migrate;
 -- ownership being the quiet way around FORCE ROW LEVEL SECURITY.
 GRANT CREATE ON SCHEMA public TO app_migrate;
 
+-- Membership in the two roles, so the ALTER DEFAULT PRIVILEGES below is allowed.
+--
+-- **This is the line that made bootstrap work on RDS**, and its absence is a
+-- failure no test container can reproduce. ALTER DEFAULT PRIVILEGES FOR ROLE x
+-- requires the caller to be a member of x — a true superuser passes that check
+-- implicitly, and the container's `postgres` user is one. RDS's master is
+-- `rds_superuser`, which is not, so the statement failed there with "permission
+-- denied to change default privileges" on a first real deploy while every
+-- integration run stayed green.
+--
+-- Granting membership to the current user is safe and re-runnable: master
+-- already created these roles and can drop them. It is not a widening of what
+-- master can do, only an explicit statement of it.
+DO $$
+BEGIN
+  EXECUTE format('GRANT app_migrate, app_rw TO %I', current_user);
+EXCEPTION
+  -- A true superuser is already implicitly a member of every role, and some
+  -- managed providers refuse the redundant grant rather than ignoring it.
+  -- Either way the ALTER below then succeeds, so a refusal here is not fatal.
+  WHEN insufficient_privilege OR duplicate_object THEN NULL;
+END
+$$;
+
 -- The runtime grant, applied to whatever app_migrate creates from now on.
 --
 -- ALTER DEFAULT PRIVILEGES only affects future objects, which is why it belongs

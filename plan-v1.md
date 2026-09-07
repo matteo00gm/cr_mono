@@ -2030,6 +2030,25 @@ It opens connections outside `withTenant`, so `no-raw-db-outside-with-tenant` ne
 
 **Files.** `packages/db/src/deploy.ts`, `scripts/db-deploy.mjs`, `infra/config.ts`, `.dependency-cruiser.mjs`, plus the fixture rewiring.
 
+**As built, 2026-09-07 — the runner exists, and running it found a bug no container can produce.**
+
+The first `dev` deploy came up with an RDS instance holding no roles and no schema: every request touching data answered 500 with `password authentication failed for user "app_rw"`. `scripts/db-deploy.mjs` had been written, tested and wired to nothing — the row's own note said migrations were "applied by hand and by the test fixtures, which is fine while no stage holds data", and a stage now existed.
+
+**`apps/migrator`, a one-shot Lambda.** Four decisions, each with a reason that is not preference:
+
+- **Its own function, not part of `apps/api`.** P0-21a refuses `database/master_url` and `database/app_migrate_password` to every application function — one grants a connection that bypasses RLS, the other can alter the schema. Folding the migration into the API would hand the request path exactly those two privileges. `deployParameterReadPermissions()` existed for this and had no caller until now.
+- **Credentials read at invoke time, not injected.** The API carries `DATABASE_URL` in its environment, which is right for `app_rw` and wrong for master: an environment variable is readable by anyone holding `lambda:GetFunctionConfiguration`, permanently, whether or not the function ever runs.
+- **In the VPC**, because RDS has egress but no inbound path. A GitHub runner cannot reach it, and neither can a laptop — which is the outcome to design against rather than work around.
+- **Not invoked automatically by a deploy.** A migration that runs silently on every `sst deploy` is how a schema change reaches production before anybody looks at it. One explicit command, in the runbook, with output.
+
+**`deploy.ts` gained an optional `SqlLocation`.** Its directories resolved from `import.meta.url`, which is correct in a workspace and wrong inside a bundle — esbuild collapses the package into one file and the default resolves to `/var/`. The runner copies `bootstrap/` and `migrations/` into its artifact and says where they landed.
+
+**⚠ The finding: bootstrap had never run against a non-superuser.** `ALTER DEFAULT PRIVILEGES FOR ROLE app_migrate` requires the caller to be a *member* of that role. A true superuser passes that check implicitly, and the test container's `postgres` user is one — so eleven integration suites stayed green while the statement failed on RDS, whose master is `rds_superuser` and is not a superuser. The error was `permission denied to change default privileges`.
+
+The fix is an explicit `GRANT app_migrate, app_rw TO current_user` before it, guarded so a provider that refuses the redundant grant is not fatal. What is worth keeping is the shape: **this class of bug is invisible to the integration suite by construction**, because the suite's master is more privileged than any managed provider's will ever be. Every other privilege assertion in P0-39 has the same blind spot. A container started with a non-superuser master would close it and is the obvious follow-up.
+
+**Verified end to end on `dev`.** The runner returns `{"ok":true,"applied":"bootstrap+migrations"}`, and a sign-up through CloudFront then created a real user — the first request in this project to reach Postgres and come back.
+
 ---
 
 ### P0-22 · Migration: `tenants`
@@ -6056,10 +6075,12 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Renovate security rule covers `packages/core` | **closed** | `matchFileNames` now lists `packages/core/**` beside `packages/security/**`, so `better-auth` updates arrive labelled `security-critical` for a human. See **D7**. |
 | Plan not yet split into `docs/architecture/` | P0-59 deferred | The ADR half of P0-59 shipped; the split did not. Six thousand lines reorganised with no test, invalidating every `plan-v1.md` reference in commit messages, As-Built entries and open items, and conflicting with every open PR. Worth doing when the PR queue is empty — not as a rider on the ADR system. |
 | Dependency build-script prompt | **closed** | Not a `pnpm add` artefact at all — a plain fresh `install` writes it, so CI regenerated it every run. Now *answered* (`allowBuilds: … false`), which drops `strictDepBuilds` and restores the install-time notification suppression had cost. See **E5**. |
-| Sending domain not authenticated | P0-64 open | SPF, DKIM and DMARC are operator work no test replaces. Until they exist the production path has never sent a message and account recovery does not work. See **E6**. |
+| Sending domain authenticated | **closed (2026-09-07)** | `app.catalogorosso.com` verified in Resend (eu-west-1); DKIM and SPF published, DMARC inherited at `p=none` with reporting. Remaining step is moving to `p=quarantine` after a week of reports — an operator decision. See **E6**. |
 | Suppression list has no writer | P0-64b | The table and the send-path check shipped; the bounce webhook did not, because it needs a signed-webhook surface `apps/api` does not have yet. See **E7**. |
 | Invitations cannot be revoked | P0-51 open | The column and the index shipped and are tested; the endpoint did not, because it belongs with the members page rather than ahead of it. A mistaken invitation stays live for seven days. See **E8**. |
 | Roster cannot be changed from the API | P0-52 open | The last-OWNER guard and the writes it protects shipped and are tested to three concurrency cases; no endpoint calls them, because the member-management screen is P0-57. See **E8**. |
+| Migrations had no runner | **closed (2026-09-07)** | `apps/migrator`, a one-shot in-VPC Lambda invoked after deploy. The first `dev` deploy had an RDS instance with no roles or schema, so everything touching data answered 500. See **P0-21b**. |
+| 🔒 Bootstrap untested against a non-superuser | **follow-up** | `ALTER DEFAULT PRIVILEGES FOR ROLE` needs membership in that role; the test container's master is a true superuser and RDS's is not, so the statement failed only on deploy. Every P0-39 privilege assertion shares that blind spot. A container with a non-superuser master closes it. See **P0-21b**. |
 | Composition root wires email and members | **closed (2026-09-06)** | `buildDependencies` in `composition.ts`, asserted by identity against the fail-loud placeholder — a shape check would have passed on the broken version. `index.ts` is now environment reading only. See **E9**. |
 
 ### ⚠ Open items from the P0-54 → P0-53 chain, in detail
@@ -6116,13 +6137,21 @@ The gap was that **removing the environment variable is completely silent**: not
 
 Verified in both directions before merging: the assertion passes against the real file, and fires when the line is deleted. A guard that cannot fail is not a guard.
 
-**A4. Password reset is wired to the email seam.** ✅ **closed (2026-09-06)**
+**A4. Password reset sends, and the message was read off a live stage.** ✅ **closed, measured 2026-09-07**
 
-The placeholder logged and resolved. It resolved rather than throwing for a good reason — Better Auth calls `sendResetPassword` only when the address belongs to a real user, so a sender that threw would make reset 500 for real addresses and 200 for invented ones, an enumeration oracle manufactured by the error path — and that reasoning is now inherited by the real sender rather than lost with the stub: `sendEmail` returns a `suppressed` outcome instead of throwing, precisely for callers shaped like this one.
+Closed twice over. The wiring landed with **E9**; what makes it closed rather than believed is that a reset was requested through CloudFront against `dev` and the rendered message read back out of CloudWatch:
 
-**What changed.** `buildDependencies` constructs the P0-64 seam and hands it to `createAuth` (**E9**). On any non-production stage the whole rendered message goes to the log transport, so the reset link is recoverable locally — which it was not before, and which is what made the auth flow untestable outside a deployment.
+```
+[email] to=probe@app.catalogorosso.com from=AI Sommelier <noreply@app.catalogorosso.com>
+subject="Reimposta la tua password"
+Reimposta la password:
+https://…/v1/dashboard/auth/reset-password/QDg0j9a1…
+Il link scade fra 60 minuti.
+```
 
-**What is still open, and it is not this item.** Nothing has authenticated the sending domain, so a *production* reset still cannot leave the building. That is **E6**, and it is operator work no code closes.
+Five things that were assertions until then: the composition root builds the real seam and not the placeholder; the default locale is Italian; `EmailFrom` resolves to the verified domain; the plaintext part carries the whole URL; and the "60 minutes" the copy promises matches what is enforced.
+
+**The staging guard is the part worth noting.** That address is deliberately *not* on `EmailAllowlist`, so the message went to the log and no mail left the account. Non-production stages cannot reach a customer, and this is the run that shows it rather than the test that asserts it.
 
 #### B. Must close before real traffic, for reasons other than security
 
@@ -6184,7 +6213,17 @@ Each of these is a trade that was made rather than a thing forgotten. They are r
 
 **D4. `/v1/dashboard/context` uses `catalog:read` as a stand-in.** It reports the resolved tenant and role, which is not really a catalogue read. It exists as the assertion target for P0-48 and the matrix. When real routes arrive, either give it its own capability or fold it into `/me`.
 
-**D5. `Secure` on auth cookies is asserted in configuration, not on the wire.** Better Auth drops the flag over plain `http://`, which is what an in-process suite speaks. Asserting it there would mean either running the suite against TLS or weakening the production setting to make a test pass. `HttpOnly`, `SameSite=Lax` and `Path` *are* asserted on the actual `Set-Cookie`.
+**D5. `Secure` on auth cookies, read off the wire.** ✅ **closed, measured 2026-09-07**
+
+Better Auth drops the flag over plain `http://`, so configuration was never the question — what the deployment actually emits was. A sign-in through CloudFront returns:
+
+```
+Set-Cookie: __Secure-better-auth.session_token=…; Max-Age=604800; Path=/; HttpOnly; Secure; SameSite=Lax
+```
+
+All four properties present, including the `__Secure-` name prefix, which a browser enforces independently of the attribute.
+
+Two things came free with the same response. **D1 is confirmed at its stated value** — the session-data cookie carries `Max-Age=300`, so a revocation lags by up to five minutes exactly as recorded. And the session payload carries `"ipAddress":"195.181.181.222"`, the caller's real address, which is independent confirmation that **A2**'s edge function delivers a single resolvable entry: a multi-entry header would have left that field empty.
 
 **D6. The active-tenant header is unsigned.** Signing would protect a value that is re-validated against `memberships` on every request, adding a key to rotate for no security gain. The property comes from the re-validation. Recorded because "unsigned header" reads like an oversight and is not one.
 
@@ -6252,17 +6291,15 @@ The guard is anchored on the injected line shape (indented key, colon, marker) r
 
 Supply-chain protection is unchanged and now explicit rather than incidental: after a fresh install `cpu-features` and `ssh2` have no `build/` directory. Two `.node` files do appear in the tree, from `@rolldown/binding` and `lightningcss` — prebuilt platform binaries shipped inside optional dependencies, not products of a build script.
 
-**E6. The email seam exists; the sending domain does not.** ⛔ *(P0-64)*
+**E6. The sending domain is authenticated.** ✅ **closed (2026-09-07)**
 
-`sendEmail` is built, tested and wired to nothing that can reach a real inbox. Three things stand between it and a delivered message, and none of them is code:
+`app.catalogorosso.com` is **verified** in Resend, in `eu-west-1` — the same region as the stack. DKIM is published at `resend._domainkey.app.catalogorosso.com`, SPF at `send.app.catalogorosso.com` as `v=spf1 include:amazonses.com ~all` (Resend runs on SES, so that include is the right one), and the API key reads back through the Resend API.
 
-1. **SPF, DKIM and DMARC on the sending domain.** Start DMARC at `p=none` with reporting, read a week of reports, then move to `p=quarantine`. The order matters — going straight to `quarantine` on an unverified alignment is how a first campaign lands entirely in spam folders. The row is explicit that this comes *before* anything real is sent, because the provider is rarely the problem and the unauthenticated domain usually is.
-2. **The `ResendApiKey` parameter**, set for the stage through `sst secret set` reading from stdin rather than from a shell argument. Until it exists, `resendTransport` cannot be constructed and the log transport is what runs — which is the correct failure, but it is a failure.
-3. **A verified `from` address on that domain.** Resend rejects a `from` outside a verified domain with a 403, which `resendTransport` classifies as non-retryable — so the symptom is a clean, immediate, correctly-reported failure rather than a hang. That is the intended behaviour and it is still a non-working product.
+**DMARC is inherited, and that is correct rather than a gap.** The subdomain carries no `_dmarc` record of its own, so it takes the organisational domain's policy — `v=DMARC1; p=none; rua=mailto:info@catalogorosso.com`. That is precisely the posture this row asked for: reporting on, enforcement off, with somewhere to read a week of reports before moving to `p=quarantine`. Moving there is the remaining step and it is an operator decision, not code.
 
-**What it costs while open.** Nothing in staging, by construction: `chooseTransport` routes everything but an explicitly allowlisted address to the log. In production it is the difference between having account recovery and not having it — a self-hosted auth stack whose reset mail cannot leave the building locks out the first customer who forgets a password (§P0-45), and there is no second channel.
+**A sending subdomain rather than the root** is worth noting as a decision, because it was not one this plan made explicitly. It isolates the reputation of transactional mail from anything the root domain ever sends, and it means a bad week for one cannot filter the other. The consequence for the code is a constraint: `EmailFrom` must be on `app.catalogorosso.com`, since the root publishes SPF but no DKIM selector and mail from it would fail alignment.
 
-**What closes it.** The three items above, then one real send to an allowlisted address from the `dev` stage with the address on the allowlist, checked for SPF/DKIM/DMARC pass in the receiving client's headers. Reading the headers is the whole test — a message that arrives is not evidence of alignment, only of not being blocked yet.
+**One operational note from setting it up.** The first key stored was scoped "Sending access" only, which returns **401** on `GET /domains` — indistinguishable at a glance from a revoked key. Worth knowing before debugging the wrong thing.
 
 **E7. Nothing writes to the suppression list.** ⛔ *(P0-64b)*
 

@@ -23,6 +23,7 @@ const NODE_PROJECTS = [
   'packages/testing',
   'apps/api',
   'apps/worker',
+  'apps/migrator',
 ];
 
 /** Browser-side code: needs a DOM to render into. */
