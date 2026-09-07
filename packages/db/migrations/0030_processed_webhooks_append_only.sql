@@ -1,0 +1,17 @@
+-- The one idempotency ledger that was still writable (P0-33a).
+--
+-- `processed_webhooks` never got a revoke, so P0-21's default privileges leave
+-- app_rw holding UPDATE and DELETE on the table whose only purpose is to say
+-- "this event has already been applied".
+--
+-- The failure that allows: a bug or a compromised application credential
+-- deletes a row, the provider redelivers that event, and it applies a second
+-- time — the double-apply §3.8 describes, against a table that exists solely to
+-- prevent it. The plan already treats replay as security-relevant
+-- (`REPLAYED_WEBHOOK` is a `security_events` type), which makes this the last
+-- such ledger the runtime role could quietly rewrite.
+--
+-- Retention pruning is real and belongs to a role that is not app_rw, for the
+-- same reason tenant deletion now does: a ledger the application can trim is a
+-- ledger that gets trimmed by whatever bug reaches the trimming code.
+REVOKE UPDATE, DELETE ON processed_webhooks FROM app_rw;

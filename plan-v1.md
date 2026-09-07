@@ -1175,7 +1175,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P0-31 | 🔒 Migration: `audit_log` | no UPDATE/DELETE grant to `app_rw` | 22 |
 | ✅ P0-32 | 🔒 Migration: `security_events` | | 22 |
 | ✅ P0-33 | Migration: `processed_webhooks` | PK `(provider, event_id)` | 20 |
-| P0-33a | 🔒 Ledger integrity: the grants that make a ledger | append-only is defeated by `DELETE FROM tenants`; `processed_webhooks` has no revoke at all | 30,31,32,33 |
+| ✅ P0-33a | 🔒 Ledger integrity: the grants that make a ledger | append-only is defeated by `DELETE FROM tenants`; `processed_webhooks` has no revoke at all | 30,31,32,33 |
 | ✅ P0-34 | 🔒 Migration: `rate_limit_buckets` | for the Postgres limiter (§5.7) | 22 |
 | ✅ P0-35 | 🔒 Migration: `token_revocations` | `jti` + expiry, for the sweep job | 22 |
 | ✅ P0-36 | Migration: `outbox` | | 26 |
@@ -2331,13 +2331,26 @@ Grant INSERT and SELECT only. Enforced at the grant level, not by convention —
 
 **1. `DELETE FROM tenants` erases every ledger.** `usage_events`, `audit_log` and `security_events` each `REVOKE UPDATE, DELETE ... FROM app_rw`, and each cascades from `tenants`. `app_rw` keeps `DELETE` on `tenants` from P0-21's default privileges, and a referential-integrity cascade is not permission-checked against the invoking role. So one statement available to the runtime role removes the billing ledger, the record of who deleted the tenant, and the security events describing attacks on it — the three things those revokes exist to protect, defeated by the role they constrain. Not theoretical: the *goes with its tenant* case in each of those three integration suites deletes a tenant as `app_rw` and asserts the rows are gone.
 
-What this needs is a decision about what tenant deletion should *mean*, which is a billing and compliance question rather than a schema one. Deleting a tenant's conversations is P7-07's job and clearly right. Deleting the record of what they were billed for is not obviously right, and deleting the audit trail of the deletion itself is self-evidently wrong. Options, cheapest first: revoke `DELETE ON tenants` from `app_rw` and route deletion through a deliberate path; or change these three FKs to `ON DELETE SET NULL` or `RESTRICT` and let the GDPR erasure job (P7-08) decide per table what it removes. **Decide before P5** — once real money is metered the answer stops being reversible.
+**Decided (2026-09-05): revoke `DELETE ON tenants` from `app_rw`.** Migration `0029`.
+
+Of the options below, this is the only one that protects tables not yet written. `ON DELETE SET NULL` or `RESTRICT` has to be decided per table and applied per table, so the next ledger somebody adds forgets it; a revoke on the *parent* is one choke point covering everything that cascades from it. It is also ~4 lines of SQL against soft-delete's alternative — a `deleted_at` that every RLS policy must filter on and one of them eventually will not, which is a data-leak shape rather than an inconvenience.
+
+**What it decides, stated plainly: tenant deletion leaves the application.** It is no longer reachable from a request handler. GDPR erasure (P7-08) runs as a role that still holds `DELETE`, and that is correct rather than a cost — erasure is irreversible and legally significant, so it should take a deliberate path. It is right for billing too: cancelling a subscription must not destroy `usage_events`, which is the record of what the tenant owed. `SELECT`, `INSERT` and `UPDATE` stay, so the application still onboards sellers and edits their settings.
+
+*(The options considered, kept for the record: revoke on the parent — chosen; per-table `ON DELETE SET NULL`/`RESTRICT`; soft-delete; accept and document.)*
 
 **2. `processed_webhooks` is mutable by `app_rw`.** It got no revoke, so the default privileges leave the runtime role holding `UPDATE` and `DELETE` on the ledger whose only purpose is idempotency. A bug or a compromised application credential deletes a row, and the next redelivery of that event applies a second time — the double-apply §3.8 describes. The plan already treats replay as security-relevant (`REPLAYED_WEBHOOK` is a `security_events` type), so this is the one such ledger left writable. `REVOKE UPDATE, DELETE`, with retention pruning left to a role that is not `app_rw`.
 
-**Tests.** As `app_rw`: deleting a tenant does not remove whatever the chosen option keeps; `UPDATE` and `DELETE` on `processed_webhooks` raise insufficient privilege. The three existing *goes with its tenant* assertions currently prove the opposite and have to change with it.
+**Eleven suites deleted a tenant as `app_rw`, not three** *(correction).* The section said three, and a search for the phrase *goes with its tenant* found five — the other six say *deletes X when the tenant is deleted*. Searching for the behaviour (`delete from tenants`) rather than the wording is what found them all, and only after six failed on the first run. They split two ways:
 
-**Files.** two migrations + down files, plus the integration assertions. **~60 lines.**
+- **Three ledgers invert.** `audit_log`, `usage_events` and `security_events` now assert `app_rw` is refused with 42501 and the rows survive — plus a companion asserting the foreign key still cascades for a role that may delete a tenant, since the FK itself is unchanged.
+- **Eight cascade tests move to the admin connection.** `memberships`, `products`, `tenant_domains`, `widget_keys`, `widget_events`, `conversations`, `outbox`, `token_revocations`. They assert the *foreign key*, not the runtime role's privileges, so the role that triggers them is incidental — and four of them had to grow an admin client first.
+
+**The round-trip test could not see grants at all** *(finding).* `migration-reversibility` compares `pg_dump --schema-only --no-privileges`, so a revoke that silently failed to re-apply on a redeploy would leave every assertion in that file green while the ledgers became rewritable again. That is not hypothetical for this row — the entire deliverable *is* a grant. It now asserts the nine denied privileges and four that must survive, separately from the dump rather than by dropping `--no-privileges`, which would drag in ownership and default-privilege noise that differs run to run. Verified by neutering `0029` and watching it fail with `tenants.DELETE: expected true to be false`. The four pre-existing revokes (P0-15, P0-17, P0-19, widget keys) had the same exposure and are now covered by the same assertion.
+
+**Tests.** As `app_rw`: deleting a tenant raises insufficient privilege and the ledger rows survive; `UPDATE` and `DELETE` on `processed_webhooks` raise insufficient privilege; the revokes survive a full down/up round trip.
+
+**Files.** two migrations + down files, `role-privileges` and `migration-reversibility` assertions, and eleven cascade suites. **~60 lines** *(the estimate held for the migrations and missed the test churn by about 4x).*
 
 ---
 
@@ -6006,7 +6019,13 @@ The real gap was narrower: a `packages/security/**` rule refused auto-merge and 
 
 **D8. `SAFE_KEYS` governs every depth for every caller.** Adding a key to the P0-56 allowlist for one call site opens it everywhere — `message` and `code` are the live examples of names that look harmless and are not. There is a guard test asserting those two stay out. Any addition deserves the same treatment.
 
-**D9. P0-33a remains open, and is the oldest item here.** Append-only at the grant level is defeated by `DELETE FROM tenants` cascading into `audit_log`, and `processed_webhooks` has no revoke at all. It needs a decision **before P5**, and now has a second reason to matter: P0-53's writer means audit rows will actually start accumulating.
+**D9. P0-33a is closed.** ✅
+
+Append-only at the grant level was defeated by `DELETE FROM tenants` cascading into `audit_log`, `usage_events` and `security_events` — using a permission `app_rw` legitimately held, because a referential cascade is not permission-checked against the invoking role. `processed_webhooks` had no revoke at all.
+
+Decided and shipped: revoke `DELETE ON tenants` from `app_rw` (migration `0029`), and `REVOKE UPDATE, DELETE ON processed_webhooks` (`0030`). Revoking on the parent rather than adjusting each child's foreign key is what makes it cover tables not yet written.
+
+**The consequence is a product constraint, not just a schema one: tenant deletion has left the application.** P4/P5 flows that want "delete my account" need a job or an operator path running as a role that still holds `DELETE`. That is deliberate — see the P0-33a section.
 
 ---
 

@@ -15,6 +15,8 @@ import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
 let container: StartedPostgreSqlContainer | undefined;
 let client: DbClient | undefined;
+let admin: DbClient | undefined;
+let adminDb: Database;
 let db: Database;
 let tenantId: string;
 
@@ -23,10 +25,17 @@ beforeAll(async () => {
   container = started.container;
   client = createDbClient(started.roleUrl('app_rw'), { max: 1 });
   db = client.db;
+
+  // The cascade below is a property of the foreign key, not of the runtime
+  // role — and since P0-33a revoked DELETE on `tenants` from app_rw, only a
+  // role that still holds it can exercise the cascade at all.
+  admin = createDbClient(started.adminUrl, { max: 1 });
+  adminDb = admin.db;
 }, 180_000);
 
 afterAll(async () => {
   await client?.close();
+  await admin?.close();
   await container?.stop();
 }, 60_000);
 
@@ -128,7 +137,11 @@ describe('outbox', () => {
       insert into outbox (tenant_id, aggregate_id, event_type)
       values (${tenantId}::uuid, gen_random_uuid(), 'x')
     `);
-    await db.execute(sql`delete from tenants where id = ${tenantId}::uuid`);
+    // As admin: P0-33a revoked DELETE on `tenants` from app_rw, and what this
+    // asserts is the foreign key's behaviour rather than the runtime role's
+    // privileges. The outbox is a work queue, not a ledger — a tenant that no
+    // longer exists has no events left worth publishing.
+    await adminDb.execute(sql`delete from tenants where id = ${tenantId}::uuid`);
 
     expect(await countRows('outbox')).toBe(0);
   });

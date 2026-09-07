@@ -20,6 +20,8 @@ const FOREIGN_KEY_VIOLATION = '23503';
 
 let container: StartedPostgreSqlContainer | undefined;
 let client: DbClient | undefined;
+let admin: DbClient | undefined;
+let adminDb: Database;
 let db: Database;
 
 /**
@@ -65,10 +67,17 @@ beforeAll(async () => {
   container = started.container;
   client = createDbClient(started.roleUrl('app_rw'), { max: 1 });
   db = client.db;
+
+  // The cascade these suites assert is a property of the foreign key, not of
+  // the runtime role — and P0-33a revoked DELETE on `tenants` from app_rw, so
+  // only a role that still holds it can trigger the cascade at all.
+  admin = createDbClient(started.adminUrl, { max: 1 });
+  adminDb = admin.db;
 }, 180_000);
 
 afterAll(async () => {
   await client?.close();
+  await admin?.close();
   await container?.stop();
 }, 60_000);
 
@@ -142,7 +151,7 @@ describe('memberships', () => {
     const tenantId = await createTenant('cascade-me');
     await addMember(tenantId, 'user-cascade');
 
-    await db.execute(sql`delete from tenants where id = ${tenantId}::uuid`);
+    await adminDb.execute(sql`delete from tenants where id = ${tenantId}::uuid`);
 
     const rows = await db.execute(
       sql`select 1 from memberships where tenant_id = ${tenantId}::uuid`,

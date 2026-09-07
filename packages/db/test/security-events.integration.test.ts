@@ -162,7 +162,27 @@ describe('security_events', () => {
     await db.execute(sql`
       insert into security_events (tenant_id, type) values (${tenantId}::uuid, 'QUOTA_EXCEEDED')
     `);
-    await db.execute(sql`delete from tenants where id = ${tenantId}::uuid`);
+    /*
+     * Inverted by P0-33a. This asserted the rows were gone, which was the
+     * finding: the revoke above makes this table append-only for app_rw, and
+     * `DELETE FROM tenants` cascaded through it anyway, because a referential
+     * cascade is not permission-checked against the invoking role. The events
+     * describing an attack on a tenant were erasable by the role the attack
+     * would have compromised.
+     */
+    const error = await db
+      .execute(sql`delete from tenants where id = ${tenantId}::uuid`)
+      .catch((caught: unknown) => caught);
+
+    expect(pgErrorCode(error)).toBe(INSUFFICIENT_PRIVILEGE);
+
+    // Still there, and still cascades for a role that may delete a tenant.
+    const kept = await adminDb.execute(
+      sql`select 1 from security_events where tenant_id = ${tenantId}::uuid`,
+    );
+    expect([...kept]).toHaveLength(1);
+
+    await adminDb.execute(sql`delete from tenants where id = ${tenantId}::uuid`);
 
     const rows = await db.execute(
       sql`select 1 from security_events where tenant_id = ${tenantId}::uuid`,
