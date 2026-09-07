@@ -138,3 +138,19 @@ export {
  * transaction the caller already holds.
  */
 export { readUserEmail } from './users.js';
+
+/**
+ * Membership changes, with the last-OWNER guard in the statement (P0-52).
+ *
+ * Exported as the *only* way to change or remove a membership. A caller that
+ * writes its own `UPDATE memberships` has bypassed the guard, which is why the
+ * condition lives in the statement rather than in a helper beside it — and why
+ * the outcome is returned rather than thrown: what a refusal means to a caller
+ * is HTTP-shaped, and this package has no HTTP.
+ */
+export {
+  countOwners,
+  removeMember,
+  setMemberRole,
+  type MemberWriteOutcome,
+} from './members-write.js';

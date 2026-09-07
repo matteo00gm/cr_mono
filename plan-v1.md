@@ -2951,6 +2951,29 @@ Why a token is safe here where a tenant id would not be: P0-48 is about *identif
 
 **Files.** `packages/core/src/members.ts`, tests. **~90 lines.**
 
+**As built — the guard is in the statement, not beside it.** The row's phrasing ("count remaining `OWNER`s and reject") describes a check the caller performs, and that shape has a bypass: the next handler written in a hurry issues its own `UPDATE memberships` and nothing fails. So `setMemberRole` and `removeMember` are the **only** exported ways to change a membership, and the condition is a clause inside each write:
+
+```sql
+AND (role <> 'OWNER'
+     OR <the new role is OWNER>
+     OR EXISTS (SELECT 1 FROM memberships other
+                WHERE other.user_id <> $1 AND other.role = 'OWNER'))
+```
+
+Zero rows returned means refused. There is no path through this package that performs the write without the condition, because the condition *is* the write. A unit test asserts that directly, so splitting it back out into a helper fails CI.
+
+**The lock covers the roster, not the target row.** The row offers `SELECT ... FOR UPDATE` "on the tenant's membership rows", and the wider reading is the correct one: the decision depends on whether *another* owner exists, so locking only the row being changed leaves that other owner free to disappear underneath the decision. `ORDER BY user_id` on the lock, because two transactions locking the same set in different orders deadlock — Postgres locks in the order rows are returned, so a stable order makes the second wait rather than fail.
+
+**Three outcomes rather than a boolean**, and the third is a §3.5 decision rather than ergonomics. `no-such-member` becomes a 404 — the same answer a made-up user id gets — because a 403 would tell an owner of one winery which accounts belong to another. `would-remove-last-owner` becomes a 409 whose message says the way through: promote somebody first. That message is the API contract and reaches the caller verbatim (P0-55), so it is asserted by content and not only by type.
+
+**Where the split falls.** `packages/db` returns the outcome and knows nothing about HTTP; `packages/core`'s `assertMemberWriteSucceeded` turns it into a `DomainError`. Neither is optional: the database enforces, and the domain decides what a refusal *means*.
+
+**Three concurrency assertions, not one.** The row asks for two simultaneous demotions; the suite also races a demotion against a removal — the two statements are separate, and a lock covering only one of them would pass the first test — and three owners demoting themselves at once, where exactly two may succeed. Each finishes by asserting `countOwners() === 1` independently of the outcomes, so the property survives a change in how refusals are reported.
+
+**`countOwners` is not used by the guard.** The guard asks "is there another one", which is cheaper and is the question that decides. The count exists for the dashboard, so a control can be greyed out before somebody clicks it — a refusal after the fact is correct and still a worse experience than an explanation before.
+
+**⚠ No endpoints, and that is the same deferral as E8.** Nothing calls `setMemberRole` or `removeMember` yet. The guard is not free-floating — it is inside the only writes that exist, so the endpoint's arrival is trivial and safe — but the member-management screen is **P0-57**, and an endpoint with no screen is a thing nobody uses and nobody notices breaking. Tracked in **E8** alongside invitation revocation, which is the same screen.
+
 ---
 
 ### P0-53 · `audit_log` writer
@@ -6010,6 +6033,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Sending domain not authenticated | P0-64 open | SPF, DKIM and DMARC are operator work no test replaces. Until they exist the production path has never sent a message and account recovery does not work. See **E6**. |
 | Suppression list has no writer | P0-64b | The table and the send-path check shipped; the bounce webhook did not, because it needs a signed-webhook surface `apps/api` does not have yet. See **E7**. |
 | Invitations cannot be revoked | P0-51 open | The column and the index shipped and are tested; the endpoint did not, because it belongs with the members page rather than ahead of it. A mistaken invitation stays live for seven days. See **E8**. |
+| Roster cannot be changed from the API | P0-52 open | The last-OWNER guard and the writes it protects shipped and are tested to three concurrency cases; no endpoint calls them, because the member-management screen is P0-57. See **E8**. |
 
 ### ⚠ Open items from the P0-54 → P0-53 chain, in detail
 
@@ -6202,6 +6226,8 @@ This is deliberate — the inbound half needs a signed-webhook surface `apps/api
 
 **Why it was left out rather than added.** It belongs with the members page (**P0-57**), not ahead of it. An endpoint with no screen is a thing nobody uses and nobody notices breaking, and the revocation UI and the pending-invitations list are the same screen — building the endpoints first means guessing at what that screen needs and being wrong about at least one of them.
 
-**What closes it.** Two routes behind `members:manage` — `GET .../members/invitations` and `DELETE .../members/invitations/:id` — plus the audit rows for both (P0-53), landing with or immediately after P0-57. The storage needs no further migration.
+**P0-52 lands in the same gap, and widens it slightly.** `setMemberRole` and `removeMember` exist, carry the last-OWNER guard inside the statement, and are asserted against three concurrency cases — and nothing calls them either. So today an owner can invite, and can do nothing else to the roster: no change of role, no removal, no revocation, no list. All four are one screen.
+
+**What closes it.** Five routes behind `members:manage` — `GET .../members`, `PATCH .../members/:userId`, `DELETE .../members/:userId`, `GET .../members/invitations` and `DELETE .../members/invitations/:id` — plus the audit rows for each (P0-53), landing with or immediately after P0-57. The storage and the guards need no further migration; what is missing is the surface.
 
 **In the meantime**, a mistaken invitation is revoked with one `UPDATE` against the tenant's own rows. That is an operator action, so it belongs in a runbook rather than in a support reply.

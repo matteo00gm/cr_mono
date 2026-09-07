@@ -1,6 +1,6 @@
 import type { Role } from '@catalogorosso/security';
 
-import { ForbiddenError, InvalidRequestError, NotFoundError } from './errors.js';
+import { ConflictError, ForbiddenError, InvalidRequestError, NotFoundError } from './errors.js';
 
 /**
  * Membership and tenant resolution (P0-47).
@@ -127,4 +127,48 @@ export const resolveMembership = async ({
   }
 
   return match;
+};
+
+/* ------------------------------------------------- membership changes (P0-52) */
+
+/**
+ * What a membership write did, mirrored from `@catalogorosso/db`.
+ *
+ * Redeclared rather than imported so this module keeps no dependency on the
+ * database package's shape for a three-member union — the same reasoning that
+ * keeps `MembershipReader` a function type here rather than a query. The two
+ * are kept honest by the one caller that uses both, which would not compile if
+ * they drifted.
+ */
+export type MemberWriteOutcome = 'changed' | 'no-such-member' | 'would-remove-last-owner';
+
+/**
+ * Turns an outcome into the answer a caller gets, or returns for success.
+ *
+ * Here rather than in the handler because the *choice of status* is a domain
+ * decision with a security consequence, and one written down once is one that
+ * cannot be got differently in the next handler.
+ */
+export const assertMemberWriteSucceeded = (outcome: MemberWriteOutcome): void => {
+  if (outcome === 'changed') return;
+
+  if (outcome === 'no-such-member') {
+    /*
+     * 404, not 403 (§3.5). A user who is not in this winery and a user id that
+     * does not exist at all must be indistinguishable, or an owner of one
+     * tenant can probe which accounts belong to another.
+     */
+    throw new NotFoundError('No such member.');
+  }
+
+  /*
+   * The message is the API contract and reaches the caller verbatim (P0-55), so
+   * it says what to do rather than what went wrong. An owner who has just been
+   * refused needs to know the winery would be left with nobody who can manage
+   * billing, and that promoting somebody first is the way through.
+   */
+  throw new ConflictError(
+    'This winery would be left with no owner. Promote another member to OWNER first, ' +
+      'then change or remove this one.',
+  );
 };
