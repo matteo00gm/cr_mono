@@ -2045,7 +2045,21 @@ The first `dev` deploy came up with an RDS instance holding no roles and no sche
 
 **⚠ The finding: bootstrap had never run against a non-superuser.** `ALTER DEFAULT PRIVILEGES FOR ROLE app_migrate` requires the caller to be a *member* of that role. A true superuser passes that check implicitly, and the test container's `postgres` user is one — so eleven integration suites stayed green while the statement failed on RDS, whose master is `rds_superuser` and is not a superuser. The error was `permission denied to change default privileges`.
 
-The fix is an explicit `GRANT app_migrate, app_rw TO current_user` before it, guarded so a provider that refuses the redundant grant is not fatal. What is worth keeping is the shape: **this class of bug is invisible to the integration suite by construction**, because the suite's master is more privileged than any managed provider's will ever be. Every other privilege assertion in P0-39 has the same blind spot. A container started with a non-superuser master would close it and is the obvious follow-up.
+The fix is an explicit `GRANT app_migrate, app_rw TO current_user` before it, guarded so a provider that refuses the redundant grant is not fatal. What is worth keeping is the shape: **this class of bug was invisible to the integration suite by construction**, because the suite's master is more privileged than any managed provider's will ever be.
+
+**That blind spot is now closed** *(2026-09-07)*. `bootstrap-non-superuser.integration.test.ts` starts its own container — the shared harness bootstraps as the superuser by design, and the whole point is not to — and builds a `CREATEROLE CREATEDB NOSUPERUSER` role owning the database and the `public` schema, which is what RDS hands a master.
+
+Three things about how it is written matter more than the fact of it:
+
+- **It asserts the effect, not the absence of an error.** `ALTER DEFAULT PRIVILEGES` could be skipped or misapplied without raising; the symptom would be `app_rw` unable to read tables `app_migrate` creates, surfacing as every query failing long after the deploy reported success. So the test runs the real migrations as `app_migrate` and then reads `tenants` as `app_rw`.
+- **It checks that `app_migrate` owns the tables**, not the bootstrapping role. `FORCE ROW LEVEL SECURITY` does not apply to a table's owner, so a master that ended up owning them would make every P0-37 policy inert for itself — invisible until somebody connected as master and saw every tenant's rows.
+- **It guards the guard**, asserting `rolsuper` is false on the synthetic role. If that role were somehow a superuser the whole file would pass while testing nothing, which is the exact failure it exists to correct.
+
+Three departures from a literal RDS model, all deliberate. The four extensions are pre-created as the container superuser, because `vector` is not a trusted extension and a synthetic `NOSUPERUSER` role cannot install it where `rds_superuser` can. The role owns the database and `public`, because three statements in `bootstrap/0001` need ownership and would otherwise fail for a reason unrelated to what is under test. And it carries **`BYPASSRLS`**.
+
+That last one CI established rather than the author. Without it bootstrap failed with `Only roles with the BYPASSRLS attribute may create roles with the BYPASSRLS attribute` — `bootstrap/0001` creates the break-glass `app_admin` with it. **A fidelity bug in the model, not a bug in bootstrap**, and the evidence is direct: the migration runner executed that same statement against RDS successfully on 2026-09-07, so RDS's master demonstrably holds the attribute. A model *more* restrictive than the thing it models manufactures failures nobody will ever see, which is its own kind of untrue.
+
+None of the three weakens the subject. `ALTER DEFAULT PRIVILEGES FOR ROLE x` needs *membership* in `x`, and neither ownership nor `BYPASSRLS` confers it — so the check that broke on the first deploy is still the one being made. Both attributes are pinned by an assertion, so a later edit cannot quietly make this role more or less privileged than what it stands in for.
 
 **Verified end to end on `dev`.** The runner returns `{"ok":true,"applied":"bootstrap+migrations"}`, and a sign-up through CloudFront then created a real user — the first request in this project to reach Postgres and come back.
 
@@ -6080,7 +6094,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Invitations can be withdrawn | **closed (2026-09-07)** | `DELETE .../members/invitations/:id` stamps `revoked_at` rather than deleting, so a fresh invitation to the same address succeeds and the withdrawal survives for a review. See **E8**. |
 | The roster can be changed from the API | **closed (2026-09-07)** | Five routes behind `members:manage`, each carrying the last-OWNER guard and an audit row written only when something changed. See **E8**, **C5**. |
 | Migrations had no runner | **closed (2026-09-07)** | `apps/migrator`, a one-shot in-VPC Lambda invoked after deploy. The first `dev` deploy had an RDS instance with no roles or schema, so everything touching data answered 500. See **P0-21b**. |
-| 🔒 Bootstrap untested against a non-superuser | **follow-up** | `ALTER DEFAULT PRIVILEGES FOR ROLE` needs membership in that role; the test container's master is a true superuser and RDS's is not, so the statement failed only on deploy. Every P0-39 privilege assertion shares that blind spot. A container with a non-superuser master closes it. See **P0-21b**. |
+| Bootstrap tested against a non-superuser | **closed (2026-09-07)** | `bootstrap-non-superuser.integration.test.ts` starts its own container, builds a `CREATEROLE CREATEDB NOSUPERUSER` role owning the database and `public` — what RDS hands a master — and applies bootstrap as that role. It asserts the *effect* rather than the absence of an error: `app_rw` can read a table `app_migrate` created, and `app_migrate` owns it. See **P0-21b**. |
 | Composition root wires email and members | **closed (2026-09-06)** | `buildDependencies` in `composition.ts`, asserted by identity against the fail-loud placeholder — a shape check would have passed on the broken version. `index.ts` is now environment reading only. See **E9**. |
 
 ### ⚠ Open items from the P0-54 → P0-53 chain, in detail
