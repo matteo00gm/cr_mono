@@ -13,6 +13,7 @@ import type { RateLimiter } from '@catalogorosso/security';
 import { isSuppressed, readMembershipsForUser, withUser } from '@catalogorosso/db';
 
 import { createMembersPort, type MembersPort } from './members.js';
+import { createWebhooksPort, type WebhooksPort } from './webhooks.js';
 import type { AuthPort } from './middleware/auth.js';
 import { AUTH_PUBLIC_PATH } from './routes.js';
 
@@ -102,6 +103,18 @@ export interface RuntimeConfig {
    * the wiring would otherwise need a container to check a string.
    */
   readonly rateLimiter?: RateLimiter | undefined;
+
+  /**
+   * The Resend endpoint signing secret, `whsec_…` (P0-64b).
+   *
+   * Absent is **restrictive**: the webhook endpoint refuses every delivery,
+   * because with no secret there is nothing to verify a signature against. That
+   * is the opposite of `originSecret` above, and it is why this one needs no
+   * deployment guard — what its absence costs is bounces going unrecorded (E7),
+   * not a hole. Passed straight through rather than being read here, because
+   * only the surface has a use for it.
+   */
+  readonly resendWebhookSecret?: string | undefined;
 }
 
 export interface Dependencies {
@@ -110,6 +123,10 @@ export interface Dependencies {
   readonly originSecret?: string | undefined;
   readonly readMemberships: MembershipReader;
   readonly members: MembersPort;
+  /** Records provider delivery events (P0-64b). */
+  readonly webhooks: WebhooksPort;
+  /** Passed through to `createApp`; absent means the endpoint refuses. */
+  readonly resendWebhookSecret?: string | undefined;
   /** Exposed so the wiring is assertable, not because anything else calls it. */
   readonly sendResetPassword: (email: ResetPasswordEmail) => Promise<void>;
 }
@@ -222,6 +239,18 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
       sendEmail: sendEmailWith({ isSuppressed: () => Promise.resolve(false) }),
       acceptUrlBase: config.acceptUrlBase ?? `${config.authBaseUrl}/invito`,
     }),
+
+    /*
+     * Built unconditionally, unlike the secret beside it. The port is what
+     * records a bounce once one is verified, and there is no configuration that
+     * makes recording one wrong — the gate is the signature, which the surface
+     * applies before this is ever reached.
+     */
+    webhooks: createWebhooksPort(),
+
+    ...(config.resendWebhookSecret === undefined
+      ? {}
+      : { resendWebhookSecret: config.resendWebhookSecret }),
 
     sendResetPassword,
   };

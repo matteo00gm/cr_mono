@@ -185,13 +185,13 @@ jobs:
       - name: Assert the API function receives the email environment
         run: |
           missing=""
-          for key in SST_STAGE EMAIL_FROM RESEND_API_KEY EMAIL_ALLOWLIST; do
+          for key in SST_STAGE EMAIL_FROM RESEND_API_KEY EMAIL_ALLOWLIST RESEND_WEBHOOK_SECRET; do
             if ! grep -qE "^[[:space:]]*$key:" infra/api.ts; then
               missing="$missing $key"
             fi
           done
           if [ -n "$missing" ]; then
-            echo "::error::infra/api.ts does not inject:$missing — apps/api/src/composition.ts reads them, and an absent value degrades silently to the log transport (P0-64, E9)"
+            echo "::error::infra/api.ts does not inject:$missing — apps/api/src/composition.ts reads them, and an absent value degrades silently: the log transport for mail (P0-64, E9), and a webhook endpoint that refuses every bounce for RESEND_WEBHOOK_SECRET (P0-64b, E7)"
             exit 1
           fi
           echo "the API function receives the email environment."

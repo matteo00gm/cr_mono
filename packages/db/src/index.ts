@@ -189,3 +189,21 @@ export {
   type BucketCheck,
   type BucketResult,
 } from './rate-limit.js';
+
+/**
+ * The inbound-webhook idempotency ledger (P0-64b, and P0-33 after it).
+ *
+ * `withWebhookEvent` opens its own transaction, which every other export here
+ * deliberately does not — and the reason it is allowed to is written at length
+ * in the module: a webhook arrives outside any request, and both tables it
+ * touches are global by design with no policy for a missing context to narrow.
+ * It is exported rather than a `getDb` accessor for exactly that reason: one
+ * named path with a written reason, never a general one that erodes into the
+ * default.
+ */
+export {
+  claimWebhookEvent,
+  withWebhookEvent,
+  type ClaimedRun,
+  type WebhookEvent,
+} from './webhooks.js';

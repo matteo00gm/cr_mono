@@ -3214,6 +3214,17 @@ Four departures from the text above, each because building it made the reason co
 
 **Tests.** A bounce event suppresses the address; a redelivery of the same event does not move `suppressed_at`; an event with a bad signature is rejected and writes nothing; a complaint suppresses too.
 
+**As built — the surface was the row, and four decisions came out of building it.** `POST /v1/webhooks/resend` behind Svix signature verification, applied through `withWebhookEvent`, which claims the id in `processed_webhooks` and runs the work inside the *same* transaction. All four tests above exist, plus the two the row did not ask for and that turned out to matter more: twenty concurrent claims of one event let exactly one through, and a failure inside the work leaves nothing claimed — asserted by running the same event again and watching it apply. The standing decision is **ADR 0020**.
+
+- **`withWebhookEvent` is generic, and it is where the transaction boundary lives.** The row describes writing a suppression; what it actually needs is *exactly-once*, and that is a property of the boundary rather than of email. Claim in one transaction and apply in another and there is a window where the event is recorded as processed and the work never happened — at which point the provider's redelivery, the one mechanism that would have repaired it, is refused because the ledger says it is done. Permanent, silent, and indistinguishable from success. P0-33's Stripe handler needs the identical guarantee over different work, so it is written once.
+- **The connection is un-scoped, and that contradicted a documented invariant.** `AGENTS.md` said there is exactly one sanctioned un-scoped path. That was already untrue before this row — `createRateLimiter` (P2-02) opens one for `rate_limit_buckets` — and this makes two, so the invariant was rewritten rather than quietly broken a second time. The real rule is narrower and checkable: three tables carry no `tenant_id` and no policy on purpose, their callers are named, and the safety is that there is no scoped read for a missing context to narrow. It stops holding the instant one of them touches a tenant table.
+- **Only a *permanent* bounce suppresses, and an absent bounce type does not.** This is the decision most worth arguing with, and it deliberately runs against the fail-closed instinct. A transient bounce is a full mailbox; the address belongs to a person who will read their mail next week. Suppressing one produces exactly the failure P0-64 exists to prevent — a paying customer locked out of password reset with no self-service way back — while a missed suppression costs one more message to a dead address, which bounces again and arrives here again. The asymmetry decides it. Complaints suppress unconditionally: the address works, which is why continuing is worse.
+- **An unreadable payload is answered 200 and logged, not 400.** The obvious answer is a 4xx, on the reasoning that a 4xx is final and a 5xx is retried. That premise is false for Svix, which retries *every* non-2xx for hours and eventually disables an endpoint that keeps failing — so a 400 would buy nothing, cost eight redeliveries of a body that will never become readable, and push the endpoint toward being switched off. That is E7 again, reached from the other direction. The status is therefore chosen by whether a retry can help; a database failure is left to become a 500 precisely because there it can.
+
+**What the endpoint refuses, and how loudly.** A mis-signed request is 401 with one message for every reason — the specific failure goes to the log under `kind`/`type`, both already on the P0-56 allowlist, because adding a `reason` key would open that name at every depth for every caller (D8). A stage with no signing secret answers **404**: absent is restrictive here, the opposite of `ORIGIN_SECRET`, so there is no startup guard — only a warning line, because what absence costs is bounces going unrecorded rather than a hole. `RESEND_WEBHOOK_SECRET` joins the CI grep that asserts the Lambda receives what the composition root reads.
+
+**⚠ The endpoint still has to be created in Resend's dashboard**, pointed at `https://<stage-host>/v1/webhooks/resend`, and its `whsec_…` secret set with `sst secret set ResendWebhookSecret --stage <stage>`. Until then the code is complete and the list still fills with nothing — which is why **E7 stays open as an operator item** rather than closing outright with this row.
+
 ---
 
 ### P0-59 · `docs/` scaffold and ADR system ⛔
@@ -6338,11 +6349,19 @@ Supply-chain protection is unchanged and now explicit rather than incidental: af
 
 **One operational note from setting it up.** The first key stored was scoped "Sending access" only, which returns **401** on `GET /domains` — indistinguishable at a glance from a revoked key. Worth knowing before debugging the wrong thing.
 
-**E7. Nothing writes to the suppression list.** ⛔ *(P0-64b)*
+**E7. Nothing writes to the suppression list.** 🔧 **code closed (2026-09-08, P0-64b) — one operator step remains**
 
-The table, the read and the send-path check all exist; the webhook that records a bounce does not. So the list is empty and stays empty, which makes the suppression check a no-op in practice however well it is tested.
+The table, the read and the send-path check all existed; the webhook that records a bounce did not, so the list was empty and the suppression check a no-op however well it was tested.
 
-This is deliberate — the inbound half needs a signed-webhook surface `apps/api` does not have, and P0-33's Stripe handler needs the same one — but the consequence should not be understated: **until P0-64b lands, a hard-bounced address is mailed again on the next send**, and repeated sends to dead addresses are the specific behaviour that moves a sending domain onto filter lists. It matters more once **E6** closes, not less: today nothing is being sent at all, so nothing is accumulating.
+**The code half is done.** `POST /v1/webhooks/resend` verifies a Svix signature over the raw body, claims the message id in `processed_webhooks`, and writes the suppression *inside that same transaction* — so a failed delivery leaves nothing claimed and the redelivery repairs it. Signature verification runs before the body is parsed, which is what stops the realistic attack: a captured legitimate delivery re-sent with a different recipient would suppress an address of the attacker's choosing and lock a real customer out of password reset, using our own bounce machinery to do it. The standing decision is **ADR 0020**; the four judgement calls are in the P0-64b As-built above.
+
+**⚠ What is left is not code.** The endpoint has to be created in Resend's dashboard against the deployed host, and its `whsec_…` written to the stage:
+
+```
+sst secret set ResendWebhookSecret --stage <stage>
+```
+
+Until that happens the endpoint answers **404** to everything — restrictive rather than permissive, so nothing is exposed — and the list still fills with nothing. `index.ts` logs a warning on a deployed stage for exactly this reason: an empty suppression list is indistinguishable from a sending domain with no bounces, and E7's whole lesson is how quiet that failure is. It matters more once **E6** closes, not less.
 
 **E8. The roster can be read and changed from the API.** ✅ **closed (2026-09-07)**
 
