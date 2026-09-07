@@ -28,7 +28,25 @@ import { POSTGRES_IMAGE, ROLE_PASSWORDS } from './support/postgres.js';
  * to.
  */
 
-/** As close to `rds_superuser` as a plain container gets. */
+/**
+ * As close to `rds_superuser` as a plain container gets.
+ *
+ * **`BYPASSRLS` is part of the model, and CI is what established that.** The
+ * first version of this role omitted it, and bootstrap failed with
+ * `Only roles with the BYPASSRLS attribute may create roles with the BYPASSRLS
+ * attribute` — `bootstrap/0001` creates the break-glass `app_admin` role with
+ * it.
+ *
+ * That is a fidelity bug in the model rather than a bug in bootstrap, and the
+ * evidence is direct: the real migration runner executed that same statement
+ * against RDS successfully on 2026-09-07, so RDS's master demonstrably holds
+ * the attribute. A model more restrictive than the thing it models produces
+ * failures nobody will ever see, which is its own kind of untrue.
+ *
+ * It does not weaken what this file tests. `BYPASSRLS` is a row-security
+ * attribute; `ALTER DEFAULT PRIVILEGES FOR ROLE x` needs *membership* in `x`,
+ * which no attribute confers. The membership check is still the subject.
+ */
 const RDS_LIKE = { role: 'rds_like_master', password: 'rds_like_password' } as const;
 
 let container: StartedPostgreSqlContainer | undefined;
@@ -62,7 +80,7 @@ beforeAll(async () => {
    * never granted.
    */
   await adminDb.execute(
-    sql.raw(`CREATE ROLE ${RDS_LIKE.role} LOGIN CREATEROLE CREATEDB NOSUPERUSER
+    sql.raw(`CREATE ROLE ${RDS_LIKE.role} LOGIN CREATEROLE CREATEDB BYPASSRLS NOSUPERUSER
              PASSWORD '${RDS_LIKE.password}'`),
   );
 
@@ -153,13 +171,23 @@ describe('bootstrap as a non-superuser', () => {
   });
 
   it('does not make the bootstrapping role a superuser by accident', async () => {
-    // Guards the guard. If `rds_like_master` were somehow a superuser, every
-    // assertion above would pass while testing nothing — the exact failure this
-    // file exists to correct.
+    /*
+     * Guards the guard. If `rds_like_master` were somehow a superuser every
+     * assertion above would pass while testing nothing — the exact failure this
+     * file exists to correct.
+     *
+     * `rolbypassrls` is asserted true in the same breath, because it is part of
+     * the model rather than an accident: RDS's master holds it, proven by the
+     * real runner creating `app_admin` on 2026-09-07. Pinning both means a
+     * future edit cannot quietly make this role either more or less privileged
+     * than the thing it stands in for.
+     */
     const rows = await adminDb.execute(
-      sql`SELECT rolsuper FROM pg_roles WHERE rolname = ${RDS_LIKE.role}`,
+      sql`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = ${RDS_LIKE.role}`,
     );
+    const role = [...rows][0] as { rolsuper: boolean; rolbypassrls: boolean };
 
-    expect(([...rows][0] as { rolsuper: boolean }).rolsuper).toBe(false);
+    expect(role.rolsuper).toBe(false);
+    expect(role.rolbypassrls).toBe(true);
   });
 });
