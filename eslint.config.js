@@ -31,17 +31,38 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: {
         projectService: {
-          // Root-level tooling configs live in no tsconfig by design.
-          allowDefaultProject: ['*.config.ts', '*.config.mts', '*.config.js'],
+          /*
+           * Root-level tooling configs live in no tsconfig by design — and so
+           * does `apps/dashboard/vite.config.ts`, for the same reason: it
+           * configures the bundler rather than being bundled, and putting it in
+           * the app's `include` would make the app's own typecheck depend on
+           * Vite's types.
+           */
+          allowDefaultProject: [
+            '*.config.ts',
+            '*.config.mts',
+            '*.config.js',
+            'apps/dashboard/vite.config.ts',
+          ],
         },
         tsconfigRootDir: import.meta.dirname,
       },
     },
   },
 
-  // Root config files are not in any tsconfig — disable type-aware rules
+  /*
+   * Tooling configs are in no tsconfig — disable type-aware rules.
+   *
+   * A recursive glob rather than a root-only one: without the leading
+   * double-star the pattern matches only the repository root, and
+   * `apps/dashboard/vite.config.ts` fell through to the default project —
+   * where four rules report "requires strictNullChecks" and one reports an
+   * unresolved call, none of which is about the file. A config that configures
+   * the bundler is not part of the app it bundles, and putting it in the app's
+   * `include` would make the app's own typecheck depend on Vite's types.
+   */
   {
-    files: ['*.config.{js,ts,mjs,mts}'],
+    files: ['**/*.config.{js,ts,mjs,mts}'],
     ...tseslint.configs.disableTypeChecked,
   },
 
