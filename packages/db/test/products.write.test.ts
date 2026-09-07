@@ -30,16 +30,27 @@ const VALUES = {
 const ROW = { id: '7c9e6679-7425-40de-944b-e07fc1f90ae7', sku: 'BAR-2019' };
 
 /**
- * A driver error shaped the way one actually arrives.
+ * A driver error, in **both** the shapes that actually arrive.
  *
- * **The SQLSTATE is on `cause`, not on the error itself**, because Drizzle
- * wraps what postgres-js threw. A fake that put `code` at the top level would
- * agree with a `pgErrorCode` that read it there — and both would be wrong about
- * the same thing, which is precisely how A1's timestamp bug survived a green
- * suite.
+ * **CI established that there are two, and this file is why it had to.** The
+ * first version fabricated only the wrapped form, so it agreed with a
+ * `pgErrorCode` that read only `cause` — and a duplicate SKU escaped as a 500
+ * against real Postgres while every test here stayed green. Same shape as A1's
+ * timestamp bug, same cause: a fixture written from the implementation's
+ * assumption instead of the driver's behaviour.
+ *
+ * `db.execute` with a raw statement wraps what postgres-js threw, putting the
+ * SQLSTATE on `cause`. The query builder — which is what `insertProduct` uses —
+ * lets the `PostgresError` through with the code on the error itself.
  */
-const driverError = (code: string) =>
+const wrappedError = (code: string) =>
   Object.assign(new Error('Failed query: insert into "products" ...'), { cause: { code } });
+
+const rawDriverError = (code: string) =>
+  Object.assign(new Error('duplicate key value violates unique constraint'), { code });
+
+/** The one the query builder actually throws, used wherever one is needed. */
+const driverError = rawDriverError;
 
 interface Fake {
   readonly tx: DbTransaction;
@@ -141,6 +152,26 @@ describe('insertProduct', () => {
     expect(inserted.filter((write) => write.table === 'outbox')).toEqual([]);
   });
 
+  it.each([
+    ['the raw driver error the query builder throws', rawDriverError],
+    ['the wrapped error db.execute produces', wrappedError],
+  ])('recognises a duplicate in %s', async (_shape, build) => {
+    /*
+     * Both, because the two call sites differ and the code must not care. The
+     * cost of caring is a 500 for a form mistake — which is what shipped for
+     * exactly as long as this test only knew one shape.
+     */
+    const { tx } = fakeTx({
+      onProductInsert: () => {
+        throw build('23505');
+      },
+    });
+
+    expect(await insertProduct(tx, { tenantId: 't', values: VALUES, contentHash: 'h' })).toEqual({
+      outcome: 'duplicate-sku',
+    });
+  });
+
   it('lets any other database failure out', async () => {
     /*
      * Only `23505` is an outcome. A connection failure or a check violation is
@@ -155,7 +186,7 @@ describe('insertProduct', () => {
 
     await expect(
       insertProduct(tx, { tenantId: 't', values: VALUES, contentHash: 'h' }),
-    ).rejects.toThrow(/Failed query/);
+    ).rejects.toThrow(/duplicate key value/);
   });
 
   it('refuses to queue a job for a row it cannot see', async () => {
