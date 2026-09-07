@@ -79,6 +79,32 @@ export const api = new sst.aws.Function('Api', {
 
   // Direct Function URL. CloudFront gains it as an origin in P0-17a, which
   // needs an origin to point at and is why that task waited for this one.
+  /**
+   * `true`, which means the Function URL is publicly invokable — and that is a
+   * known open bypass, not an oversight (A2).
+   *
+   * **An attempt to close it with `authorization: 'iam'` plus a `lambda`-type
+   * OAC was deployed, measured, and reverted.** It worked exactly as intended
+   * for GET — a direct call to the Function URL returned 403 while the same
+   * request through CloudFront returned 200 — and it broke **every POST**,
+   * including sign-in, with `The request signature we calculated does not
+   * match`.
+   *
+   * The reason is documented and structural: CloudFront's OAC for Lambda
+   * Function URLs **does not sign the request body**, so a `AWS_IAM` Function
+   * URL rejects any request that has one. SST names the same three options
+   * (`router.ts`, `routerProtection`): `none`, `oac` — which requires the
+   * *client* to compute and send `x-amz-content-sha256`, impossible for a
+   * widget embedded on somebody else's site — and `oac-with-edge-signing`,
+   * which signs in Lambda@Edge at the cost of us-east-1-only deployment,
+   * per-request latency, a 1MB body cap, and slow stage deletion.
+   *
+   * So closing this is a real trade rather than a config change, and the
+   * cheaper alternative — a secret header set by CloudFront on origin requests
+   * and validated by the API — is a different design with its own weaknesses.
+   * Recorded in **A2** with both options costed; the decision is not this
+   * file's to make quietly.
+   */
   url: true,
 
   architecture: 'arm64',

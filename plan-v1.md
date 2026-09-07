@@ -6066,7 +6066,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Turbo remote cache not enabled | repository secrets | `TURBO_TOKEN` / `TURBO_TEAM` are referenced by the workflow but unset, so Turbo uses its local cache only. Harmless; wire it when CI wall-clock starts to matter. |
 | Coverage bars now measure real code | **closed (2026-09-01)** | No longer 100% of nothing: `packages/core` 22/22 statements and `packages/db` 33/33 across 3 files, both at 100% against their 90% bars. `apps/*`, `packages/security` and `packages/testing` are still stubs, so their bars stay unexercised until code lands. |
 | 🔒 Auth rate limiting is per-container | **before public sign-in** | Better Auth's default store is a module-level `Map`, so the real limit is N x the configured one and a container recycle resets it. Needs P2-01's Postgres-backed limiter. See **A1**. |
-| 🔒 The Function URL bypasses the edge | **before untrusted traffic** | The CloudFront Function pins the client IP correctly — measured on `dev`, four probes, all `xffEntries=1`, including a forged three-entry header collapsing to one. But the Function URL is `authType: NONE` with `Principal: "*"`, so a direct call skips the function entirely and the origin believes any `X-Forwarded-For` sent. The S3 origin carries an OAC; the API origin carries none. See **A2**. |
+| 🔒 The Function URL bypasses the edge | **needs a decision** | OAC was deployed and reverted: it locks GET correctly (403 direct, 200 via CloudFront) and breaks every POST, because CloudFront does not sign the request body for Lambda origins. The three options and their costs are in **A2**; the recommendation is a secret origin header. |
 | `NODE_ENV=production` asserted in CI | **closed** | A grep in `ci.yml`, matching the NAT and `app_rw` assertions. Verified to fire when the line is removed. See **A3**. |
 | Password reset sends no email | **closed (2026-09-06)** | The placeholder is replaced by the P0-64 seam, wired at the composition root. Non-production stages render the whole message to the log, so the reset link is recoverable locally for the first time. Still resolves rather than throwing on a suppressed address, which is what keeps the two responses identical. See **A4**, **E9**. |
 | Reserved concurrency unset | **P1-48, before traffic** | §5.1 says 40, P1-48 says 10; P1-48 is right. Unbounded is worse than either. Interacts with **A1**. See **B1**. |
@@ -6126,6 +6126,32 @@ What it costs: per-caller rate limiting becomes per-*claimed*-caller, so an atta
 **What closes it.** `url: { authorization: 'iam' }` on the function, an `aws:cloudfront:OriginAccessControl` with `originAccessControlOriginType: 'lambda'` and `signingBehavior: 'always'`, and that OAC attached to the API origin — the same shape the S3 origin already uses. CloudFront then signs each origin request with SigV4 and a direct call returns 403.
 
 **When: before the API takes untrusted traffic.** It is not urgent while nothing is deployed but the `dev` Function URL is live and public right now, and the URL is discoverable — it is in CloudFront's origin configuration, in this file, and in any error a client sees.
+
+**The obvious fix was tried, deployed, measured, and reverted — and what it proved is worth more than the attempt.**
+
+`url: { authorization: 'iam' }` plus a `lambda`-type Origin Access Control did exactly what it should for GET: a direct call to the Function URL returned **403 Forbidden** while the same request through CloudFront returned 200. The bypass was closed.
+
+It also broke **every POST**, including sign-in:
+
+```
+403 The request signature we calculated does not match the signature you provided.
+```
+
+**CloudFront's OAC for Lambda Function URLs does not sign the request body.** A Function URL set to `AWS_IAM` rejects any request that has one, so the control that closes the bypass also closes the API. This is structural, not a misconfiguration — SST names the same three options in `router.ts` under `routerProtection`:
+
+| Mode | What it costs |
+|---|---|
+| `none` | The bypass. Where we are. |
+| `oac` | The **client** must compute and send `x-amz-content-sha256`. Impossible for a widget embedded on a seller's site, which is the whole product. |
+| `oac-with-edge-signing` | Lambda@Edge signs each request. us-east-1 only, per-request latency and cost on every API call, a 1MB body cap, and stage deletion becomes slow. |
+
+**So closing A2 is a trade, not a config change**, and it was worth a deploy to find that out rather than discovering it in front of customers.
+
+**The cheaper alternative, for when this is decided.** A secret header set by CloudFront on origin requests (`origin.customHeaders`), validated by middleware in `apps/api`. It works for every method, adds no latency, needs no Lambda@Edge, and cannot be produced by a direct caller — CloudFront sets it at the origin-request stage where a viewer cannot influence it. What it gives up is real: a **bearer secret rather than a signature**, so anyone who can read the distribution's configuration can replay it. That is an insider with AWS console access rather than anyone on the internet holding a URL, which is a materially smaller threat than the one we have now — but it is not nothing, and it needs a rotation story.
+
+**Recommendation.** The secret header, unless the widget's chat path turns out to need Lambda@Edge for another reason. It closes the internet-facing half of the problem for roughly no cost, and `oac-with-edge-signing` remains available if the threat model changes. **Not decided here** — this is a security posture choice with a running cost attached, and it belongs to a person.
+
+**Until then the bypass is open**, and it interacts with **A1**: per-caller rate limiting is per-*claimed*-caller for anyone who finds the Function URL, on top of the per-container multiplication A1 already describes.
 
 **A note on how this was found**, because the near-miss matters more than the result. The first attempt looked for the client IP on the request log line, did not find it, and almost reported the edge broken. The IP was never on that line — it is captured into the request context for `audit()`. The instrument was wrong, not the system. `xffEntries` exists because of that: a count, not the address, since `ip` is deliberately not on the P0-56 allowlist. Nothing here would have been visible without deploying, and none of it was visible from the configuration, which reads correctly.
 
