@@ -100,3 +100,41 @@ export {
   unsuppressAddress,
   type SuppressionRow,
 } from './email-suppressions.js';
+
+/**
+ * The invitation acceptance scope (P0-51).
+ *
+ * The third RLS context, beside `withTenant` and `withUser`, and exported for
+ * the same reason: it is a *scoped* path, not an escape from scoping. The
+ * invitation is matched by a 256-bit secret and the tenant is then set from the
+ * row Postgres returned — so the membership it writes is scoped by a value that
+ * came out of the database rather than off the wire, on the one path that has
+ * no membership to read it from.
+ */
+export { withInvitation, type OpenInvitation } from './with-invitation.js';
+
+/**
+ * The `invitations` statements (P0-51).
+ *
+ * Here rather than in an app for the same reason as the audit insert and the
+ * membership read: statements live in this package so no app imports a driver.
+ * Which role an invitation carries, and whether an acceptance is admitted, stay
+ * in `packages/core`.
+ */
+export {
+  emailIsMember,
+  insertInvitation,
+  insertMembershipFromInvitation,
+  markInvitationAccepted,
+  readActiveTenantName,
+  type NewInvitation,
+} from './invitations.js';
+
+/**
+ * Reads an address for a user id, for the invitation email check (P0-51).
+ *
+ * `auth_users` carries no `tenant_id` and no policy — it is read before a
+ * tenant is known, by design (§P0-45) — so this is a plain read inside whatever
+ * transaction the caller already holds.
+ */
+export { readUserEmail } from './users.js';

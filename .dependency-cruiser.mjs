@@ -105,8 +105,23 @@ export default {
         // it touches has no tenant_id and no RLS policy, so there is no scoped
         // read for a missing context to silently narrow, and no other tenant's
         // rows for one to widen into.
+        //
+        // src/with-invitation.ts is exempt from P0-51, and it is the *third*
+        // RLS context rather than an escape from one. It opens a transaction,
+        // so unlike the two files below it really does reach a connection —
+        // and the exemption is for the same reason `with-user.ts` has one: the
+        // acceptance path has to read `invitations` before the caller is a
+        // member of the tenant, because becoming one is what the request does.
+        // Everything it can see is still under a policy; the scope is a
+        // 256-bit token instead of a tenant id, and the tenant is then set
+        // from the row Postgres matched. A fourth context appearing here
+        // should be treated as a design change.
+        //
+        // src/invitations.ts and src/users.ts are exempt on the same terms as
+        // audit.ts: they import `sql` to write statements and take the
+        // connection from their caller, opening nothing.
         pathNot:
-          '^packages/db/src/(client|with-tenant|with-user|deploy|auth-db|memberships|audit)[.]ts$' +
+          '^packages/db/src/(client|with-tenant|with-user|with-invitation|deploy|auth-db|memberships|audit|users|invitations)[.]ts$' +
           '|^packages/db/src/email-suppressions[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +

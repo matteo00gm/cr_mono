@@ -1,13 +1,22 @@
 import type { MembershipReader } from '@catalogorosso/core';
-import { publicRoute, requires, type RouteAccess } from '@catalogorosso/security';
-import { contextResponse, meResponse, surfaceResponse } from '@catalogorosso/api-client';
+import { publicRoute, requires, ROLES, type RouteAccess } from '@catalogorosso/security';
+import {
+  acceptInviteResponse,
+  contextResponse,
+  inviteResponse,
+  meResponse,
+  surfaceResponse,
+} from '@catalogorosso/api-client';
 import { Hono } from 'hono';
 import { z } from 'zod';
+
+import { InvalidRequestError, NotFoundError } from '@catalogorosso/core';
 
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
 import { requireCapability, routeKey } from '../middleware/capability.js';
 import { resolveTenant } from '../middleware/tenant.js';
+import { unconfiguredMembers, type MembersPort } from '../members.js';
 import { AUTH_ROUTE_PREFIX, DASHBOARD_PREFIX } from '../routes.js';
 
 /**
@@ -28,9 +37,58 @@ export interface DashboardOptions {
   readonly auth: AuthPort;
   /** Reads the caller's memberships, under RLS. See `src/memberships.ts`. */
   readonly readMemberships: MembershipReader;
+  /**
+   * Invitations (P0-51). Optional, unlike `auth`, and the asymmetry is
+   * deliberate: an absent `auth` would serve the dashboard *unauthenticated* —
+   * silently permissive, and undetectable downstream — while an absent members
+   * port refuses every call with a wiring error. Loud and total beats quiet and
+   * open, so this one is allowed a default and that one is not.
+   */
+  readonly members?: MembersPort | undefined;
 }
 
-export const createDashboardApp = ({ auth, readMemberships }: DashboardOptions): Hono<AppEnv> => {
+/**
+ * A JSON body, or `null` when there is not one.
+ *
+ * `c.req.json()` rejects on a malformed or absent body, and an unhandled
+ * rejection here would surface as a 500 for what is a client mistake. The
+ * schema below then reports it as the 400 it is.
+ */
+const readJson = async (c: { req: { json: () => Promise<unknown> } }): Promise<unknown> => {
+  try {
+    return await c.req.json();
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * 320 is the practical maximum length of an address (64 local + @ + 255
+ * domain). A bound rather than no bound, because this string is written into a
+ * row and into an email subject.
+ */
+const inviteBody = z.object({
+  email: z.string().min(3).max(320),
+  role: z.enum(ROLES),
+});
+
+/**
+ * The acceptance body, and what it does **not** carry.
+ *
+ * There is no `role` here, and its absence is the row's central requirement:
+ * the acceptance payload is written by the person who benefits from a higher
+ * role, so reading one from it is self-service escalation with an audit trail
+ * that looks legitimate. `.strict()` makes a sent one a 400 rather than a
+ * silently ignored field, so an attempt shows up as a rejection instead of
+ * looking like it worked.
+ */
+const acceptBody = z.object({ token: z.string().min(16).max(256) }).strict();
+
+export const createDashboardApp = ({
+  auth,
+  readMemberships,
+  members = unconfiguredMembers,
+}: DashboardOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
   /*
@@ -82,6 +140,45 @@ export const createDashboardApp = ({ auth, readMemberships }: DashboardOptions):
     return c.json({ userId: c.get('userId'), memberships });
   });
 
+  /**
+   * Redeem an invitation.
+   *
+   * **Above tenant resolution, and that is structural rather than tidy.** The
+   * caller is not yet a member of the winery they are joining — becoming one is
+   * what this request does — so `resolveTenant` would refuse them before the
+   * handler ran. Moving this route below that middleware makes accepting an
+   * invitation impossible for exactly the people it exists for, and every test
+   * written against a caller who is already a member would still pass.
+   *
+   * The tenant comes from the invitation row, matched by a 256-bit token, and
+   * is set inside the same transaction (`withInvitation`). So the P0-48
+   * invariant holds on a path that has no membership to read it from: the value
+   * still comes out of Postgres rather than off the wire.
+   */
+  app.post('/members/accept', async (c) => {
+    const parsed = acceptBody.safeParse(await readJson(c));
+
+    if (!parsed.success) {
+      throw new InvalidRequestError('Send a JSON body carrying the invitation token.');
+    }
+
+    const membership = await members.accept({
+      token: parsed.data.token,
+      userId: c.get('userId'),
+    });
+
+    /*
+     * One answer for every failure — unknown token, expired, revoked, already
+     * redeemed, addressed to somebody else. Distinguishing them would turn this
+     * into an oracle for testing which tokens exist and which addresses have
+     * open invitations, and none of the distinctions helps a legitimate caller,
+     * who either has a working link or needs a new one either way.
+     */
+    if (!membership) throw new NotFoundError('That invitation link is not usable.');
+
+    return c.json(membership);
+  });
+
   /*
    * ---- Everything below this line is scoped to one winery ----------------
    *
@@ -103,6 +200,39 @@ export const createDashboardApp = ({ auth, readMemberships }: DashboardOptions):
   app.get('/context', requireCapability('catalog:read'), (c) =>
     c.json({ tenantId: c.get('tenantId'), role: c.get('role') }),
   );
+
+  /**
+   * Invite somebody to this winery.
+   *
+   * The role *is* read from the request here, and that is not a contradiction
+   * of the rule the acceptance route follows. The caller holds
+   * `members:manage`, which only an OWNER has, so choosing the role is exactly
+   * their authority. What must never be read from a request is the role at
+   * **acceptance**, where the sender is the person who benefits from it.
+   */
+  app.post('/members/invite', requireCapability('members:manage'), async (c) => {
+    const parsed = inviteBody.safeParse(await readJson(c));
+
+    if (!parsed.success) {
+      throw new InvalidRequestError('Send a JSON body carrying an email and a role.');
+    }
+
+    const result = await members.invite({
+      tenantId: c.get('tenantId'),
+      email: parsed.data.email,
+      role: parsed.data.role,
+      invitedBy: c.get('userId'),
+    });
+
+    /*
+     * The same 200 whether or not a row was created, with `created` saying
+     * which. Re-inviting is a no-op rather than an error because the owner's
+     * intent — "make sure this person can get in" — is already satisfied, and
+     * answering 409 to it produces a dashboard that has to explain a conflict
+     * that is not one.
+     */
+    return c.json({ email: parsed.data.email, created: result.created });
+  });
 
   return app;
 };
@@ -202,6 +332,44 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'on another gets the right one for the winery in play.',
       example: { tenantId: '9f2c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a', role: 'EDITOR' },
       response: contextResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/members/invite`),
+    {
+      access: requires('members:manage'),
+      summary: 'Invite somebody to this winery',
+      description:
+        'Creates a single-use invitation and emails it. The role is chosen here, by a ' +
+        'caller who holds members:manage - it is never read from the acceptance request, ' +
+        'where the sender would be the person who benefits from it. Re-inviting an ' +
+        'address that is already a member, or already has an open invitation, answers 200 ' +
+        'with `created: false` rather than an error: the intent is already satisfied, and ' +
+        'sending again on every click would mail somebody repeatedly through our domain.',
+      example: { email: 'anna@cantinarossi.example', created: true },
+      response: inviteResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/members/accept`),
+    {
+      access: publicRoute(
+        'Authenticated but pre-tenant, by necessity: the caller is not yet a member of ' +
+          'the winery they are joining - becoming one is what the request does - so ' +
+          'tenant resolution would refuse them before the handler ran. The tenant comes ' +
+          'from the invitation row, matched by a 256-bit token and set inside the same ' +
+          'transaction, so it still comes out of Postgres rather than off the wire.',
+      ),
+      summary: 'Redeem an invitation',
+      description:
+        'Exchanges an invitation token for a membership, and returns the membership as ' +
+        'written so the dashboard can switch straight into the new winery. The role comes ' +
+        'from the invitation the owner created; a role sent in the body is a 400, not a ' +
+        'silently ignored field. Every unusable token - unknown, expired, revoked, already ' +
+        'redeemed, addressed to somebody else - answers 404 alike, so this cannot be used ' +
+        'to discover which invitations exist.',
+      example: { tenantId: '9f2c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a', role: 'EDITOR' },
+      response: acceptInviteResponse,
     },
   ],
 ]);

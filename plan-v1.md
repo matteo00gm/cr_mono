@@ -2915,6 +2915,28 @@ Implementation: `POST .../members/invite` requires `members:manage`, creates an 
 
 **Files.** `apps/api/src/routes/members.ts`, tests. **~120 lines.**
 
+**As built.** Not one file and not ~120 lines. The row's own sentence — "acceptance requires an authenticated Better Auth session, matches the token, and writes the `memberships` row" — turns out to contain a structural problem the estimate did not price, and most of what shipped is the answer to it.
+
+**The circularity, and the third RLS scope.** The invitee is *not a member* of the winery they are joining; becoming one is what the request does. Every tenant table's policy reads `app.tenant_id`, which `withTenant` sets from a `memberships` row — so a tenant-scoped read of `invitations` returns zero rows on the one path that has to work. Two ways out, and the obvious one is wrong:
+
+- An **un-scoped connection**, like `@catalogorosso/db/auth`. Rejected: it puts a second table outside RLS to solve a problem inside it, and the connection then exists for anything else to reach. The value of one audited escape hatch is that there is one.
+- A **third scope**, `withInvitation()`, which sets a GUC holding the token's *hash*; the policy on `invitations` admits a row matching it beside the usual tenant branch. The tenant GUC is then set **from the matched row**, in the same transaction — so the membership write is scoped by a value Postgres produced rather than one the request supplied. The P0-48 invariant holds on a path with no membership to read it from.
+
+Why a token is safe here where a tenant id would not be: P0-48 is about *identifiers*. Naming a tenant asserts something the caller has no standing to assert; holding 256 bits from a CSPRNG **is** the authorization, the way a session cookie is. Recorded as **ADR 0019**, including the alternative worth revisiting (scoping by the accepting user's address, which would also make a pending-invitations view natural and which widens the read from one row to every invitation ever sent to that person).
+
+**Six further departures, each because building it made the reason concrete:**
+
+- **Acceptance is bound to the invited address**, not merely to the token. Links get forwarded, quoted in tickets, and left in mailboxes that change hands; without this, whoever opens the mail joins the winery. The price is real — an invitee who signed up under a different address needs a fresh invitation — and it is a support message rather than a security incident.
+- **The token is stored hashed, with SHA-256 rather than argon2id.** A dump of `invitations` must not hand the reader membership of every tenant with an open invitation. The KDF choice differs from `widget_keys` deliberately: the input is 32 CSPRNG bytes, so there is no dictionary to attack and no weak input to stretch — stretching would only put a delay on the acceptance path.
+- **The acceptance body is `.strict()`**, so a `role` sent by the invitee is a 422 rather than a silently ignored field. Ignoring it would be safe and would also mean an attempt looks like success to the attacker and like nothing at all to the operator.
+- **Every unusable token answers 404 alike** — unknown, expired, revoked, already redeemed, addressed to somebody else. Distinguishing them makes the endpoint an oracle for which invitations exist, and none of the distinctions helps a legitimate caller, who needs a new link either way.
+- **Re-inviting is a no-op enforced by a partial unique index** on open rows, not by a read-then-write. The caller learns nothing was created and therefore sends no second email; mailing again on every click would make an invite button a way to send somebody repeated messages through our sending domain (P0-64).
+- **The members port is optional on `createApp` where `auth` is required**, and the asymmetry is the argument: an absent `auth` would serve the dashboard *unauthenticated* — silent and permissive — while an absent members port refuses every call with a wiring error. Loud and total is allowed a default; quiet and open is not. Asserted directly.
+
+**One piece of infrastructure this forced, worth its own note.** `invitations` is the first table added *after* P0-37's RLS migration, and `rlsMigrationSql()` regenerated a single file that a test compared byte-for-byte against `0025_rls.sql`. Appending to that file would leave every database that already ran it without the new policy, while the file and the suite both claimed otherwise — a failure invisible until a cross-tenant read. So a policy now carries the migration it shipped in, the generator takes a tag, and the test iterates every file the list produces. `0025_rls.sql` is unchanged; its *down* file gained one comment line, bringing its header into line with the `-- Reverses <tag>.sql.` convention every other down file already used.
+
+**⚠ Not built, and deliberately: revoking an invitation and listing pending ones.** The column (`revoked_at`) and the index that makes a fresh invitation possible after a revocation both exist and are tested, so the storage is ready; there is no endpoint. It belongs with the members page (P0-57) rather than ahead of it, because an endpoint with no screen is a thing nobody uses and nobody notices breaking. Tracked as **E8**.
+
 ---
 
 ### P0-52 · Last-OWNER guard 🔒
@@ -5987,6 +6009,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Dependency build-script prompt | **closed** | Not a `pnpm add` artefact at all — a plain fresh `install` writes it, so CI regenerated it every run. Now *answered* (`allowBuilds: … false`), which drops `strictDepBuilds` and restores the install-time notification suppression had cost. See **E5**. |
 | Sending domain not authenticated | P0-64 open | SPF, DKIM and DMARC are operator work no test replaces. Until they exist the production path has never sent a message and account recovery does not work. See **E6**. |
 | Suppression list has no writer | P0-64b | The table and the send-path check shipped; the bounce webhook did not, because it needs a signed-webhook surface `apps/api` does not have yet. See **E7**. |
+| Invitations cannot be revoked | P0-51 open | The column and the index shipped and are tested; the endpoint did not, because it belongs with the members page rather than ahead of it. A mistaken invitation stays live for seven days. See **E8**. |
 
 ### ⚠ Open items from the P0-54 → P0-53 chain, in detail
 
@@ -6170,3 +6193,15 @@ Supply-chain protection is unchanged and now explicit rather than incidental: af
 The table, the read and the send-path check all exist; the webhook that records a bounce does not. So the list is empty and stays empty, which makes the suppression check a no-op in practice however well it is tested.
 
 This is deliberate — the inbound half needs a signed-webhook surface `apps/api` does not have, and P0-33's Stripe handler needs the same one — but the consequence should not be understated: **until P0-64b lands, a hard-bounced address is mailed again on the next send**, and repeated sends to dead addresses are the specific behaviour that moves a sending domain onto filter lists. It matters more once **E6** closes, not less: today nothing is being sent at all, so nothing is accumulating.
+
+**E8. An invitation can be created but not withdrawn.** ⛔ *(P0-51)*
+
+`invitations.revoked_at` exists, the partial unique index is written so that a fresh invitation succeeds once a row is revoked, and both are asserted against real Postgres. What does not exist is an endpoint that sets it, or one that lists what is pending.
+
+**What it costs while open.** An owner who invites the wrong address — a typo, or somebody who has since left — cannot take it back. The invitation stays live for its full seven days, and anyone who receives that mail can join the winery as whatever role it carries. The blast radius is bounded by the expiry and by the address binding (acceptance requires the session's address to match the invited one), which is why this is an open item rather than a blocker, but "wait a week" is not an answer to give a paying customer who has just realised what they typed.
+
+**Why it was left out rather than added.** It belongs with the members page (**P0-57**), not ahead of it. An endpoint with no screen is a thing nobody uses and nobody notices breaking, and the revocation UI and the pending-invitations list are the same screen — building the endpoints first means guessing at what that screen needs and being wrong about at least one of them.
+
+**What closes it.** Two routes behind `members:manage` — `GET .../members/invitations` and `DELETE .../members/invitations/:id` — plus the audit rows for both (P0-53), landing with or immediately after P0-57. The storage needs no further migration.
+
+**In the meantime**, a mistaken invitation is revoked with one `UPDATE` against the tenant's own rows. That is an operator action, so it belongs in a runbook rather than in a support reply.

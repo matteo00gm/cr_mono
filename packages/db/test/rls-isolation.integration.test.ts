@@ -46,6 +46,25 @@ interface SeedContext {
 const INSERTS: Record<string, (tenantId: string, ctx: SeedContext) => SQL> = {
   tenants: (tenantId) =>
     sql`insert into tenants (id, name, slug) values (${tenantId}::uuid, 'x', ${`iso-${tenantId}`})`,
+  /*
+   * P0-51, and the one seeder whose values must be *fresh on every call*.
+   *
+   * Every builder here is invoked twice with the same tenant id: once to seed
+   * A legitimately, and once — while scoped to B — as the write the policy has
+   * to reject. `invitations` carries two uniqueness constraints that a fixed
+   * value would trip on that second call: `token_hash` is unique across all
+   * tenants, because it is a credential rather than a per-tenant identifier,
+   * and there is one open invitation per address per tenant.
+   *
+   * A unique violation and a policy refusal are both errors, so the test would
+   * still fail-or-pass on *something* — and that is precisely the problem: it
+   * would be asserting the index, not the policy, and would keep passing if
+   * the policy were removed.
+   */
+  invitations: (tenantId, ctx) =>
+    sql`insert into invitations (tenant_id, email, role, token_hash, invited_by, expires_at)
+        values (${tenantId}::uuid, gen_random_uuid()::text || '@example.com', 'EDITOR',
+                gen_random_uuid()::text, ${ctx.userId}, now() + interval '7 days')`,
   memberships: (tenantId, ctx) =>
     sql`insert into memberships (tenant_id, user_id, role)
         values (${tenantId}::uuid, ${ctx.userId}, 'EDITOR')`,
