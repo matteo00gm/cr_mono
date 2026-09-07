@@ -127,6 +127,31 @@ const clientIp = (header: string | undefined): { ip?: string } => {
 };
 
 /**
+ * How many entries `x-forwarded-for` carried, for the request log (A2).
+ *
+ * **A count, deliberately, and not the address.** The address is PII and `ip`
+ * is not in the P0-56 allowlist — adding it there would open the name at every
+ * depth for every caller, which the invariant warns about by name. A small
+ * integer cannot carry a secret, and it answers the only operational question
+ * this header raises.
+ *
+ * That question is A2, and it is not hypothetical. `clientIp` above keeps a
+ * single well-formed entry and nothing else, because a list cannot be trusted
+ * without knowing which hop appended what. When it declines, the caller has no
+ * resolvable address — Better Auth's `getIPFromHeader` behaves the same way and
+ * returns null, which does not disable rate limiting but puts **every caller in
+ * one shared bucket per path**, so one attacker exhausting the sign-in limit
+ * locks out every user.
+ *
+ * A CloudFront Function overwrites the header at the edge (P0-17a) precisely so
+ * this is always 1. Logging it is what makes that claim measurable rather than
+ * reasoned, and what makes a regression in the distribution's configuration
+ * visible in the logs instead of only in an incident.
+ */
+const forwardedForEntries = (header: string | undefined): number =>
+  header === undefined ? 0 : header.split(',').length;
+
+/**
  * Present or absent, never `undefined` — `exactOptionalPropertyTypes` treats
  * "the key is there holding undefined" as a different thing from "no key", and
  * only the second is what an absent header means.
@@ -190,6 +215,12 @@ export const requestContext =
       log.info(
         {
           method: c.req.method,
+          /*
+           * Not the address — see `forwardedForEntries`. Anything but 1 means
+           * the origin cannot resolve a caller, which is a shared rate-limit
+           * bucket rather than no rate limiting (A2).
+           */
+          xffEntries: forwardedForEntries(c.req.header('x-forwarded-for')),
           /*
            * The route *template*, not the raw URL: `/v1/products/:id` groups,
            * where `/v1/products/9f2c…` makes every request its own unique
