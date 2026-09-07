@@ -6047,7 +6047,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Turbo remote cache not enabled | repository secrets | `TURBO_TOKEN` / `TURBO_TEAM` are referenced by the workflow but unset, so Turbo uses its local cache only. Harmless; wire it when CI wall-clock starts to matter. |
 | Coverage bars now measure real code | **closed (2026-09-01)** | No longer 100% of nothing: `packages/core` 22/22 statements and `packages/db` 33/33 across 3 files, both at 100% against their 90% bars. `apps/*`, `packages/security` and `packages/testing` are still stubs, so their bars stay unexercised until code lands. |
 | 🔒 Auth rate limiting is per-container | **before public sign-in** | Better Auth's default store is a module-level `Map`, so the real limit is N x the configured one and a container recycle resets it. Needs P2-01's Postgres-backed limiter. See **A1**. |
-| 🔒 CloudFront client-IP forwarding unconfirmed | **P0-17a, before launch** | A multi-entry `x-forwarded-for` resolves to null, which is not "no limit" but **one shared bucket per path** — one attacker locks out every user. See **A2**. |
+| 🔒 The Function URL bypasses the edge | **before untrusted traffic** | The CloudFront Function pins the client IP correctly — measured on `dev`, four probes, all `xffEntries=1`, including a forged three-entry header collapsing to one. But the Function URL is `authType: NONE` with `Principal: "*"`, so a direct call skips the function entirely and the origin believes any `X-Forwarded-For` sent. The S3 origin carries an OAC; the API origin carries none. See **A2**. |
 | `NODE_ENV=production` asserted in CI | **closed** | A grep in `ci.yml`, matching the NAT and `app_rw` assertions. Verified to fire when the line is removed. See **A3**. |
 | Password reset sends no email | **closed (2026-09-06)** | The placeholder is replaced by the P0-64 seam, wired at the composition root. Non-production stages render the whole message to the log, so the reset link is recoverable locally for the first time. Still resolves rather than throwing on a suppressed address, which is what keeps the two responses identical. See **A4**, **E9**. |
 | Reserved concurrency unset | **P1-48, before traffic** | §5.1 says 40, P1-48 says 10; P1-48 is right. Unbounded is worse than either. Interacts with **A1**. See **B1**. |
@@ -6083,15 +6083,30 @@ What closes it: back the limiter with the P0-34 `rate_limit_buckets` table throu
 
 When: **before any public sign-in endpoint is reachable.** Until then the control is that nothing is deployed.
 
-**A2. The client IP is pinned at the edge; unverified until a deploy.** 🔒 *(partly closed)*
+**A2. The client IP is pinned at the edge — and the edge can be walked around.** 🔒 *(measured 2026-09-07)*
 
-Better Auth reads `x-forwarded-for` and its `getIPFromHeader` returns **null** on more than one entry. A null IP does not disable limiting — it puts every caller in **one shared bucket per path**, so one attacker exhausting the sign-in limit locks out every user. CloudFront *appends* the viewer address to any client-supplied `X-Forwarded-For`, so a caller sending their own header produced exactly that.
+**The mechanism works, and that is now measured rather than reasoned.** Four probes against the deployed `dev` stage, read back from CloudWatch as `xffEntries` on the request line:
 
-**P0-17a closes the mechanism.** A CloudFront Function on every API behaviour overwrites the header with `event.viewer.ip`, which CloudFront sets and a request cannot influence. Overwriting rather than configuring a trusted-proxy list makes the value unforgeable and leaves no proxy ranges to keep current.
+| Probe | `xffEntries` |
+|---|---|
+| Through CloudFront, forging `X-Forwarded-For: 1.2.3.4` | **1** |
+| Through CloudFront, no header at all | **1** |
+| Through CloudFront, forging three entries | **1** |
+| **Direct to the Function URL, forging one entry** | **1** |
 
-**What remains is verification, and it needs a deploy.** Nothing here has run against real CloudFront. The acceptance test is a request through the distribution carrying `X-Forwarded-For: 1.2.3.4`, asserting the limiter still buckets per caller rather than globally — and that the origin sees a single-entry header holding the true viewer address. Until then this is reasoned, not measured.
+The first three close the original question. The CloudFront Function overwrites the header with `event.viewer.ip`, a forged value of any length collapses to the true viewer address, and — the specific worry that motivated the measurement — **CloudFront does not append its own entry after a viewer-request function runs**. Had it done so every request would have arrived as two entries, `clientIp` would have declined every one of them, and the limiter would have bucketed every caller together while the configuration looked correct.
 
-The other half, `NODE_ENV=production`, is closed and asserted in CI — see **A3**.
+**The fourth probe is the finding.** The Lambda Function URL is `authType: NONE` with `Principal: "*"`, so it is reachable by anyone who has it, and a request that reaches it never passes the CloudFront Function. The origin then believes whatever `X-Forwarded-For` the caller sent. That does not weaken the edge control — it walks around it.
+
+What it costs: per-caller rate limiting becomes per-*claimed*-caller, so an attacker rotating the header gets unlimited sign-in attempts (and **A1** already multiplies each configured limit by the container count). `audit_log.ip` records an attacker-chosen value, which is worse than recording none because it is a record people will believe. Anything ever placed at the edge — a WAF, an origin allowlist, request-size limits — is bypassable the same way.
+
+**The asymmetry is the tell.** The S3 origin already carries an Origin Access Control, so the dashboard bucket cannot be read except through CloudFront. The API origin is a `customOriginConfig` with no `originAccessControlId` at all. One origin is locked to the distribution and the other is open, in the same file.
+
+**What closes it.** `url: { authorization: 'iam' }` on the function, an `aws:cloudfront:OriginAccessControl` with `originAccessControlOriginType: 'lambda'` and `signingBehavior: 'always'`, and that OAC attached to the API origin — the same shape the S3 origin already uses. CloudFront then signs each origin request with SigV4 and a direct call returns 403.
+
+**When: before the API takes untrusted traffic.** It is not urgent while nothing is deployed but the `dev` Function URL is live and public right now, and the URL is discoverable — it is in CloudFront's origin configuration, in this file, and in any error a client sees.
+
+**A note on how this was found**, because the near-miss matters more than the result. The first attempt looked for the client IP on the request log line, did not find it, and almost reported the edge broken. The IP was never on that line — it is captured into the request context for `audit()`. The instrument was wrong, not the system. `xffEntries` exists because of that: a count, not the address, since `ip` is deliberately not on the P0-56 allowlist. Nothing here would have been visible without deploying, and none of it was visible from the configuration, which reads correctly.
 
 **A3. `NODE_ENV=production` is asserted in CI.** ✅ **closed**
 
