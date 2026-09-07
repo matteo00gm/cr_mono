@@ -17,6 +17,20 @@
               "description": "Identify the dashboard surface",
               "content": {
                 "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "surface": {
+                        "type": "string",
+                        "const": "dashboard"
+                      }
+                    },
+                    "required": [
+                      "surface"
+                    ],
+                    "additionalProperties": false
+                  },
                   "example": {
                     "surface": "dashboard"
                   }
@@ -65,6 +79,27 @@
               "description": "The resolved tenant and role for this request",
               "content": {
                 "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "tenantId": {
+                        "type": "string"
+                      },
+                      "role": {
+                        "type": "string",
+                        "enum": [
+                          "OWNER",
+                          "EDITOR"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "tenantId",
+                      "role"
+                    ],
+                    "additionalProperties": false
+                  },
                   "example": {
                     "tenantId": "9f2c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a",
                     "role": "EDITOR"
@@ -113,6 +148,43 @@
               "description": "The caller and the wineries they belong to",
               "content": {
                 "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "userId": {
+                        "type": "string"
+                      },
+                      "memberships": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "tenantId": {
+                              "type": "string"
+                            },
+                            "role": {
+                              "type": "string",
+                              "enum": [
+                                "OWNER",
+                                "EDITOR"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "tenantId",
+                            "role"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "userId",
+                      "memberships"
+                    ],
+                    "additionalProperties": false
+                  },
                   "example": {
                     "userId": "user_matteo",
                     "memberships": [

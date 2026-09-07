@@ -142,6 +142,36 @@ export default tseslint.config(
         },
         {
           /*
+           * Raw `fetch` to our own API, outside the client (P0-63).
+           *
+           * Not about ergonomics. `docs/api/consumers.md` is derived from the
+           * calls themselves, so it is complete only while every call goes
+           * through `@catalogorosso/api-client` naming its endpoint as a
+           * literal. One raw `fetch('/v1/…')` makes that map a subset, and
+           * nothing says which subset — worse than not having it, because it
+           * is still trusted.
+           *
+           * Matched on the *argument*: a call to a seller's site or to Bedrock
+           * is fine and common. What is forbidden is reaching our own API
+           * around the one place that records that it happened.
+           *
+           * The backslashes are doubled because this is a JS string — `"\/"`
+           * collapses to `/`, and the selector would carry `//v1//`, a regex
+           * matching nothing and a rule silently never firing.
+           */
+          selector: "CallExpression[callee.name='fetch'] > Literal[value=/\\/v1\\//]",
+          message:
+            'Use @catalogorosso/api-client instead of calling our own API directly (P0-63). ' +
+            'The consumer map is derived from client calls, and a raw fetch makes it ' +
+            'silently incomplete.',
+        },
+        {
+          selector:
+            "CallExpression[callee.name='fetch'] > TemplateLiteral > TemplateElement[value.raw=/\\/v1\\//]",
+          message: 'Use @catalogorosso/api-client instead of calling our own API directly (P0-63).',
+        },
+        {
+          /*
            * `c.req.valid('json').tenantId`, `c.req.query().tenantId`,
            * `(await c.req.json()).tenantId`, and `body.tenantId`.
            *
@@ -175,6 +205,56 @@ export default tseslint.config(
   {
     files: ['apps/api/src/middleware/tenant.ts'],
     rules: { 'no-restricted-syntax': 'off' },
+  },
+
+  /*
+   * The same `fetch` prohibition for the packages and apps that carry no tenant
+   * rule of their own.
+   *
+   * Separate because ESLint flat config *replaces* a rule when a later object
+   * configures it again rather than merging — so `apps/api` must carry both
+   * sets in one array (above), and everything else carries only this one.
+   * Getting that wrong silently disabled P0-48's IDOR rule, and its self-test
+   * is what caught it.
+   */
+  {
+    files: ['apps/**/*.{ts,tsx}', 'packages/**/*.{ts,tsx}'],
+    ignores: ['apps/api/**', 'packages/api-client/**', '**/test/**'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          /*
+           * Raw `fetch` to our own API, outside the client (P0-63).
+           *
+           * Not about ergonomics. `docs/api/consumers.md` is derived from the
+           * calls themselves, so it is complete only while every call goes
+           * through `@catalogorosso/api-client` naming its endpoint as a
+           * literal. One raw `fetch('/v1/…')` makes that map a subset, and
+           * nothing says which subset — worse than not having it, because it
+           * is still trusted.
+           *
+           * Matched on the *argument*: a call to a seller's site or to Bedrock
+           * is fine and common. What is forbidden is reaching our own API
+           * around the one place that records that it happened.
+           *
+           * The backslashes are doubled because this is a JS string — `"\/"`
+           * collapses to `/`, and the selector would carry `//v1//`, a regex
+           * matching nothing and a rule silently never firing.
+           */
+          selector: "CallExpression[callee.name='fetch'] > Literal[value=/\\/v1\\//]",
+          message:
+            'Use @catalogorosso/api-client instead of calling our own API directly (P0-63). ' +
+            'The consumer map is derived from client calls, and a raw fetch makes it ' +
+            'silently incomplete.',
+        },
+        {
+          selector:
+            "CallExpression[callee.name='fetch'] > TemplateLiteral > TemplateElement[value.raw=/\\/v1\\//]",
+          message: 'Use @catalogorosso/api-client instead of calling our own API directly (P0-63).',
+        },
+      ],
+    },
   },
 
   // Widget-specific: ban innerHTML and dangerouslySetInnerHTML

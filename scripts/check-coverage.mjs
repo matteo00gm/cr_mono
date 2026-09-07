@@ -31,6 +31,10 @@ const THRESHOLDS = {
   'packages/core': { lines: 90, branches: 90 },
   'packages/db': { lines: 90, branches: 90 },
   'apps/api': { lines: 85, branches: 85 },
+
+  // Small, entirely testable, and on the path of every request either consumer
+  // makes — so it carries a package bar rather than an app one.
+  'packages/api-client': { lines: 90, branches: 90 },
   'apps/widget': { lines: 85, branches: 85 },
 
   // Not specified in §6.2 — chosen here, and open to revision.
