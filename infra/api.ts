@@ -86,6 +86,31 @@ export const api = new sst.aws.Function('Api', {
   memory: '512 MB',
 
   /**
+   * Reserved concurrency, capped at 10 (P1-48, closing B1).
+   *
+   * **The plan contradicts itself and P1-48 is the half that is right.** §5.1
+   * says 40; each concurrent Lambda holds a Postgres connection, and forty
+   * against a `t4g.micro` exhausts `max_connections` before the function is
+   * anywhere near its own limit — so the database falls over first and the
+   * symptom looks like an application fault.
+   *
+   * Unset was never a third option, only an unnoticed one: an unbounded
+   * function against that instance is worse than either figure, and it was safe
+   * until now purely because nothing was deployed.
+   *
+   * **It interacts with A1 and the two must move together.** Better Auth's
+   * limits are per container, so raising this multiplies every configured
+   * limit by the number of warm containers. That is now backed by
+   * `rate_limit_buckets` through the P2-01 limiter, which makes the counters
+   * shared — but the coupling remains the reason to revisit both at once rather
+   * than either alone.
+   *
+   * Reserved rather than provisioned: reserved caps and costs nothing,
+   * provisioned pre-warms and bills continuously.
+   */
+  concurrency: { reserved: 10 },
+
+  /**
    * BUFFERED, stated rather than inherited.
    *
    * `streaming: false` resolves to `invokeMode: "BUFFERED"` (function.ts:2744).

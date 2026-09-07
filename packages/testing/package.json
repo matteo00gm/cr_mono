@@ -11,7 +11,8 @@
     "@catalogorosso/db": "workspace:*",
     "@testcontainers/postgresql": "^12.1.0",
     "drizzle-orm": "^0.45.2",
-    "postgres": "^3.4.9"
+    "postgres": "^3.4.9",
+    "vitest": "^4.1.11"
   },
   "devDependencies": {
     "@types/node": "^26.4.0"

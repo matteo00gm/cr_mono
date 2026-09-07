@@ -39,6 +39,7 @@ interface ConfiguredAuth {
       window?: number;
       max?: number;
       customRules?: Record<string, { window: number; max: number }>;
+      customStorage?: { consume: (key: string, rule: unknown) => Promise<unknown> };
     };
   };
 }
@@ -218,5 +219,65 @@ describe('createAuth', () => {
      * `sendResetPassword` no call site can see.
      */
     expect(createAuth(options)).not.toBe(createAuth(options));
+  });
+});
+
+describe('rate limit storage (A1)', () => {
+  it('is absent by default, which is the per-container behaviour A1 describes', () => {
+    /*
+     * Better Auth then uses its own module-level `Map`. In Lambda that is per
+     * container: N warm containers give an attacker N times each configured
+     * limit, and a recycle resets the counter to zero. Correct for a local run
+     * and the suite; never for a deployment, which is why the composition root
+     * refuses to start without one.
+     */
+    expect(configure().options.rateLimit?.customStorage).toBeUndefined();
+  });
+
+  it('reaches Better Auth when supplied', () => {
+    const storage = { consume: () => Promise.resolve({ allowed: true, retryAfter: null }) };
+
+    /*
+     * **This assertion exists because of a hazard in the library's types.** The
+     * options accept unknown keys at the `rateLimit` level, so a misspelled
+     * `customStorage` typechecks cleanly and falls back to the in-memory store
+     * — reintroducing A1 with nothing failing and nothing visible in a diff.
+     * Reading the option back off a real instance is what catches that.
+     */
+    expect(configure({ rateLimitStorage: storage }).options.rateLimit?.customStorage).toBe(storage);
+  });
+
+  it('is what a real Better Auth instance consults, not just an option it carries', async () => {
+    const calls: { key: string; rule: unknown }[] = [];
+    const auth = createAuth({
+      ...options,
+      rateLimitStorage: {
+        consume: (key, rule) => {
+          calls.push({ key, rule });
+          return Promise.resolve({ allowed: false, retryAfter: 42 });
+        },
+      },
+    });
+
+    /*
+     * A real request through the real handler. Asserting the option is set
+     * proves the wiring; asserting the storage is *called* proves Better Auth
+     * resolved it — and those are different claims, because `getRateLimitStorage`
+     * only consults `customStorage` when rate limiting is enabled and the path
+     * matched a rule.
+     */
+    const response = await auth.handler(
+      new Request('https://dashboard.example.test/v1/dashboard/auth/sign-in/email', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': '203.0.113.7' },
+        body: JSON.stringify({ email: 'a@b.example', password: 'whatever' }),
+      }),
+    );
+
+    expect(calls.length).toBeGreaterThan(0);
+
+    // 429, because the storage refused. Anything else means the limiter was
+    // consulted and then ignored, which is worse than not consulting it.
+    expect(response.status).toBe(429);
   });
 });

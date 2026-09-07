@@ -123,6 +123,12 @@ export default {
         pathNot:
           '^packages/db/src/(client|with-tenant|with-user|with-invitation|deploy|auth-db|memberships|members-write|audit|users|invitations)[.]ts$' +
           '|^packages/db/src/email-suppressions[.]ts$' +
+          // src/rate-limit.ts is exempt from P2-02 on the same terms: it writes a
+          // statement and takes the connection from its caller. Its table has no
+          // tenant_id by design (P0-34) — the tenant is inside the bucket key,
+          // because the limiter also counts callers who belong to no tenant — so
+          // there is no scoped read for a missing context to narrow.
+          '|^packages/db/src/rate-limit[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
           '|^packages/core/src/auth[.]ts$' +

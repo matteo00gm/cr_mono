@@ -1,4 +1,5 @@
 import {
+  betterAuthRateLimitStorage,
   chooseTransport,
   createAuth,
   createSendEmail,
@@ -8,6 +9,7 @@ import {
   type ResetPasswordEmail,
   type SuppressionCheck,
 } from '@catalogorosso/core';
+import type { RateLimiter } from '@catalogorosso/security';
 import { isSuppressed, readMembershipsForUser, withUser } from '@catalogorosso/db';
 
 import { createMembersPort, type MembersPort } from './members.js';
@@ -87,6 +89,19 @@ export interface RuntimeConfig {
    * does, because it is the only place that knows whether this is a deployment.
    */
   readonly originSecret?: string | undefined;
+  /**
+   * Where auth rate-limit counters live (A1).
+   *
+   * Absent means Better Auth's own in-memory store, which in Lambda counts
+   * **per container**: N warm containers give an attacker N times each
+   * configured limit, and a recycle resets the counter to zero. Correct for a
+   * local run and the suite; never for a deployment, which `index.ts` enforces.
+   *
+   * A port rather than a construction here, for the reason every port in this
+   * file exists: the default opens a database transaction, so a test asserting
+   * the wiring would otherwise need a container to check a string.
+   */
+  readonly rateLimiter?: RateLimiter | undefined;
 }
 
 export interface Dependencies {
@@ -170,6 +185,16 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
     auth: createAuth({
       secret: config.authSecret,
       baseUrl: config.authBaseUrl,
+
+      /*
+       * Present only when a limiter was supplied. Passing `undefined` is
+       * equivalent to omitting it, but writing it conditionally keeps the
+       * intent visible: without one this is deliberately the library's
+       * per-container default, and that is `index.ts`'s decision to allow.
+       */
+      ...(config.rateLimiter === undefined
+        ? {}
+        : { rateLimitStorage: betterAuthRateLimitStorage(config.rateLimiter) }),
 
       /*
        * The *mounted* path, not `/auth`. Better Auth is handed the raw

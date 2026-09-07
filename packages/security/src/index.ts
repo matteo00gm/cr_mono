@@ -7,3 +7,4 @@
  */
 export * from './capabilities.js';
 export * from './redact.js';
+export * from './rate-limit/index.js';

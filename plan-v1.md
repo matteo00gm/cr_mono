@@ -6065,11 +6065,11 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |
 | Turbo remote cache not enabled | repository secrets | `TURBO_TOKEN` / `TURBO_TEAM` are referenced by the workflow but unset, so Turbo uses its local cache only. Harmless; wire it when CI wall-clock starts to matter. |
 | Coverage bars now measure real code | **closed (2026-09-01)** | No longer 100% of nothing: `packages/core` 22/22 statements and `packages/db` 33/33 across 3 files, both at 100% against their 90% bars. `apps/*`, `packages/security` and `packages/testing` are still stubs, so their bars stay unexercised until code lands. |
-| 🔒 Auth rate limiting is per-container | **before public sign-in** | Better Auth's default store is a module-level `Map`, so the real limit is N x the configured one and a container recycle resets it. Needs P2-01's Postgres-backed limiter. See **A1**. |
+| Auth rate limiting is Postgres-backed | **closed (2026-09-07)** | Wired as Better Auth's `customStorage` over `rate_limit_buckets`, pulling P2-01/02/03 forward. Asserted by driving a real instance to a 429, because the library's options accept unknown keys and a typo would fall back to the per-container store silently. See **A1**. |
 | The Function URL no longer bypasses the edge | **closed, measured (2026-09-07)** | CloudFront attaches a generated `x-origin-secret` at the origin-request stage; the API refuses anything without it with 404. OAC was tried first and reverted — it locks GET and breaks every POST, because CloudFront does not sign request bodies for Lambda origins. Both directions verified live. See **A2**. |
 | `NODE_ENV=production` asserted in CI | **closed** | A grep in `ci.yml`, matching the NAT and `app_rw` assertions. Verified to fire when the line is removed. See **A3**. |
 | Password reset sends no email | **closed (2026-09-06)** | The placeholder is replaced by the P0-64 seam, wired at the composition root. Non-production stages render the whole message to the log, so the reset link is recoverable locally for the first time. Still resolves rather than throwing on a suppressed address, which is what keeps the two responses identical. See **A4**, **E9**. |
-| Reserved concurrency unset | **P1-48, before traffic** | §5.1 says 40, P1-48 says 10; P1-48 is right. Unbounded is worse than either. Interacts with **A1**. See **B1**. |
+| Reserved concurrency capped at 10 | **closed (2026-09-07)** | P1-48's figure, not §5.1's 40: each concurrent Lambda holds a Postgres connection and forty exhausts `max_connections` on a `t4g.micro`. Guarded in CI. See **B1**. |
 | `AUTH_SECRET` rotation has no runbook | before launch | Rotating signs every seller out and voids outstanding reset links. Needs an ADR in the P0-59 set, not code. See **B2**. |
 | No expiry sweep for sessions or verifications | P1 | Both columns are indexed and nothing scans them. Storage hygiene, not security — expiry is enforced on read. See **C3**. |
 | Renovate security rule covers `packages/core` | **closed** | `matchFileNames` now lists `packages/core/**` beside `packages/security/**`, so `better-auth` updates arrive labelled `security-critical` for a human. See **D7**. |
@@ -6093,16 +6093,26 @@ Nothing here is a bug in code that shipped — everything below is either a deli
 
 #### A. Must close before the API takes untrusted traffic
 
-**A1. Auth rate limiting is per-container, so the real limit is N times the configured one.** 🔒
+**A1. Auth rate limiting is backed by Postgres, so the counters survive a container.** ✅ **closed (2026-09-07)**
 
-Better Auth's default limiter stores counters in a module-level `Map` (`api/rate-limiter/index.mjs`), which in Lambda means **per container**. Two consequences, and the second is worse than the first:
+Better Auth's default store is a module-level `Map`, which in Lambda means *per container*: N warm containers gave an attacker N times each configured limit, and a container recycle reset the counter to zero. A limit that resets when an attacker waits is not a limit.
 
-- At reserved concurrency 10 (P1-48), ten warm containers give an attacker up to ten times each configured limit — so `/sign-in/email` at 10/minute is really up to 100/minute.
-- **A container recycle resets the counter to zero.** An attacker who can provoke scaling, or who simply waits, gets a clean slate. Lockouts and backoff therefore cannot be reasoned about at all.
+It is now backed by the P0-34 `rate_limit_buckets` table through P2-01's interface, wired in as `rateLimit.customStorage`. That pulls **P2-01, P2-02 and P2-03 forward** from P2, which is the right order: they existed as a plan for a control that was already deployed and already wrong.
 
-What closes it: back the limiter with the P0-34 `rate_limit_buckets` table through **P2-01**'s `RateLimiter`, wired in as Better Auth's `rateLimit.customStorage`. P2-01 already plans the token bucket and the concurrency suite; this is the adapter plus the wiring.
+**Where the pieces live, and one deviation.** The interface is in `packages/security` beside the capability table. The Postgres implementation is in `packages/db`, **not** in `packages/security/src/rate-limit/postgres.ts` where P2-02's Files line puts it — statements live where queries belong so no domain module imports a driver (P0-09), exactly as the audit insert and the membership read do. The conformance suite is in `packages/testing`, because it is the only package that can see both implementations.
 
-When: **before any public sign-in endpoint is reachable.** Until then the control is that nothing is deployed.
+**Four things the implementation gets right on purpose.**
+
+- **One `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`**, never a read then a write. A SELECT followed by an UPDATE lets every concurrent caller read the same count before any of them writes — fifty callers then pass a limit of ten. The integration suite asserts exactly that: fifty parallel checks, ten allowed.
+- **The window is computed in SQL from `now()`**, never passed from the application. Lambda containers do not share a clock, and a boundary computed per container puts concurrent requests in different windows, each with a full allowance.
+- **All-or-nothing across dimensions, by transaction rollback.** `BucketsExceeded` unwinds every increment the call made, so a caller already blocked on one dimension costs the others nothing. Without it, an attacker held off by their IP limit could still drain the tenant's budget with every rejected request, for free.
+- **A real fault is not an allowance.** Only `BucketsExceeded` becomes a decision; a database that is down propagates. A limiter that fails open under load disappears exactly when it is needed.
+
+**A hazard found in the library's types, and the test it forced.** `betterAuth`'s options **accept unknown keys** at the `rateLimit` level — `customStorageTypo` typechecks cleanly and silently falls back to the in-memory store. That is A1 reintroduced with nothing failing and nothing visible in a diff. So the suite drives a *real* Better Auth instance through a real sign-in request and asserts the storage was consulted and the response was 429. Verified by planting the typo and watching both assertions fail.
+
+**Absent is permissive, so the composition root refuses it.** A local run and the suite are allowed the in-memory behaviour — they have no database and the semantics are correct for them. A deployed stage is not: `index.ts` builds the Postgres limiter whenever `SST_STAGE` is set, on the same reasoning as the origin secret. `customStorage` is also **not in better-auth 1.7.2's exported types**, verified by searching every `.d.mts` in the package, so `RateLimitStorage` is restated in `packages/core` as the one name to update when the library changes.
+
+**⚠ What is still per-container.** Only the *auth* surface is wired. The widget's own limits (P2-04 onward) are not built yet, and `pruneClosedWindows` exists but nothing schedules it — P2-14's sweep. Neither is a regression: both are absent rather than wrong, and the table has no other reaper, so the prune wants scheduling before sustained traffic.
 
 **A2. The client IP is pinned at the edge, and the edge can no longer be walked around.** ✅ **closed, measured 2026-09-07**
 
@@ -6168,15 +6178,15 @@ Five things that were assertions until then: the composition root builds the rea
 
 #### B. Must close before real traffic, for reasons other than security
 
-**B1. Reserved concurrency is unset, and the plan contradicts itself about the value.**
+**B1. Reserved concurrency is capped at 10.** ✅ **closed (2026-09-07)**
 
-`infra/api.ts` sets no `concurrency`. §5.1 says 40; **P1-48** says cap at 10 while on `t4g.micro`. P1-48 is right — each concurrent Lambda holds a Postgres connection, and 40 against that instance class is a self-inflicted connection exhaustion that looks like an outage rather than a limit.
+The plan contradicted itself — §5.1 said 40, P1-48 said 10 — and P1-48 is the half that is right: each concurrent Lambda holds a Postgres connection, and forty against a `t4g.micro` exhausts `max_connections` before the function is anywhere near its own limit, so the database falls over first and the symptom reads as an application fault.
 
-Leaving it unset is safe only because nothing is deployed. An unbounded function against a `t4g.micro` is worse than either figure.
+Unset was never a third option, only an unnoticed one. It was confirmed `null` on the deployed function, and safe purely because nothing was serving traffic.
 
-What closes it: **P1-48**, setting `concurrency: { reserved: 10 }`.
+**Reserved, not provisioned**: reserved caps and costs nothing, provisioned pre-warms and bills continuously.
 
-When: **before the function serves traffic.** Note this interacts with **A1**: raising concurrency multiplies the per-container rate limit, so the two should be revisited together.
+**It moved with A1, and the coupling is the reason.** Better Auth's limits were per container, so raising concurrency multiplied every configured limit by however many were warm. That is now backed by `rate_limit_buckets`, which makes the counters shared — but the two still want revisiting together, and `ci.yml` now asserts the cap for the same reason it asserts the origin guard: both are silent when wrong, because the API keeps working and only the limiter stops meaning what it says.
 
 **B2. Rotating `AUTH_SECRET` invalidates every session and every outstanding reset token, and there is no runbook.**
 

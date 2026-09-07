@@ -171,3 +171,21 @@ export {
  * those decisions belong.
  */
 export { readOpenInvitations, revokeInvitation, type PendingInvitation } from './invitations.js';
+
+/**
+ * The Postgres rate limiter (P2-02), which is what closes A1.
+ *
+ * Here rather than in `packages/security` where P2-02's Files line puts it, and
+ * the deviation follows this package's own rule: statements live where queries
+ * belong, so no domain module imports a driver (P0-09). The *interface* stays
+ * in `packages/security` beside the capability table, which is the security
+ * vocabulary the rest of the repository compiles against.
+ */
+export {
+  BucketsExceeded,
+  consumeBuckets,
+  createRateLimiter,
+  pruneClosedWindows,
+  type BucketCheck,
+  type BucketResult,
+} from './rate-limit.js';
