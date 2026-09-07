@@ -86,6 +86,19 @@ jobs:
       - name: Check AGENTS.md
         run: pnpm agents:check
 
+      # A template nobody fills is worse than no template: it manufactures the
+      # appearance of process (P0-61). This fails when `## Why` is empty or
+      # still holds the placeholder comment.
+      #
+      # Only on pull_request — a push to main has no PR body to read, and the
+      # step would either fail spuriously or have to be written to pass on
+      # nothing, which is the same as not running it.
+      - name: Check the PR explains why
+        if: github.event_name == 'pull_request'
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: node scripts/check-pr-why.mjs
+
       # Architectural boundaries (P0-09). Separate from lint because these are
       # graph properties across packages, which no per-file linter can see.
       - name: Check architectural boundaries
