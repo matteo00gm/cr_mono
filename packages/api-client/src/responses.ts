@@ -221,6 +221,24 @@ export const productCreatedResponse = productSchema;
 export const productUpdatedResponse = productSchema;
 
 /**
+ * One page of the catalogue (P1-06).
+ *
+ * **`nextCursor` rather than a page number or a total.** Keyset pagination has
+ * no page numbers to give, and that is the point: an `OFFSET` page two repeats
+ * a row when something was inserted while somebody was paging, which on an
+ * import screen is exactly when the data is changing. No total either — it
+ * would be a second scan of the whole catalogue on every page, for information
+ * the client does not need in order to decide whether to offer "next".
+ *
+ * The cursor is opaque on purpose. A client that parsed it would depend on the
+ * sort implementation, and adding a sort column would become a breaking change.
+ */
+export const productListResponse = z.object({
+  items: z.array(productSchema),
+  nextCursor: z.string().nullable(),
+});
+
+/**
  * The answer to a delete (P1-04).
  *
  * **It says what happened rather than returning 204**, and the wording is the
@@ -261,6 +279,7 @@ export const DASHBOARD_RESPONSES = {
   'POST /v1/dashboard/products': productCreatedResponse,
   'PATCH /v1/dashboard/products/:id': productUpdatedResponse,
   'DELETE /v1/dashboard/products/:id': productArchivedResponse,
+  'GET /v1/dashboard/products': productListResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

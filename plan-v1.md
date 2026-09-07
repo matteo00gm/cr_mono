@@ -3486,6 +3486,16 @@ It also delivers the contract testing promised in §6.1 as a side effect: a brea
 
 **Files.** same route file, tests. **~100 lines.**
 
+**As built — the reads got their own module, and the coverage test got the seeding it needs to mean anything.** `GET /v1/dashboard/products` behind `catalog:read`, in `packages/db/src/products-read.ts` rather than beside the write statements: search (P1-08) and filters (P1-09) compose into the same builder, and none of them touches the outbox pairing that dominates the write file.
+
+- **The cursor carries the sort value *and* the id, and the id is what makes it correct.** `created_at` is not unique — a bulk import writes hundreds of rows in the same millisecond — so a cursor holding only the timestamp either repeats rows or skips them at every page boundary. The integration test therefore seeds its rows **inside one transaction**, so they share a timestamp: that is the case the design exists for rather than an awkward edge, and a test that seeded them one at a time would pass against the broken implementation.
+- **The correctness argument for keyset comes before the performance one.** Offset degrades as a catalogue grows, but what bites first is that it is *wrong* when data changes between pages: a row inserted while somebody is paging shifts everything down, so page two repeats a row page one already showed. On an import screen that is exactly when the data is changing — and there is a test that inserts between pages and asserts no overlap.
+- **Sortable columns are an allowlist mapping names to column objects.** An unknown name has no column to reach, so injection is structurally impossible rather than filtered; the route *also* refuses one, because silently falling back to the default leaves a caller convinced they are sorting by something and surfaces much later as "the grid is in the wrong order".
+- **One row more than asked for decides `nextCursor`**, rather than a `count(*)`. A count is a second scan of the whole catalogue on every page for information the client does not need: it needs to know whether to offer "next", not how many pages exist. The off-by-one — a full page with nothing after it must not offer "next" — has its own test.
+- **A malformed cursor is ignored, not an error.** It arrives from an old bookmark or a truncated URL, and a 500 teaches a seller their catalogue is broken; returning the first page is what a bookmark that no longer means anything should do.
+- **Archived wines are hidden by default.** The row survives only so an order referring to it still makes sense (P1-04), which is not a reason to show it. `includeArchived=true` asks for them, ahead of P1-09 giving it a proper filter.
+- **Nothing in `listProducts` mentions a tenant**, and there is a test asserting one winery sees nothing of another. A `where tenant_id = …` added "for safety" would make that test pass while hiding a policy that had stopped working.
+
 ---
 
 ### P1-07 · Migration + search indexes

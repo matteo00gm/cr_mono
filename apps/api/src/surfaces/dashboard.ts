@@ -10,6 +10,7 @@ import {
   pendingInvitationsResponse,
   productArchivedResponse,
   productCreatedResponse,
+  productListResponse,
   productUpdatedResponse,
   roleChangeResponse,
   rosterResponse,
@@ -24,7 +25,7 @@ import {
   InvalidRequestError,
   NotFoundError,
 } from '@catalogorosso/core';
-import { productInsert, productUpdate } from '@catalogorosso/db';
+import { isSortField, MAX_LIMIT, productInsert, productUpdate } from '@catalogorosso/db';
 
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
@@ -114,6 +115,32 @@ const roleChangeBody = z.object({ role: z.enum(ROLES) }).strict();
  * looking like it worked.
  */
 const acceptBody = z.object({ token: z.string().min(16).max(256) }).strict();
+
+/**
+ * The catalogue list query (P1-06).
+ *
+ * **Every value is validated before it reaches a query builder**, and the sort
+ * field most of all: it is the one parameter that names a *column*, and the
+ * allowlist in `packages/db` is what stops a client-supplied string ever
+ * reaching the planner. Checking it here as well means an unknown field is a
+ * 422 naming the parameter rather than a silent fall back to the default —
+ * which would leave a caller convinced they were sorting by something.
+ *
+ * The limit is clamped rather than rejected. A caller asking for a thousand
+ * rows wants as many as they can have; refusing them is unhelpful where
+ * answering with a hundred is exactly right, and `nextCursor` tells them there
+ * is more.
+ */
+const listQuery = z.object({
+  limit: z.coerce.number().int().positive().max(MAX_LIMIT).optional(),
+  sort: z.string().refine(isSortField, 'not a sortable field').optional(),
+  direction: z.enum(['asc', 'desc']).optional(),
+  cursor: z.string().min(1).max(512).optional(),
+  includeArchived: z
+    .enum(['true', 'false'])
+    .transform((value) => value === 'true')
+    .optional(),
+});
 
 export const createDashboardApp = ({
   auth,
@@ -427,6 +454,44 @@ export const createDashboardApp = ({
       status: 'ARCHIVED' as const,
       noLongerRecommended: true as const,
       vectorsRemoved: result.vectorsRemoved,
+    });
+  });
+
+  /**
+   * One page of the catalogue.
+   *
+   * **Keyset pagination, and the reason is correctness before it is speed.**
+   * `OFFSET` degrades as a catalogue grows, but the failure that bites first is
+   * that it is *wrong* when the data changes between pages: a row inserted
+   * while somebody is paging shifts everything down by one, so page two repeats
+   * a row page one already showed. On an import screen that is precisely when
+   * the data is changing.
+   *
+   * Archived wines are hidden unless asked for. A seller who removed a wine
+   * should not have to look at it; the row survives only so an order referring
+   * to it still makes sense (P1-04), which is not a reason to show it.
+   */
+  app.get('/products', requireCapability('catalog:read'), async (c) => {
+    const parsed = listQuery.safeParse(c.req.query());
+
+    if (!parsed.success) {
+      /*
+       * Named rather than generic, because these are query parameters a person
+       * typed into a URL or a client built wrong — and "sort" is the one worth
+       * naming, since silently falling back to the default would leave a caller
+       * convinced they were sorting by something.
+       */
+      throw new InvalidRequestError(
+        'Check the query parameters: sort must be one of createdAt, updatedAt, name or ' +
+          `priceCents, direction asc or desc, and limit a whole number up to ${String(MAX_LIMIT)}.`,
+      );
+    }
+
+    const page = await products.list({ tenantId: c.get('tenantId'), ...parsed.data });
+
+    return c.json({
+      items: page.items.map(toProductResponse),
+      nextCursor: page.nextCursor,
     });
   });
 
@@ -763,6 +828,54 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         vectorsRemoved: 1,
       },
       response: productArchivedResponse,
+    },
+  ],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/products`),
+    {
+      access: requires('catalog:read'),
+      summary: 'One page of the catalogue',
+      description:
+        'Keyset pagination: pass the `nextCursor` from the previous page rather than an ' +
+        'offset. That is a correctness choice before a performance one — an offset page ' +
+        'two repeats a row when something was inserted while somebody was paging, which ' +
+        'on an import screen is exactly when the data is changing. The cursor is opaque ' +
+        'and must not be parsed; it encodes the sort position and is free to change. ' +
+        'Sortable fields are an allowlist, and an unknown one is refused rather than ' +
+        'quietly ignored. `limit` is clamped to 100. Archived wines are hidden unless ' +
+        '`includeArchived=true`.',
+      example: {
+        items: [
+          {
+            id: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+            sku: 'BAR-2019',
+            externalVariantId: '43215678901234',
+            name: 'Barolo Bussia',
+            producer: 'Poderi Colla',
+            vintage: 2019,
+            wineType: 'red',
+            grapeVarieties: ['Nebbiolo'],
+            region: 'Piemonte',
+            denomination: 'Barolo DOCG',
+            styleTags: ['strutturato'],
+            tastingNotes: 'Rosa appassita, catrame e ciliegia sotto spirito.',
+            foodPairings: ['brasato al Barolo'],
+            alcoholPct: '14.50',
+            priceCents: 4500,
+            currency: 'EUR',
+            stockStatus: 'IN_STOCK',
+            stockQty: 24,
+            productUrl: 'https://cantina.example/barolo-bussia',
+            imageUrl: 'https://cantina.example/img/barolo-bussia.jpg',
+            status: 'ACTIVE',
+            embeddingState: 'INDEXED',
+            createdAt: '2026-09-08T09:14:00.000Z',
+            updatedAt: '2026-09-08T09:14:00.000Z',
+          },
+        ],
+        nextCursor: 'MjAyNi0wOS0wOFQwOToxNDowMC4wMDBaADdjOWU2Njc5',
+      },
+      response: productListResponse,
     },
   ],
   [

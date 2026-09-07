@@ -793,6 +793,303 @@
         }
       },
       "/v1/dashboard/products": {
+        "get": {
+          "summary": "One page of the catalogue",
+          "description": "Keyset pagination: pass the `nextCursor` from the previous page rather than an offset. That is a correctness choice before a performance one — an offset page two repeats a row when something was inserted while somebody was paging, which on an import screen is exactly when the data is changing. The cursor is opaque and must not be parsed; it encodes the sort position and is free to change. Sortable fields are an allowlist, and an unknown one is refused rather than quietly ignored. `limit` is clamped to 100. Archived wines are hidden unless `includeArchived=true`.\n\nRequires the `catalog:read` capability.",
+          "operationId": "getV1DashboardProducts",
+          "x-required-capability": "catalog:read",
+          "responses": {
+            "200": {
+              "description": "One page of the catalogue",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "sku": {
+                              "type": "string"
+                            },
+                            "externalVariantId": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "producer": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "vintage": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "wineType": {
+                              "type": "string"
+                            },
+                            "grapeVarieties": {
+                              "anyOf": [
+                                {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "region": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "denomination": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "styleTags": {
+                              "anyOf": [
+                                {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "tastingNotes": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "foodPairings": {
+                              "anyOf": [
+                                {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "alcoholPct": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "priceCents": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "currency": {
+                              "type": "string"
+                            },
+                            "stockStatus": {
+                              "type": "string",
+                              "enum": [
+                                "IN_STOCK",
+                                "OUT_OF_STOCK",
+                                "PREORDER"
+                              ]
+                            },
+                            "stockQty": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "productUrl": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "imageUrl": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "ACTIVE",
+                                "ARCHIVED"
+                              ]
+                            },
+                            "embeddingState": {
+                              "type": "string",
+                              "enum": [
+                                "PENDING",
+                                "INDEXED",
+                                "FAILED",
+                                "STALE"
+                              ]
+                            },
+                            "createdAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                            },
+                            "updatedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "sku",
+                            "externalVariantId",
+                            "name",
+                            "producer",
+                            "vintage",
+                            "wineType",
+                            "grapeVarieties",
+                            "region",
+                            "denomination",
+                            "styleTags",
+                            "tastingNotes",
+                            "foodPairings",
+                            "alcoholPct",
+                            "priceCents",
+                            "currency",
+                            "stockStatus",
+                            "stockQty",
+                            "productUrl",
+                            "imageUrl",
+                            "status",
+                            "embeddingState",
+                            "createdAt",
+                            "updatedAt"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "nextCursor": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "items",
+                      "nextCursor"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "items": [
+                      {
+                        "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                        "sku": "BAR-2019",
+                        "externalVariantId": "43215678901234",
+                        "name": "Barolo Bussia",
+                        "producer": "Poderi Colla",
+                        "vintage": 2019,
+                        "wineType": "red",
+                        "grapeVarieties": [
+                          "Nebbiolo"
+                        ],
+                        "region": "Piemonte",
+                        "denomination": "Barolo DOCG",
+                        "styleTags": [
+                          "strutturato"
+                        ],
+                        "tastingNotes": "Rosa appassita, catrame e ciliegia sotto spirito.",
+                        "foodPairings": [
+                          "brasato al Barolo"
+                        ],
+                        "alcoholPct": "14.50",
+                        "priceCents": 4500,
+                        "currency": "EUR",
+                        "stockStatus": "IN_STOCK",
+                        "stockQty": 24,
+                        "productUrl": "https://cantina.example/barolo-bussia",
+                        "imageUrl": "https://cantina.example/img/barolo-bussia.jpg",
+                        "status": "ACTIVE",
+                        "embeddingState": "INDEXED",
+                        "createdAt": "2026-09-08T09:14:00.000Z",
+                        "updatedAt": "2026-09-08T09:14:00.000Z"
+                      }
+                    ],
+                    "nextCursor": "MjAyNi0wOS0wOFQwOToxNDowMC4wMDBaADdjOWU2Njc5"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "post": {
           "summary": "Add a wine to the catalogue",
           "description": "Creates a product and queues it for embedding in the same transaction, so a wine that exists is always a wine that will become findable — there is no state where one committed and the other did not. The tenant comes from a memberships row and never from the body, which the contract makes unrepresentable rather than merely discouraged. A SKU already used in this winery answers 409 and names it; the uniqueness is scoped to the winery the caller belongs to, so the answer discloses nothing about any other catalogue. The response is the row as stored, including the defaults the server filled in, so the client need not re-fetch to learn them.\n\nRequires the `catalog:write` capability.",

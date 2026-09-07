@@ -135,7 +135,7 @@ export default {
           // and under policy, so unlike the three above there is no second
           // argument to make — the caller is inside withTenant, which is the
           // ordinary case this rule exists to preserve.
-          '|^packages/db/src/products[.]ts$' +
+          '|^packages/db/src/products(-read)?[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
           '|^packages/core/src/auth[.]ts$' +

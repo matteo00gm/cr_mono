@@ -19,6 +19,7 @@ export const productsPort = (overrides: Partial<ProductsPort> = {}): ProductsPor
   create: () => Promise.reject(new Error('products.create is not stubbed in this test')),
   update: () => Promise.reject(new Error('products.update is not stubbed in this test')),
   archive: () => Promise.reject(new Error('products.archive is not stubbed in this test')),
+  list: () => Promise.reject(new Error('products.list is not stubbed in this test')),
   ...overrides,
 });
 

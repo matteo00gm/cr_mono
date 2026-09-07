@@ -212,3 +212,24 @@ export {
   type ProductUpdateOutcome,
   type ProductWriteOutcome,
 } from './products.js';
+
+/**
+ * Catalogue reads (P1-06).
+ *
+ * Keyset pagination rather than `OFFSET`, and the sortable columns are an
+ * allowlist mapping to column objects — so a client-supplied name has no column
+ * to reach rather than being interpolated into SQL. Search (P1-08) and filters
+ * (P1-09) compose into the same builder.
+ */
+export {
+  DEFAULT_LIMIT,
+  decodeCursor,
+  isSortField,
+  listProducts,
+  MAX_LIMIT,
+  SORTABLE,
+  type ListQuery,
+  type ProductPage,
+  type SortDirection,
+  type SortField,
+} from './products-read.js';
