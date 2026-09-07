@@ -50,6 +50,36 @@ const optionalEnvironment = (name: string): string | undefined => {
   return value === undefined || value === '' ? undefined : value;
 };
 
+/**
+ * The stage, needed before `buildDependencies` so the guard below can be
+ * conditional on being deployed at all.
+ */
+const stage = optionalEnvironment('SST_STAGE') ?? 'unknown';
+
+/**
+ * The origin secret, and the assertion that a deployment has one (A2).
+ *
+ * **Absent is permissive**, which is the one shape E9 established must never be
+ * a silent default: without it the API answers anyone who reaches the Function
+ * URL directly, skipping the CloudFront Function that pins the client IP. So a
+ * deployed stage refuses to start without it, and only a local run — where
+ * `SST_STAGE` is unset and there is no CloudFront in front — is allowed to go
+ * without.
+ *
+ * Failing to start is the right failure. The alternative is a container that
+ * comes up healthy and is quietly reachable around the edge, which is precisely
+ * the class of bug this whole item came from.
+ */
+const originSecret = optionalEnvironment('ORIGIN_SECRET');
+
+if (stage !== 'unknown' && originSecret === undefined) {
+  throw new Error(
+    'ORIGIN_SECRET is not set, but SST_STAGE is — so this is a deployment, and ' +
+      'without the secret the API answers requests that bypassed CloudFront and ' +
+      'forged their client IP (A2). infra/cdn.ts sets it on the API origin.',
+  );
+}
+
 const dependencies = buildDependencies({
   authSecret: requireEnvironment('AUTH_SECRET'),
   authBaseUrl: requireEnvironment('AUTH_BASE_URL'),
@@ -59,7 +89,8 @@ const dependencies = buildDependencies({
    * rather than sending it. The safe direction: a missing variable must never
    * be the reason a real customer receives a message from a staging run.
    */
-  stage: optionalEnvironment('SST_STAGE') ?? 'unknown',
+  stage,
+  ...(originSecret === undefined ? {} : { originSecret }),
 
   emailFrom: optionalEnvironment('EMAIL_FROM') ?? 'AI Sommelier <noreply@localhost>',
   resendApiKey: optionalEnvironment('RESEND_API_KEY'),

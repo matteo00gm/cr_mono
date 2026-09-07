@@ -10,6 +10,7 @@ import { assertEveryRouteDeclared } from './middleware/capability.js';
 import { errorHandler, normaliseThrown, notFoundHandler } from './middleware/error.js';
 import { DASHBOARD_PREFIX, WIDGET_PREFIX } from './routes.js';
 import { requestContext } from './middleware/logger.js';
+import { requireOriginSecret } from './middleware/origin-secret.js';
 import { createDashboardApp, DASHBOARD_ROUTE_ACCESS } from './surfaces/dashboard.js';
 import { createWidgetApp } from './surfaces/widget.js';
 
@@ -60,9 +61,25 @@ export interface AppOptions {
    * wiring error. See `src/members.ts`.
    */
   readonly members?: MembersPort | undefined;
+
+  /**
+   * The shared secret CloudFront attaches to origin requests (A2).
+   *
+   * Optional, and unlike `members` an absent value here is *permissive* — which
+   * is exactly the shape E9 warned about, so it is not left to a default. The
+   * composition root refuses to build a deployed stage without one; what this
+   * being optional buys is a suite that calls `app.request()` without
+   * manufacturing a header on every call, and a local run that works.
+   */
+  readonly originSecret?: string | undefined;
 }
 
-export const createApp = ({ auth, readMemberships, members }: AppOptions): Hono<AppEnv> => {
+export const createApp = ({
+  auth,
+  readMemberships,
+  members,
+  originSecret,
+}: AppOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
   /*
@@ -75,6 +92,18 @@ export const createApp = ({ auth, readMemberships, members }: AppOptions): Hono<
    * surface-specific, and every request on both surfaces needs it.
    */
   app.use('*', requestContext());
+
+  /*
+   * Second, immediately after the request context and before everything else
+   * (A2).
+   *
+   * Above the error handler on purpose: a request that did not come through
+   * CloudFront should be refused before any handler, any body parse, and any
+   * database connection — the point is that this host is not talking to it at
+   * all. It stays *below* `requestContext` so the refusal still carries a
+   * request id and appears in the logs, which is what makes probing visible.
+   */
+  if (originSecret !== undefined) app.use('*', requireOriginSecret(originSecret));
 
   /*
    * Immediately inside the request context, and before every route.

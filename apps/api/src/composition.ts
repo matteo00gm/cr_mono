@@ -79,10 +79,20 @@ export interface RuntimeConfig {
    * passes it.
    */
   readonly suppression?: ((userId: string) => SuppressionCheck) | undefined;
+  /**
+   * The shared secret CloudFront attaches to origin requests (A2).
+   *
+   * Absent is permitted only where there is no CloudFront in front — a local
+   * run, or the suite. `buildDependencies` does not police that; `index.ts`
+   * does, because it is the only place that knows whether this is a deployment.
+   */
+  readonly originSecret?: string | undefined;
 }
 
 export interface Dependencies {
   readonly auth: AuthPort;
+  /** Passed through to `createApp`; absent means the guard is not installed. */
+  readonly originSecret?: string | undefined;
   readonly readMemberships: MembershipReader;
   readonly members: MembersPort;
   /** Exposed so the wiring is assertable, not because anything else calls it. */
@@ -172,6 +182,8 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
     }),
 
     readMemberships: readMembershipsForUser,
+
+    ...(config.originSecret === undefined ? {} : { originSecret: config.originSecret }),
 
     /*
      * The invite path checks the suppression list inside the transaction it
