@@ -66,6 +66,16 @@ jobs:
       - name: Lint root-level configs and scripts
         run: pnpm lint:root
 
+      # ADR hygiene (P0-59). Three failures, none visible in any single file:
+      # a decision with no status or date, numbering that has drifted, and a
+      # supersession pointing at nothing. The last is the worst — it says the
+      # decision changed and then refuses to say how.
+      #
+      # The append-only rule itself is enforced by review and git history; this
+      # catches every consequence of breaking it.
+      - name: Check ADRs
+        run: pnpm adr:check
+
       # Architectural boundaries (P0-09). Separate from lint because these are
       # graph properties across packages, which no per-file linter can see.
       - name: Check architectural boundaries

@@ -1203,7 +1203,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P0-56 | 🔒 Log redaction serializer | **allowlist**, not denylist; test with secrets and PII fixtures | 55 |
 | P0-57 | `apps/dashboard`: Vite+Preact | routing, Better Auth client, layout shell | 42,45 |
 | P0-58 | SST: dashboard static deploy | S3 + CloudFront behaviour, cache invalidation | 17,57 |
-| P0-59 | ⛔ `docs/` scaffold + ADR system | template, index, ~15 ADRs seeded from Locked Decisions | 01 |
+| ✅ P0-59 | ⛔ `docs/` scaffold + ADR system | template, index, ~15 ADRs seeded from Locked Decisions | 01 |
 | P0-60 | ⛔ `AGENTS.md` + the invariants | root + per-package; the prohibitions a model cannot infer (§8.3) | 59 |
 | P0-61 | PR template + commitlint + rationale check | required `## Why`, conventional commits, generated CHANGELOG | 06 |
 | P0-62 | ⛔ OpenAPI generation + drift check | from route table + `drizzle-zod`; route missing description/capability/example fails CI | 42,54 |
@@ -3101,9 +3101,19 @@ Also move this plan into `docs/architecture/`, split by Part — a 4,000-line fi
 
 **The rule that makes them durable:** ADRs are **append-only**. A decision that changes gets a *new* ADR with `Supersedes: NNNN`, and the old one's status updated to point forward. Never edit the body of an accepted ADR — that erases the very history it exists to preserve.
 
+**Seventeen ADRs, not fifteen** *(count only).* The Locked Decisions table has twenty rows; three are pointers rather than decisions with rejected alternatives — *Testing* says "see Testing Strategy", and *Billing* and *Cart at launch* record a choice with no live alternative to reject. Writing those as ADRs would produce files whose Alternatives section says "none", which teaches the next author that the section is optional.
+
+**Supersession is checked in both directions** *(addition).* The row asks that every reference resolve to a real file. A reference that resolves and is not reciprocated is the worse failure: `0021` claims to supersede `0007` while `0007` still reads `Accepted`, so whichever the reader opened first looks current. The checker requires both halves.
+
+**The numbering gap check is not a style rule.** ADRs are append-only and numbered sequentially, so a gap means a decision was *deleted* — which is the one thing the system exists to prevent. It is reported as that rather than as a formatting complaint.
+
+**The checker asserts itself, in six directions** *(addition).* Same reasoning as P0-08's secret scanner and P0-48's lint rule: a structural check that silently stops matching is indistinguishable from a clean tree. Verified before merging that it passes on the real set and fires on each of a missing `Status`, a numbering gap, a duplicate number, a dangling supersession, and a missing section.
+
+**⚠ The plan split is deliberately not done here** *(deviation).* This row also asks that `plan-v1.md` be moved into `docs/architecture/` and split by Part. Deferred, for three reasons worth stating rather than leaving as an omission: it is a mechanical reorganisation of six thousand lines with no test to catch a mistake; every commit message, As-Built entry and open item in the repository refers to `plan-v1.md` by name, so the split invalidates a large number of live references at once; and it would conflict with every open PR, since each of them edits that file. It is orthogonal to the ADR system, which is the durable half of this row. Recorded as an open item so it is a scheduled decision rather than a forgotten one.
+
 **Tests.** A CI check that every ADR has the required front-matter fields, numbering has no gaps or duplicates, and every `Supersedes`/`Superseded by` reference resolves to a real file.
 
-**Files.** `docs/**`, `scripts/check-adrs.mjs`, CI step. **~200 lines, mostly prose.**
+**Files.** `docs/adr/**`, `docs/README.md`, `scripts/check-adrs.mjs`, CI step. **~200 lines, mostly prose.**
 
 ---
 
@@ -5902,6 +5912,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | `AUTH_SECRET` rotation has no runbook | before launch | Rotating signs every seller out and voids outstanding reset links. Needs an ADR in the P0-59 set, not code. See **B2**. |
 | No expiry sweep for sessions or verifications | P1 | Both columns are indexed and nothing scans them. Storage hygiene, not security — expiry is enforced on read. See **C3**. |
 | Renovate security rule covers `packages/core` | **closed** | `matchFileNames` now lists `packages/core/**` beside `packages/security/**`, so `better-auth` updates arrive labelled `security-critical` for a human. See **D7**. |
+| Plan not yet split into `docs/architecture/` | P0-59 deferred | The ADR half of P0-59 shipped; the split did not. Six thousand lines reorganised with no test, invalidating every `plan-v1.md` reference in commit messages, As-Built entries and open items, and conflicting with every open PR. Worth doing when the PR queue is empty — not as a rider on the ADR system. |
 | Dependency build-script prompt | **closed** | Not a `pnpm add` artefact at all — a plain fresh `install` writes it, so CI regenerated it every run. Now *answered* (`allowBuilds: … false`), which drops `strictDepBuilds` and restores the install-time notification suppression had cost. See **E5**. |
 
 ### ⚠ Open items from the P0-54 → P0-53 chain, in detail

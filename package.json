@@ -26,7 +26,8 @@
     "clean": "rimraf --glob coverage .turbo \"{apps,packages}/*/dist\" \"{apps,packages}/*/.turbo\" \"{apps,packages}/*/*.tsbuildinfo\"",
     "db:generate": "drizzle-kit generate",
     "prepare": "husky",
-    "db:seed": "node scripts/db-seed.mjs"
+    "db:seed": "node scripts/db-seed.mjs",
+    "adr:check": "node scripts/check-adrs.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [
