@@ -176,6 +176,26 @@ jobs:
           fi
           echo "NODE_ENV is pinned on the API function."
 
+      # Every environment variable the composition root reads must actually be
+      # injected. This guard exists because it was not: E9 shipped a wired
+      # composition root whose four email variables reached no Lambda, and
+      # nothing failed — the code degrades to the log transport, which is the
+      # safe direction and therefore silent. `typecheck:infra` is local-only
+      # (E3), so a grep is the guard available here.
+      - name: Assert the API function receives the email environment
+        run: |
+          missing=""
+          for key in SST_STAGE EMAIL_FROM RESEND_API_KEY EMAIL_ALLOWLIST; do
+            if ! grep -qE "^[[:space:]]*$key:" infra/api.ts; then
+              missing="$missing $key"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::infra/api.ts does not inject:$missing — apps/api/src/composition.ts reads them, and an absent value degrades silently to the log transport (P0-64, E9)"
+            exit 1
+          fi
+          echo "the API function receives the email environment."
+
       # The notification that a dependency wants to run code at install time.
       #
       # pnpm appends `<package>: set this to true or false` to

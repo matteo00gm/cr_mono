@@ -1,0 +1,76 @@
+/*
+ * Design tokens (P0-57).
+ *
+ * **The only thing shared between the dashboard and the widget.** Everything
+ * else about the two is deliberately separate — different bundles, different
+ * runtimes on the page, different security posture — but a seller's customers
+ * see the widget and the seller sees this console, and a palette that drifts
+ * between them makes the product look like two products.
+ *
+ * Custom properties rather than a build-time theme, because the widget renders
+ * inside a Shadow root on somebody else's page: a variable crosses that
+ * boundary when it is set on the host, and a compiled class name does not.
+ */
+:root {
+  /* Sangiovese, not "primary". A name that says what it is survives a redesign. */
+  --cr-wine: #7f1d1d;
+  --cr-wine-dark: #5f1414;
+  --cr-ink: #1a1a1a;
+  --cr-ink-soft: #666666;
+  --cr-paper: #fffdf9;
+  --cr-line: #e6e0d8;
+
+  --cr-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --cr-radius: 6px;
+  --cr-gap: 16px;
+}
+
+body {
+  margin: 0;
+  font-family: var(--cr-font);
+  color: var(--cr-ink);
+  background: var(--cr-paper);
+}
+
+.shell-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cr-gap);
+  padding: var(--cr-gap);
+  border-bottom: 1px solid var(--cr-line);
+}
+
+.shell-brand {
+  font-weight: 600;
+  color: var(--cr-wine);
+}
+
+.shell-nav {
+  display: flex;
+  gap: var(--cr-gap);
+  padding: var(--cr-gap);
+  border-bottom: 1px solid var(--cr-line);
+}
+
+.shell-nav a {
+  color: var(--cr-ink);
+  text-decoration: none;
+}
+
+.shell-nav a:hover,
+.shell-nav a:focus-visible {
+  color: var(--cr-wine-dark);
+  text-decoration: underline;
+}
+
+.shell-main {
+  padding: var(--cr-gap);
+}
+
+.shell-loading {
+  /* Occupies space without announcing anything. `aria-busy` on the element is
+     what a screen reader reads; a visible spinner would make a sub-100ms
+     session check feel like a wait. */
+  min-height: 2rem;
+}

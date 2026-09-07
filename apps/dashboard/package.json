@@ -3,8 +3,22 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "build": "tsc --build tsconfig.build.json",
+    "build": "vite build",
+    "dev": "vite",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."
-  }
+  },
+  "dependencies": {
+    "@catalogorosso/api-client": "workspace:*",
+    "@catalogorosso/security": "workspace:*",
+    "better-auth": "^1.7.2",
+    "preact": "^10.29.8",
+    "wouter-preact": "^3.10.0"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "@testing-library/preact": "^3.2.4",
+    "vite": "^8.2.2"
+  },
+  "type": "module"
 }

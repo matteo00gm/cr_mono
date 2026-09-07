@@ -40,6 +40,16 @@ export interface ResetPasswordEmail {
   /** The single-use reset link, already carrying the token. */
   readonly url: string;
   readonly token: string;
+  /**
+   * The account the reset is for.
+   *
+   * Carried through so the sender can obtain a *scoped* database connection
+   * without a tenant: `withUser` is the narrowest sanctioned context on a path
+   * that has no tenant by definition, and the suppression list has to be read
+   * before an account-recovery mail is sent. Without this the composition root
+   * would need an un-scoped connection to check one policy-free table (P0-64).
+   */
+  readonly userId: string;
 }
 
 export interface AuthOptions {
@@ -155,7 +165,7 @@ export const createAuth = (options: AuthOptions): AuthInstance =>
     emailAndPassword: {
       enabled: true,
       sendResetPassword: async ({ user, url, token }) => {
-        await options.sendResetPassword({ to: user.email, url, token });
+        await options.sendResetPassword({ to: user.email, url, token, userId: user.id });
       },
     },
 

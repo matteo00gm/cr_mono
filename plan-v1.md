@@ -3089,6 +3089,32 @@ Zero rows returned means refused. There is no path through this package that per
 
 **Files.** `apps/dashboard/*`. **~180 lines.** *(Scaffold-heavy but mostly boilerplate; splitting hurts reviewability more than it helps.)*
 
+**As built.** The scaffold is boilerplate as predicted; four things in it are not, and each was found by building rather than by reading the row.
+
+**The nav gate is UX, not security — and the module says so at the top.** The row's own note makes this point in one line; `src/nav.ts` opens with a paragraph, because this is the file a future reader is most likely to mistake for an authorization layer. Hiding *Fatturazione* from an `EDITOR` saves them a click that would be refused; it does not stop them reaching it, because a bundle shipped to a browser is readable, editable and re-runnable by whoever receives it. The consequence is spelled out: **a change here is never a fix for an authorization problem** — that fix is in `DASHBOARD_ROUTES` (P0-49), and adding a second `can()` here would hide the symptom.
+
+The gate is derived from `can()` rather than from a hand-written role list, and a test asserts *that* rather than only the outcome — the failure it catches is a capability granted to `EDITOR` in `packages/security` while the nav keeps hiding the section.
+
+**Both clients are built on demand, not at module scope.** `createAuthClient` resolves its base URL at construction and **throws on a relative one**, so `createAuthClient({ baseURL: '/v1/dashboard/auth' })` at module scope took the entire component suite down on import — before a single test ran. The URL is now absolute (still same-origin: CloudFront serves the bundle and the API from one host) and built lazily, so importing this module for `chooseActive` — a pure function with no network in it — does not require a working `location`.
+
+The API client got the same treatment for a different reason: `createClient` captures `globalThis.fetch` at construction, so a module-level instance freezes whichever `fetch` existed at first import. Invisible in a browser; wrong everywhere else.
+
+**Choosing a winery is a preference, and it fails closed.** The active tenant lives in `localStorage` rather than a cookie, because the server re-validates it against a `memberships` row on every request (P0-47) — a stale or edited value fails rather than granting anything, which is what makes it safe to keep where the user can edit it. Two rules are tested directly: a remembered id that is no longer a membership is **ignored rather than replaced by the first one** (falling back to "first" would silently move somebody into a different winery, and the next thing they edited would land there), and several memberships with no memory shows a picker rather than guessing.
+
+Switching wineries **reloads** rather than re-rendering. Every screen's data is scoped to the active tenant, so switching invalidates all of it at once — and a reload cannot leave one component holding the previous tenant's rows, which would show a seller another winery's catalogue looking exactly like theirs.
+
+**Three pieces of shared configuration had to change, and each was a gate that would otherwise have passed vacuously.**
+
+- `vitest.config.ts` collected `test/**/*.test.ts` only, so a `.tsx` component suite would have been reported as passing while collecting nothing.
+- Coverage included `src/**/*.ts` only, so the dashboard's bar would have been met by whatever plain-`.ts` modules happened to exist — a gate passing on a package whose actual code it never looked at. `src/main.tsx` is excluded by name (an entry point that calls `render` has no branch to cover), narrowly enough that the exclusion cannot grow to cover a component.
+- ESLint's "tooling configs are in no tsconfig" block matched the repository root only, so `apps/dashboard/vite.config.ts` fell through to the default project and reported four rules as needing `strictNullChecks`. Now a recursive glob.
+
+**Δ The dashboard has one tsconfig, not two.** Every other package carries a lint/typecheck config and an emit config; a browser app is bundled rather than `tsc --build`-emitted, so an emit project beside Vite would write a second unused copy of every module and put this app in the root reference graph for nothing. `typecheck` is the real type gate; `build` is `vite build`. The app is no longer referenced from the root `tsconfig.json`.
+
+**+ It is the first real consumer of P0-63's client**, so `docs/api/consumers.md` now lists an endpoint instead of none. That map is derived from the calls themselves and is complete only because raw `fetch` to our own API is a lint error outside the client — a rule that had nothing to protect until this row.
+
+**⚠ The screens are placeholders**, which is the row's scope: it is the shell every dashboard screen mounts into, not the screens. The one that matters most is the members page, because P0-51's roster writes and P0-52's guard both exist with nothing calling them — see **E8**.
+
 ---
 
 ### P0-58 · SST: dashboard static deploy
@@ -6016,14 +6042,14 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | SST deploy verified | **closed (2026-09-01)** | Deployed and verified on `dev` stage in `eu-west-1` (VPC, NAT, RDS Postgres 16 with TLS, SSM parameters with SecureString decryption, SNS Topic + subscription, Budgets). Cleanly torn down with `sst remove` to avoid idle costs. |
 | Bedrock model access confirmed | **closed (2026-09-01)** | Confirmed active in `eu-west-1` via AWS CLI: `amazon.nova-lite-v1:0` (chat/pairing LLM) and `amazon.titan-embed-text-v2:0` (vector embeddings). |
 | OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |
-| Branch protection not configured | repository settings | **All five** checks must be required on `main` before any gate in Part 6 blocks a merge: `verify`, `test` and `integration` from ci.yml, `secrets` and `dependencies` from security.yml. Requiring a subset leaves the rest advisory. GitHub offers only checks it has recently observed, so each becomes selectable after its first run — revisit this list whenever a job is added. |
+| Branch protection configured | **closed (2026-09-06)** | All five checks required on `main` — `Format, lint, typecheck`, `Test and coverage gates`, `Integration tests (Postgres)`, `Secret scan`, `Dependency audit` — with `enforce_admins: true`, 0 approvals (1 would deadlock a solo maintainer) and `strict: false` (so a stacked chain does not need rebasing between merges). Verified by attempting a direct push to `main` and being refused. See **E4**. |
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |
 | Turbo remote cache not enabled | repository secrets | `TURBO_TOKEN` / `TURBO_TEAM` are referenced by the workflow but unset, so Turbo uses its local cache only. Harmless; wire it when CI wall-clock starts to matter. |
 | Coverage bars now measure real code | **closed (2026-09-01)** | No longer 100% of nothing: `packages/core` 22/22 statements and `packages/db` 33/33 across 3 files, both at 100% against their 90% bars. `apps/*`, `packages/security` and `packages/testing` are still stubs, so their bars stay unexercised until code lands. |
 | 🔒 Auth rate limiting is per-container | **before public sign-in** | Better Auth's default store is a module-level `Map`, so the real limit is N x the configured one and a container recycle resets it. Needs P2-01's Postgres-backed limiter. See **A1**. |
 | 🔒 CloudFront client-IP forwarding unconfirmed | **P0-17a, before launch** | A multi-entry `x-forwarded-for` resolves to null, which is not "no limit" but **one shared bucket per path** — one attacker locks out every user. See **A2**. |
 | `NODE_ENV=production` asserted in CI | **closed** | A grep in `ci.yml`, matching the NAT and `app_rw` assertions. Verified to fire when the line is removed. See **A3**. |
-| 🔒 Password reset sends no email | **P0-64, before real signups** | The placeholder logs and resolves — deliberately, since throwing would create an enumeration oracle. So the failure is quiet. See **A4**. |
+| Password reset sends no email | **closed (2026-09-06)** | The placeholder is replaced by the P0-64 seam, wired at the composition root. Non-production stages render the whole message to the log, so the reset link is recoverable locally for the first time. Still resolves rather than throwing on a suppressed address, which is what keeps the two responses identical. See **A4**, **E9**. |
 | Reserved concurrency unset | **P1-48, before traffic** | §5.1 says 40, P1-48 says 10; P1-48 is right. Unbounded is worse than either. Interacts with **A1**. See **B1**. |
 | `AUTH_SECRET` rotation has no runbook | before launch | Rotating signs every seller out and voids outstanding reset links. Needs an ADR in the P0-59 set, not code. See **B2**. |
 | No expiry sweep for sessions or verifications | P1 | Both columns are indexed and nothing scans them. Storage hygiene, not security — expiry is enforced on read. See **C3**. |
@@ -6034,6 +6060,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Suppression list has no writer | P0-64b | The table and the send-path check shipped; the bounce webhook did not, because it needs a signed-webhook surface `apps/api` does not have yet. See **E7**. |
 | Invitations cannot be revoked | P0-51 open | The column and the index shipped and are tested; the endpoint did not, because it belongs with the members page rather than ahead of it. A mistaken invitation stays live for seven days. See **E8**. |
 | Roster cannot be changed from the API | P0-52 open | The last-OWNER guard and the writes it protects shipped and are tested to three concurrency cases; no endpoint calls them, because the member-management screen is P0-57. See **E8**. |
+| Composition root wires email and members | **closed (2026-09-06)** | `buildDependencies` in `composition.ts`, asserted by identity against the fail-loud placeholder — a shape check would have passed on the broken version. `index.ts` is now environment reading only. See **E9**. |
 
 ### ⚠ Open items from the P0-54 → P0-53 chain, in detail
 
@@ -6074,17 +6101,13 @@ The gap was that **removing the environment variable is completely silent**: not
 
 Verified in both directions before merging: the assertion passes against the real file, and fires when the line is deleted. A guard that cannot fail is not a guard.
 
-**A4. Password reset is wired to a placeholder that sends nothing.** 🔒
+**A4. Password reset is wired to the email seam.** ✅ **closed (2026-09-06)**
 
-`apps/api/src/index.ts` supplies a `sendResetPassword` that logs at error level and resolves. A user who requests a reset gets a 200 and **no email, ever**.
+The placeholder logged and resolved. It resolved rather than throwing for a good reason — Better Auth calls `sendResetPassword` only when the address belongs to a real user, so a sender that threw would make reset 500 for real addresses and 200 for invented ones, an enumeration oracle manufactured by the error path — and that reasoning is now inherited by the real sender rather than lost with the stub: `sendEmail` returns a `suppressed` outcome instead of throwing, precisely for callers shaped like this one.
 
-It resolves rather than throwing on purpose: Better Auth calls the seam only when the address belongs to a real user, so a throwing stub would 500 for real addresses and 200 for made-up ones — an account-enumeration oracle manufactured by the stub. That decision is correct and should not be revisited; the consequence is that the failure is *quiet*, which is why it is written here.
+**What changed.** `buildDependencies` constructs the P0-64 seam and hands it to `createAuth` (**E9**). On any non-production stage the whole rendered message goes to the log transport, so the reset link is recoverable locally — which it was not before, and which is what made the auth flow untestable outside a deployment.
 
-What closes it: **P0-64**. It needs a Resend API key in SSM at `/sommelier/<stage>/email/api_key` and a verified sending domain with SPF, DKIM and DMARC — neither producible from this repository.
-
-When: **before any real user can sign up.** Until then, the log line `password reset requested but no email transport is configured` is the only signal.
-
----
+**What is still open, and it is not this item.** Nothing has authenticated the sending domain, so a *production* reset still cannot leave the building. That is **E6**, and it is operator work no code closes.
 
 #### B. Must close before real traffic, for reasons other than security
 
@@ -6120,7 +6143,15 @@ When: **before launch**, as documentation rather than code.
 
 **C4. TOTP is configured but exercised only at the schema level.** The `twoFactor` plugin is registered and its four columns exist (migration `0028`), but no enrolment or verification path is tested. **P4-11** owns OWNER MFA and carries the three details that matter: backup codes single-use and hashed, a ±1-step window with replay rejected, and the step-up check reading the database rather than the cookie cache.
 
-**C5. `audit()` has no callers.** It is a helper waiting for the actions worth auditing — **P0-51** (invites), **P0-52** (last-OWNER guard), and the domain and key management rows. Its own tests cover the writer; nothing yet proves an audited action writes a row, because no action is audited.
+**C5. Two of the three actions now write audit rows; the third has no caller to write one from.** *(partly closed)*
+
+My first reading of this said "P0-51 and P0-52 went in without audit rows", which overstated it. Checking properly splits the item in three, and the split is the useful part:
+
+- **Invite** — a real gap, now closed. `audit(tx, { action: 'member.invited' })` runs inside the same `withTenant` transaction as the row, so the record commits or rolls back with it (P0-53).
+- **Acceptance** — a real gap, now closed, and it needed one extra thing. The accept route sits *above* `resolveTenant` by necessity, so the request context carries no tenant and `audit()` refuses to write without one. The port therefore calls `setRequestTenant(invitation.tenantId)` first — legitimate, because that tenant came out of Postgres via a matched 256-bit token rather than off the wire, so it is the P0-48 guarantee reached another way rather than a shortcut around it. Every log line for the rest of the request carries the tenant as a side benefit.
+- **Role change and removal** — **not a gap.** `setMemberRole` and `removeMember` have no caller outside their own tests; there is no request, so there is no actor, and an `audit()` inside those helpers would sit at the wrong layer *and* break the P0-52 integration suite, which calls them directly inside `withTenant` with no request context. Confirmed by running it. The audit row belongs beside the endpoint that supplies the actor, and those endpoints arrive with **E8**.
+
+**One thing the fix improved beyond closing the gap.** The writer is now injected into the members port rather than imported, which makes the audit row *assertable* — before, it would have been written and nothing would have checked. It also avoids a harness trap worth recording: `audit()` reads the actor from an `AsyncLocalStorage` in `packages/core`, and a test that mocks `@catalogorosso/db` gets a second instance of that module for the importing file's graph, so a context set in the test is invisible in the code under test. That cost a confusing `MissingAuditTenantError` before the cause was found.
 
 **C6. `audit_log` has no reader.** §4.2 defers the browsable view, not the record. Until **P4** builds a screen, reading it is a direct query and a runbook — and there is no runbook.
 
@@ -6182,7 +6213,13 @@ There is no fix to make; the lesson is procedural and belongs written down: **be
 
 **E3. `pnpm typecheck:infra` is local-only.** It needs `sst install` to generate `.sst/platform/config.d.ts` first, and that download is the cost of enforcing it in CI. Every infra invariant is therefore guarded by CI greps rather than by types — see **A3**, and the existing NAT and `app_rw` assertions.
 
-**E4. Branch protection is still not configured.** Until all **five** checks are required on `main` — `verify`, `test` and now `integration` from `ci.yml`, plus `secrets` and `dependencies` from `security.yml` — every gate in Part 6 is advisory. Requiring a subset leaves the rest advisory, which is the failure mode worth naming: it looks configured.
+**E4. Branch protection is configured.** ✅ **closed (2026-09-06)**
+
+All five checks are required on `main`: `Format, lint, typecheck`, `Test and coverage gates`, `Integration tests (Postgres)`, `Secret scan`, `Dependency audit`. Requiring a subset would have been the worse outcome, because it *looks* configured — the remaining gates stay advisory and nobody notices.
+
+Three settings are deliberate rather than default. `enforce_admins: true`, because a rule the only maintainer can bypass is a note to self. **0 required approvals**, because 1 would deadlock a solo maintainer against their own pull requests — the checks are the gate here, not a second pair of eyes that does not exist yet; raise it the day somebody else can review. `strict: false`, so a stacked chain does not need rebasing between merges — with a suite this fast the risk it guards against is small, and the friction it adds to an eleven-PR stack is not.
+
+**Verified rather than assumed**: a direct push to `main` was attempted and refused, with GitHub naming both the pull-request requirement and the five expected checks. Configuring protection and never testing it is the same class of mistake as a guard that cannot fail.
 
 **E5. The build-script prompt is answered rather than suppressed, and the notification it used to cost is back.** ✅ **closed**
 
@@ -6231,3 +6268,25 @@ This is deliberate — the inbound half needs a signed-webhook surface `apps/api
 **What closes it.** Five routes behind `members:manage` — `GET .../members`, `PATCH .../members/:userId`, `DELETE .../members/:userId`, `GET .../members/invitations` and `DELETE .../members/invitations/:id` — plus the audit rows for each (P0-53), landing with or immediately after P0-57. The storage and the guards need no further migration; what is missing is the surface.
 
 **In the meantime**, a mistaken invitation is revoked with one `UPDATE` against the tenant's own rows. That is an operator action, so it belongs in a runbook rather than in a support reply.
+
+**E9. The composition root wires the email seam and the members port.** ✅ **closed (2026-09-06)**
+
+**A postscript, because the same bug happened twice in a row.** The fix wired `composition.ts` to read four environment variables — `SST_STAGE`, `EMAIL_FROM`, `RESEND_API_KEY`, `EMAIL_ALLOWLIST` — and `infra/api.ts` injected none of them. Nothing failed: every absent value has a defined fallback, and the fallback is the log transport, so the symptom of a completely unwired email stack is *mail being logged* — which is also the intended behaviour on every non-production stage. Silent, safe, and wrong.
+
+That is the identical shape as the gap it was fixing: a seam correct on both sides with nothing joining them, and no assertion in a position to notice. It is now injected, and `ci.yml` greps for all four — a grep rather than a type because `typecheck:infra` is local-only (**E3**). The guard was verified by deleting a line and watching it fire.
+
+`ResendApiKey`, `EmailFrom` and `EmailAllowlist` are `sst.Secret`s **with defaults**, which is deliberate: a secret with no default fails `sst deploy` until somebody sets it, and blocking every deploy on a sending domain that does not exist yet (**E6**) would be the wrong trade. Empty reads as absent, and an empty allowlist means a non-production stage can mail nobody at all.
+
+It did not, and the diagnosis is worth keeping because the shape recurs. `apps/api/src/index.ts` constructed `createApp({ auth, readMemberships })` and nothing else, so password reset sent nothing and the invite endpoints answered **500** — verified by building the app exactly as the entry point did and calling the route, rather than by reading the code.
+
+**Why every suite was green.** P0-64 was verified against a fake transport, P0-51 against a fake port, and both correctly. Neither said anything about the one place the real implementations meet, and nothing could: `index.ts` did its work at module scope and threw on import without `AUTH_SECRET`, so no test could reach it. The absence of an assertion was itself the cause, not a symptom.
+
+**The extraction is most of the fix.** `buildDependencies(config)` in `composition.ts` takes configuration and returns what the app needs; `index.ts` is now the environment reading, which is the part that legitimately cannot be tested without an environment. `test/composition.test.ts` asserts the members port **by identity** — `not.toBe(unconfiguredMembers)` — because a shape check would have passed on the broken version: the fail-loud placeholder has the same shape by construction, which is exactly why it went unnoticed.
+
+**Three decisions inside it.**
+
+- **A missing provider key must not stop the container.** The sending domain is not authenticated yet (E6), so every stage runs without one today, and a root that refused to build for want of an email address would take the whole API down. Absent means the log transport — which is also what `chooseTransport` picks for any non-production stage, so the degraded path and the normal path are the same path.
+- **An unset stage defaults to `unknown`, not to `production`.** A missing variable must never be the reason a real customer receives mail from a staging run.
+- **The suppression read on the reset path goes through `withUser`.** `email_suppressions` has no policy, so any connection could read it — but "any connection" is what this repository does not hand out (P0-19). `withUser` is the narrowest sanctioned context on a path where the user is known and the tenant never will be, and it adds no new escape hatch. It cost one field on `ResetPasswordEmail` to carry the user id through.
+
+**The invite path checks suppression itself**, inside the transaction it already holds, and does not create an invitation for an undeliverable address. The alternative — letting `sendEmail`'s own guard catch it after the commit — leaves a live invitation nobody can accept and an owner told "invited". The port now reports four outcomes rather than a boolean; the HTTP response still flattens three of them to `created: false`, deliberately, because the members screen (**E8**) is what will have somewhere to show the reason and widening the contract before there is a reader means guessing at the shape.

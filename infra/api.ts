@@ -12,6 +12,41 @@ import { authSecret, databaseUrl, parameterReadPermissions } from './config';
  * domain itself is not sensitive.
  */
 const authBaseUrl = new sst.Secret('AuthBaseUrl', 'https://localhost');
+
+/**
+ * The transactional email provider key (P0-64).
+ *
+ * **Defaulted to the empty string on purpose.** A secret with no default makes
+ * `sst deploy` fail until somebody sets it, and the sending domain is not
+ * authenticated yet (E6) — so requiring it would block every deploy on work
+ * that has nothing to do with deploying. Empty is read as absent by the
+ * composition root, which then uses the log transport: the message is rendered
+ * in full to CloudWatch instead of being sent.
+ *
+ * Set it, when the domain is ready, from stdin rather than as an argument so
+ * the value never reaches a shell history file:
+ *   `sst secret set ResendApiKey --stage <stage>`
+ */
+const resendApiKey = new sst.Secret('ResendApiKey', '');
+
+/**
+ * The `From` header. Its domain must be the authenticated one (E6).
+ *
+ * A secret for the same reason `AuthBaseUrl` is one — not because an address is
+ * sensitive, but because `sst.Secret` is the mechanism this app already has for
+ * an operator-supplied per-stage value.
+ */
+const emailFrom = new sst.Secret('EmailFrom', 'AI Sommelier <noreply@localhost>');
+
+/**
+ * Addresses a non-production stage may really mail, comma-separated.
+ *
+ * Empty by default, which means a non-production stage can mail **nobody** —
+ * every message goes to the log. That is the safe direction: the list is how
+ * you deliberately let one address through for manual testing, never how you
+ * accidentally reach a customer.
+ */
+const emailAllowlist = new sst.Secret('EmailAllowlist', '');
 import { vpc } from './vpc';
 
 /**
@@ -144,6 +179,21 @@ export const api = new sst.aws.Function('Api', {
      * stops being a manual step at all.
      */
     AUTH_BASE_URL: authBaseUrl.value,
+
+    /**
+     * The stage, which decides whether mail is sent or logged (P0-64).
+     *
+     * Injected explicitly rather than relied upon: Lambda does not set it, and
+     * the composition root defaults an absent value to `unknown` — which routes
+     * to the log transport. So a missing variable here degrades to "logs the
+     * mail" rather than to "mails the customer", and this line is what makes
+     * the *intended* behaviour happen rather than the safe fallback.
+     */
+    SST_STAGE: $app.stage,
+
+    EMAIL_FROM: emailFrom.value,
+    RESEND_API_KEY: resendApiKey.value,
+    EMAIL_ALLOWLIST: emailAllowlist.value,
   },
 
   /**

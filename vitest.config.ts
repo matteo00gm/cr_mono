@@ -33,7 +33,12 @@ const project = (root: string, environment: 'node' | 'jsdom') => ({
     name: root.split('/')[1],
     root,
     environment,
-    include: ['test/**/*.test.ts'],
+    /*
+     * `.tsx` as well, for the browser-side projects: P0-57's component tests
+     * render Preact, and a pattern that matched only `.ts` would silently
+     * collect none of them — a suite reported as passing because it was empty.
+     */
+    include: ['test/**/*.test.{ts,tsx}'],
     // Integration tests need Docker and run from vitest.integration.config.ts.
     exclude: ['test/**/*.integration.test.ts'],
   },
@@ -64,8 +69,26 @@ export default defineConfig({
       // PR annotation; text is for humans running it locally.
       reporter: ['text', 'json-summary', 'lcov'],
       reportsDirectory: 'coverage',
-      include: ['{apps,packages}/*/src/**/*.ts'],
-      exclude: ['**/*.d.ts'],
+      /*
+       * `.tsx` too, since P0-57. Without it the dashboard's components would be
+       * outside the report entirely, and its bar would be met by whatever
+       * plain-`.ts` modules happened to exist — a gate passing on a package
+       * whose actual code it never looked at.
+       */
+      include: ['{apps,packages}/*/src/**/*.{ts,tsx}'],
+      exclude: [
+        '**/*.d.ts',
+        /*
+         * Entry points, which do one thing: mount the app into a document.
+         * There is no branch to cover and no assertion worth writing — a test
+         * would import the module for its side effect and prove that `render`
+         * was called, which is the line itself restated.
+         *
+         * Kept to `main.tsx` by name rather than a pattern, so the exclusion
+         * cannot quietly grow to cover a component.
+         */
+        'apps/*/src/main.tsx',
+      ],
       // Files with zero tests must still count against the bars, or coverage
       // rises by deleting test files.
       all: true,

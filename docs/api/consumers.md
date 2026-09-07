@@ -7,4 +7,6 @@ themselves rather than maintained by hand, so it cannot fall behind — and
 complete only because raw `fetch` to our own API is forbidden outside
 `@catalogorosso/api-client` (P0-63).
 
-_No call sites yet. The dashboard (P0-57) and widget (P3) are the first consumers._
+| Endpoint | Called from |
+|---|---|
+| `GET /v1/dashboard/me` | apps/dashboard/src/session.ts:150 |

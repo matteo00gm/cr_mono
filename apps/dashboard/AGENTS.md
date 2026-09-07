@@ -1,7 +1,7 @@
 # apps/dashboard
 
-Vite + Preact SPA, static, served from S3 behind CloudFront. Mostly unbuilt —
-P0-57 scaffolds it.
+Vite + Preact SPA, static, served from S3 behind CloudFront. The shell is built
+(P0-57); the screens behind it are placeholders.
 
 ## Invariants
 
@@ -16,6 +16,13 @@ P0-57 scaffolds it.
   extensionless paths to `/index.html`. Never reintroduce distribution-wide
   `customErrorResponses` — it turns every API 404 into a 200 carrying this
   app's HTML (P0-17a).
+- Build both clients on demand, never at module scope. `createAuthClient`
+  resolves its base URL at construction and throws on a relative one, and
+  `createClient` captures `globalThis.fetch` at construction — a module-level
+  instance freezes whichever `fetch` existed at first import (P0-57).
+- The active winery lives in `localStorage`, and a remembered id that is no
+  longer a membership is ignored rather than replaced by the first one.
+  Defaulting would move somebody into a different winery silently (P0-57).
 
 ## Source of truth
 
