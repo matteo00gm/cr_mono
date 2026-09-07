@@ -3423,6 +3423,19 @@ It also delivers the contract testing promised in §6.1 as a side effect: a brea
 
 **Files.** same route file, tests. **~90 lines.**
 
+**As built — the hash comparison lives inside the statement, with the row locked.** `PATCH /v1/dashboard/products/:id` behind `catalog:write`. `updateProduct` reads the row `FOR UPDATE`, merges the patch onto it, calls an injected hash rule, compares against the *stored* hash, and enqueues only when the two differ. All three of the row's tests exist, plus the ones building it turned up.
+
+- **The domain rule is injected as a function, and the shape is forced by the problem.** A patch is partial, so the hash has to be taken over the *merged* row — and the caller cannot merge, because it has not read the row. Passing `hashOf` in keeps the field set in `packages/core`, where it is tested as the domain decision it is, while the read, the comparison and the enqueue stay inside one transaction where they cannot come apart.
+- **`FOR UPDATE`, which is not ceremony.** Two concurrent patches would otherwise both read the same base row, both merge onto it, and the second would overwrite fields the first had just set — with a hash computed from a row that never existed.
+- **A re-embedded row becomes `STALE`, never `PENDING`.** The distinction is what P1-40's grid shows a seller: `PENDING` means never indexed and not recommendable yet, `STALE` means findable under its previous description while the new one is built. Collapsing them would tell somebody their catalogue had gone dark during an ordinary edit. A patch that changes nothing the model reads leaves the state untouched entirely — setting `STALE` unconditionally is the easy implementation and would flag every price change as a rebuild.
+- **Absent fields are dropped before the merge**, and the failure mode if they are not is worth stating: `productUpdate` is `.partial()`, so an unsent field arrives as `undefined`, and spreading that over the row blanks every column the patch did not mention. The damage shows up in the *hash* first — a merged row full of `undefined` hashes to something that looks like a change — so the symptom is a re-embedding bill before it is a data-loss report.
+- **404 falls out of RLS rather than being coded.** Nothing compares the row's tenant to the caller's; the scoped read simply matches nothing. That is the safer arrangement, because the natural hand-written version returns 403 and tells an attacker the resource exists (§3.5). Asserted alongside a non-uuid id and an id that never existed, all three answering identically.
+- **No `reindexed` field in the response.** `embeddingState` already carries it, and a second field saying the same thing is a second thing to keep true.
+
+**One correction to an expectation, not to the code.** A caller who belongs to *no* winery gets **403**, not 404, and that is right: it is a fact about their own account rather than a probe about somebody else's resource, and P0-47 already drew that line. §3.5's 404 is for a resource inside a winery they are not a member of.
+
+**The integration test supplies its own hash rule rather than importing the real one**, because `packages/db` cannot import `packages/core` — core depends on db, and the boundary rules forbid the cycle. That constraint is a good one here: what `updateProduct` promises is *call the injected rule and compare against the stored hash*, and coupling these assertions to the real field list would pin a decision that belongs to `packages/core/test/catalog`.
+
 ---
 
 ### P1-04 · Product delete

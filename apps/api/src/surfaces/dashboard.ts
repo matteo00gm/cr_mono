@@ -9,6 +9,7 @@ import {
   memberRemovedResponse,
   pendingInvitationsResponse,
   productCreatedResponse,
+  productUpdatedResponse,
   roleChangeResponse,
   rosterResponse,
   surfaceResponse,
@@ -22,7 +23,7 @@ import {
   InvalidRequestError,
   NotFoundError,
 } from '@catalogorosso/core';
-import { productInsert } from '@catalogorosso/db';
+import { productInsert, productUpdate } from '@catalogorosso/db';
 
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
@@ -341,6 +342,61 @@ export const createDashboardApp = ({
     return c.json(toProductResponse(result.product), 201);
   });
 
+  /**
+   * Edit a wine.
+   *
+   * **`PATCH`, and the outbox row is conditional — this is where the cost
+   * control actually lives.** A seller correcting stock or fixing a price edits
+   * rows constantly, and embedding every one of those is a bill that tracks how
+   * often people use the product rather than what is in it. The comparison is
+   * against the stored hash, inside the same transaction that holds the row
+   * locked, so two concurrent patches cannot both compute from the same base.
+   *
+   * **A cross-tenant id answers 404, not 403** (§3.5) — and it does so because
+   * RLS scoped the read to nothing rather than because a branch says so. That
+   * is the safer arrangement: the natural hand-written version compares the
+   * row's tenant to the caller's and returns 403, which tells an attacker the
+   * resource exists.
+   */
+  app.patch('/products/:id', requireCapability('catalog:write'), async (c) => {
+    const parsed = productUpdate.safeParse(await readJson(c));
+
+    if (!parsed.success) {
+      throw new InvalidRequestError('Send a JSON body with the product fields to change.');
+    }
+
+    const result = await products.update({
+      tenantId: c.get('tenantId'),
+      productId: c.req.param('id'),
+      values: parsed.data,
+    });
+
+    if (result.outcome === 'not-found') {
+      /*
+       * One answer for an id that never existed, one that belongs to another
+       * winery, and one that is not a uuid at all. Distinguishing them would
+       * tell a caller which ids are real.
+       */
+      throw new NotFoundError('No such product.');
+    }
+
+    if (result.outcome === 'duplicate-sku') {
+      throw new ConflictError(
+        'Another product in this catalogue already uses that SKU. ' +
+          'Edit that one, or choose a different SKU.',
+      );
+    }
+
+    /*
+     * No `reindexed` field in the response, deliberately: `embeddingState`
+     * already carries it. A re-embedding edit leaves the row `STALE` — findable
+     * under its previous description while the new one is built — and P1-40's
+     * grid renders that state directly. A second field saying the same thing is
+     * a second thing to keep true.
+     */
+    return c.json(toProductResponse(result.product));
+  });
+
   /* ---- the members screen (E8) ---------------------------------------- */
 
   /**
@@ -608,6 +664,49 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         updatedAt: '2026-09-08T09:14:00.000Z',
       },
       response: productCreatedResponse,
+    },
+  ],
+  [
+    routeKey('PATCH', `${DASHBOARD_PREFIX}/products/:id`),
+    {
+      access: requires('catalog:write'),
+      summary: 'Edit a wine',
+      description:
+        'Applies a partial update. Re-embedding is queued only when the change touches ' +
+        'something the model actually reads — a price or stock correction costs nothing, ' +
+        'which is what keeps the embedding bill tracking the catalogue rather than how ' +
+        'often it is edited. An edit that does re-embed leaves the row STALE: still ' +
+        'findable under its previous description while the new one is built, as opposed ' +
+        'to PENDING, which means never indexed at all. A product belonging to another ' +
+        'winery answers 404 and never 403, so this cannot be used to discover which ' +
+        'product ids exist elsewhere.',
+      example: {
+        id: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+        sku: 'BAR-2019',
+        externalVariantId: '43215678901234',
+        name: 'Barolo Bussia',
+        producer: 'Poderi Colla',
+        vintage: 2019,
+        wineType: 'red',
+        grapeVarieties: ['Nebbiolo'],
+        region: 'Piemonte',
+        denomination: 'Barolo DOCG',
+        styleTags: ['strutturato', 'tannico'],
+        tastingNotes: 'Rosa appassita, catrame e ciliegia sotto spirito.',
+        foodPairings: ['brasato al Barolo', 'formaggi stagionati'],
+        alcoholPct: '14.50',
+        priceCents: 4900,
+        currency: 'EUR',
+        stockStatus: 'IN_STOCK',
+        stockQty: 18,
+        productUrl: 'https://cantina.example/barolo-bussia',
+        imageUrl: 'https://cantina.example/img/barolo-bussia.jpg',
+        status: 'ACTIVE',
+        embeddingState: 'INDEXED',
+        createdAt: '2026-09-08T09:14:00.000Z',
+        updatedAt: '2026-09-08T11:02:00.000Z',
+      },
+      response: productUpdatedResponse,
     },
   ],
   [

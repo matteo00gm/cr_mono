@@ -2,9 +2,12 @@ import type { Product } from '@catalogorosso/api-client';
 import { contentHashOf } from '@catalogorosso/core';
 import {
   insertProduct,
+  updateProduct,
   withTenant,
   type ProductInsert,
   type ProductRow,
+  type ProductUpdate,
+  type ProductUpdateOutcome,
   type ProductWriteOutcome,
 } from '@catalogorosso/db';
 
@@ -72,8 +75,16 @@ export interface CreateProductCommand {
   readonly values: ProductInsert;
 }
 
+export interface UpdateProductCommand {
+  readonly tenantId: string;
+  readonly productId: string;
+  /** Partial: `productUpdate` is `productInsert.partial()`. */
+  readonly values: ProductUpdate;
+}
+
 export interface ProductsPort {
   create(command: CreateProductCommand): Promise<ProductWriteOutcome>;
+  update(command: UpdateProductCommand): Promise<ProductUpdateOutcome>;
 }
 
 /**
@@ -95,6 +106,7 @@ export class ProductsPortNotConfiguredError extends Error {
 
 export const unconfiguredProducts: ProductsPort = {
   create: () => Promise.reject(new ProductsPortNotConfiguredError()),
+  update: () => Promise.reject(new ProductsPortNotConfiguredError()),
 };
 
 /* -------------------------------------------------------------------------- */
@@ -122,6 +134,24 @@ export const createProductsPort = (): ProductsPort => ({
          * re-embed the catalogue.
          */
         contentHash: contentHashOf(command.values),
+      }),
+    ),
+
+  update: (command) =>
+    withTenant(command.tenantId, (tx) =>
+      updateProduct(tx, {
+        productId: command.productId,
+        values: command.values,
+
+        /*
+         * The rule travels as a function because a patch is partial: the hash
+         * has to be taken over the *merged* row, and only the statement has
+         * read it. This keeps the field set in `packages/core`, where it is
+         * tested as the domain decision it is, while the read, the comparison
+         * and the enqueue stay inside one transaction where they cannot come
+         * apart.
+         */
+        hashOf: (merged) => contentHashOf(merged),
       }),
     ),
 });

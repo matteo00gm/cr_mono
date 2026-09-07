@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { insertProduct } from '../src/products.js';
+import { insertProduct, updateProduct, type ProductRow } from '../src/products.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 import type { ProductInsert } from '../src/contracts.js';
 
@@ -173,5 +173,153 @@ describe('insertProduct', () => {
     ).rejects.toThrow(/returned no row/);
 
     expect(inserted.filter((write) => write.table === 'outbox')).toEqual([]);
+  });
+});
+
+/**
+ * The patch statement's branches, without a database (P1-03).
+ *
+ * The hash comparison and the conditional enqueue are the shapes worth pinning
+ * here; that they hold under a real transaction, with the row locked, is
+ * `products.write.integration.test.ts`.
+ */
+const fakeUpdateTx = (row: Record<string, unknown> | undefined) => {
+  const inserted: { table: string; values: unknown }[] = [];
+  const updates: Record<string, unknown>[] = [];
+
+  const tx = {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          for: (mode: string) => {
+            updates.push({ lock: mode });
+            return { limit: () => Promise.resolve(row === undefined ? [] : [row]) };
+          },
+        }),
+      }),
+    }),
+    update: () => ({
+      set: (values: Record<string, unknown>) => {
+        updates.push(values);
+        return {
+          where: () => ({
+            returning: () => Promise.resolve([{ ...row, ...values }]),
+          }),
+        };
+      },
+    }),
+    insert: () => ({
+      values: (values: Record<string, unknown>) => {
+        inserted.push({ table: 'outbox', values });
+        return { then: (resolve: (v: unknown) => unknown) => resolve(undefined) };
+      },
+    }),
+  } as unknown as DbTransaction;
+
+  return { tx, inserted, updates };
+};
+
+const STORED = {
+  id: 'p1',
+  tenantId: 't1',
+  name: 'Barolo',
+  tastingNotes: null,
+  priceCents: 4500,
+  contentHash: 'stored-hash',
+  embeddingState: 'INDEXED',
+};
+
+describe('updateProduct', () => {
+  it('locks the row it read, so two patches cannot merge onto the same base', async () => {
+    /*
+     * Without `FOR UPDATE` two concurrent patches both read this row, both
+     * merge onto it, and the second overwrites fields the first had just set —
+     * with a hash computed from a row that never existed.
+     */
+    const { tx, updates } = fakeUpdateTx(STORED);
+
+    await updateProduct(tx, { productId: 'p1', values: {}, hashOf: () => 'stored-hash' });
+
+    expect(updates[0]).toEqual({ lock: 'update' });
+  });
+
+  it('reports not-found for a row the caller cannot see', async () => {
+    const { tx } = fakeUpdateTx(undefined);
+
+    expect(await updateProduct(tx, { productId: 'gone', values: {}, hashOf: () => 'x' })).toEqual({
+      outcome: 'not-found',
+    });
+  });
+
+  it('enqueues nothing and leaves the state alone when the hash is unchanged', async () => {
+    const { tx, inserted, updates } = fakeUpdateTx(STORED);
+
+    const result = await updateProduct(tx, {
+      productId: 'p1',
+      values: { priceCents: 9900 },
+      hashOf: () => 'stored-hash',
+    });
+
+    expect(result).toMatchObject({ outcome: 'updated', reindexed: false });
+    expect(inserted).toEqual([]);
+    expect(updates[1]).not.toHaveProperty('embeddingState');
+  });
+
+  it('enqueues once and marks STALE when the hash moved', async () => {
+    const { tx, inserted, updates } = fakeUpdateTx(STORED);
+
+    const result = await updateProduct(tx, {
+      productId: 'p1',
+      values: { tastingNotes: 'New.' },
+      hashOf: () => 'different-hash',
+    });
+
+    expect(result).toMatchObject({ outcome: 'updated', reindexed: true });
+    expect(updates[1]).toMatchObject({ contentHash: 'different-hash', embeddingState: 'STALE' });
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0]?.values).toMatchObject({ payload: { reason: 'updated' } });
+  });
+
+  it('hashes the merged row, not the patch', async () => {
+    /*
+     * A patch is partial, so hashing it alone would compare a fragment against
+     * a whole row — every patch would look like a change and re-embed the
+     * catalogue on every save.
+     */
+    const { tx } = fakeUpdateTx(STORED);
+    let seen: Partial<ProductRow> | undefined;
+
+    await updateProduct(tx, {
+      productId: 'p1',
+      values: { tastingNotes: 'New.' },
+      hashOf: (merged) => {
+        seen = merged;
+        return 'stored-hash';
+      },
+    });
+
+    expect(seen).toMatchObject({ name: 'Barolo', tastingNotes: 'New.', priceCents: 4500 });
+  });
+
+  it('does not let an absent field blank a stored one', async () => {
+    /*
+     * `productUpdate` is `.partial()`, so an unsent field arrives as
+     * `undefined`. Spreading that over the row would clear every column the
+     * patch did not mention — and the hash would move first, so the symptom
+     * would be a re-embedding bill before it was a data-loss report.
+     */
+    const { tx } = fakeUpdateTx(STORED);
+    let seen: Partial<ProductRow> | undefined;
+
+    await updateProduct(tx, {
+      productId: 'p1',
+      values: { priceCents: 1, name: undefined },
+      hashOf: (merged) => {
+        seen = merged;
+        return 'stored-hash';
+      },
+    });
+
+    expect(seen?.name).toBe('Barolo');
   });
 });

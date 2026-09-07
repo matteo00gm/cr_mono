@@ -1,6 +1,8 @@
+import { and, eq, sql } from 'drizzle-orm';
+
 import { outbox } from './schema/outbox.js';
 import { products } from './schema/products.js';
-import type { ProductInsert } from './contracts.js';
+import type { ProductInsert, ProductUpdate } from './contracts.js';
 import type { DbTransaction } from './with-tenant.js';
 
 /**
@@ -135,4 +137,127 @@ export const insertProduct = async (
   });
 
   return { outcome: 'created', product: created };
+};
+
+/**
+ * A patch that changed nothing the model sees is not a failure and not a
+ * re-index — it is the ordinary case, and the outcome says so.
+ *
+ * `reindexed` is reported rather than inferred by the caller, because the
+ * caller cannot infer it: the decision needs the *stored* hash, which only this
+ * function has read.
+ */
+export type ProductUpdateOutcome =
+  | { readonly outcome: 'updated'; readonly product: ProductRow; readonly reindexed: boolean }
+  | { readonly outcome: 'not-found' }
+  | { readonly outcome: 'duplicate-sku' };
+
+export interface ProductPatch {
+  readonly productId: string;
+  /** Partial by construction: `productUpdate` is `productInsert.partial()`. */
+  readonly values: ProductUpdate;
+  /**
+   * The domain rule, injected.
+   *
+   * **A function rather than a value, and the shape is forced by the problem.**
+   * A patch is partial, so the hash has to be taken over the *merged* row — and
+   * the caller cannot merge, because it has not read the row. Passing the rule
+   * in keeps the field set in `packages/core` (where it is tested as a domain
+   * decision) while the read, the comparison and the enqueue stay inside one
+   * transaction here, where they cannot come apart.
+   */
+  readonly hashOf: (merged: ProductRow) => string;
+}
+
+/**
+ * Drops keys the caller did not send.
+ *
+ * `productUpdate` is `.partial()`, so an absent field arrives as `undefined` —
+ * and spreading that over the stored row would blank every column the patch did
+ * not mention. The bug would be silent for the *hash* long before it was
+ * visible in the data: a merged row full of `undefined` hashes to something
+ * that looks like a change, so every patch would re-embed.
+ */
+const defined = (values: ProductUpdate): Partial<ProductRow> =>
+  Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined));
+
+/**
+ * Applies a patch, and enqueues re-embedding **only when the content changed**.
+ *
+ * **This is where the cost control actually lives.** A seller correcting stock
+ * or fixing a price edits rows constantly; embedding every one of those is a
+ * bill that tracks how often people use the product rather than what is in it.
+ * The comparison is against the stored hash, so it survives a round trip that
+ * happens to produce identical text.
+ *
+ * `FOR UPDATE` locks the row for the rest of the transaction, and that is not
+ * ceremony: two concurrent patches would otherwise both read the same base row,
+ * both merge onto it, and the second would overwrite fields the first had just
+ * set — with a hash computed from a row that never existed.
+ *
+ * A row this tenant cannot see is `not-found` rather than an error, and it
+ * arrives that way for free: RLS scopes the read, so another winery's id
+ * matches nothing. §3.5's "a cross-tenant id returns 404" is therefore a
+ * property of the policy rather than a branch somebody has to remember — which
+ * matters, because the natural hand-written version returns 403.
+ */
+export const updateProduct = async (
+  tx: DbTransaction,
+  patch: ProductPatch,
+): Promise<ProductUpdateOutcome> => {
+  const existing = await tx
+    .select()
+    .from(products)
+    .where(eq(products.id, patch.productId))
+    .for('update')
+    .limit(1);
+
+  const row = existing[0];
+  if (row === undefined) return { outcome: 'not-found' };
+
+  const merged: ProductRow = { ...row, ...defined(patch.values) };
+  const nextHash = patch.hashOf(merged);
+  const reindexed = nextHash !== row.contentHash;
+
+  let updated: ProductRow | undefined;
+
+  try {
+    const rows = await tx
+      .update(products)
+      .set({
+        ...defined(patch.values),
+        contentHash: nextHash,
+        /*
+         * `STALE`, not `PENDING`. The distinction is what P1-40's grid shows a
+         * seller: `PENDING` means this wine has never been indexed and cannot
+         * be recommended yet, while `STALE` means it is findable under its
+         * previous description. Collapsing them would tell somebody their
+         * catalogue had gone dark during an ordinary edit.
+         */
+        ...(reindexed ? { embeddingState: 'STALE' as const } : {}),
+        updatedAt: sql`now()`,
+      })
+      .where(and(eq(products.id, patch.productId)))
+      .returning();
+
+    updated = rows[0];
+  } catch (error) {
+    if (pgErrorCode(error) === UNIQUE_VIOLATION) return { outcome: 'duplicate-sku' };
+    throw error;
+  }
+
+  if (updated === undefined) {
+    // Unreachable: the row was locked above, so it cannot have gone.
+    throw new Error('updateProduct: the update returned no row, which cannot happen');
+  }
+
+  if (reindexed) {
+    await enqueueEmbedding(tx, {
+      tenantId: updated.tenantId,
+      productId: updated.id,
+      reason: 'updated',
+    });
+  }
+
+  return { outcome: 'updated', product: updated, reindexed };
 };

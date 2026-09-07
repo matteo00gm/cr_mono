@@ -210,6 +210,17 @@ export const productSchema = z.object({
 export const productCreatedResponse = productSchema;
 
 /**
+ * The product after a patch (P1-03).
+ *
+ * The same shape, and there is no `reindexed` flag: `embeddingState` already
+ * carries it. An edit that changed something the model reads leaves the row
+ * `STALE` — findable under its previous description while the new one is built
+ * — as against `PENDING`, which means never indexed at all. A second field
+ * saying the same thing is a second thing to keep true.
+ */
+export const productUpdatedResponse = productSchema;
+
+/**
  * Every dashboard response, keyed by `METHOD path`.
  *
  * The client's `request()` is typed off this, so calling an endpoint returns
@@ -227,6 +238,7 @@ export const DASHBOARD_RESPONSES = {
   'DELETE /v1/dashboard/members/invitations/:id': invitationRevokedResponse,
   'POST /v1/dashboard/members/accept': acceptInviteResponse,
   'POST /v1/dashboard/products': productCreatedResponse,
+  'PATCH /v1/dashboard/products/:id': productUpdatedResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

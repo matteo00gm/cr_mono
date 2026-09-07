@@ -203,7 +203,10 @@ export {
   EMBEDDING_EVENT,
   enqueueEmbedding,
   insertProduct,
+  updateProduct,
   type NewProduct,
+  type ProductPatch,
   type ProductRow,
+  type ProductUpdateOutcome,
   type ProductWriteOutcome,
 } from './products.js';
