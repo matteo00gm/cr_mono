@@ -106,37 +106,95 @@ export const createDashboardApp = ({ auth, readMemberships }: DashboardOptions):
 };
 
 /**
- * What every dashboard route requires, keyed by `METHOD <mounted path>` (P0-49).
+ * Every dashboard route, keyed by `METHOD <mounted path>`.
  *
- * **Separate from the registrations above, deliberately.** A capability
- * declared inline is a capability that disappears with the route it decorated;
- * a table can be enumerated, diffed and cross-checked — which is what
- * `assertEveryRouteDeclared` does at boot, and what P0-50's role×endpoint
- * matrix walks. Adding a route without adding a line here is a **startup
+ * **Separate from the registrations above, deliberately.** Metadata attached
+ * inline disappears with the route it decorated; a table can be enumerated,
+ * diffed and cross-checked — which is what P0-49's boot check does, what
+ * P0-50's role x endpoint matrix walks, and what P0-62 generates the OpenAPI
+ * document from. Adding a route without adding a line here is a **startup
  * failure**, not a silent default to open.
  *
  * The paths carry the mount prefix because that is how Hono reports them from
  * `app.routes`; deriving both from the same constant is what stops the two
  * drifting when the surface moves.
+ *
+ * `summary`, `description` and `example` exist for P0-62 and are required
+ * rather than optional: a reference where half the routes are blank is
+ * decorative, so the generator refuses one exactly as the boot check refuses an
+ * undeclared route.
  */
-export const DASHBOARD_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map<
-  string,
-  RouteAccess
->([
+export interface RouteDoc {
+  readonly access: RouteAccess;
+  /** One line. What a caller gets. */
+  readonly summary: string;
+  /** Why a caller would use it, and anything surprising about the answer. */
+  readonly description: string;
+  /** A representative success body. Concrete values, never `"string"`. */
+  readonly example: unknown;
+}
+
+export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, RouteDoc>([
   [
     routeKey('GET', DASHBOARD_PREFIX),
-    publicRoute(
-      'Surface marker. Reports which app answered and nothing else — no tenant, ' +
-        'no user, no data. P0-46 uses it to prove the two surfaces are distinct.',
-    ),
+    {
+      access: publicRoute(
+        'Surface marker. Reports which app answered and nothing else - no tenant, ' +
+          'no user, no data. P0-46 uses it to prove the two surfaces are distinct.',
+      ),
+      summary: 'Identify the dashboard surface',
+      description:
+        'Returns the name of the route surface that handled the request. It exists so a ' +
+        'caller - or a test - can prove *which* application answered, rather than only ' +
+        'that something did. Carries no tenant, user or catalogue data.',
+      example: { surface: 'dashboard' },
+    },
   ],
   [
     routeKey('GET', `${DASHBOARD_PREFIX}/me`),
-    publicRoute(
-      'Authenticated but pre-tenant, by necessity: a user with several memberships ' +
-        'cannot choose from a list they are not allowed to fetch. It returns only the ' +
-        "caller's own identity and memberships, which RLS scopes to them (P0-47).",
-    ),
+    {
+      access: publicRoute(
+        'Authenticated but pre-tenant, by necessity: a user with several memberships ' +
+          'cannot choose from a list they are not allowed to fetch. It returns only the ' +
+          "caller's own identity and memberships, which RLS scopes to them (P0-47).",
+      ),
+      summary: 'The caller and the wineries they belong to',
+      description:
+        'Authenticated, but resolved before a tenant is chosen - a user who belongs to ' +
+        'several wineries cannot pick one from a list they are not allowed to fetch. The ' +
+        'memberships returned are scoped by Row Level Security to the caller, so this ' +
+        'cannot be used to enumerate anybody else. Send the chosen tenant back on ' +
+        'subsequent requests in the active-tenant header.',
+      example: {
+        userId: 'user_matteo',
+        memberships: [
+          { tenantId: '9f2c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a', role: 'OWNER' },
+          { tenantId: 'c3d5a881-6b12-4f77-9a10-6b124f779a10', role: 'EDITOR' },
+        ],
+      },
+    },
   ],
-  [routeKey('GET', `${DASHBOARD_PREFIX}/context`), requires('catalog:read')],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/context`),
+    {
+      access: requires('catalog:read'),
+      summary: 'The resolved tenant and role for this request',
+      description:
+        'Reports what the server decided the request is scoped to. The tenant comes from ' +
+        'a `memberships` row for the authenticated user and never from request input; the ' +
+        'role comes from that same row, so a user who is EDITOR on one winery and OWNER ' +
+        'on another gets the right one for the winery in play.',
+      example: { tenantId: '9f2c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a', role: 'EDITOR' },
+    },
+  ],
 ]);
+
+/**
+ * The access half of the table, for the callers that only need that.
+ *
+ * Derived rather than maintained separately - two tables that must agree are
+ * two tables that will not.
+ */
+export const DASHBOARD_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map(
+  [...DASHBOARD_ROUTES].map(([key, doc]) => [key, doc.access]),
+);

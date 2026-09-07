@@ -29,7 +29,9 @@
     "db:seed": "node scripts/db-seed.mjs",
     "adr:check": "node scripts/check-adrs.mjs",
     "agents:check": "node scripts/check-agents-md.mjs",
-    "changelog": "node scripts/changelog.mjs"
+    "changelog": "node scripts/changelog.mjs",
+    "openapi": "node scripts/gen-openapi.mjs",
+    "openapi:check": "node scripts/gen-openapi.mjs --check"
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [

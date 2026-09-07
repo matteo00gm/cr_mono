@@ -1,0 +1,174 @@
+{
+  "dashboard": {
+    "openapi": "3.1.0",
+    "info": {
+      "title": "Sommelier dashboard API",
+      "description": "Authenticated by a session cookie. The tenant is resolved from a `memberships` row for the signed-in user and never from request input, so a tenant id in a body, query or header is ignored.",
+      "version": "0.0.0"
+    },
+    "paths": {
+      "/v1/dashboard": {
+        "get": {
+          "summary": "Identify the dashboard surface",
+          "description": "Returns the name of the route surface that handled the request. It exists so a caller - or a test - can prove *which* application answered, rather than only that something did. Carries no tenant, user or catalogue data.\n\nNo capability required. Surface marker. Reports which app answered and nothing else - no tenant, no user, no data. P0-46 uses it to prove the two surfaces are distinct.",
+          "operationId": "getV1Dashboard",
+          "responses": {
+            "200": {
+              "description": "Identify the dashboard surface",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "surface": "dashboard"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/dashboard/context": {
+        "get": {
+          "summary": "The resolved tenant and role for this request",
+          "description": "Reports what the server decided the request is scoped to. The tenant comes from a `memberships` row for the authenticated user and never from request input; the role comes from that same row, so a user who is EDITOR on one winery and OWNER on another gets the right one for the winery in play.\n\nRequires the `catalog:read` capability.",
+          "operationId": "getV1DashboardContext",
+          "x-required-capability": "catalog:read",
+          "responses": {
+            "200": {
+              "description": "The resolved tenant and role for this request",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "tenantId": "9f2c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a",
+                    "role": "EDITOR"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/dashboard/me": {
+        "get": {
+          "summary": "The caller and the wineries they belong to",
+          "description": "Authenticated, but resolved before a tenant is chosen - a user who belongs to several wineries cannot pick one from a list they are not allowed to fetch. The memberships returned are scoped by Row Level Security to the caller, so this cannot be used to enumerate anybody else. Send the chosen tenant back on subsequent requests in the active-tenant header.\n\nNo capability required. Authenticated but pre-tenant, by necessity: a user with several memberships cannot choose from a list they are not allowed to fetch. It returns only the caller's own identity and memberships, which RLS scopes to them (P0-47).",
+          "operationId": "getV1DashboardMe",
+          "responses": {
+            "200": {
+              "description": "The caller and the wineries they belong to",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "userId": "user_matteo",
+                    "memberships": [
+                      {
+                        "tenantId": "9f2c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a",
+                        "role": "OWNER"
+                      },
+                      {
+                        "tenantId": "c3d5a881-6b12-4f77-9a10-6b124f779a10",
+                        "role": "EDITOR"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "widget": {
+    "openapi": "3.1.0",
+    "info": {
+      "title": "Sommelier widget API",
+      "description": "Public, called from sellers’ own sites. Authenticated by origin-bound tokens rather than cookies; this surface accepts no credentials.",
+      "version": "0.0.0"
+    },
+    "paths": {}
+  }
+}

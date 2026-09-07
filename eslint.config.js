@@ -54,7 +54,21 @@ export default tseslint.config(
     ...tseslint.configs.disableTypeChecked,
     languageOptions: {
       parserOptions: { projectService: false },
-      globals: { console: 'readonly', process: 'readonly' },
+      /*
+       * Node's own globals, listed rather than pulled from the `globals`
+       * package for one dependency's worth of convenience. Everything here is
+       * provided by the Node 22 runtime these scripts run on; `Response` is
+       * needed because `gen-openapi.mjs` builds a stub fetch handler.
+       */
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        fetch: 'readonly',
+        Response: 'readonly',
+        Request: 'readonly',
+        Headers: 'readonly',
+        URL: 'readonly',
+      },
     },
   },
 
