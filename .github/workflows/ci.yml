@@ -76,6 +76,16 @@ jobs:
       - name: Check ADRs
         run: pnpm adr:check
 
+      # The invariants (P0-60). Packages are discovered on disk rather than
+      # listed, the same reflection pattern as P0-41 — so a new package fails
+      # this the moment it exists, which is the intended prompt.
+      #
+      # Every invariant must cite a task id. An unattributed prohibition is one
+      # nobody can look up, so it gets followed until it is inconvenient and
+      # then quietly dropped.
+      - name: Check AGENTS.md
+        run: pnpm agents:check
+
       # Architectural boundaries (P0-09). Separate from lint because these are
       # graph properties across packages, which no per-file linter can see.
       - name: Check architectural boundaries
