@@ -23,10 +23,10 @@ import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 /**
  * Tables with a `tenant_id` that deliberately carry no policy.
  *
- * Empty today, and that is not an oversight. `processed_webhooks` and
- * `rate_limit_buckets` are the two tables the plan exempts, and neither has a
- * `tenant_id` column at all — so neither is discovered by the query below and
- * neither needs an entry here. The list exists for the case the plan
+ * Empty today, and that is not an oversight. `processed_webhooks`,
+ * `rate_limit_buckets` and `email_suppressions` are the tables that carry no
+ * policy, and none has a `tenant_id` column at all — so none is discovered by
+ * the query below and none needs an entry here. The list exists for the case the plan
  * anticipated but the schema has not yet produced: a table that *is* scoped by
  * tenant and still, for a stated reason, must not be isolated.
  *

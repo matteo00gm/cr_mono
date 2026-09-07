@@ -97,8 +97,17 @@ export default {
         // every additional name is another place a query can be issued with no
         // tenant, and the point of one sanctioned path is that there is one
         // thing to audit.
+        //
+        // src/email-suppressions.ts is exempt from P0-64 on the same terms as
+        // audit.ts and memberships.ts: it imports `sql` to write a statement
+        // and takes the connection from its caller, opening nothing. It is
+        // listed separately because the reason it is *safe* differs — the table
+        // it touches has no tenant_id and no RLS policy, so there is no scoped
+        // read for a missing context to silently narrow, and no other tenant's
+        // rows for one to widen into.
         pathNot:
           '^packages/db/src/(client|with-tenant|with-user|deploy|auth-db|memberships|audit)[.]ts$' +
+          '|^packages/db/src/email-suppressions[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
           '|^packages/core/src/auth[.]ts$' +

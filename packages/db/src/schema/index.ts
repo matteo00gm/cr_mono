@@ -9,6 +9,7 @@
 export * from './audit-log.js';
 export * from './auth.js';
 export * from './conversations.js';
+export * from './email-suppressions.js';
 export * from './memberships.js';
 export * from './product-embeddings.js';
 export * from './outbox.js';
