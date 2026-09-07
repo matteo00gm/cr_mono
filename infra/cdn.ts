@@ -1,6 +1,7 @@
 /// <reference path="../.sst/platform/config.d.ts" />
 
 import { api } from './api';
+import { originSecret } from './config';
 import { isProtectedStage } from './stage';
 
 /**
@@ -196,6 +197,15 @@ export const distribution = new aws.cloudfront.Distribution('Cdn', {
     {
       originId: apiOriginId,
       domainName: apiOriginDomain,
+
+      /*
+       * Attached at the *origin-request* stage, which is what makes this work
+       * at all: a viewer cannot see the header and a viewer-supplied header of
+       * the same name is replaced rather than merged, so it cannot be forged
+       * from outside. The API refuses any request that arrives without it.
+       */
+      customHeaders: [{ name: 'x-origin-secret', value: originSecret }],
+
       customOriginConfig: {
         httpPort: 80,
         httpsPort: 443,

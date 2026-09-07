@@ -196,6 +196,24 @@ jobs:
           fi
           echo "the API function receives the email environment."
 
+      # Both halves of the origin guard (A2). A deploy showed the Function URL
+      # is reachable directly, skipping the CloudFront Function that pins the
+      # client IP — so CloudFront attaches a secret header and the API refuses
+      # anything without it. Dropping either half leaves an API that works
+      # perfectly and is quietly reachable around the edge, which is exactly how
+      # this went unnoticed the first time.
+      - name: Assert the origin guard is wired at both ends
+        run: |
+          if ! grep -q "customHeaders: \[{ name: 'x-origin-secret'" infra/cdn.ts; then
+            echo "::error::infra/cdn.ts must attach the x-origin-secret custom header to the API origin — see A2; without it every request is refused, because the API requires it on a deployed stage"
+            exit 1
+          fi
+          if ! grep -q "ORIGIN_SECRET: originSecret" infra/api.ts; then
+            echo "::error::infra/api.ts must pass ORIGIN_SECRET to the function — see A2; src/index.ts refuses to start a deployed stage without it"
+            exit 1
+          fi
+          echo "the origin guard is wired at both ends."
+
       # The notification that a dependency wants to run code at install time.
       #
       # pnpm appends `<package>: set this to true or false` to

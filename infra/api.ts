@@ -2,7 +2,7 @@
 
 import process from 'node:process';
 
-import { authSecret, databaseUrl, parameterReadPermissions } from './config';
+import { authSecret, databaseUrl, originSecret, parameterReadPermissions } from './config';
 
 /**
  * The public origin Better Auth builds absolute URLs against.
@@ -190,6 +190,17 @@ export const api = new sst.aws.Function('Api', {
      * the *intended* behaviour happen rather than the safe fallback.
      */
     SST_STAGE: $app.stage,
+
+    /**
+     * The shared secret CloudFront attaches to origin requests (A2).
+     *
+     * The API refuses any request arriving without it, so this is what stops a
+     * caller reaching the Function URL directly and forging `X-Forwarded-For`
+     * around the edge. `src/index.ts` refuses to start a deployed stage if it
+     * is absent, because absent is *permissive* here and a container that comes
+     * up healthy while quietly reachable is the failure this closes.
+     */
+    ORIGIN_SECRET: originSecret,
 
     EMAIL_FROM: emailFrom.value,
     RESEND_API_KEY: resendApiKey.value,

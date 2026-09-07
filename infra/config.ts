@@ -115,6 +115,39 @@ const authSecretValue = new random.RandomPassword('AuthSecret', {
 export const authSecret = secureParameter('AuthSecret', 'auth/secret', authSecretValue.result);
 
 /**
+ * The shared secret CloudFront attaches to every API origin request (A2).
+ *
+ * **Here rather than in `infra/cdn.ts`, and the reason is structural.** The
+ * distribution sets it on the origin and the API function reads it to validate,
+ * so a definition living in either would make the two files import each other —
+ * `cdn.ts` already imports `api.ts` for the Function URL. Config is the file
+ * both can depend on.
+ *
+ * Generated rather than operator-set, so there is no step to forget and no
+ * value to paste anywhere. `RandomPassword` keeps it in Pulumi state, so it is
+ * stable across deploys — regenerating each time would rotate the distribution
+ * and the function at slightly different moments and 404 everything in between.
+ *
+ * `special: false` because it travels in an HTTP header, where quoting is one
+ * more thing to get wrong; 64 alphanumeric characters carry far more entropy
+ * than a guess can reach.
+ *
+ * **Not an SSM parameter.** The two consumers are both infrastructure and read
+ * it at synth time, so a parameter would add a fetch, an IAM grant and a second
+ * place for it to be wrong, and buy nothing — this is not a value an operator
+ * ever sets or reads.
+ *
+ * **Rotation is not zero-downtime**: deleting this resource and redeploying
+ * gives the origin and the function the new value at slightly different times.
+ * Acceptable for a value that never leaves AWS, and written down so it is a
+ * known property rather than a surprise mid-incident.
+ */
+export const originSecret = new random.RandomPassword('OriginSecret', {
+  length: 64,
+  special: false,
+}).result;
+
+/**
  * Paths that exist for the deploy path and for break-glass, and that no
  * application function may be granted.
  *
