@@ -70,6 +70,14 @@ export const SAFE_KEYS: ReadonlySet<string> = new Set([
   'route',
   'status',
   'durationMs',
+  /*
+   * How many entries `x-forwarded-for` carried (A2). A small integer, never the
+   * address: `ip` is deliberately *not* on this list, because a name added here
+   * is open at every depth for every caller, and an address is PII. A count
+   * cannot carry a secret, and anything but 1 means the origin cannot resolve a
+   * caller — which is a shared rate-limit bucket, not an absent one.
+   */
+  'xffEntries',
 
   // Error classification — the serialised error itself, and its domain kind.
   'err',

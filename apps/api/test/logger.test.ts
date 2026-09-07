@@ -247,3 +247,42 @@ describe('the completion line', () => {
     expect(lines[0]).toMatchObject({ msg: 'request', status: 404 });
   });
 });
+
+describe('the forwarded-for entry count (A2)', () => {
+  const lineFor = async (header?: string): Promise<Line | undefined> => {
+    const { lines, log } = capturing();
+    const app = new Hono();
+    app.use('*', requestContext(log));
+    app.get('/x', (c) => c.text('ok'));
+
+    await app.request('/x', header === undefined ? {} : { headers: { 'x-forwarded-for': header } });
+    return lines.find((line) => line.msg === 'request');
+  };
+
+  it('is 1 when the edge overwrote the header', async () => {
+    /*
+     * The state P0-17a's CloudFront Function exists to produce. One entry means
+     * the origin can resolve a caller, so the rate limiter buckets per caller
+     * rather than putting everyone in one bucket per path.
+     */
+    expect(await lineFor('203.0.113.7')).toMatchObject({ xffEntries: 1 });
+  });
+
+  it('is 2 when something appended, which is the A2 failure', async () => {
+    // Either a proxy appending, or a forged header CloudFront added to. Both
+    // leave the origin unable to say who called, and the symptom is a shared
+    // limit rather than an error anyone would notice.
+    expect(await lineFor('1.2.3.4, 203.0.113.7')).toMatchObject({ xffEntries: 2 });
+  });
+
+  it('is 0 when the header is absent', async () => {
+    expect(await lineFor()).toMatchObject({ xffEntries: 0 });
+  });
+
+  it('never carries the address itself', async () => {
+    // `ip` is not on the P0-56 allowlist and must not become a reason to add
+    // it: a count answers the operational question without logging PII.
+    const line = await lineFor('203.0.113.7');
+    expect(JSON.stringify(line)).not.toContain('203.0.113.7');
+  });
+});
