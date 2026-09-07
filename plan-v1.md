@@ -6271,6 +6271,12 @@ This is deliberate — the inbound half needs a signed-webhook surface `apps/api
 
 **E9. The composition root wires the email seam and the members port.** ✅ **closed (2026-09-06)**
 
+**A postscript, because the same bug happened twice in a row.** The fix wired `composition.ts` to read four environment variables — `SST_STAGE`, `EMAIL_FROM`, `RESEND_API_KEY`, `EMAIL_ALLOWLIST` — and `infra/api.ts` injected none of them. Nothing failed: every absent value has a defined fallback, and the fallback is the log transport, so the symptom of a completely unwired email stack is *mail being logged* — which is also the intended behaviour on every non-production stage. Silent, safe, and wrong.
+
+That is the identical shape as the gap it was fixing: a seam correct on both sides with nothing joining them, and no assertion in a position to notice. It is now injected, and `ci.yml` greps for all four — a grep rather than a type because `typecheck:infra` is local-only (**E3**). The guard was verified by deleting a line and watching it fire.
+
+`ResendApiKey`, `EmailFrom` and `EmailAllowlist` are `sst.Secret`s **with defaults**, which is deliberate: a secret with no default fails `sst deploy` until somebody sets it, and blocking every deploy on a sending domain that does not exist yet (**E6**) would be the wrong trade. Empty reads as absent, and an empty allowlist means a non-production stage can mail nobody at all.
+
 It did not, and the diagnosis is worth keeping because the shape recurs. `apps/api/src/index.ts` constructed `createApp({ auth, readMemberships })` and nothing else, so password reset sent nothing and the invite endpoints answered **500** — verified by building the app exactly as the entry point did and calling the route, rather than by reading the code.
 
 **Why every suite was green.** P0-64 was verified against a fake transport, P0-51 against a fake port, and both correctly. Neither said anything about the one place the real implementations meet, and nothing could: `index.ts` did its work at module scope and threw on import without `AUTH_SECRET`, so no test could reach it. The absence of an assertion was itself the cause, not a symptom.
