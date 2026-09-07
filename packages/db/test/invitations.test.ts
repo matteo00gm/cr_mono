@@ -6,6 +6,8 @@ import {
   insertMembershipFromInvitation,
   markInvitationAccepted,
   readActiveTenantName,
+  readOpenInvitations,
+  revokeInvitation,
 } from '../src/invitations.js';
 import { readUserEmail } from '../src/users.js';
 import { withInvitation } from '../src/with-invitation.js';
@@ -297,5 +299,88 @@ describe('withInvitation', () => {
     expect(query).toContain('accepted_at IS NULL');
     expect(query).toContain('revoked_at IS NULL');
     expect(query).toContain('expires_at > now()');
+  });
+});
+
+describe('readOpenInvitations (E8)', () => {
+  it('selects only the columns a screen may see', async () => {
+    const { tx, statements } = capturing([]);
+    await readOpenInvitations(tx);
+
+    const sql = text(statements[0]);
+
+    /*
+     * `token_hash` is absent, and that is the assertion worth having: the hash
+     * is what the credential reduces to, and a list endpoint returning it hands
+     * anyone with `members:manage` material to attack offline — for no gain
+     * over revoking and re-inviting.
+     */
+    expect(sql).not.toContain('token_hash');
+    expect(sql).toContain('email');
+    expect(sql).toContain('expires_at');
+  });
+
+  it('lists open invitations only', async () => {
+    const { tx, statements } = capturing([]);
+    await readOpenInvitations(tx);
+
+    // Accepted and revoked rows are history. A screen listing them shows an
+    // owner a growing set of things they cannot act on.
+    expect(text(statements[0])).toContain('accepted_at IS NULL AND revoked_at IS NULL');
+  });
+
+  it('maps snake_case columns to the shape the API returns', async () => {
+    const { tx } = capturing([
+      {
+        id: 'inv_1',
+        email: 'anna@cantina.example',
+        role: 'EDITOR',
+        invited_by: 'user_matteo',
+        expires_at: new Date('2026-09-14T00:00:00.000Z'),
+        created_at: new Date('2026-09-07T00:00:00.000Z'),
+      },
+    ]);
+
+    expect((await readOpenInvitations(tx))[0]).toEqual({
+      id: 'inv_1',
+      email: 'anna@cantina.example',
+      role: 'EDITOR',
+      invitedBy: 'user_matteo',
+      expiresAt: new Date('2026-09-14T00:00:00.000Z'),
+      createdAt: new Date('2026-09-07T00:00:00.000Z'),
+    });
+  });
+});
+
+describe('revokeInvitation (E8)', () => {
+  it('stamps rather than deletes, and only an open row', async () => {
+    const { tx, statements } = capturing([{ email: 'anna@cantina.example' }]);
+    await revokeInvitation(tx, 'inv_1');
+
+    const sql = text(statements[0]);
+
+    /*
+     * Stamping keeps the fact that an invitation was sent and withdrawn, which
+     * a members screen may never show and an incident review will want — and
+     * the partial unique index covers open rows only, so a stamped row does not
+     * block a fresh invitation to the same address.
+     */
+    expect(sql).toContain('SET revoked_at = now()');
+    expect(sql).not.toContain('DELETE');
+    expect(sql).toContain('accepted_at IS NULL AND revoked_at IS NULL');
+  });
+
+  it('returns the address, so the audit row needs no second read', async () => {
+    const { tx } = capturing([{ email: 'anna@cantina.example' }]);
+
+    expect(await revokeInvitation(tx, 'inv_1')).toBe('anna@cantina.example');
+  });
+
+  it('returns undefined when nothing matched', async () => {
+    // Already accepted, already revoked, or absent. The caller turns all three
+    // into one 404 rather than pretending success.
+    const { tx } = capturing([]);
+
+    expect(await revokeInvitation(tx, 'inv_gone')).toBeUndefined();
   });
 });

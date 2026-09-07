@@ -11,6 +11,26 @@ import {
 import { memberships, oneMembership, signedIn } from './support/auth.js';
 
 /**
+ * A port where every method refuses, overridden per test.
+ *
+ * The five screen methods (E8) landed after these tests were written, and a
+ * partial object no longer satisfies `MembersPort`. Defaulting them to a
+ * rejection rather than to a plausible empty answer is deliberate: a test that
+ * accidentally exercises a method it did not mean to should fail loudly, not
+ * quietly assert against an empty list.
+ */
+const port = (overrides: Partial<MembersPort>): MembersPort => ({
+  invite: () => Promise.reject(new Error('port.invite not stubbed')),
+  accept: () => Promise.reject(new Error('port.accept not stubbed')),
+  roster: () => Promise.reject(new Error('port.roster not stubbed')),
+  pending: () => Promise.reject(new Error('port.pending not stubbed')),
+  changeRole: () => Promise.reject(new Error('port.changeRole not stubbed')),
+  remove: () => Promise.reject(new Error('port.remove not stubbed')),
+  revoke: () => Promise.reject(new Error('port.revoke not stubbed')),
+  ...overrides,
+});
+
+/**
  * The invitation endpoints (P0-51).
  *
  * The port is a fake here on purpose. What is under test is the *wiring* — who
@@ -42,7 +62,7 @@ const recording = (
   return {
     invites,
     accepts,
-    port: {
+    port: port({
       invite: (command) => {
         invites.push(command);
         return Promise.resolve({ outcome: 'invited' as const, created: true });
@@ -51,7 +71,7 @@ const recording = (
         accepts.push(command);
         return Promise.resolve(accept);
       },
-    },
+    }),
   };
 };
 
@@ -77,7 +97,14 @@ describe('POST /members/invite', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ email: 'Anna@Cantina.Example', created: true });
+    // `outcome` ships with the members screen (E8): the port always
+    // distinguished the three reasons for `created: false`, and the response
+    // withheld them until there was a screen with somewhere to show them.
+    expect(await response.json()).toEqual({
+      email: 'Anna@Cantina.Example',
+      created: true,
+      outcome: 'invited',
+    });
 
     /*
      * The tenant reaching the port is the resolved one, from a memberships row.
@@ -112,10 +139,10 @@ describe('POST /members/invite', () => {
     const app = createApp({
       auth: signedIn(),
       readMemberships: oneMembership(TENANT, 'OWNER'),
-      members: {
+      members: port({
         invite: () => Promise.resolve({ outcome: 'already-invited' as const, created: false }),
         accept: () => Promise.resolve(undefined),
-      },
+      }),
     });
 
     const response = await post(app, '/v1/dashboard/members/invite', {
@@ -220,12 +247,12 @@ describe('POST /members/accept', () => {
     const app = createApp({
       auth: signedIn('user_anna'),
       readMemberships: memberships([]),
-      members: {
+      members: port({
         invite: () => Promise.resolve({ outcome: 'already-invited' as const, created: false }),
         // The port returns `undefined` for unknown, expired, revoked, already
         // redeemed and addressed-to-somebody-else without distinguishing them.
         accept: () => Promise.resolve(undefined),
-      },
+      }),
     });
 
     const response = await post(app, '/v1/dashboard/members/accept', { token: TOKEN });

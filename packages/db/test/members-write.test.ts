@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { countOwners, removeMember, setMemberRole } from '../src/members-write.js';
+import { readRoster } from '../src/memberships.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 
 /**
@@ -167,5 +168,51 @@ describe('countOwners', () => {
     // "undefined owners".
     const { tx } = capturing([]);
     expect(await countOwners(tx)).toBe(0);
+  });
+});
+
+describe('readRoster (E8)', () => {
+  it('joins auth_users, because a list of opaque ids is not a members screen', async () => {
+    const { tx, statements } = capturing([]);
+    await readRoster(tx);
+
+    const sql = text(statements[0]);
+
+    /*
+     * Safe under RLS in the direction that matters: `memberships` is
+     * policy-scoped to this tenant, so the join can only reach users who are
+     * already members of it. It cannot be used to read the user table at large.
+     */
+    expect(sql).toContain('JOIN auth_users');
+    expect(sql).not.toContain('tenant_id =');
+  });
+
+  it('puts owners first', async () => {
+    const { tx, statements } = capturing([]);
+    await readRoster(tx);
+
+    // The list answers "who can do what here", and that ordering answers it
+    // without the reader scanning.
+    expect(text(statements[0])).toContain("ORDER BY (m.role <> 'OWNER')");
+  });
+
+  it('maps the row to the shape the API returns', async () => {
+    const { tx } = capturing([
+      {
+        user_id: 'user_matteo',
+        role: 'OWNER',
+        created_at: new Date('2026-08-01T09:14:00.000Z'),
+        email: 'matteo@cantina.example',
+        name: 'Matteo',
+      },
+    ]);
+
+    expect((await readRoster(tx))[0]).toEqual({
+      userId: 'user_matteo',
+      email: 'matteo@cantina.example',
+      name: 'Matteo',
+      role: 'OWNER',
+      joinedAt: new Date('2026-08-01T09:14:00.000Z'),
+    });
   });
 });

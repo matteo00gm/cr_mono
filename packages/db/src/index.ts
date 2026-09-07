@@ -44,7 +44,13 @@ export { InvalidUserIdError, NestedUserContextError, withUser } from './with-use
  * exception. The decision made *with* these rows stays in `packages/core`,
  * which has no database at all.
  */
-export { readMembershipsForUser, type MembershipRole, type UserMembership } from './memberships.js';
+export {
+  readMembershipsForUser,
+  readRoster,
+  type MembershipRole,
+  type RosterEntry,
+  type UserMembership,
+} from './memberships.js';
 
 /**
  * The audit insert (P0-53).
@@ -155,3 +161,13 @@ export {
   setMemberRole,
   type MemberWriteOutcome,
 } from './members-write.js';
+
+/**
+ * The members screen's reads and the invitation withdrawal (E8).
+ *
+ * Same reasoning as every other statement exported here: queries live in this
+ * package so no app imports a driver. What a caller is *allowed* to do with
+ * them — the capability, the last-OWNER guard, the audit row — stays where
+ * those decisions belong.
+ */
+export { readOpenInvitations, revokeInvitation, type PendingInvitation } from './invitations.js';

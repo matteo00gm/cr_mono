@@ -17,6 +17,8 @@ const calls: string[] = [];
 const state = {
   isMember: false,
   suppressed: false,
+  writeOutcome: 'changed' as 'changed' | 'no-such-member' | 'would-remove-last-owner',
+  revokedEmail: 'anna@cantina.example' as string | undefined,
   insertedId: undefined as string | undefined,
   invitation: undefined as
     | {
@@ -64,6 +66,20 @@ vi.mock('@catalogorosso/db', () => ({
   markInvitationAccepted: () => {
     calls.push('markInvitationAccepted');
     return Promise.resolve();
+  },
+  readRoster: () => Promise.resolve([{ userId: 'user_a', role: 'OWNER' }]),
+  readOpenInvitations: () => Promise.resolve([{ id: 'inv_1', email: 'anna@cantina.example' }]),
+  setMemberRole: () => {
+    calls.push('setMemberRole');
+    return Promise.resolve(state.writeOutcome);
+  },
+  removeMember: () => {
+    calls.push('removeMember');
+    return Promise.resolve(state.writeOutcome);
+  },
+  revokeInvitation: () => {
+    calls.push('revokeInvitation');
+    return Promise.resolve(state.revokedEmail);
   },
   readActiveTenantName: () => Promise.resolve('Cantina Rossi'),
   readUserEmail: () => Promise.resolve(state.userEmail),
@@ -114,6 +130,8 @@ const reset = () => {
   audited.length = 0;
   state.isMember = false;
   state.suppressed = false;
+  state.writeOutcome = 'changed';
+  state.revokedEmail = 'anna@cantina.example';
   state.insertedId = 'inv_1';
   state.userEmail = 'anna@cantina.example';
   state.membership = undefined;
@@ -328,5 +346,93 @@ describe('accept', () => {
     const { port } = build();
 
     expect(await port.accept({ token: 'a'.repeat(43), userId: 'user_anna' })).toBeUndefined();
+  });
+});
+
+describe('the members screen (E8)', () => {
+  it('reads the roster and the open invitations inside a tenant transaction', async () => {
+    reset();
+    const { port } = build();
+
+    expect(await port.roster(TENANT)).toHaveLength(1);
+    expect(await port.pending(TENANT)).toHaveLength(1);
+
+    // Under RLS, so neither query names a tenant — `withTenant` is what scopes
+    // them, and a predicate here would be a second source of truth for
+    // something the policy already decides.
+    expect(calls.filter((c) => c.startsWith('withTenant('))).toHaveLength(2);
+  });
+
+  it('records an audit row when a role actually changes', async () => {
+    reset();
+    const { port } = build();
+
+    expect(await port.changeRole({ tenantId: TENANT, userId: 'user_a', role: 'EDITOR' })).toBe(
+      'changed',
+    );
+    expect(audited).toEqual([{ action: 'member.role_changed', target: 'user_a' }]);
+  });
+
+  it('records nothing when the change was refused', async () => {
+    reset();
+    state.writeOutcome = 'would-remove-last-owner';
+    const { port } = build();
+
+    const outcome = await port.changeRole({ tenantId: TENANT, userId: 'user_a', role: 'EDITOR' });
+
+    /*
+     * The rule the whole audit design rests on (P0-53): an entry for something
+     * that did not happen is worse than no entry, because it is a record people
+     * believe. The guard lives in the SQL statement, so the port learns of a
+     * refusal only from the outcome — which is exactly what this branches on.
+     */
+    expect(outcome).toBe('would-remove-last-owner');
+    expect(audited).toEqual([]);
+  });
+
+  it('records a removal, which is the one nothing else records', async () => {
+    reset();
+    const { port } = build();
+
+    expect(await port.remove({ tenantId: TENANT, userId: 'user_a' })).toBe('changed');
+
+    // The memberships row is gone afterwards, so without this there is no
+    // record anywhere that the person was ever a member.
+    expect(audited).toEqual([{ action: 'member.removed', target: 'user_a' }]);
+  });
+
+  it('records nothing when a removal was refused', async () => {
+    reset();
+    state.writeOutcome = 'no-such-member';
+    const { port } = build();
+
+    expect(await port.remove({ tenantId: TENANT, userId: 'user_elsewhere' })).toBe(
+      'no-such-member',
+    );
+    expect(audited).toEqual([]);
+  });
+
+  it('names the un-invited address in the audit row', async () => {
+    reset();
+    const { port } = build();
+
+    expect(await port.revoke({ tenantId: TENANT, invitationId: 'inv_1' })).toBe(true);
+
+    // The address comes back from the UPDATE rather than from a second read, so
+    // there is no window in which the row could change between the two.
+    expect(audited).toEqual([
+      { action: 'member.invitation_revoked', target: 'anna@cantina.example' },
+    ]);
+  });
+
+  it('reports a revocation that matched nothing, and records nothing', async () => {
+    reset();
+    state.revokedEmail = undefined;
+    const { port } = build();
+
+    // Already accepted, already revoked, or absent — the caller turns all three
+    // into one 404 rather than distinguishing which ids are real.
+    expect(await port.revoke({ tenantId: TENANT, invitationId: 'inv_gone' })).toBe(false);
+    expect(audited).toEqual([]);
   });
 });

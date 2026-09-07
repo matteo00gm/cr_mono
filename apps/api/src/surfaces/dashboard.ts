@@ -3,14 +3,23 @@ import { publicRoute, requires, ROLES, type RouteAccess } from '@catalogorosso/s
 import {
   acceptInviteResponse,
   contextResponse,
+  invitationRevokedResponse,
   inviteResponse,
   meResponse,
+  memberRemovedResponse,
+  pendingInvitationsResponse,
+  roleChangeResponse,
+  rosterResponse,
   surfaceResponse,
 } from '@catalogorosso/api-client';
 import { Hono } from 'hono';
 import { z } from 'zod';
 
-import { InvalidRequestError, NotFoundError } from '@catalogorosso/core';
+import {
+  assertMemberWriteSucceeded,
+  InvalidRequestError,
+  NotFoundError,
+} from '@catalogorosso/core';
 
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
@@ -71,6 +80,16 @@ const inviteBody = z.object({
   email: z.string().min(3).max(320),
   role: z.enum(ROLES),
 });
+
+/**
+ * The role-change body (E8).
+ *
+ * `.strict()` for the same reason the acceptance body is: an unexpected field
+ * should be a rejection the operator can see, not a value silently dropped. The
+ * target is in the *path*, never here — a body carrying both a `userId` and a
+ * `role` is one refactor away from somebody reading the wrong one.
+ */
+const roleChangeBody = z.object({ role: z.enum(ROLES) }).strict();
 
 /**
  * The acceptance body, and what it does **not** carry.
@@ -238,7 +257,97 @@ export const createDashboardApp = ({
      * somewhere useful to show the reason, and widening the contract before
      * there is a reader for it means guessing at the shape.
      */
-    return c.json({ email: parsed.data.email, created: result.created });
+    return c.json({
+      email: parsed.data.email,
+      created: result.created,
+      outcome: result.outcome,
+    });
+  });
+
+  /* ---- the members screen (E8) ---------------------------------------- */
+
+  /**
+   * The roster.
+   *
+   * Behind `members:manage` rather than a read capability, and that is a
+   * choice worth stating: who else can reach a winery's catalogue and billing
+   * is not neutral information, and an `EDITOR` has no action to take on it.
+   * It moves to a narrower capability the day there is a screen that needs it.
+   */
+  app.get('/members', requireCapability('members:manage'), async (c) =>
+    c.json({ members: await members.roster(c.get('tenantId')) }),
+  );
+
+  /** Invitations still outstanding. Open ones only — see the port. */
+  app.get('/members/invitations', requireCapability('members:manage'), async (c) =>
+    c.json({ invitations: await members.pending(c.get('tenantId')) }),
+  );
+
+  /**
+   * Change a member's role.
+   *
+   * `PATCH` rather than `PUT`: the body carries the role and nothing else, and
+   * a `PUT` would imply the caller is replacing the whole membership — which
+   * would invite somebody to send `tenantId` in it, which is exactly the thing
+   * P0-48 exists to make impossible.
+   */
+  app.patch('/members/:userId', requireCapability('members:manage'), async (c) => {
+    const parsed = roleChangeBody.safeParse(await readJson(c));
+
+    if (!parsed.success) {
+      throw new InvalidRequestError('Send a JSON body carrying a role of OWNER or EDITOR.');
+    }
+
+    const userId = c.req.param('userId');
+
+    const outcome = await members.changeRole({
+      tenantId: c.get('tenantId'),
+      userId,
+      role: parsed.data.role,
+    });
+
+    /*
+     * Throws on anything but success, and the mapping lives in
+     * `packages/core` so this handler and the one below cannot disagree about
+     * it: a member of another winery is 404 and never 403 (§3.5), and the
+     * last-OWNER refusal is a 409 whose message says how to proceed.
+     */
+    assertMemberWriteSucceeded(outcome);
+
+    return c.json({ userId, role: parsed.data.role });
+  });
+
+  /**
+   * Remove a member.
+   *
+   * The same guard as a demotion, one clause shorter — a winery cannot be left
+   * with no owner either way (P0-52). The audit row matters most here, because
+   * the `memberships` row is gone afterwards and nothing else records that the
+   * person was ever a member.
+   */
+  app.delete('/members/:userId', requireCapability('members:manage'), async (c) => {
+    const userId = c.req.param('userId');
+
+    assertMemberWriteSucceeded(await members.remove({ tenantId: c.get('tenantId'), userId }));
+
+    return c.json({ userId, removed: true as const });
+  });
+
+  /**
+   * Withdraw an invitation.
+   *
+   * 404 when nothing matched — already accepted, already revoked, or never
+   * existed. One answer for all three, because distinguishing them tells a
+   * caller which invitation ids are real, and none of the distinctions helps
+   * an owner who is trying to make a link stop working.
+   */
+  app.delete('/members/invitations/:id', requireCapability('members:manage'), async (c) => {
+    const invitationId = c.req.param('id');
+
+    const revoked = await members.revoke({ tenantId: c.get('tenantId'), invitationId });
+    if (!revoked) throw new NotFoundError('No such invitation.');
+
+    return c.json({ invitationId, revoked: true as const });
   });
 
   return app;
@@ -377,6 +486,102 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'to discover which invitations exist.',
       example: { tenantId: '9f2c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a', role: 'EDITOR' },
       response: acceptInviteResponse,
+    },
+  ],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/members`),
+    {
+      access: requires('members:manage'),
+      summary: 'Who belongs to this winery',
+      description:
+        'The roster: a name, address, role and join date for each member. Behind ' +
+        '`members:manage` rather than a read capability, because who else can reach the ' +
+        'catalogue and billing of a winery is not neutral information, and an EDITOR ' +
+        'has no action to take on it. Scoped by Row Level Security to the active winery, ' +
+        'so it cannot be used to enumerate anybody else.',
+      example: {
+        members: [
+          {
+            userId: 'user_matteo',
+            email: 'matteo@cantina.example',
+            name: 'Matteo Rossi',
+            role: 'OWNER',
+            joinedAt: '2026-08-01T09:14:00.000Z',
+          },
+        ],
+      },
+      response: rosterResponse,
+    },
+  ],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/members/invitations`),
+    {
+      access: requires('members:manage'),
+      summary: 'Invitations still outstanding',
+      description:
+        'Open invitations only — accepted and revoked ones are history, and listing them ' +
+        'would show a growing set of things nobody can act on. Carries no token and no ' +
+        'hash, because the hash is what the credential reduces to and returning it would ' +
+        'hand a caller material to attack offline, for no gain over revoking and ' +
+        're-inviting.',
+      example: {
+        invitations: [
+          {
+            id: '4f1c9a2e-77b8-4a6d-9c31-2e77b84a6d9c',
+            email: 'anna@cantina.example',
+            role: 'EDITOR',
+            invitedBy: 'user_matteo',
+            expiresAt: '2026-09-14T09:14:00.000Z',
+            createdAt: '2026-09-07T09:14:00.000Z',
+          },
+        ],
+      },
+      response: pendingInvitationsResponse,
+    },
+  ],
+  [
+    routeKey('PATCH', `${DASHBOARD_PREFIX}/members/:userId`),
+    {
+      access: requires('members:manage'),
+      summary: "Change a member's role",
+      description:
+        'Refuses with 409 when it would leave the winery with no OWNER, and the message ' +
+        'says how to proceed: promote somebody first. The guard is inside the SQL ' +
+        'statement and takes a lock over the whole roster, so two simultaneous demotions ' +
+        'cannot both succeed. A user who belongs to another winery answers 404, never ' +
+        '403, so this cannot be used to probe which accounts exist elsewhere.',
+      example: { userId: 'user_anna', role: 'EDITOR' },
+      response: roleChangeResponse,
+    },
+  ],
+  [
+    routeKey('DELETE', `${DASHBOARD_PREFIX}/members/:userId`),
+    {
+      access: requires('members:manage'),
+      summary: 'Remove a member',
+      description:
+        'The same last-OWNER guard as a role change. Writes an audit row inside the same ' +
+        'transaction, which matters more here than anywhere else: the membership row is ' +
+        'gone afterwards, so nothing else records that the person was ever a member or ' +
+        'who removed them.',
+      example: { userId: 'user_anna', removed: true },
+      response: memberRemovedResponse,
+    },
+  ],
+  [
+    routeKey('DELETE', `${DASHBOARD_PREFIX}/members/invitations/:id`),
+    {
+      access: requires('members:manage'),
+      summary: 'Withdraw an invitation',
+      description:
+        'Stamps the invitation revoked rather than deleting it, so the fact that one was ' +
+        'sent and withdrawn survives for an incident review — and so a fresh invitation ' +
+        'to the same address succeeds, which the partial unique index allows only once ' +
+        'the old row is closed. Answers 404 for an id that is already accepted, already ' +
+        'revoked, or never existed: one answer, so this cannot be used to discover which ' +
+        'invitation ids are real.',
+      example: { invitationId: '4f1c9a2e-77b8-4a6d-9c31-2e77b84a6d9c', revoked: true },
+      response: invitationRevokedResponse,
     },
   ],
 ]);

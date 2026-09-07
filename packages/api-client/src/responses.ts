@@ -50,6 +50,85 @@ export const contextResponse = membershipSchema;
 export const inviteResponse = z.object({
   email: z.string(),
   created: z.boolean(),
+
+  /**
+   * *Why* nothing was created, when nothing was (E8).
+   *
+   * Held back deliberately in P0-51 — the port distinguished the three cases
+   * and the response flattened them, because widening a contract before there
+   * is a reader means guessing at the shape. The members screen is that reader,
+   * so the reason ships with it: "already a member", "already invited" and
+   * "we cannot deliver to that address" are three different things to tell an
+   * owner, and the third is the one they would otherwise never learn.
+   */
+  outcome: z.enum(['invited', 'already-member', 'already-invited', 'undeliverable']),
+});
+
+/**
+ * Timestamps cross the wire as ISO-8601 strings.
+ *
+ * `z.iso.datetime()` rather than `z.date()`: JSON has no date type, so a schema
+ * claiming one would validate against what the *server* holds and not against
+ * what a client actually receives — which is the difference the contract exists
+ * to pin.
+ */
+const timestamp = z.iso.datetime();
+
+/**
+ * The roster (E8).
+ *
+ * Name and address rather than only a user id, because a members screen listing
+ * opaque identifiers is not a members screen. Both come from `auth_users` via a
+ * join that RLS already scopes to this tenant's memberships.
+ */
+export const rosterResponse = z.object({
+  members: z.array(
+    z.object({
+      userId: z.string(),
+      email: z.string(),
+      name: z.string(),
+      role: roleSchema,
+      joinedAt: timestamp,
+    }),
+  ),
+});
+
+/**
+ * Invitations still outstanding (E8).
+ *
+ * Open ones only — accepted and revoked rows are history, and a screen that
+ * listed them would show an owner a growing list of things they cannot act on.
+ * **No token and no hash**: the hash is the credential's shadow, and returning
+ * it would hand anyone with `members:manage` material to attack offline for no
+ * gain over revoking and re-inviting.
+ */
+export const pendingInvitationsResponse = z.object({
+  invitations: z.array(
+    z.object({
+      id: z.string(),
+      email: z.string(),
+      role: roleSchema,
+      invitedBy: z.string(),
+      expiresAt: timestamp,
+      createdAt: timestamp,
+    }),
+  ),
+});
+
+/** The membership as it now stands, so the screen need not re-fetch the roster. */
+export const roleChangeResponse = z.object({
+  userId: z.string(),
+  role: roleSchema,
+});
+
+export const memberRemovedResponse = z.object({
+  userId: z.string(),
+  removed: z.literal(true),
+});
+
+export const invitationRevokedResponse = z.object({
+  invitationId: z.string(),
+  revoked: z.literal(true),
 });
 
 /**
@@ -66,6 +145,11 @@ export type MeResponse = z.infer<typeof meResponse>;
 export type ContextResponse = z.infer<typeof contextResponse>;
 export type InviteResponse = z.infer<typeof inviteResponse>;
 export type AcceptInviteResponse = z.infer<typeof acceptInviteResponse>;
+export type RosterResponse = z.infer<typeof rosterResponse>;
+export type PendingInvitationsResponse = z.infer<typeof pendingInvitationsResponse>;
+export type RoleChangeResponse = z.infer<typeof roleChangeResponse>;
+export type MemberRemovedResponse = z.infer<typeof memberRemovedResponse>;
+export type InvitationRevokedResponse = z.infer<typeof invitationRevokedResponse>;
 
 /**
  * Every dashboard response, keyed by `METHOD path`.
@@ -78,6 +162,11 @@ export const DASHBOARD_RESPONSES = {
   'GET /v1/dashboard/me': meResponse,
   'GET /v1/dashboard/context': contextResponse,
   'POST /v1/dashboard/members/invite': inviteResponse,
+  'GET /v1/dashboard/members': rosterResponse,
+  'GET /v1/dashboard/members/invitations': pendingInvitationsResponse,
+  'PATCH /v1/dashboard/members/:userId': roleChangeResponse,
+  'DELETE /v1/dashboard/members/:userId': memberRemovedResponse,
+  'DELETE /v1/dashboard/members/invitations/:id': invitationRevokedResponse,
   'POST /v1/dashboard/members/accept': acceptInviteResponse,
 } as const;
 

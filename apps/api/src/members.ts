@@ -7,9 +7,15 @@ import {
   type Role,
   type SendEmail,
 } from '@catalogorosso/core';
+import type { MemberWriteOutcome, PendingInvitation, RosterEntry } from '@catalogorosso/db';
 import {
   emailIsMember,
   isSuppressed,
+  readOpenInvitations,
+  readRoster,
+  removeMember,
+  revokeInvitation,
+  setMemberRole,
   insertInvitation,
   insertMembershipFromInvitation,
   markInvitationAccepted,
@@ -73,6 +79,40 @@ export interface MembersPort {
   invite(command: InviteCommand): Promise<InviteResult>;
   /** `undefined` for every unusable token, with no distinction between them. */
   accept(command: AcceptCommand): Promise<{ tenantId: string; role: Role } | undefined>;
+
+  /* ---- the members screen (E8) ---- */
+
+  roster(tenantId: string): Promise<readonly RosterEntry[]>;
+  pending(tenantId: string): Promise<readonly PendingInvitation[]>;
+
+  /**
+   * Both write paths return the outcome rather than throwing.
+   *
+   * The mapping from outcome to HTTP status is a §3.5 decision — a member of
+   * another winery must be 404 and not 403 — and it lives in
+   * `assertMemberWriteSucceeded` so the two handlers cannot disagree about it.
+   */
+  changeRole(command: RoleChangeCommand): Promise<MemberWriteOutcome>;
+  remove(command: RemoveCommand): Promise<MemberWriteOutcome>;
+
+  /** `false` when nothing matched — already accepted, already revoked, or absent. */
+  revoke(command: RevokeCommand): Promise<boolean>;
+}
+
+export interface RoleChangeCommand {
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly role: 'OWNER' | 'EDITOR';
+}
+
+export interface RemoveCommand {
+  readonly tenantId: string;
+  readonly userId: string;
+}
+
+export interface RevokeCommand {
+  readonly tenantId: string;
+  readonly invitationId: string;
 }
 
 /**
@@ -97,6 +137,11 @@ export class MembersPortNotConfiguredError extends Error {
 export const unconfiguredMembers: MembersPort = {
   invite: () => Promise.reject(new MembersPortNotConfiguredError()),
   accept: () => Promise.reject(new MembersPortNotConfiguredError()),
+  roster: () => Promise.reject(new MembersPortNotConfiguredError()),
+  pending: () => Promise.reject(new MembersPortNotConfiguredError()),
+  changeRole: () => Promise.reject(new MembersPortNotConfiguredError()),
+  remove: () => Promise.reject(new MembersPortNotConfiguredError()),
+  revoke: () => Promise.reject(new MembersPortNotConfiguredError()),
 };
 
 /* -------------------------------------------------------------------------- */
@@ -258,4 +303,78 @@ export const createMembersPort = ({
 
     return outcome;
   },
+
+  /* ---- the members screen (E8) ---- */
+
+  roster: (tenantId) => withTenant(tenantId, (tx) => readRoster(tx)),
+
+  pending: (tenantId) => withTenant(tenantId, (tx) => readOpenInvitations(tx)),
+
+  /**
+   * Changing a role, with the last-OWNER guard and the audit row in one
+   * transaction.
+   *
+   * The guard lives inside the statement (P0-52), so this cannot perform the
+   * write without it. What is added here is the record: "who demoted this
+   * person, and when" is the question an owner asks afterwards, and until now
+   * nothing answered it.
+   *
+   * The audit row is written **only when something changed**. An entry for a
+   * refused change would be a record of something that did not happen, which is
+   * the failure P0-53's whole design is arranged against.
+   */
+  changeRole: (command) =>
+    withTenant(command.tenantId, async (tx) => {
+      const outcome = await setMemberRole(tx, { userId: command.userId, role: command.role });
+
+      if (outcome === 'changed') {
+        await record(tx, {
+          action: 'member.role_changed',
+          target: command.userId,
+          metadata: { role: command.role },
+        });
+      }
+
+      return outcome;
+    }),
+
+  /**
+   * Removing a member.
+   *
+   * The audit row matters more here than anywhere else in this file: the
+   * `memberships` row is *gone* afterwards, so without this there is no record
+   * anywhere that the person was ever a member, let alone who removed them. A
+   * demotion at least leaves a row to look at.
+   */
+  remove: (command) =>
+    withTenant(command.tenantId, async (tx) => {
+      const outcome = await removeMember(tx, { userId: command.userId });
+
+      if (outcome === 'changed') {
+        await record(tx, { action: 'member.removed', target: command.userId });
+      }
+
+      return outcome;
+    }),
+
+  /**
+   * Withdrawing an invitation.
+   *
+   * The address comes back from the `UPDATE` rather than from a second read, so
+   * the audit row names who was un-invited without a round trip — and without a
+   * window in which the row could change between the two.
+   */
+  revoke: (command) =>
+    withTenant(command.tenantId, async (tx) => {
+      const email = await revokeInvitation(tx, command.invitationId);
+      if (email === undefined) return false;
+
+      await record(tx, {
+        action: 'member.invitation_revoked',
+        target: email,
+        metadata: { invitationId: command.invitationId },
+      });
+
+      return true;
+    }),
 });

@@ -145,3 +145,91 @@ export const readActiveTenantName = async (tx: DbTransaction): Promise<string | 
 
   return row?.name;
 };
+
+/**
+ * The tenant's invitations that are still open (P0-51, E8).
+ *
+ * Open only — accepted and revoked rows are history, and a members screen that
+ * listed them would show an owner a growing list of things they cannot act on.
+ * The `revoked_at` column stays for the audit trail; the *screen* is about what
+ * is outstanding.
+ *
+ * **`token_hash` is not selected**, and that is not an oversight to tidy up
+ * later: the hash is the credential's shadow, and a list endpoint that returns
+ * it hands anyone with `members:manage` the material to attack it offline.
+ * There is nothing a caller can do with it that they cannot do better by
+ * revoking and re-inviting.
+ *
+ * Named `PendingInvitation` rather than `OpenInvitation` because
+ * `with-invitation.ts` already exports the latter for the row the *acceptance*
+ * path matches — a different shape for a different purpose, and two types with
+ * one name in the same package surface is how a caller ends up using the wrong
+ * one and finding out at runtime.
+ */
+export interface PendingInvitation {
+  readonly id: string;
+  readonly email: string;
+  readonly role: string;
+  readonly invitedBy: string;
+  readonly expiresAt: Date;
+  readonly createdAt: Date;
+}
+
+export const readOpenInvitations = async (
+  tx: DbTransaction,
+): Promise<readonly PendingInvitation[]> => {
+  const rows = await tx.execute(sql`
+    SELECT id, email, role, invited_by, expires_at, created_at
+    FROM invitations
+    WHERE accepted_at IS NULL AND revoked_at IS NULL
+    ORDER BY created_at DESC
+  `);
+
+  return [...rows].map((row) => {
+    const r = row as {
+      id: string;
+      email: string;
+      role: string;
+      invited_by: string;
+      expires_at: Date;
+      created_at: Date;
+    };
+
+    return {
+      id: r.id,
+      email: r.email,
+      role: r.role,
+      invitedBy: r.invited_by,
+      expiresAt: r.expires_at,
+      createdAt: r.created_at,
+    };
+  });
+};
+
+/**
+ * Withdraws an open invitation.
+ *
+ * **Stamps `revoked_at` rather than deleting the row.** Two reasons, and the
+ * second is the one that decides it: the partial unique index covers only open
+ * rows, so a stamped row does not block a fresh invitation to the same address
+ * — and an invitation that was sent and withdrawn is a thing that happened,
+ * which a members screen may never show but an incident review will want.
+ *
+ * Returns the address, so the caller can put it in the audit row without a
+ * second read — and `undefined` when nothing matched, which the caller turns
+ * into 404 rather than pretending success.
+ */
+export const revokeInvitation = async (
+  tx: DbTransaction,
+  id: string,
+): Promise<string | undefined> => {
+  const rows = await tx.execute(sql`
+    UPDATE invitations
+    SET revoked_at = now()
+    WHERE id = ${id}::uuid AND accepted_at IS NULL AND revoked_at IS NULL
+    RETURNING email
+  `);
+
+  const row = [...rows][0] as { email?: string } | undefined;
+  return row?.email;
+};
