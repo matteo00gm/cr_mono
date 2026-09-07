@@ -90,3 +90,48 @@ describe('buildDependencies', () => {
     expect(() => buildDependencies({ ...config, resendApiKey: undefined })).not.toThrow();
   });
 });
+
+describe('rate limiting (A1)', () => {
+  it('wires the limiter into Better Auth when one is supplied', async () => {
+    const seen: string[] = [];
+    const deps = buildDependencies({
+      ...config,
+      rateLimiter: {
+        check: (checks) => {
+          seen.push(...checks.map((c) => c.key));
+          return Promise.resolve({
+            allowed: false,
+            remaining: 0,
+            resetAt: new Date(),
+            retryAfterSec: 30,
+          });
+        },
+      },
+    });
+
+    /*
+     * A real request through the real handler, because the option being set and
+     * the storage being *consulted* are different claims — and better-auth's
+     * options accept unknown keys at that level, so a misspelled
+     * `customStorage` typechecks cleanly and falls back to the per-container
+     * store. That is A1 reintroduced with nothing failing.
+     */
+    const response = await deps.auth.handler(
+      new Request(`${config.authBaseUrl}/v1/dashboard/auth/sign-in/email`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': '203.0.113.7' },
+        body: JSON.stringify({ email: 'a@b.example', password: 'whatever' }),
+      }),
+    );
+
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0]).toMatch(/^auth:/);
+    expect(response.status).toBe(429);
+  });
+
+  it('falls back to the per-container store when none is supplied', () => {
+    // Permitted only because `index.ts` refuses to start a deployed stage
+    // without one. What it buys is a local run and a suite with no database.
+    expect(() => buildDependencies(config)).not.toThrow();
+  });
+});

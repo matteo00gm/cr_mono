@@ -1,6 +1,8 @@
 import process from 'node:process';
 import { handle } from 'hono/aws-lambda';
 
+import { createRateLimiter } from '@catalogorosso/db';
+
 import { createApp } from './app.js';
 import { buildDependencies } from './composition.js';
 import { logger } from './middleware/logger.js';
@@ -80,6 +82,22 @@ if (stage !== 'unknown' && originSecret === undefined) {
   );
 }
 
+/**
+ * Where auth rate-limit counters live, and the assertion that a deployment has
+ * somewhere durable to put them (A1).
+ *
+ * **Absent is permissive**, the same shape as the origin secret above: Better
+ * Auth falls back to a module-level `Map`, which in Lambda is per container, so
+ * N warm containers give an attacker N times each configured limit and a
+ * recycle resets the counter to zero. Nothing errors and nothing looks wrong.
+ *
+ * A local run has no database and is allowed the in-memory behaviour; a
+ * deployed stage is not, and refusing to start is the right failure. The
+ * alternative is a container that comes up healthy with rate limiting that
+ * quietly does not survive its own lifetime.
+ */
+const rateLimiter = stage === 'unknown' ? undefined : createRateLimiter();
+
 const dependencies = buildDependencies({
   authSecret: requireEnvironment('AUTH_SECRET'),
   authBaseUrl: requireEnvironment('AUTH_BASE_URL'),
@@ -91,6 +109,7 @@ const dependencies = buildDependencies({
    */
   stage,
   ...(originSecret === undefined ? {} : { originSecret }),
+  ...(rateLimiter === undefined ? {} : { rateLimiter }),
 
   emailFrom: optionalEnvironment('EMAIL_FROM') ?? 'AI Sommelier <noreply@localhost>',
   resendApiKey: optionalEnvironment('RESEND_API_KEY'),

@@ -76,6 +76,42 @@ export interface AuthOptions {
    */
   readonly basePath: string;
   readonly sendResetPassword: (email: ResetPasswordEmail) => Promise<void>;
+
+  /**
+   * Where rate-limit counters live (A1).
+   *
+   * **Optional, and absent means per-container** — which is Better Auth's
+   * default and the whole of A1: its store is a module-level `Map`, so N warm
+   * Lambda containers give an attacker N times each configured limit, and a
+   * container recycle resets the counter to zero. A limit that resets when an
+   * attacker waits is not a limit.
+   *
+   * Optional rather than required because a local run and the suite have no
+   * database and the in-memory behaviour is correct for them. The composition
+   * root is what refuses to deploy without one.
+   */
+  readonly rateLimitStorage?: RateLimitStorage | undefined;
+}
+
+/**
+ * Better Auth's storage contract, restated here rather than imported.
+ *
+ * `customStorage` is **not in better-auth 1.7.2's exported types** — verified
+ * by searching every `.d.mts` in the package — though the `consume` function it
+ * holds is typed once inside the options. Restating it gives this repository a
+ * name to compile against and one place to update when the library changes.
+ *
+ * A second thing that search turned up, and it is the reason
+ * `auth.test.ts` asserts the limiter is actually consulted: the options type
+ * **accepts unknown keys at this level**, so `customStorageTypo` typechecks
+ * cleanly and silently falls back to the in-memory store. A typo would
+ * reintroduce A1 with nothing failing.
+ */
+export interface RateLimitStorage {
+  consume(
+    key: string,
+    rule: { readonly window: number; readonly max: number },
+  ): Promise<{ allowed: boolean; retryAfter: number | null }>;
 }
 
 /**
@@ -232,6 +268,17 @@ export const createAuth = (options: AuthOptions): AuthInstance =>
      */
     rateLimit: {
       enabled: true,
+
+      /*
+       * Present only when the caller supplied one. Passing `undefined` would be
+       * equivalent to omitting it, but writing it conditionally keeps the
+       * intent visible: without storage this is deliberately the library's
+       * in-memory default, and that is a decision the composition root makes
+       * rather than a gap here.
+       */
+      ...(options.rateLimitStorage === undefined
+        ? {}
+        : { customStorage: options.rateLimitStorage }),
       window: 60,
       max: 100,
 

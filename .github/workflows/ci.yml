@@ -214,6 +214,19 @@ jobs:
           fi
           echo "the origin guard is wired at both ends."
 
+      # Reserved concurrency (B1) and the shared rate-limit store (A1) are
+      # coupled: Better Auth's limits are per container, so an unbounded
+      # function multiplies every configured limit by however many are warm.
+      # Both are silent when wrong — the API works and only the limiter stops
+      # meaning what it says.
+      - name: Assert the API function caps its concurrency
+        run: |
+          if ! grep -qE "concurrency: *\{ *reserved: *[0-9]+" infra/api.ts; then
+            echo "::error::infra/api.ts must set concurrency.reserved — see B1; each concurrent Lambda holds a Postgres connection and an unbounded function exhausts max_connections on a t4g.micro before hitting its own limit"
+            exit 1
+          fi
+          echo "reserved concurrency is set."
+
       # The notification that a dependency wants to run code at install time.
       #
       # pnpm appends `<package>: set this to true or false` to
