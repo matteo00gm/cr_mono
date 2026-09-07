@@ -232,6 +232,244 @@
           }
         }
       },
+      "/v1/dashboard/members": {
+        "get": {
+          "summary": "Who belongs to this winery",
+          "description": "The roster: a name, address, role and join date for each member. Behind `members:manage` rather than a read capability, because who else can reach the catalogue and billing of a winery is not neutral information, and an EDITOR has no action to take on it. Scoped by Row Level Security to the active winery, so it cannot be used to enumerate anybody else.\n\nRequires the `members:manage` capability.",
+          "operationId": "getV1DashboardMembers",
+          "x-required-capability": "members:manage",
+          "responses": {
+            "200": {
+              "description": "Who belongs to this winery",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "members": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "userId": {
+                              "type": "string"
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "role": {
+                              "type": "string",
+                              "enum": [
+                                "OWNER",
+                                "EDITOR"
+                              ]
+                            },
+                            "joinedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                            }
+                          },
+                          "required": [
+                            "userId",
+                            "email",
+                            "name",
+                            "role",
+                            "joinedAt"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "members"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "members": [
+                      {
+                        "userId": "user_matteo",
+                        "email": "matteo@cantina.example",
+                        "name": "Matteo Rossi",
+                        "role": "OWNER",
+                        "joinedAt": "2026-08-01T09:14:00.000Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/dashboard/members/:userId": {
+        "delete": {
+          "summary": "Remove a member",
+          "description": "The same last-OWNER guard as a role change. Writes an audit row inside the same transaction, which matters more here than anywhere else: the membership row is gone afterwards, so nothing else records that the person was ever a member or who removed them.\n\nRequires the `members:manage` capability.",
+          "operationId": "deleteV1DashboardMembers:userId",
+          "x-required-capability": "members:manage",
+          "responses": {
+            "200": {
+              "description": "Remove a member",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "userId": {
+                        "type": "string"
+                      },
+                      "removed": {
+                        "type": "boolean",
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "userId",
+                      "removed"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "userId": "user_anna",
+                    "removed": true
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "patch": {
+          "summary": "Change a member's role",
+          "description": "Refuses with 409 when it would leave the winery with no OWNER, and the message says how to proceed: promote somebody first. The guard is inside the SQL statement and takes a lock over the whole roster, so two simultaneous demotions cannot both succeed. A user who belongs to another winery answers 404, never 403, so this cannot be used to probe which accounts exist elsewhere.\n\nRequires the `members:manage` capability.",
+          "operationId": "patchV1DashboardMembers:userId",
+          "x-required-capability": "members:manage",
+          "responses": {
+            "200": {
+              "description": "Change a member's role",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "userId": {
+                        "type": "string"
+                      },
+                      "role": {
+                        "type": "string",
+                        "enum": [
+                          "OWNER",
+                          "EDITOR"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "userId",
+                      "role"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "userId": "user_anna",
+                    "role": "EDITOR"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/members/accept": {
         "post": {
           "summary": "Redeem an invitation",
@@ -301,6 +539,183 @@
           }
         }
       },
+      "/v1/dashboard/members/invitations": {
+        "get": {
+          "summary": "Invitations still outstanding",
+          "description": "Open invitations only — accepted and revoked ones are history, and listing them would show a growing set of things nobody can act on. Carries no token and no hash, because the hash is what the credential reduces to and returning it would hand a caller material to attack offline, for no gain over revoking and re-inviting.\n\nRequires the `members:manage` capability.",
+          "operationId": "getV1DashboardMembersInvitations",
+          "x-required-capability": "members:manage",
+          "responses": {
+            "200": {
+              "description": "Invitations still outstanding",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "invitations": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "email": {
+                              "type": "string"
+                            },
+                            "role": {
+                              "type": "string",
+                              "enum": [
+                                "OWNER",
+                                "EDITOR"
+                              ]
+                            },
+                            "invitedBy": {
+                              "type": "string"
+                            },
+                            "expiresAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                            },
+                            "createdAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "email",
+                            "role",
+                            "invitedBy",
+                            "expiresAt",
+                            "createdAt"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "invitations"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "invitations": [
+                      {
+                        "id": "4f1c9a2e-77b8-4a6d-9c31-2e77b84a6d9c",
+                        "email": "anna@cantina.example",
+                        "role": "EDITOR",
+                        "invitedBy": "user_matteo",
+                        "expiresAt": "2026-09-14T09:14:00.000Z",
+                        "createdAt": "2026-09-07T09:14:00.000Z"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/dashboard/members/invitations/:id": {
+        "delete": {
+          "summary": "Withdraw an invitation",
+          "description": "Stamps the invitation revoked rather than deleting it, so the fact that one was sent and withdrawn survives for an incident review — and so a fresh invitation to the same address succeeds, which the partial unique index allows only once the old row is closed. Answers 404 for an id that is already accepted, already revoked, or never existed: one answer, so this cannot be used to discover which invitation ids are real.\n\nRequires the `members:manage` capability.",
+          "operationId": "deleteV1DashboardMembersInvitations:id",
+          "x-required-capability": "members:manage",
+          "responses": {
+            "200": {
+              "description": "Withdraw an invitation",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "invitationId": {
+                        "type": "string"
+                      },
+                      "revoked": {
+                        "type": "boolean",
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "invitationId",
+                      "revoked"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "invitationId": "4f1c9a2e-77b8-4a6d-9c31-2e77b84a6d9c",
+                    "revoked": true
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/members/invite": {
         "post": {
           "summary": "Invite somebody to this winery",
@@ -321,11 +736,21 @@
                       },
                       "created": {
                         "type": "boolean"
+                      },
+                      "outcome": {
+                        "type": "string",
+                        "enum": [
+                          "invited",
+                          "already-member",
+                          "already-invited",
+                          "undeliverable"
+                        ]
                       }
                     },
                     "required": [
                       "email",
-                      "created"
+                      "created",
+                      "outcome"
                     ],
                     "additionalProperties": false
                   },

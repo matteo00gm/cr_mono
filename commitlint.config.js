@@ -28,13 +28,25 @@
  */
 
 /**
- * A task id, or a short capitalised area.
+ * A task id, a register item id, or a short capitalised area.
  *
  * The area form exists for the changes that belong to no backlog row — CI
  * wiring, a plan sweep, a dependency bump. Keeping it capitalised and short is
  * what stops it becoming a second, sloppier convention.
+ *
+ * **The `[A-E]\d` form was added after this rule rejected three correct
+ * commits.** `plan-v1.md` numbers its open items `A1`…`E9` by section, several
+ * changes belong to exactly one of them and to no backlog row, and the area
+ * form does not match because the second character is a digit. Each time the
+ * commit was retitled to something vaguer — which is the rule making the log
+ * worse, not better.
+ *
+ * Deliberately narrow: `A`–`E` are the five sections that exist, so this
+ * accepts the register's vocabulary and not an open invitation to invent
+ * two-character scopes.
  */
-const HEADER = /^(P\d-\d{2}[a-z]?|[A-Z][A-Za-z]{1,14}(?: [A-Za-z]{2,14})?): (.+)$/;
+const HEADER =
+  /^(P\d-\d{2}[a-z]?|[A-E]\d{1,2}[a-z]?|[A-Z][A-Za-z]{1,14}(?: [A-Za-z]{2,14})?): (.+)$/;
 
 export default {
   parserPreset: {

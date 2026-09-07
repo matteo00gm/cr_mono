@@ -6077,8 +6077,8 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Dependency build-script prompt | **closed** | Not a `pnpm add` artefact at all — a plain fresh `install` writes it, so CI regenerated it every run. Now *answered* (`allowBuilds: … false`), which drops `strictDepBuilds` and restores the install-time notification suppression had cost. See **E5**. |
 | Sending domain authenticated | **closed (2026-09-07)** | `app.catalogorosso.com` verified in Resend (eu-west-1); DKIM and SPF published, DMARC inherited at `p=none` with reporting. Remaining step is moving to `p=quarantine` after a week of reports — an operator decision. See **E6**. |
 | Suppression list has no writer | P0-64b | The table and the send-path check shipped; the bounce webhook did not, because it needs a signed-webhook surface `apps/api` does not have yet. See **E7**. |
-| Invitations cannot be revoked | P0-51 open | The column and the index shipped and are tested; the endpoint did not, because it belongs with the members page rather than ahead of it. A mistaken invitation stays live for seven days. See **E8**. |
-| Roster cannot be changed from the API | P0-52 open | The last-OWNER guard and the writes it protects shipped and are tested to three concurrency cases; no endpoint calls them, because the member-management screen is P0-57. See **E8**. |
+| Invitations can be withdrawn | **closed (2026-09-07)** | `DELETE .../members/invitations/:id` stamps `revoked_at` rather than deleting, so a fresh invitation to the same address succeeds and the withdrawal survives for a review. See **E8**. |
+| The roster can be changed from the API | **closed (2026-09-07)** | Five routes behind `members:manage`, each carrying the last-OWNER guard and an audit row written only when something changed. See **E8**, **C5**. |
 | Migrations had no runner | **closed (2026-09-07)** | `apps/migrator`, a one-shot in-VPC Lambda invoked after deploy. The first `dev` deploy had an RDS instance with no roles or schema, so everything touching data answered 500. See **P0-21b**. |
 | 🔒 Bootstrap untested against a non-superuser | **follow-up** | `ALTER DEFAULT PRIVILEGES FOR ROLE` needs membership in that role; the test container's master is a true superuser and RDS's is not, so the statement failed only on deploy. Every P0-39 privilege assertion shares that blind spot. A container with a non-superuser master closes it. See **P0-21b**. |
 | Composition root wires email and members | **closed (2026-09-06)** | `buildDependencies` in `composition.ts`, asserted by identity against the fail-loud placeholder — a shape check would have passed on the broken version. `index.ts` is now environment reading only. See **E9**. |
@@ -6200,15 +6200,15 @@ When: **before launch**, as documentation rather than code.
 
 **C4. TOTP is configured but exercised only at the schema level.** The `twoFactor` plugin is registered and its four columns exist (migration `0028`), but no enrolment or verification path is tested. **P4-11** owns OWNER MFA and carries the three details that matter: backup codes single-use and hashed, a ±1-step window with replay rejected, and the step-up check reading the database rather than the cookie cache.
 
-**C5. Two of the three actions now write audit rows; the third has no caller to write one from.** *(partly closed)*
+**C5. Every audited action writes its row.** ✅ **closed (2026-09-07)**
 
-My first reading of this said "P0-51 and P0-52 went in without audit rows", which overstated it. Checking properly splits the item in three, and the split is the useful part:
+Closed in two passes, and the split is the useful record. Invite and acceptance landed with the composition-root fix; role change and removal landed with **E8**, because until there were endpoints there was no request, no actor, and nothing to audit — an `audit()` inside `members-write.ts` would have sat at the wrong layer *and* broken the P0-52 integration suite, which calls those functions directly inside `withTenant` with no request context.
 
-- **Invite** — a real gap, now closed. `audit(tx, { action: 'member.invited' })` runs inside the same `withTenant` transaction as the row, so the record commits or rolls back with it (P0-53).
-- **Acceptance** — a real gap, now closed, and it needed one extra thing. The accept route sits *above* `resolveTenant` by necessity, so the request context carries no tenant and `audit()` refuses to write without one. The port therefore calls `setRequestTenant(invitation.tenantId)` first — legitimate, because that tenant came out of Postgres via a matched 256-bit token rather than off the wire, so it is the P0-48 guarantee reached another way rather than a shortcut around it. Every log line for the rest of the request carries the tenant as a side benefit.
-- **Role change and removal** — **not a gap.** `setMemberRole` and `removeMember` have no caller outside their own tests; there is no request, so there is no actor, and an `audit()` inside those helpers would sit at the wrong layer *and* break the P0-52 integration suite, which calls them directly inside `withTenant` with no request context. Confirmed by running it. The audit row belongs beside the endpoint that supplies the actor, and those endpoints arrive with **E8**.
+All five rows are written **inside the transaction that performs the write**, which is the whole of P0-53's design, and **only when something actually changed**. A refused role change or removal records nothing: an entry for something that did not happen is worse than none, because it is a record people believe.
 
-**One thing the fix improved beyond closing the gap.** The writer is now injected into the members port rather than imported, which makes the audit row *assertable* — before, it would have been written and nothing would have checked. It also avoids a harness trap worth recording: `audit()` reads the actor from an `AsyncLocalStorage` in `packages/core`, and a test that mocks `@catalogorosso/db` gets a second instance of that module for the importing file's graph, so a context set in the test is invisible in the code under test. That cost a confusing `MissingAuditTenantError` before the cause was found.
+The removal row is the one that matters most. The `memberships` row is gone afterwards, so without it nothing anywhere records that the person was ever a member, let alone who removed them.
+
+One thing the fix improved beyond closing the item: the writer is **injected** into the members port rather than imported, which makes the row assertable — before, it would have been written and nothing would have checked. It also sidesteps a harness trap worth remembering: `audit()` reads the actor from an `AsyncLocalStorage` in `packages/core`, and a test that mocks `@catalogorosso/db` gets a second instance of that module for the importing file's graph, so a context set in the test is invisible in the code under test.
 
 **C6. `audit_log` has no reader.** §4.2 defers the browsable view, not the record. Until **P4** builds a screen, reading it is a direct query and a runbook — and there is no runbook.
 
@@ -6320,19 +6320,31 @@ The table, the read and the send-path check all exist; the webhook that records 
 
 This is deliberate — the inbound half needs a signed-webhook surface `apps/api` does not have, and P0-33's Stripe handler needs the same one — but the consequence should not be understated: **until P0-64b lands, a hard-bounced address is mailed again on the next send**, and repeated sends to dead addresses are the specific behaviour that moves a sending domain onto filter lists. It matters more once **E6** closes, not less: today nothing is being sent at all, so nothing is accumulating.
 
-**E8. An invitation can be created but not withdrawn.** ⛔ *(P0-51)*
+**E8. The roster can be read and changed from the API.** ✅ **closed (2026-09-07)**
 
-`invitations.revoked_at` exists, the partial unique index is written so that a fresh invitation succeeds once a row is revoked, and both are asserted against real Postgres. What does not exist is an endpoint that sets it, or one that lists what is pending.
+Five routes behind `members:manage`, closing the gap P0-51 and P0-52 left between them: the roster writes, the last-OWNER guard, the `invitations` table and its `revoked_at` column all existed, and **nothing called any of them**. An owner could invite and do nothing else.
 
-**What it costs while open.** An owner who invites the wrong address — a typo, or somebody who has since left — cannot take it back. The invitation stays live for its full seven days, and anyone who receives that mail can join the winery as whatever role it carries. The blast radius is bounded by the expiry and by the address binding (acceptance requires the session's address to match the invited one), which is why this is an open item rather than a blocker, but "wait a week" is not an answer to give a paying customer who has just realised what they typed.
+| Route | What it does |
+|---|---|
+| `GET .../members` | The roster, with name and address joined from `auth_users` |
+| `GET .../members/invitations` | Invitations still outstanding |
+| `PATCH .../members/:userId` | Change a role, behind P0-52's guard |
+| `DELETE .../members/:userId` | Remove a member, same guard |
+| `DELETE .../members/invitations/:id` | Withdraw an invitation |
 
-**Why it was left out rather than added.** It belongs with the members page (**P0-57**), not ahead of it. An endpoint with no screen is a thing nobody uses and nobody notices breaking, and the revocation UI and the pending-invitations list are the same screen — building the endpoints first means guessing at what that screen needs and being wrong about at least one of them.
+**Five decisions worth stating.**
 
-**P0-52 lands in the same gap, and widens it slightly.** `setMemberRole` and `removeMember` exist, carry the last-OWNER guard inside the statement, and are asserted against three concurrency cases — and nothing calls them either. So today an owner can invite, and can do nothing else to the roster: no change of role, no removal, no revocation, no list. All four are one screen.
+- **`members:manage` on the two reads as well**, not a narrower read capability. Who else can reach a winery's catalogue and billing is not neutral information, and an `EDITOR` has no action to take on it. It moves the day a screen needs it.
+- **No token and no hash in the invitation list.** The hash is what the credential reduces to; returning it hands anyone with `members:manage` material to attack offline, for no gain over revoking and re-inviting. Asserted by a test that greps the serialised body rather than by reading the SELECT.
+- **Revocation stamps rather than deletes.** The partial unique index covers open rows only, so a stamped row does not block a fresh invitation to the same address — and an invitation that was sent and withdrawn is a thing that happened, which a screen may never show and an incident review will want.
+- **One 404 for every unusable invitation id** — already accepted, already revoked, never existed. Distinguishing them tells a caller which ids are real, and helps no owner who is simply trying to make a link stop working.
+- **`PATCH`, not `PUT`, and the body is `.strict()`.** `PUT` implies replacing the whole membership, which invites somebody to send a `tenantId` in it — the exact thing P0-48 exists to make impossible. The target is in the path; the body carries a role and nothing else, and anything more is a 422 rather than a silently dropped field.
 
-**What closes it.** Five routes behind `members:manage` — `GET .../members`, `PATCH .../members/:userId`, `DELETE .../members/:userId`, `GET .../members/invitations` and `DELETE .../members/invitations/:id` — plus the audit rows for each (P0-53), landing with or immediately after P0-57. The storage and the guards need no further migration; what is missing is the surface.
+**The invite response gained its `outcome`.** P0-51 deliberately flattened three reasons for `created: false` into a boolean, because widening a contract before there is a reader means guessing at the shape. The members screen is that reader, so `already-member`, `already-invited` and `undeliverable` now reach it — and the third is the one an owner would otherwise never learn.
 
-**In the meantime**, a mistaken invitation is revoked with one `UPDATE` against the tenant's own rows. That is an operator action, so it belongs in a runbook rather than in a support reply.
+**C5 closes with it.** All three write paths record an audit row inside the transaction that performs the write, **and only when something changed** — an entry for a refused change would be a record of something that did not happen, which is what P0-53's whole design is arranged against. The removal row matters most: the `memberships` row is gone afterwards, so nothing else records that the person was ever a member or who removed them.
+
+**⚠ There is still no screen.** These are the routes the members page will call, and `apps/dashboard` does not have that page — P0-57 built the shell. What this changes is that the capability is now reachable and testable end to end, and the storage is no longer stranded behind an API that could not touch it. The UI is dashboard work and is tracked with the rest of P0-57's screens.
 
 **E9. The composition root wires the email seam and the members port.** ✅ **closed (2026-09-06)**
 

@@ -29,7 +29,8 @@ const flag = (name) => {
 };
 
 /** `P0-45: subject` or `CI: subject`. Merges and anything else are dropped. */
-const SUBJECT = /^(P\d-\d{2}[a-z]?|[A-Z][A-Za-z]{1,14}(?: [A-Za-z]{2,14})?): (.+)$/;
+const SUBJECT =
+  /^(P\d-\d{2}[a-z]?|[A-E]\d{1,2}[a-z]?|[A-Z][A-Za-z]{1,14}(?: [A-Za-z]{2,14})?): (.+)$/;
 
 const readSubjects = () => {
   if (args.includes('--stdin')) {
