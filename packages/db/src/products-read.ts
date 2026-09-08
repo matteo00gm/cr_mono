@@ -72,6 +72,16 @@ export interface ListQuery {
    * builds out of the catalogue itself.
    */
   readonly wineType?: string | undefined;
+  /**
+   * A grape the wine must contain (P1-07, P1-09).
+   *
+   * **Containment, and it carries more weight than the other filters**, because
+   * free-text search cannot answer it: `array_to_string` is `STABLE`, so the
+   * grape array could not be folded into the generated tsvector and "find me a
+   * nebbiolo" has nowhere else to go. The array GIN index is what makes it
+   * cheap.
+   */
+  readonly grape?: string | undefined;
   /** Minor units, inclusive, like every price in this system. */
   readonly priceMin?: number | undefined;
   readonly priceMax?: number | undefined;
@@ -266,6 +276,15 @@ const baseConditions = (query: ListQuery): SQL[] => {
   }
 
   if (query.wineType !== undefined) conditions.push(eq(products.wineType, query.wineType));
+
+  /*
+   * `@>` rather than `= ANY`, because containment is what the GIN index
+   * answers — and the index is the whole reason this filter is affordable on a
+   * catalogue of any size.
+   */
+  if (query.grape !== undefined) {
+    conditions.push(sql`${products.grapeVarieties} @> array[${query.grape}]::text[]`);
+  }
 
   if (query.embeddingState !== undefined) {
     conditions.push(eq(products.embeddingState, query.embeddingState));
