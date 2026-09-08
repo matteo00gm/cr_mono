@@ -894,7 +894,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
             updatedAt: '2026-09-08T09:14:00.000Z',
           },
         ],
-        nextCursor: 'Y29sdW1uIDIwMjYtMDktMDhUMDk6MTQ6MDAuMDAwWiA3YzllNjY3OQ',
+        nextCursor: 'Y29sdW1u.MjAyNi0wOS0wOFQwOToxNDowMC4wMDBa.N2M5ZTY2Nzk',
         matchedBy: null,
       },
       response: productListResponse,
