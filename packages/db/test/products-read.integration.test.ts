@@ -596,3 +596,33 @@ describe('filters', () => {
     expect(await skus({ wineType: 'red' })).not.toContain('F-ARCH');
   });
 });
+
+describe('accents, now that the column cannot fold them', () => {
+  it('finds an accented wine through the similarity fallback', async () => {
+    /*
+     * **The degradation P1-07 could not avoid**, asserted rather than left
+     * implicit: `unaccent` cannot appear in a generated column in this
+     * deployment model, so an unaccented query misses the tsquery — and the
+     * fallback catches it, which the caller is told about.
+     */
+    await inTenant((tx) =>
+      insertProduct(tx, {
+        tenantId,
+        values: {
+          sku: 'ACC-1',
+          name: 'Nebbiòlo Superiore',
+          wineType: 'red',
+          priceCents: 1000,
+          currency: 'EUR',
+          stockStatus: 'IN_STOCK' as const,
+        },
+        contentHash: 'acc',
+      }),
+    );
+
+    const page = await inTenant((tx) => listProducts(tx, { q: 'Nebbiolo Superiore', limit: 10 }));
+
+    expect(page.matchedBy).toBe('similar');
+    expect(page.items.map((row) => row.sku)).toContain('ACC-1');
+  });
+});

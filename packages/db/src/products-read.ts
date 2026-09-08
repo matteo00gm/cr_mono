@@ -208,12 +208,13 @@ const sortValueOf = (sort: SortField): SQL<string> => sql<string>`${SORTABLE[sor
  * rather than in the parser. `websearch_to_tsquery` reads that the way a search
  * engine would, and never raises.
  *
- * The phrase is unaccented on the way in for the same reason the column is on
- * the way out (P1-07): an index that only matches the stored spelling is an
- * index that works for whoever entered the data.
+ * **The phrase is not unaccented, because the column is not either** — Postgres
+ * refuses `unaccent` in a generated column three different ways, and the last
+ * of them needs superuser (P1-07). So an accented spelling misses here and is
+ * caught by the similarity fallback below, which is reported to the caller as
+ * `matchedBy: 'similar'` rather than passed off as an exact hit.
  */
-const textQuery = (q: string): SQL =>
-  sql`websearch_to_tsquery('italian', immutable_unaccent(${q}))`;
+const textQuery = (q: string): SQL => sql`websearch_to_tsquery('italian', ${q})`;
 
 const textRank = (q: string): SQL<number> => sql<number>`ts_rank_cd(search_tsv, ${textQuery(q)})`;
 
@@ -222,10 +223,14 @@ const textRank = (q: string): SQL<number> => sql<number>`ts_rank_cd(search_tsv, 
  *
  * `greatest` rather than a sum, so a wine matching the producer well is not
  * outranked by one matching both fields badly.
+ *
+ * This is also where **accented spellings** land, since the stored vector
+ * cannot fold them (P1-07): `nebbiolo` against a stored `Nebbiòlo` misses the
+ * tsquery and scores high here.
  */
 const similarityRank = (q: string): SQL<number> => sql<number>`greatest(
-  similarity(immutable_unaccent(name), immutable_unaccent(${q})),
-  similarity(immutable_unaccent(coalesce(producer, '')), immutable_unaccent(${q}))
+  similarity(name, ${q}),
+  similarity(coalesce(producer, ''), ${q})
 )`;
 
 /**
