@@ -20,28 +20,38 @@ BEGIN
 END
 $$;
 
--- `unaccent()` is STABLE, not IMMUTABLE, so Postgres refuses it in a generated
--- column or an expression index: the dictionary can be reloaded, which would
--- leave the stored value disagreeing with the function.
+-- `unaccent()` is STABLE, not IMMUTABLE — its dictionary can be reloaded — so
+-- Postgres refuses it in a generated column or an expression index. Wrapping it
+-- in a SQL function marked IMMUTABLE does **not** help, and finding out why took
+-- two CI runs:
 --
--- The wrapper below asserts immutability we do not strictly have, and that is a
--- real trade rather than a trick. What it costs: if somebody edits
--- `unaccent.rules` on a running database, existing rows keep the accents they
--- were indexed with until they are rewritten. What it buys: `Nebbiolo` matching
--- a search for `nebbíolo`, which is what Italian visitors actually type — and
--- the alternative is unaccenting at query time only, which cannot use an index
--- at all.
+--   * Without a `SET` clause the wrapper is *inlinable*, so Postgres expands it
+--     and sees the STABLE `unaccent` underneath. `42P17`.
+--   * With a `SET search_path` clause it is not inlinable — and still `42P17`,
+--     because a function carrying one cannot appear in a stored generation
+--     expression either.
 --
--- **Every name inside is schema-qualified, and there is deliberately no `SET
--- search_path`.** The qualification is what stops a caller redirecting
--- resolution with their own path — the escalation shape a function marked
--- IMMUTABLE and called during an index build would otherwise have.
+-- The recipe that works is PostgreSQL's own, from the `unaccent` documentation:
+-- declare the extension's C entry point a second time, as IMMUTABLE. Inlining
+-- then exposes nothing mutable, because there is nothing underneath.
 --
--- A `SET` clause would say the same thing more forcefully and *cannot be used
--- here*: Postgres refuses a function carrying one inside a generated column
--- expression with `42P17 invalid_object_definition`, because the setting could
--- change and the stored value could not. CI is what established that — the
--- first version had the clause, and every migration after this one failed.
+-- **The immutability is asserted rather than true, and that is the trade.** If
+-- somebody edits `unaccent.rules` on a running database, rows keep the folding
+-- they were indexed with until they are rewritten. Against that: `nebbiolo`
+-- matches `Nebbiòlo`, which is what Italian visitors type — and the only
+-- alternative is unaccenting at query time, which cannot use an index at all.
+CREATE OR REPLACE FUNCTION immutable_unaccent_dict(regdictionary, text)
+  RETURNS text
+  LANGUAGE c
+  IMMUTABLE
+  PARALLEL SAFE
+  STRICT
+AS '$libdir/unaccent', 'unaccent_dict';
+
+-- The one-argument form the expressions below call. Schema-qualified inside, so
+-- a caller cannot redirect resolution with their own `search_path` — which is
+-- the escalation shape an IMMUTABLE function called during an index build would
+-- otherwise have.
 CREATE OR REPLACE FUNCTION immutable_unaccent(text)
   RETURNS text
   LANGUAGE sql
@@ -49,7 +59,7 @@ CREATE OR REPLACE FUNCTION immutable_unaccent(text)
   PARALLEL SAFE
   STRICT
 AS $$
-  SELECT public.unaccent('public.unaccent'::regdictionary, $1)
+  SELECT public.immutable_unaccent_dict('public.unaccent'::regdictionary, $1)
 $$;
 
 -- Generated, not trigger-maintained, and the difference is that a generated
