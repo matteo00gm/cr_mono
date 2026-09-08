@@ -18,6 +18,26 @@ import type { DbTransaction } from './with-tenant.js';
  * and a function that opened its own connection could not offer it.
  */
 
+/** unique_violation — a `(tenant_id, sku)` that already exists. */
+const UNIQUE_VIOLATION = '23505';
+
+/**
+ * The SQLSTATE, wherever the driver left it.
+ *
+ * Both levels, because the two call sites differ: `db.execute` with a raw
+ * statement wraps the driver error in a Drizzle one and the code sits on
+ * `cause`, while the query builder lets postgres-js's own `PostgresError`
+ * through with the code on the error itself. The message is never matched on —
+ * `Failed query: …` is Drizzle's phrasing, which is neither ours nor stable.
+ */
+const pgErrorCode = (error: unknown): string | undefined => {
+  const candidate = error as { code?: unknown; cause?: { code?: unknown } } | undefined;
+  const direct = candidate?.code;
+  const wrapped = candidate?.cause?.code;
+
+  return typeof direct === 'string' ? direct : typeof wrapped === 'string' ? wrapped : undefined;
+};
+
 /**
  * **A constraint violation cannot be caught and walked away from inside a
  * transaction, and CI is what established that.**
@@ -35,6 +55,11 @@ import type { DbTransaction } from './with-tenant.js';
  * an error: no exception, no poisoned transaction, one round trip, and no race
  * between checking and inserting. The conflict target is named, so a violation
  * of any other constraint still raises and is still ours to fix.
+ *
+ * `updateProduct` cannot do that — `UPDATE` has no `DO NOTHING` that could be
+ * told apart from "matched nothing" — so it takes the other route: a
+ * **savepoint**, which rolls back the failed statement without ending the
+ * transaction, and only then is there something a `catch` can act on.
  */
 
 export type ProductRow = typeof products.$inferSelect;
@@ -222,25 +247,42 @@ export const updateProduct = async (
   let updated: ProductRow | undefined;
 
   try {
-    const rows = await tx
-      .update(products)
-      .set({
-        ...defined(patch.values),
-        contentHash: nextHash,
-        /*
-         * `STALE`, not `PENDING`. The distinction is what P1-40's grid shows a
-         * seller: `PENDING` means this wine has never been indexed and cannot
-         * be recommended yet, while `STALE` means it is findable under its
-         * previous description. Collapsing them would tell somebody their
-         * catalogue had gone dark during an ordinary edit.
-         */
-        ...(reindexed ? { embeddingState: 'STALE' as const } : {}),
-        updatedAt: sql`now()`,
-      })
-      .where(and(eq(products.id, patch.productId)))
-      .returning();
+    /*
+     * **A savepoint, and it is what makes the `catch` below mean anything.**
+     * `insertProduct` avoids the problem entirely with `ON CONFLICT DO
+     * NOTHING`; `UPDATE` has no equivalent, because a `DO NOTHING` there could
+     * not be told apart from "matched nothing" and would report a silent
+     * success for a SKU that was never changed.
+     *
+     * So the statement runs inside a nested transaction, which Drizzle issues
+     * as `SAVEPOINT`. A constraint violation then rolls back to the savepoint
+     * rather than poisoning the whole transaction — which is the difference
+     * between catching an error and merely watching it go past: without this,
+     * postgres-js rejects the outer `transaction()` promise with the original
+     * error whatever this `catch` returns, and the caller sees a 500 for a form
+     * mistake.
+     */
+    updated = await tx.transaction(async (inner) => {
+      const rows = await inner
+        .update(products)
+        .set({
+          ...defined(patch.values),
+          contentHash: nextHash,
+          /*
+           * `STALE`, not `PENDING`. The distinction is what P1-40's grid shows
+           * a seller: `PENDING` means this wine has never been indexed and
+           * cannot be recommended yet, while `STALE` means it is findable under
+           * its previous description. Collapsing them would tell somebody their
+           * catalogue had gone dark during an ordinary edit.
+           */
+          ...(reindexed ? { embeddingState: 'STALE' as const } : {}),
+          updatedAt: sql`now()`,
+        })
+        .where(and(eq(products.id, patch.productId)))
+        .returning();
 
-    updated = rows[0];
+      return rows[0];
+    });
   } catch (error) {
     if (pgErrorCode(error) === UNIQUE_VIOLATION) return { outcome: 'duplicate-sku' };
     throw error;

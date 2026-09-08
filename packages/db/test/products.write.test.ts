@@ -158,11 +158,12 @@ describe('insertProduct', () => {
  * here; that they hold under a real transaction, with the row locked, is
  * `products.write.integration.test.ts`.
  */
-const fakeUpdateTx = (row: Record<string, unknown> | undefined) => {
+const fakeUpdateTx = (row: Record<string, unknown> | undefined, onUpdate?: () => never) => {
   const inserted: { table: string; values: unknown }[] = [];
   const updates: Record<string, unknown>[] = [];
+  const savepoints: number[] = [];
 
-  const tx = {
+  const tx: Record<string, unknown> = {
     select: () => ({
       from: () => ({
         where: () => ({
@@ -173,9 +174,19 @@ const fakeUpdateTx = (row: Record<string, unknown> | undefined) => {
         }),
       }),
     }),
+    /*
+     * A nested transaction is a `SAVEPOINT`, which is what lets the update path
+     * survive a constraint violation without ending the outer transaction. The
+     * fake counts them so the design is asserted rather than assumed.
+     */
+    transaction: (run: (inner: unknown) => Promise<unknown>) => {
+      savepoints.push(savepoints.length + 1);
+      return run(tx);
+    },
     update: () => ({
       set: (values: Record<string, unknown>) => {
         updates.push(values);
+        if (onUpdate) onUpdate();
         return {
           where: () => ({
             returning: () => Promise.resolve([{ ...row, ...values }]),
@@ -189,9 +200,9 @@ const fakeUpdateTx = (row: Record<string, unknown> | undefined) => {
         return { then: (resolve: (v: unknown) => unknown) => resolve(undefined) };
       },
     }),
-  } as unknown as DbTransaction;
+  };
 
-  return { tx, inserted, updates };
+  return { tx: tx as unknown as DbTransaction, inserted, updates, savepoints };
 };
 
 const STORED = {
@@ -205,6 +216,49 @@ const STORED = {
 };
 
 describe('updateProduct', () => {
+  it('runs the update inside a savepoint, which is the only way the catch works', async () => {
+    /*
+     * **The correction the create path forced.** postgres-js marks a
+     * transaction failed on any statement error and rejects the *outer*
+     * promise with it, whatever a `catch` inside returned — so classifying a
+     * constraint violation is only meaningful if the statement ran somewhere
+     * that can be rolled back on its own. `insertProduct` sidesteps this with
+     * `ON CONFLICT DO NOTHING`; `UPDATE` has no equivalent that could be told
+     * apart from "matched nothing", so it needs the savepoint.
+     */
+    const { tx, savepoints } = fakeUpdateTx(STORED);
+
+    await updateProduct(tx, { productId: 'p1', values: {}, hashOf: () => 'stored-hash' });
+
+    expect(savepoints).toHaveLength(1);
+  });
+
+  it('reports a duplicate SKU rather than letting the violation out', async () => {
+    const { tx } = fakeUpdateTx(STORED, () => {
+      throw Object.assign(new Error('duplicate key value violates unique constraint'), {
+        code: '23505',
+      });
+    });
+
+    expect(
+      await updateProduct(tx, {
+        productId: 'p1',
+        values: { sku: 'TAKEN' },
+        hashOf: () => 'stored-hash',
+      }),
+    ).toEqual({ outcome: 'duplicate-sku' });
+  });
+
+  it('lets any other failure out rather than calling it a duplicate', async () => {
+    const { tx } = fakeUpdateTx(STORED, () => {
+      throw Object.assign(new Error('check constraint violated'), { code: '23514' });
+    });
+
+    await expect(
+      updateProduct(tx, { productId: 'p1', values: {}, hashOf: () => 'stored-hash' }),
+    ).rejects.toThrow(/check constraint/);
+  });
+
   it('locks the row it read, so two patches cannot merge onto the same base', async () => {
     /*
      * Without `FOR UPDATE` two concurrent patches both read this row, both
