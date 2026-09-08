@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  CURSOR_DECODERS,
   DEFAULT_LIMIT,
   decodeCursor,
   isSortField,
@@ -334,5 +335,57 @@ describe('the search cursor', () => {
     await listProducts(tx, { includeArchived: true });
 
     expect(queries).toHaveLength(1);
+  });
+});
+
+describe('the cursor value, decoded back to the column type', () => {
+  /**
+   * **A cursor is text and a column is not.** Drizzle maps a bound parameter
+   * through the column's own `mapToDriverValue`, so a string handed to a
+   * `timestamp` comparison reaches `value.toISOString()` and throws — page two
+   * of the *default* sort was a 500 until the integration suite found it.
+   *
+   * A fake transaction cannot see that, because it never maps driver values.
+   * What is assertable here is the half that is ours: each sortable column's
+   * cursor value comes back as the kind of thing that column compares against,
+   * and the table is keyed by `SortField` so a new sortable column is a compile
+   * error until somebody says which.
+   */
+  it('decodes a timestamp cursor to a Date', () => {
+    expect(CURSOR_DECODERS.createdAt('2026-09-08T09:14:00.000Z')).toBeInstanceOf(Date);
+    expect(CURSOR_DECODERS.updatedAt('2026-09-08T09:14:00.000Z')).toBeInstanceOf(Date);
+  });
+
+  it('decodes a numeric cursor to a number, not a numeric string', () => {
+    expect(CURSOR_DECODERS.priceCents('4500')).toBe(4500);
+  });
+
+  it('leaves a text cursor alone', () => {
+    expect(CURSOR_DECODERS.name('Barolo Bussia')).toBe('Barolo Bussia');
+  });
+
+  it('round-trips a timestamp exactly, so the boundary lands on the right row', () => {
+    /*
+     * A boundary a millisecond off either repeats the last row of the previous
+     * page or skips the first of the next — and both are invisible until
+     * somebody counts.
+     */
+    const at = new Date('2026-09-08T09:14:00.123Z');
+    const decoded = CURSOR_DECODERS.createdAt(at.toISOString());
+
+    expect((decoded as Date).getTime()).toBe(at.getTime());
+  });
+
+  it('runs the boundary without throwing for every sortable column', async () => {
+    for (const sort of ['createdAt', 'updatedAt', 'name', 'priceCents'] as const) {
+      const { tx, queries } = capturing([product('a')]);
+
+      await listProducts(tx, {
+        sort,
+        cursor: cursorFor('column', '2026-09-08T09:14:00.000Z', 'id-1'),
+      });
+
+      expect(queries).toHaveLength(1);
+    }
   });
 });
