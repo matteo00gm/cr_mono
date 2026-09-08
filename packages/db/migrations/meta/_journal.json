@@ -239,6 +239,13 @@
       "when": 1788654188568,
       "tag": "0033_invitations_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1788654188569,
+      "tag": "0034_products_search",
+      "breakpoints": true
     }
   ]
 }

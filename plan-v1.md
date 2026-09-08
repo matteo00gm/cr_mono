@@ -3529,6 +3529,17 @@ A **generated** column cannot drift from the source fields, unlike a trigger-mai
 
 **Files.** migration, schema update. **~50 lines.**
 
+**As built — `unaccent` cannot go in a generated column, and the way round it is a decision rather than a trick.** `unaccent()` is `STABLE`, not `IMMUTABLE`, because its dictionary can be reloaded — so Postgres refuses it in a generated column or an expression index, and the row's "accent-insensitivity via `unaccent`" is not directly buildable.
+
+- **An `immutable_unaccent` wrapper, with the trade stated.** It asserts immutability the underlying function does not have. What that costs: editing `unaccent.rules` on a running database leaves existing rows indexed under the old folding until they are rewritten. What it buys: `nebbiolo` matching `Nebbiòlo`, which is what Italian visitors actually type — and the only alternative is unaccenting at query time, which cannot use an index at all. `SET search_path` is pinned in the function body, because a function marked `IMMUTABLE` and called during an index build is a well-known escalation shape when its schema resolution is left to the caller.
+- **The column is weighted, and the weights are a decision.** Name and producer `A`, grapes and region `B`, denomination `C`. Somebody typing "barolo" almost always means the wine called Barolo rather than every wine whose denomination mentions it — and there are a great many of the latter. There is a test asserting the ordering rather than the weights.
+- **The SKU is deliberately not searched.** It is a warehouse code: noise for retrieval to work around, and the field most likely to collide with a real word. The grid filters on it directly instead.
+- **Two trigram indexes, not one.** The row names `name`; producer misspellings are the ones visitors actually produce — `Poderi Cola` for `Poderi Colla` — and a tsquery for those matches nothing at all.
+- **The `italian` configuration is asserted at migration time.** A database built without the Italian dictionary would silently index with `simple`, stop stemming, and the symptom would be "search finds fewer things than it should", months later.
+- **`search_tsv` is not declared in the Drizzle schema**, which is a departure from "contracts are derived from the schema" (P0-42) and is deliberate: declaring it would put a large tsvector into `ProductRow` and fetch it on every catalogue read for a column nothing displays. The search query names it in raw SQL instead.
+
+**⚠ The three `EXPLAIN` assertions here share a known flake.** `product-embeddings.integration.test.ts` has an equivalent HNSW plan assertion that failed once in CI and then **passed on a re-run of the identical commit** — so it is resource contention rather than a regression, most likely because every integration file starts its own container in parallel and the suite has just grown by three. Tracked as a follow-up; the property being asserted (a silently unused index is a latency cliff nobody notices) is worth keeping.
+
 ---
 
 ### P1-08 · Catalog search endpoint
