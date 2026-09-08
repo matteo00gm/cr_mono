@@ -9,3 +9,4 @@ DROP INDEX IF EXISTS products_grapes_idx;
 DROP INDEX IF EXISTS products_name_trgm_idx;
 DROP INDEX IF EXISTS products_producer_trgm_idx;
 DROP FUNCTION IF EXISTS immutable_unaccent(text);
+DROP FUNCTION IF EXISTS immutable_unaccent_dict(regdictionary, text);
