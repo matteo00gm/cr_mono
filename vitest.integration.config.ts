@@ -38,5 +38,28 @@ export default defineConfig({
     // Container start dominates; the assertions themselves are milliseconds.
     testTimeout: 60_000,
     hookTimeout: 180_000,
+
+    /**
+     * **Four containers at a time, not one per file.**
+     *
+     * Every file here starts its own Postgres, and the default is to run them
+     * all at once. That was survivable at thirty files and stopped being so at
+     * thirty-seven: `product-embeddings.integration.test.ts` asserts that a
+     * vector search is planned as an HNSW index scan, and it began failing —
+     * then **passing on a re-run of the identical commit**, which is what
+     * establishes contention rather than a regression.
+     *
+     * The number is a guess at a runner's headroom rather than a measurement,
+     * and it is deliberately not 1: a fully serial suite would be minutes
+     * slower on every pull request, and a suite people avoid running is the
+     * thing this repository has already decided to spend money to prevent
+     * (§6.4).
+     *
+     * If a plan assertion flakes again despite this, the cause is not
+     * contention and the next step is to assert the *property* — that the query
+     * did not read every row — rather than the planner's choice of name.
+     */
+    maxWorkers: 4,
+    minWorkers: 1,
   },
 });
