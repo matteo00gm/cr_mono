@@ -229,6 +229,7 @@ export {
   MAX_LIMIT,
   SORTABLE,
   type ListQuery,
+  type MatchMode,
   type ProductPage,
   type SortDirection,
   type SortField,

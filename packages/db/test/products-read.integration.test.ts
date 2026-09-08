@@ -303,3 +303,165 @@ describe('the cursor', () => {
     expect(page.items).toHaveLength(2);
   });
 });
+
+describe('searching', () => {
+  const named = (sku: string, name: string, producer?: string) =>
+    inTenant((tx) =>
+      insertProduct(tx, {
+        tenantId,
+        values: {
+          sku,
+          name,
+          ...(producer === undefined ? {} : { producer }),
+          wineType: 'red',
+          priceCents: 1000,
+          currency: 'EUR',
+          stockStatus: 'IN_STOCK' as const,
+        },
+        contentHash: sku,
+      }),
+    );
+
+  const search = (q: string, extra: Record<string, unknown> = {}) =>
+    inTenant((tx) => listProducts(tx, { q, limit: 10, ...extra }));
+
+  it('finds a wine by a word in its name, and says the match was exact', async () => {
+    await named('S-1', 'Barolo Bussia', 'Poderi Colla');
+    await named('S-2', 'Chianti Classico', 'Castello');
+
+    const page = await search('barolo');
+
+    expect(page.items.map((row) => row.sku)).toEqual(['S-1']);
+    expect(page.matchedBy).toBe('text');
+  });
+
+  it('finds a wine by its producer', async () => {
+    await named('S-3', 'Etichetta Bianca', 'Poderi Colla');
+
+    expect((await search('colla')).items.map((row) => row.sku)).toContain('S-3');
+  });
+
+  it.each([
+    ['quotes', 'Barolo "Bussia"'],
+    ['an ampersand', 'barolo & bussia'],
+    ['a pipe', 'barolo | nebbiolo'],
+    ['a negation', 'barolo !chianti'],
+    ['an unbalanced paren', 'barolo ('],
+  ])('does not raise on %s, which to_tsquery would', async (_case, q) => {
+    /*
+     * **The reason the query uses `websearch_to_tsquery`.** `to_tsquery` raises
+     * a syntax error on every one of these, so a visitor typing a quotation
+     * mark into a search box would get a 500 — a failure that reads as a bug in
+     * the catalogue rather than in the parser.
+     */
+    await named('S-4', 'Barolo Bussia');
+
+    await expect(search(q)).resolves.toBeDefined();
+  });
+
+  it('falls back to similarity when nothing matches the text', async () => {
+    await named('S-5', 'Barolo Bussia', 'Poderi Colla');
+
+    /*
+     * `Poderi Cola` is not a word in the index and stems to nothing useful, so
+     * the text query returns empty and the trigram fallback takes over.
+     */
+    const page = await search('Poderi Cola');
+
+    expect(page.items.map((row) => row.sku)).toContain('S-5');
+    expect(page.matchedBy).toBe('similar');
+  });
+
+  it('does not fall back when the text search found something', async () => {
+    await named('S-6', 'Barolo Bussia');
+
+    expect((await search('barolo')).matchedBy).toBe('text');
+  });
+
+  it('returns nothing rather than the whole catalogue for an unrelated phrase', async () => {
+    /*
+     * The similarity floor. Without it `similarity` returns a value for every
+     * row and the fallback becomes "here is your entire catalogue, badly
+     * ordered" — which is worse than no results, because it looks like an
+     * answer.
+     */
+    await named('S-7', 'Barolo Bussia', 'Poderi Colla');
+
+    expect((await search('xilofono spaziale')).items).toEqual([]);
+  });
+
+  it('keeps a fallback page two in the fallback', async () => {
+    /*
+     * **The reason the match mode is in the cursor.** On page two the query is
+     * re-run with a boundary, and an empty text result then means "no more"
+     * rather than "never matched" — so a mode re-derived from the query would
+     * silently switch back to text and report the end of the results after one
+     * page.
+     */
+    for (let index = 0; index < 5; index += 1) {
+      await named(`FB-${String(index)}`, `Vino ${String(index)}`, 'Poderi Colla');
+    }
+
+    const first = await search('Poderi Cola', { limit: 2 });
+    expect(first.matchedBy).toBe('similar');
+    expect(first.nextCursor).not.toBeNull();
+
+    const second = await search('Poderi Cola', { limit: 2, cursor: first.nextCursor ?? undefined });
+
+    expect(second.matchedBy).toBe('similar');
+    expect(second.items).not.toEqual([]);
+
+    const overlap = second.items.filter((row) => first.items.some((seen) => seen.id === row.id));
+    expect(overlap).toEqual([]);
+  });
+
+  it('covers every match exactly once across ranked pages', async () => {
+    /*
+     * Ranks tie constantly — every one of these rows scores identically — which
+     * is exactly why the cursor carries the id as well as the rank.
+     */
+    for (let index = 0; index < 9; index += 1) {
+      await named(`RK-${String(index)}`, 'Barolo Bussia', 'Poderi Colla');
+    }
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+
+    for (let page = 0; page < 10; page += 1) {
+      const result = await search('barolo', {
+        limit: 2,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      seen.push(...result.items.map((row) => row.id));
+
+      if (result.nextCursor === null) break;
+      cursor = result.nextCursor;
+    }
+
+    expect(seen).toHaveLength(9);
+    expect(new Set(seen).size).toBe(9);
+  });
+
+  it('hides archived wines from a search too', async () => {
+    await named('S-8', 'Barolo Archiviato');
+    const found = await search('archiviato');
+    const victim = found.items[0];
+    if (victim === undefined) throw new Error('expected a match');
+
+    await inTenant((tx) => archiveProduct(tx, victim.id));
+
+    expect((await search('archiviato')).items).toEqual([]);
+  });
+
+  it('shows one winery nothing of another', async () => {
+    await named('S-9', 'Barolo Riservato');
+
+    const other = await createTenant(db, 'nosy-searcher');
+    const page = await db.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('app.tenant_id', ${other}, true)`);
+      return listProducts(tx, { q: 'barolo', limit: 10 });
+    });
+
+    expect(page.items).toEqual([]);
+  });
+});

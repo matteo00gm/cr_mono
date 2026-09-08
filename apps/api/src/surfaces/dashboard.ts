@@ -132,6 +132,15 @@ const acceptBody = z.object({ token: z.string().min(16).max(256) }).strict();
  * is more.
  */
 const listQuery = z.object({
+  /**
+   * The search phrase (P1-08).
+   *
+   * Bounded, because it is interpolated into a `tsquery` parse and a trigram
+   * comparison — neither of which is injectable, both of which are work
+   * proportional to its length. A 10,000-character "search" is a cheap way to
+   * make the database do something expensive.
+   */
+  q: z.string().trim().min(1).max(200).optional(),
   limit: z.coerce.number().int().positive().max(MAX_LIMIT).optional(),
   sort: z.string().refine(isSortField, 'not a sortable field').optional(),
   direction: z.enum(['asc', 'desc']).optional(),
@@ -492,6 +501,13 @@ export const createDashboardApp = ({
     return c.json({
       items: page.items.map(toProductResponse),
       nextCursor: page.nextCursor,
+      /*
+       * `column` is not a *match* — it is the absence of a search — so it
+       * reports as `null` rather than as a third mode. A client should not have
+       * to know that listing and searching share an implementation.
+       */
+      matchedBy:
+        page.matchedBy === 'column' ? null : page.matchedBy === 'text' ? 'exact' : 'similar',
     });
   });
 
@@ -843,7 +859,12 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'and must not be parsed; it encodes the sort position and is free to change. ' +
         'Sortable fields are an allowlist, and an unknown one is refused rather than ' +
         'quietly ignored. `limit` is clamped to 100. Archived wines are hidden unless ' +
-        '`includeArchived=true`.',
+        '`includeArchived=true`. Passing `q` searches instead of listing: results come back ' +
+        'by relevance rather than by the sort, because a search ordered by creation date is ' +
+        'a filter wearing a search box. When nothing matches the text, the search falls back ' +
+        'to trigram similarity over the name and producer — and says so in `matchedBy`, ' +
+        'because a fallback presented as an exact match leads a seller to conclude their ' +
+        'catalogue contains something it does not.',
       example: {
         items: [
           {
@@ -873,7 +894,8 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
             updatedAt: '2026-09-08T09:14:00.000Z',
           },
         ],
-        nextCursor: 'MjAyNi0wOS0wOFQwOToxNDowMC4wMDBaADdjOWU2Njc5',
+        nextCursor: 'Y29sdW1uIDIwMjYtMDktMDhUMDk6MTQ6MDAuMDAwWiA3YzllNjY3OQ',
+        matchedBy: null,
       },
       response: productListResponse,
     },

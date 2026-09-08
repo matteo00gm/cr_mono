@@ -795,7 +795,7 @@
       "/v1/dashboard/products": {
         "get": {
           "summary": "One page of the catalogue",
-          "description": "Keyset pagination: pass the `nextCursor` from the previous page rather than an offset. That is a correctness choice before a performance one — an offset page two repeats a row when something was inserted while somebody was paging, which on an import screen is exactly when the data is changing. The cursor is opaque and must not be parsed; it encodes the sort position and is free to change. Sortable fields are an allowlist, and an unknown one is refused rather than quietly ignored. `limit` is clamped to 100. Archived wines are hidden unless `includeArchived=true`.\n\nRequires the `catalog:read` capability.",
+          "description": "Keyset pagination: pass the `nextCursor` from the previous page rather than an offset. That is a correctness choice before a performance one — an offset page two repeats a row when something was inserted while somebody was paging, which on an import screen is exactly when the data is changing. The cursor is opaque and must not be parsed; it encodes the sort position and is free to change. Sortable fields are an allowlist, and an unknown one is refused rather than quietly ignored. `limit` is clamped to 100. Archived wines are hidden unless `includeArchived=true`. Passing `q` searches instead of listing: results come back by relevance rather than by the sort, because a search ordered by creation date is a filter wearing a search box. When nothing matches the text, the search falls back to trigram similarity over the name and producer — and says so in `matchedBy`, because a fallback presented as an exact match leads a seller to conclude their catalogue contains something it does not.\n\nRequires the `catalog:read` capability.",
           "operationId": "getV1DashboardProducts",
           "x-required-capability": "catalog:read",
           "responses": {
@@ -1012,11 +1012,26 @@
                           "string",
                           "null"
                         ]
+                      },
+                      "matchedBy": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "exact",
+                              "similar"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     },
                     "required": [
                       "items",
-                      "nextCursor"
+                      "nextCursor",
+                      "matchedBy"
                     ],
                     "additionalProperties": false
                   },
@@ -1055,7 +1070,8 @@
                         "updatedAt": "2026-09-08T09:14:00.000Z"
                       }
                     ],
-                    "nextCursor": "MjAyNi0wOS0wOFQwOToxNDowMC4wMDBaADdjOWU2Njc5"
+                    "nextCursor": "Y29sdW1uIDIwMjYtMDktMDhUMDk6MTQ6MDAuMDAwWiA3YzllNjY3OQ",
+                    "matchedBy": null
                   }
                 }
               }

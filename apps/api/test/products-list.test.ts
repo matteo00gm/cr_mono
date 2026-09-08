@@ -25,7 +25,7 @@ const port = (overrides: Partial<ProductsPort> = {}): ProductsPort =>
   productsPort({
     list: (command) => {
       queries.push(command);
-      return Promise.resolve({ items: [storedProduct()], nextCursor: null });
+      return Promise.resolve({ items: [storedProduct()], nextCursor: null, matchedBy: 'column' });
     },
     ...overrides,
   });
@@ -157,5 +157,93 @@ describe('who may call it', () => {
   it('lets a reader read, which is what catalog:read is for', async () => {
     expect((await get(app('EDITOR'))).status).toBe(200);
     expect((await get(app('OWNER'))).status).toBe(200);
+  });
+});
+
+describe('searching', () => {
+  it('passes the phrase through and reports an exact match as exact', async () => {
+    queries.length = 0;
+
+    const response = await get(
+      app('EDITOR', {
+        list: (command) => {
+          queries.push(command);
+          return Promise.resolve({
+            items: [storedProduct()],
+            nextCursor: null,
+            matchedBy: 'text',
+          });
+        },
+      }),
+      '?q=barolo',
+    );
+
+    expect(queries[0]?.q).toBe('barolo');
+    expect((await response.json()) as Record<string, unknown>).toMatchObject({
+      matchedBy: 'exact',
+    });
+  });
+
+  it('says when the results are only similar', async () => {
+    /*
+     * **The reason this field exists.** A fallback presented as an exact match
+     * leads a seller to conclude their catalogue contains something it does not
+     * — and the wrong conclusion is the one the interface encouraged.
+     */
+    const response = await get(
+      app('EDITOR', {
+        list: () =>
+          Promise.resolve({ items: [storedProduct()], nextCursor: null, matchedBy: 'similar' }),
+      }),
+      '?q=poderi%20cola',
+    );
+
+    expect((await response.json()) as Record<string, unknown>).toMatchObject({
+      matchedBy: 'similar',
+    });
+  });
+
+  it('reports no match mode when there was no search', async () => {
+    /*
+     * `column` is the absence of a search rather than a third kind of match, so
+     * it reports as null: a client should not have to know that listing and
+     * searching share an implementation.
+     */
+    const body = (await (await get(app())).json()) as { matchedBy: unknown };
+
+    expect(body.matchedBy).toBeNull();
+  });
+
+  it('trims a phrase and refuses an empty one', async () => {
+    queries.length = 0;
+
+    await get(app(), '?q=%20%20barolo%20%20');
+    expect(queries[0]?.q).toBe('barolo');
+
+    expect((await get(app(), '?q=%20%20')).status).toBe(422);
+  });
+
+  it('refuses a phrase long enough to be an attack on the parser', async () => {
+    /*
+     * Not injectable — it is a bound parameter to `websearch_to_tsquery` — but
+     * both the parse and the trigram comparison are work proportional to its
+     * length, so a 10,000-character "search" is a cheap way to make the
+     * database do something expensive.
+     */
+    expect((await get(app(), `?q=${'a'.repeat(5000)}`)).status).toBe(422);
+  });
+
+  it.each([
+    ['quotes', 'Barolo "Bussia"'],
+    ['boolean operators', 'barolo & bussia | nebbiolo'],
+    ['a negation', '!barolo'],
+    ['an unbalanced paren', 'barolo ('],
+  ])('accepts %s, which to_tsquery would have thrown on', async (_case, q) => {
+    /*
+     * The reason the query uses `websearch_to_tsquery`. `to_tsquery` raises on
+     * all of these, so a visitor typing a quotation mark would get a 500 — a
+     * failure that looks like a bug in the catalogue rather than in the parser.
+     */
+    expect((await get(app(), `?q=${encodeURIComponent(q)}`)).status).toBe(200);
   });
 });
