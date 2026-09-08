@@ -168,7 +168,7 @@ describe('accents, and what replaced the folding', () => {
 });
 
 describe('what is searched, and what is not', () => {
-  it('finds by producer, region, denomination and grape', async () => {
+  it('finds by producer, region and denomination', async () => {
     await add({
       sku: 'FIELD-1',
       name: 'Etichetta Bianca',
@@ -178,9 +178,29 @@ describe('what is searched, and what is not', () => {
       grapes: ['Nebbiolo', 'Barbera'],
     });
 
-    for (const query of ['colla', 'piemonte', 'barbaresco', 'barbera']) {
+    for (const query of ['colla', 'piemonte', 'barbaresco']) {
       expect(await search(query), `searching for ${query}`).toContain('FIELD-1');
     }
+  });
+
+  it('does not find by grape, which is a containment query instead', async () => {
+    /*
+     * **The reduction Postgres forced, asserted rather than left implicit.**
+     * `array_to_string` is STABLE — it calls the element type's output function
+     * — so the array cannot be folded into a generated column, and the same
+     * three dead ends as `unaccent` apply (P1-07). Grapes are queried through
+     * the array GIN index instead, which is containment: the right question for
+     * "does this wine include Nebbiolo", and what P1-09's filter uses.
+     */
+    await add({ sku: 'FIELD-2', name: 'Etichetta Rossa', grapes: ['Barbera'] });
+
+    expect(await search('barbera')).not.toContain('FIELD-2');
+
+    await useTenant(db, tenantId);
+    const rows = await db.execute(
+      sql`select sku from products where grape_varieties @> array['Barbera']::text[]`,
+    );
+    expect([...rows].map((row) => (row as { sku: string }).sku)).toContain('FIELD-2');
   });
 
   it('ranks a name match above a denomination match', async () => {
