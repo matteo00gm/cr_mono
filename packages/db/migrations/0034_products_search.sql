@@ -20,47 +20,29 @@ BEGIN
 END
 $$;
 
--- `unaccent()` is STABLE, not IMMUTABLE — its dictionary can be reloaded — so
--- Postgres refuses it in a generated column or an expression index. Wrapping it
--- in a SQL function marked IMMUTABLE does **not** help, and finding out why took
--- two CI runs:
+-- **There is no `unaccent` in this column, and that is a constraint rather than
+-- an oversight. Three attempts established it, each rejected by Postgres:**
 --
---   * Without a `SET` clause the wrapper is *inlinable*, so Postgres expands it
---     and sees the STABLE `unaccent` underneath. `42P17`.
---   * With a `SET search_path` clause it is not inlinable — and still `42P17`,
---     because a function carrying one cannot appear in a stored generation
---     expression either.
+--   * `unaccent()` is STABLE, not IMMUTABLE — its dictionary can be reloaded —
+--     so it cannot appear in a generated column or an expression index.
+--   * A SQL wrapper marked IMMUTABLE does not help. Without a `SET` clause it
+--     is *inlinable*, so Postgres expands it and sees the STABLE function
+--     underneath (`42P17`); with a `SET search_path` clause it is not inlinable
+--     and still fails, because a function carrying one cannot appear in a
+--     stored generation expression either.
+--   * PostgreSQL's own recipe — declaring the extension's C entry point a
+--     second time as IMMUTABLE — needs **superuser** to create a C function, and
+--     migrations run as `app_migrate` (`42501`). Nor would raising that help:
+--     RDS's master is `rds_superuser` and not a superuser either (P0-21b).
 --
--- The recipe that works is PostgreSQL's own, from the `unaccent` documentation:
--- declare the extension's C entry point a second time, as IMMUTABLE. Inlining
--- then exposes nothing mutable, because there is nothing underneath.
---
--- **The immutability is asserted rather than true, and that is the trade.** If
--- somebody edits `unaccent.rules` on a running database, rows keep the folding
--- they were indexed with until they are rewritten. Against that: `nebbiolo`
--- matches `Nebbiòlo`, which is what Italian visitors type — and the only
--- alternative is unaccenting at query time, which cannot use an index at all.
-CREATE OR REPLACE FUNCTION immutable_unaccent_dict(regdictionary, text)
-  RETURNS text
-  LANGUAGE c
-  IMMUTABLE
-  PARALLEL SAFE
-  STRICT
-AS '$libdir/unaccent', 'unaccent_dict';
-
--- The one-argument form the expressions below call. Schema-qualified inside, so
--- a caller cannot redirect resolution with their own `search_path` — which is
--- the escalation shape an IMMUTABLE function called during an index build would
--- otherwise have.
-CREATE OR REPLACE FUNCTION immutable_unaccent(text)
-  RETURNS text
-  LANGUAGE sql
-  IMMUTABLE
-  PARALLEL SAFE
-  STRICT
-AS $$
-  SELECT public.immutable_unaccent_dict('public.unaccent'::regdictionary, $1)
-$$;
+-- So accent folding is not available in the stored column for this deployment
+-- model, and the plan's "accent-insensitivity via `unaccent`" cannot be built
+-- as written. **What replaces it is the trigram fallback (P1-08):** a search for
+-- `nebbiolo` against a stored `Nebbiòlo` misses the tsquery and is caught by
+-- similarity — which the API already reports honestly as `matchedBy: 'similar'`
+-- rather than passing it off as an exact match. That is a real degradation and
+-- it is worth naming: accented spellings become fuzzy matches rather than exact
+-- ones, and rank below an exact hit.
 
 -- Generated, not trigger-maintained, and the difference is that a generated
 -- column cannot drift. A trigger can be dropped, disabled, or skipped by a
@@ -72,14 +54,14 @@ $$;
 -- denomination last because it is the field most often left empty.
 ALTER TABLE products ADD COLUMN search_tsv tsvector
   GENERATED ALWAYS AS (
-    setweight(to_tsvector('italian', immutable_unaccent(coalesce(name, ''))), 'A') ||
-    setweight(to_tsvector('italian', immutable_unaccent(coalesce(producer, ''))), 'A') ||
+    setweight(to_tsvector('italian', coalesce(name, '')), 'A') ||
+    setweight(to_tsvector('italian', coalesce(producer, '')), 'A') ||
     setweight(
-      to_tsvector('italian', immutable_unaccent(array_to_string(coalesce(grape_varieties, '{}'), ' '))),
+      to_tsvector('italian', array_to_string(coalesce(grape_varieties, '{}'), ' ')),
       'B'
     ) ||
-    setweight(to_tsvector('italian', immutable_unaccent(coalesce(region, ''))), 'B') ||
-    setweight(to_tsvector('italian', immutable_unaccent(coalesce(denomination, ''))), 'C')
+    setweight(to_tsvector('italian', coalesce(region, '')), 'B') ||
+    setweight(to_tsvector('italian', coalesce(denomination, '')), 'C')
   ) STORED;
 
 CREATE INDEX products_search_idx ON products USING gin (search_tsv);
@@ -91,8 +73,8 @@ CREATE INDEX products_grapes_idx ON products USING gin (grape_varieties);
 
 -- Trigrams, for the half of search that stemming cannot help with: real
 -- visitors misspell producer names constantly, and a tsquery for `Poderi Cola`
--- matches nothing at all. Unaccented for the same reason as the tsvector, so
--- the fallback does not become the accent-sensitive path.
-CREATE INDEX products_name_trgm_idx ON products USING gin (immutable_unaccent(name) gin_trgm_ops);
+-- matches nothing at all. This is also where accented spellings land now, since
+-- the stored vector cannot fold them.
+CREATE INDEX products_name_trgm_idx ON products USING gin (name gin_trgm_ops);
 CREATE INDEX products_producer_trgm_idx
-  ON products USING gin (immutable_unaccent(coalesce(producer, '')) gin_trgm_ops);
+  ON products USING gin ((coalesce(producer, '')) gin_trgm_ops);
