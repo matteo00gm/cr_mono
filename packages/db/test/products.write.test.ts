@@ -158,7 +158,11 @@ describe('insertProduct', () => {
  * here; that they hold under a real transaction, with the row locked, is
  * `products.write.integration.test.ts`.
  */
-const fakeUpdateTx = (row: Record<string, unknown> | undefined, onUpdate?: () => never) => {
+const fakeUpdateTx = (
+  row: Record<string, unknown> | undefined,
+  onUpdate?: () => never,
+  options: { readonly updateReturnsNothing?: boolean } = {},
+) => {
   const inserted: { table: string; values: unknown }[] = [];
   const updates: Record<string, unknown>[] = [];
   const savepoints: number[] = [];
@@ -189,7 +193,8 @@ const fakeUpdateTx = (row: Record<string, unknown> | undefined, onUpdate?: () =>
         if (onUpdate) onUpdate();
         return {
           where: () => ({
-            returning: () => Promise.resolve([{ ...row, ...values }]),
+            returning: () =>
+              Promise.resolve(options.updateReturnsNothing === true ? [] : [{ ...row, ...values }]),
           }),
         };
       },
@@ -350,6 +355,29 @@ describe('updateProduct', () => {
     });
 
     expect(seen?.name).toBe('Barolo');
+  });
+});
+
+describe('updateProduct, the case that cannot happen', () => {
+  it('refuses to enqueue for a row the update did not return', async () => {
+    /*
+     * Unreachable: the row was locked with `FOR UPDATE` before the statement
+     * ran, so it cannot have gone. Kept, and covered, because the alternative
+     * to throwing is enqueueing an embedding job for `undefined.id` — a job
+     * pointing at nothing, which the worker fails on forever and nobody can
+     * trace back to an edit that reported success.
+     */
+    const { tx, inserted } = fakeUpdateTx(STORED, undefined, { updateReturnsNothing: true });
+
+    await expect(
+      updateProduct(tx, {
+        productId: 'p1',
+        values: { tastingNotes: 'New.' },
+        hashOf: () => 'different-hash',
+      }),
+    ).rejects.toThrow(/returned no row/);
+
+    expect(inserted).toEqual([]);
   });
 });
 
