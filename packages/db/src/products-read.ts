@@ -108,6 +108,59 @@ const cursorValue = (row: ProductRow, sort: SortField): string => {
 };
 
 /**
+ * The same value, back into what the *column* compares against.
+ *
+ * **A cursor is text and a column is not, so encoding needs a matching
+ * decoding** — and getting that wrong does not produce a wrong page, it
+ * produces a crash. Drizzle maps a bound parameter through the column's own
+ * `mapToDriverValue`, so a string handed to a `timestamp` comparison reaches
+ * `value.toISOString()` and throws. The integration suite is what found it:
+ * page two of the *default* sort was a 500, and a fake transaction cannot see
+ * that, because it never maps driver values.
+ *
+ * A table keyed by `SortField` rather than a `typeof` check, so adding a
+ * sortable column is a compile error here until somebody says how its cursor
+ * value comes back.
+ */
+export const CURSOR_DECODERS: Record<SortField, (value: string) => unknown> = {
+  createdAt: (value) => new Date(value),
+  updatedAt: (value) => new Date(value),
+  name: (value) => value,
+  priceCents: (value) => Number(value),
+};
+
+/**
+ * The tuple boundary: `a < b OR (a = b AND id < cursorId)`.
+ *
+ * Written out rather than as a row constructor, because the two sides are
+ * different types once the sort is a `text` or an `integer`, and Drizzle has no
+ * portable tuple comparison across them.
+ *
+ * `and` and `or` are typed as possibly-undefined because both accept empty
+ * lists. Guarding rather than asserting keeps the impossible case impossible
+ * instead of merely silenced — a boundary that came out undefined would quietly
+ * return the first page for ever, which is the sort of bug a `!` would hide.
+ *
+ * The column parameter takes whatever `eq` itself accepts: naming the union by
+ * hand would pin one of Drizzle's internal generic shapes and break on an
+ * upgrade for no benefit.
+ */
+const boundaryFor = (
+  sortExpression: Parameters<typeof eq>[0],
+  value: unknown,
+  cursorId: string,
+  direction: SortDirection,
+): SQL | undefined => {
+  const compare = direction === 'desc' ? lt : gt;
+  const tie = direction === 'desc' ? lt(products.id, cursorId) : gt(products.id, cursorId);
+  const tieBreak = and(eq(sortExpression, value), tie);
+
+  return tieBreak === undefined
+    ? compare(sortExpression, value)
+    : or(compare(sortExpression, value), tieBreak);
+};
+
+/**
  * One page of the catalogue, newest first by default.
  *
  * **Keyset, not `OFFSET`.** Offset degrades as the catalogue grows — the
@@ -145,22 +198,7 @@ export const listProducts = async (
   const cursor = query.cursor === undefined ? undefined : decodeCursor(query.cursor);
 
   if (cursor !== undefined) {
-    const compare = direction === 'desc' ? lt : gt;
-    const tie = direction === 'desc' ? lt(products.id, cursor.id) : gt(products.id, cursor.id);
-
-    /*
-     * `and` and `or` are typed as possibly-undefined because both accept empty
-     * lists. Guarding rather than asserting keeps the impossible case impossible
-     * instead of merely silenced — and a boundary that came out undefined would
-     * quietly return the first page forever, which is the sort of bug a `!`
-     * would have hidden.
-     */
-    const tieBreak = and(eq(column, cursor.value), tie);
-    const boundary =
-      tieBreak === undefined
-        ? compare(column, cursor.value)
-        : or(compare(column, cursor.value), tieBreak);
-
+    const boundary = boundaryFor(column, CURSOR_DECODERS[sort](cursor.value), cursor.id, direction);
     if (boundary !== undefined) conditions.push(boundary);
   }
 
