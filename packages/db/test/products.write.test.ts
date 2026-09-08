@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { insertProduct, updateProduct, type ProductRow } from '../src/products.js';
+import { archiveProduct, insertProduct, updateProduct, type ProductRow } from '../src/products.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 import type { ProductInsert } from '../src/contracts.js';
 
@@ -350,5 +350,70 @@ describe('updateProduct', () => {
     });
 
     expect(seen?.name).toBe('Barolo');
+  });
+});
+
+/**
+ * A transaction whose update and delete both report what they were asked for.
+ *
+ * The archive path is two statements that must both happen or neither, and the
+ * "neither" half is `products.write.integration.test.ts` — a fake rolls nothing
+ * back. What is worth pinning here is the branch a container reaches only by
+ * scoping a whole second tenant: a row the caller cannot see.
+ */
+const fakeArchiveTx = (row: Record<string, unknown> | undefined, vectors = 1) => {
+  const deletes: number[] = [];
+
+  const tx = {
+    update: () => ({
+      set: () => ({
+        where: () => ({ returning: () => Promise.resolve(row === undefined ? [] : [row]) }),
+      }),
+    }),
+    delete: () => ({
+      where: () => ({
+        returning: () => {
+          deletes.push(vectors);
+          return Promise.resolve(Array.from({ length: vectors }, (_, i) => ({ id: String(i) })));
+        },
+      }),
+    }),
+  } as unknown as DbTransaction;
+
+  return { tx, deletes };
+};
+
+describe('archiveProduct', () => {
+  it('archives and reports how many vectors went', async () => {
+    const { tx } = fakeArchiveTx({ id: 'p1', status: 'ARCHIVED' }, 3);
+
+    expect(await archiveProduct(tx, 'p1')).toMatchObject({
+      outcome: 'archived',
+      vectorsRemoved: 3,
+    });
+  });
+
+  it('reports zero vectors without treating it as a failure', async () => {
+    /*
+     * Zero is meaningful rather than suspicious: the wine had never been
+     * indexed. Conflating that with a delete that failed to clean up would send
+     * somebody looking for a bug that is not there.
+     */
+    const { tx } = fakeArchiveTx({ id: 'p1', status: 'ARCHIVED' }, 0);
+
+    expect(await archiveProduct(tx, 'p1')).toMatchObject({ vectorsRemoved: 0 });
+  });
+
+  it('does not delete vectors for a row it could not see', async () => {
+    /*
+     * **The branch that matters.** The delete names only the product id, so
+     * running it for a row the policy hid would let one tenant clear another
+     * tenant's index — and the update returning nothing is the only thing that
+     * stops it.
+     */
+    const { tx, deletes } = fakeArchiveTx(undefined);
+
+    expect(await archiveProduct(tx, 'gone')).toEqual({ outcome: 'not-found' });
+    expect(deletes).toEqual([]);
   });
 });
