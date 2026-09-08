@@ -171,6 +171,29 @@ const cursorValue = (row: ProductRow, sort: SortField): string => {
 };
 
 /**
+ * The same value, back into what the *column* compares against.
+ *
+ * **A cursor is text and a column is not, so encoding needs a matching
+ * decoding** — and getting that wrong does not produce a wrong page, it
+ * produces a crash. Drizzle maps a bound parameter through the column's own
+ * `mapToDriverValue`, so a string handed to a `timestamp` comparison reaches
+ * `value.toISOString()` and throws. The integration suite is what found it:
+ * page two of the *default* sort was a 500, and a fake transaction cannot see
+ * that, because it never maps driver values.
+ *
+ * A table keyed by `SortField` rather than a `typeof` check, so adding a
+ * sortable column is a compile error here until somebody says how its cursor
+ * value comes back.
+ */
+export const CURSOR_DECODERS: Record<SortField, (value: string) => unknown> = {
+  createdAt: (value) => new Date(value),
+  updatedAt: (value) => new Date(value),
+  name: (value) => value,
+  priceCents: (value) => Number(value),
+};
+
+/**
+ * One page of the catalogue, newest first by default.
  * The parsed query, and why it is `websearch_to_tsquery`.
  *
  * `to_tsquery` **throws** on the quotes, `&`, `|` and `!` that people type into
@@ -303,7 +326,7 @@ const runColumnPage = async (
   const conditions = baseConditions(query);
 
   if (cursor !== undefined) {
-    const boundary = boundaryFor(column, cursor.value, cursor.id, direction);
+    const boundary = boundaryFor(column, CURSOR_DECODERS[sort](cursor.value), cursor.id, direction);
     if (boundary !== undefined) conditions.push(boundary);
   }
 
