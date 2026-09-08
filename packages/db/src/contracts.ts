@@ -42,6 +42,37 @@ const SERVER_OWNED = {
 } as const;
 
 /**
+ * `products` owns three more, and leaving them out of that list was a hole.
+ *
+ * **Found by the contract-agreement test in `apps/api` (P1-01)**, which forced
+ * the wire shape to be written out — at which point it was obvious that a
+ * client could send all three, and non-obvious what each would do:
+ *
+ * - **`content_hash`** is the re-embedding gate. P1-03 compares the new hash
+ *   against the stored one, so a client that could pin it would never re-embed
+ *   again: edits would keep applying and the wine would stay findable only
+ *   under its original description, with nothing failing.
+ * - **`embedding_state`** is what P1-40's grid shows a seller. A client sending
+ *   `INDEXED` makes a wine claim to be searchable before it has a vector — and
+ *   an update that changes nothing the model reads does not overwrite it, so
+ *   the lie would stick.
+ * - **`status`** is the one with teeth. Archiving through `PATCH` would set it
+ *   without deleting the vectors — leaving a wine hidden from the seller and
+ *   still recommended to visitors, which is precisely the failure P1-04 exists
+ *   to prevent, reachable by writing a field instead of calling the route.
+ *
+ * Omitting them here makes all three unrepresentable rather than merely
+ * refused, which is the same reasoning as `tenant_id` above: the write paths
+ * already set the values they mean, and a client body cannot now disagree.
+ */
+const PRODUCT_SERVER_OWNED = {
+  ...SERVER_OWNED,
+  contentHash: true,
+  status: true,
+  embeddingState: true,
+} as const;
+
+/**
  * Two tables do not have all four, and `omit` is typed against the columns that
  * exist — so spreading the constant at them is a compile error rather than a
  * silent no-op. That is the right behaviour and worth keeping: the exceptions
@@ -78,7 +109,7 @@ export const productInsert = createInsertSchema(products, {
    * assignment that fails `pnpm typecheck` if it drifts back.
    */
   stockQty: (schema) => schema.int().nonnegative().nullish(),
-}).omit(SERVER_OWNED);
+}).omit(PRODUCT_SERVER_OWNED);
 
 export const productSelect = createSelectSchema(products);
 
