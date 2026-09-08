@@ -49,6 +49,15 @@ describe('the published product shape', () => {
        */
       'contentHash',
       /*
+       * The provider's own words, and operator-facing rather than
+       * seller-facing: "ValidationException" tells a winery nothing it can act
+       * on. **P1-50 owns turning it into something that does**, and publishing
+       * the raw text before then would set a contract around a string we intend
+       * to replace.
+       */
+      'embeddingAttempts',
+      'embeddingError',
+      /*
        * Not secret — the caller knows which winery they are in — but publishing
        * a field the contract does not declare invites a client to depend on it,
        * which is the same problem one step later.

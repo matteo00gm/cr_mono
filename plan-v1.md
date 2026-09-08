@@ -3985,6 +3985,17 @@ The connection arithmetic that produces 5: `db.t4g.micro` allows roughly 100 con
 
 **Files.** `embedding-state.ts`, tests. **~80 lines.**
 
+**As built — the transitions take *events*, not target states, and that is the design.** A caller saying "set it to INDEXED" is asserting a conclusion; a caller saying "embedded" is reporting what happened and letting one function decide what it means. Only the second is incapable of lying about a wine it never embedded — which matters because a state is just a word in a column, and nothing about `INDEXED` prevents a row from having no vector.
+
+- **`STALE` is the state that carries meaning**, and the machine is where its rules live: an edit moves `INDEXED → STALE` (findable under its previous description while the new one is built), leaves `PENDING` alone (already going to be embedded), and returns `FAILED → PENDING`, because the edit may well be the fix. P1-02, P1-03 and P1-04 already write three of these edges between them; this is what stops a fourth author inventing a fifth.
+- **Redelivery is a no-op by construction.** SQS redelivers and the poller can publish twice, so `queued` from `PENDING` and `embedded` from `INDEXED` both return the status unchanged. A transition that only works once is a transition that breaks the day something is retried.
+- **The error text is cleared on success and the attempt count is not**, which are opposite decisions for opposite reasons. A row that is `INDEXED` while carrying last week's failure tells an operator a wine is broken when it is not — and P1-50's triage reads that column. A wine that needed four tries is worth knowing about *after* it succeeds, because four tries usually means a text the provider keeps struggling with.
+- **A failure with no reason is refused at the call site.** A `FAILED` row with nothing in `embedding_error` reports a problem and withholds the only thing anyone could act on.
+
+**Migration `0035` adds `embedding_error` and `embedding_attempts`**, and the counter is deliberately *not* the outbox's. `outbox.attempts` counts how many times the poller tried to publish; this counts how many times the provider was asked and refused. A wine published once and failed four times is a different problem from one published four times and never embedded, and a single counter cannot tell them apart — which is exactly the distinction P1-50's triage turns on. Both columns are in `PRODUCT_SERVER_OWNED`: a client that could set the error could make a working wine look broken, and one that could reset the counter could hide a wine that has been failing for a week.
+
+**⚠ Neither column is published to the API yet.** The provider's own words are operator-facing — "ValidationException" tells a winery nothing it can act on — and **P1-50 owns turning that into something that does. Publishing the raw text now would set a contract around a string we intend to replace.**
+
 ---
 
 ### P1-39 · Reindex single + bulk
