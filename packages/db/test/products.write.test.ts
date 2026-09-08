@@ -29,57 +29,42 @@ const VALUES = {
 
 const ROW = { id: '7c9e6679-7425-40de-944b-e07fc1f90ae7', sku: 'BAR-2019' };
 
-/**
- * A driver error, in **both** the shapes that actually arrive.
- *
- * **CI established that there are two, and this file is why it had to.** The
- * first version fabricated only the wrapped form, so it agreed with a
- * `pgErrorCode` that read only `cause` — and a duplicate SKU escaped as a 500
- * against real Postgres while every test here stayed green. Same shape as A1's
- * timestamp bug, same cause: a fixture written from the implementation's
- * assumption instead of the driver's behaviour.
- *
- * `db.execute` with a raw statement wraps what postgres-js threw, putting the
- * SQLSTATE on `cause`. The query builder — which is what `insertProduct` uses —
- * lets the `PostgresError` through with the code on the error itself.
- */
-const wrappedError = (code: string) =>
-  Object.assign(new Error('Failed query: insert into "products" ...'), { cause: { code } });
-
-const rawDriverError = (code: string) =>
-  Object.assign(new Error('duplicate key value violates unique constraint'), { code });
-
-/** The one the query builder actually throws, used wherever one is needed. */
-const driverError = rawDriverError;
-
 interface Fake {
   readonly tx: DbTransaction;
   readonly inserted: { table: string; values: unknown }[];
+  /** What was passed to `onConflictDoNothing`, if anything. */
+  readonly conflictConfig: { value: unknown };
 }
 
-const fakeTx = (options: { onProductInsert?: () => never; noRow?: boolean } = {}): Fake => {
+/**
+ * A fake insert builder that models `onConflictDoNothing`.
+ *
+ * `conflicted: true` returns **no rows**, which is exactly what Postgres does
+ * when the target conflicts — the whole point of the design being that nothing
+ * is thrown.
+ */
+const fakeTx = (options: { conflicted?: boolean } = {}): Fake => {
   const inserted: { table: string; values: unknown }[] = [];
+  const conflictConfig: { value: unknown } = { value: undefined };
 
-  /*
-   * Distinguishes the two tables by the columns the values carry, because the
-   * table object itself is a Drizzle internal that a fake has no business
-   * asserting on. `event_type` only exists on the outbox side.
-   */
   const insert = vi.fn(() => ({
     values: (values: Record<string, unknown>) => {
       const table = 'eventType' in values ? 'outbox' : 'products';
       inserted.push({ table, values });
 
-      if (table === 'products' && options.onProductInsert) options.onProductInsert();
+      const rows = options.conflicted === true ? [] : [ROW];
 
       return {
-        returning: () => Promise.resolve(options.noRow === true ? [] : [ROW]),
+        onConflictDoNothing: (config: unknown) => {
+          conflictConfig.value = config;
+          return { returning: () => Promise.resolve(rows) };
+        },
         then: (resolve: (v: unknown) => unknown) => resolve(undefined),
       };
     },
   }));
 
-  return { inserted, tx: { insert } as unknown as DbTransaction };
+  return { inserted, conflictConfig, tx: { insert } as unknown as DbTransaction };
 };
 
 describe('insertProduct', () => {
@@ -123,16 +108,33 @@ describe('insertProduct', () => {
     });
   });
 
-  it('reports a duplicate SKU rather than throwing', async () => {
-    const { tx } = fakeTx({
-      onProductInsert: () => {
-        throw driverError('23505');
-      },
-    });
+  it('reports a duplicate SKU as an empty result, never as an exception', async () => {
+    /*
+     * **The correction CI forced.** The first version caught the constraint
+     * violation and returned an outcome — and the outcome never arrived,
+     * because postgres-js marks the transaction failed on any statement error
+     * and rejects the outer promise with the original error whatever the
+     * callback did with it. `ON CONFLICT ... DO NOTHING` makes the conflict a
+     * result instead, so there is nothing to catch and nothing to poison.
+     */
+    const { tx } = fakeTx({ conflicted: true });
 
     expect(await insertProduct(tx, { tenantId: 't', values: VALUES, contentHash: 'h' })).toEqual({
       outcome: 'duplicate-sku',
     });
+  });
+
+  it('names the conflict target, so another constraint still raises', async () => {
+    /*
+     * A bare `DO NOTHING` would swallow the next unique index somebody adds and
+     * report a silent success — a product that was never stored, answered 201.
+     */
+    const { tx, conflictConfig } = fakeTx();
+
+    await insertProduct(tx, { tenantId: 't', values: VALUES, contentHash: 'h' });
+
+    const config = conflictConfig.value as { target?: unknown } | undefined;
+    expect(config?.target).toBeDefined();
   });
 
   it('queues nothing for a refused duplicate', async () => {
@@ -141,67 +143,9 @@ describe('insertProduct', () => {
      * above: enqueueing for a row that was never created hands the worker a job
      * whose product does not exist.
      */
-    const { tx, inserted } = fakeTx({
-      onProductInsert: () => {
-        throw driverError('23505');
-      },
-    });
+    const { tx, inserted } = fakeTx({ conflicted: true });
 
     await insertProduct(tx, { tenantId: 't', values: VALUES, contentHash: 'h' });
-
-    expect(inserted.filter((write) => write.table === 'outbox')).toEqual([]);
-  });
-
-  it.each([
-    ['the raw driver error the query builder throws', rawDriverError],
-    ['the wrapped error db.execute produces', wrappedError],
-  ])('recognises a duplicate in %s', async (_shape, build) => {
-    /*
-     * Both, because the two call sites differ and the code must not care. The
-     * cost of caring is a 500 for a form mistake — which is what shipped for
-     * exactly as long as this test only knew one shape.
-     */
-    const { tx } = fakeTx({
-      onProductInsert: () => {
-        throw build('23505');
-      },
-    });
-
-    expect(await insertProduct(tx, { tenantId: 't', values: VALUES, contentHash: 'h' })).toEqual({
-      outcome: 'duplicate-sku',
-    });
-  });
-
-  it('lets any other database failure out', async () => {
-    /*
-     * Only `23505` is an outcome. A connection failure or a check violation is
-     * ours to fix, and swallowing it as "duplicate" would tell a seller their
-     * SKU was taken while the real problem was somewhere else entirely.
-     */
-    const { tx } = fakeTx({
-      onProductInsert: () => {
-        throw driverError('23514');
-      },
-    });
-
-    await expect(
-      insertProduct(tx, { tenantId: 't', values: VALUES, contentHash: 'h' }),
-    ).rejects.toThrow(/duplicate key value/);
-  });
-
-  it('refuses to queue a job for a row it cannot see', async () => {
-    /*
-     * Unreachable in practice: `RETURNING` on a single-row insert that did not
-     * throw yields exactly one row. Kept, and covered, because the alternative
-     * to throwing is enqueueing an embedding job for `undefined.id` — a job
-     * pointing at nothing, which the worker would fail on forever and which
-     * nobody could trace back to a create that reported success.
-     */
-    const { tx, inserted } = fakeTx({ noRow: true });
-
-    await expect(
-      insertProduct(tx, { tenantId: 't', values: VALUES, contentHash: 'h' }),
-    ).rejects.toThrow(/returned no row/);
 
     expect(inserted.filter((write) => write.table === 'outbox')).toEqual([]);
   });
@@ -214,11 +158,12 @@ describe('insertProduct', () => {
  * here; that they hold under a real transaction, with the row locked, is
  * `products.write.integration.test.ts`.
  */
-const fakeUpdateTx = (row: Record<string, unknown> | undefined) => {
+const fakeUpdateTx = (row: Record<string, unknown> | undefined, onUpdate?: () => never) => {
   const inserted: { table: string; values: unknown }[] = [];
   const updates: Record<string, unknown>[] = [];
+  const savepoints: number[] = [];
 
-  const tx = {
+  const tx: Record<string, unknown> = {
     select: () => ({
       from: () => ({
         where: () => ({
@@ -229,9 +174,19 @@ const fakeUpdateTx = (row: Record<string, unknown> | undefined) => {
         }),
       }),
     }),
+    /*
+     * A nested transaction is a `SAVEPOINT`, which is what lets the update path
+     * survive a constraint violation without ending the outer transaction. The
+     * fake counts them so the design is asserted rather than assumed.
+     */
+    transaction: (run: (inner: unknown) => Promise<unknown>) => {
+      savepoints.push(savepoints.length + 1);
+      return run(tx);
+    },
     update: () => ({
       set: (values: Record<string, unknown>) => {
         updates.push(values);
+        if (onUpdate) onUpdate();
         return {
           where: () => ({
             returning: () => Promise.resolve([{ ...row, ...values }]),
@@ -245,9 +200,9 @@ const fakeUpdateTx = (row: Record<string, unknown> | undefined) => {
         return { then: (resolve: (v: unknown) => unknown) => resolve(undefined) };
       },
     }),
-  } as unknown as DbTransaction;
+  };
 
-  return { tx, inserted, updates };
+  return { tx: tx as unknown as DbTransaction, inserted, updates, savepoints };
 };
 
 const STORED = {
@@ -261,6 +216,49 @@ const STORED = {
 };
 
 describe('updateProduct', () => {
+  it('runs the update inside a savepoint, which is the only way the catch works', async () => {
+    /*
+     * **The correction the create path forced.** postgres-js marks a
+     * transaction failed on any statement error and rejects the *outer*
+     * promise with it, whatever a `catch` inside returned — so classifying a
+     * constraint violation is only meaningful if the statement ran somewhere
+     * that can be rolled back on its own. `insertProduct` sidesteps this with
+     * `ON CONFLICT DO NOTHING`; `UPDATE` has no equivalent that could be told
+     * apart from "matched nothing", so it needs the savepoint.
+     */
+    const { tx, savepoints } = fakeUpdateTx(STORED);
+
+    await updateProduct(tx, { productId: 'p1', values: {}, hashOf: () => 'stored-hash' });
+
+    expect(savepoints).toHaveLength(1);
+  });
+
+  it('reports a duplicate SKU rather than letting the violation out', async () => {
+    const { tx } = fakeUpdateTx(STORED, () => {
+      throw Object.assign(new Error('duplicate key value violates unique constraint'), {
+        code: '23505',
+      });
+    });
+
+    expect(
+      await updateProduct(tx, {
+        productId: 'p1',
+        values: { sku: 'TAKEN' },
+        hashOf: () => 'stored-hash',
+      }),
+    ).toEqual({ outcome: 'duplicate-sku' });
+  });
+
+  it('lets any other failure out rather than calling it a duplicate', async () => {
+    const { tx } = fakeUpdateTx(STORED, () => {
+      throw Object.assign(new Error('check constraint violated'), { code: '23514' });
+    });
+
+    await expect(
+      updateProduct(tx, { productId: 'p1', values: {}, hashOf: () => 'stored-hash' }),
+    ).rejects.toThrow(/check constraint/);
+  });
+
   it('locks the row it read, so two patches cannot merge onto the same base', async () => {
     /*
      * Without `FOR UPDATE` two concurrent patches both read this row, both
