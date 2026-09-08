@@ -70,9 +70,16 @@ export interface ProductPage {
  * Base64 rather than a bare pair, because it is **not a contract**: a client
  * that parsed it would depend on the sort implementation, and adding a sort
  * column would then be a breaking change. Opaque means we can change it.
+ *
+ * **Each part is encoded separately and joined with a dot**, rather than joined
+ * first and encoded once. A single encoding needs a separator that cannot occur
+ * in either part — and the sort value can be a wine's *name*, which contains
+ * spaces and very nearly anything else. A control character does the job and
+ * puts one in the source file; encoding per part removes the question, because
+ * `.` cannot appear in base64url output.
  */
 const encodeCursor = (value: string, id: string): string =>
-  Buffer.from(`${value}\u0000${id}`, 'utf8').toString('base64url');
+  [value, id].map((part) => Buffer.from(part, 'utf8').toString('base64url')).join('.');
 
 interface Cursor {
   readonly value: string;
@@ -80,20 +87,18 @@ interface Cursor {
 }
 
 export const decodeCursor = (cursor: string): Cursor | undefined => {
-  let decoded: string;
-  try {
-    decoded = Buffer.from(cursor, 'base64url').toString('utf8');
-  } catch {
-    return undefined;
-  }
+  const encoded = cursor.split('.');
+  if (encoded.length !== 2) return undefined;
 
-  const separator = decoded.indexOf('\u0000');
-  if (separator <= 0) return undefined;
+  const [value, id] = encoded.map((part) => Buffer.from(part, 'base64url').toString('utf8'));
 
-  const value = decoded.slice(0, separator);
-  const id = decoded.slice(separator + 1);
-
-  return id === '' ? undefined : { value, id };
+  /*
+   * `base64url` decoding does not reject rubbish — it skips what it cannot read
+   * — so a malformed cursor arrives here as a short or empty string rather than
+   * as an error. An empty id is the one that matters: it would make the tuple
+   * boundary match nothing and hand back the first page for ever.
+   */
+  return value === undefined || id === undefined || id === '' ? undefined : { value, id };
 };
 
 /** The sort value of a row, as the string a cursor carries. */
