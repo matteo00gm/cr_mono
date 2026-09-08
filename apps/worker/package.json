@@ -6,5 +6,13 @@
     "build": "tsc --build tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1127.0",
+    "@catalogorosso/core": "workspace:*",
+    "@catalogorosso/db": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0"
   }
 }
