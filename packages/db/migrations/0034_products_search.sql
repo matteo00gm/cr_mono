@@ -20,29 +20,30 @@ BEGIN
 END
 $$;
 
--- **There is no `unaccent` in this column, and that is a constraint rather than
--- an oversight. Three attempts established it, each rejected by Postgres:**
+-- **Two things the plan asks for are not in this column, and Postgres is why.**
 --
---   * `unaccent()` is STABLE, not IMMUTABLE — its dictionary can be reloaded —
---     so it cannot appear in a generated column or an expression index.
---   * A SQL wrapper marked IMMUTABLE does not help. Without a `SET` clause it
---     is *inlinable*, so Postgres expands it and sees the STABLE function
---     underneath (`42P17`); with a `SET search_path` clause it is not inlinable
---     and still fails, because a function carrying one cannot appear in a
---     stored generation expression either.
---   * PostgreSQL's own recipe — declaring the extension's C entry point a
---     second time as IMMUTABLE — needs **superuser** to create a C function, and
---     migrations run as `app_migrate` (`42501`). Nor would raising that help:
---     RDS's master is `rds_superuser` and not a superuser either (P0-21b).
+-- *Accent folding.* `unaccent()` is STABLE — its dictionary can be reloaded —
+-- so it cannot appear in a generated column. Three ways round it were tried and
+-- each was refused: a SQL wrapper marked IMMUTABLE is *inlinable*, so Postgres
+-- expands it and sees the STABLE function underneath (`42P17`); adding a `SET
+-- search_path` clause blocks inlining and still fails, because a function
+-- carrying one cannot appear in a stored generation expression; and
+-- PostgreSQL's own recipe — re-declaring the extension's C entry point as
+-- IMMUTABLE — needs **superuser**, which `app_migrate` is not and which RDS's
+-- master is not either (P0-21b).
 --
--- So accent folding is not available in the stored column for this deployment
--- model, and the plan's "accent-insensitivity via `unaccent`" cannot be built
--- as written. **What replaces it is the trigram fallback (P1-08):** a search for
--- `nebbiolo` against a stored `Nebbiòlo` misses the tsquery and is caught by
--- similarity — which the API already reports honestly as `matchedBy: 'similar'`
--- rather than passing it off as an exact match. That is a real degradation and
--- it is worth naming: accented spellings become fuzzy matches rather than exact
--- ones, and rank below an exact hit.
+-- *Grape varieties.* `array_to_string` is STABLE for the same class of reason —
+-- it calls the element type's output function — so the array cannot be folded
+-- into the vector either, and the same three dead ends apply.
+--
+-- **What replaces them.** Accented spellings become *fuzzy* matches: a search
+-- for `nebbiolo` against a stored `Nebbiòlo` misses the tsquery and is caught by
+-- the trigram fallback (P1-08), which the API reports honestly as
+-- `matchedBy: 'similar'` rather than passing off as an exact hit. Grapes are
+-- queried through the array GIN index below — containment, which is the right
+-- question for "does this wine include Nebbiolo" and is what P1-09's filter
+-- uses. Both are real reductions in what free-text search covers, and both are
+-- written down here rather than discovered later.
 
 -- Generated, not trigger-maintained, and the difference is that a generated
 -- column cannot drift. A trigger can be dropped, disabled, or skipped by a
@@ -56,10 +57,6 @@ ALTER TABLE products ADD COLUMN search_tsv tsvector
   GENERATED ALWAYS AS (
     setweight(to_tsvector('italian', coalesce(name, '')), 'A') ||
     setweight(to_tsvector('italian', coalesce(producer, '')), 'A') ||
-    setweight(
-      to_tsvector('italian', array_to_string(coalesce(grape_varieties, '{}'), ' ')),
-      'B'
-    ) ||
     setweight(to_tsvector('italian', coalesce(region, '')), 'B') ||
     setweight(to_tsvector('italian', coalesce(denomination, '')), 'C')
   ) STORED;
@@ -67,8 +64,9 @@ ALTER TABLE products ADD COLUMN search_tsv tsvector
 CREATE INDEX products_search_idx ON products USING gin (search_tsv);
 
 -- Grape queries are containment checks — "does this wine include Nebbiolo" —
--- which is what a GIN index over an array answers. Without it the filter is a
--- scan over every row in the tenant.
+-- which is what a GIN index over an array answers, and which is now the *only*
+-- way to search by grape: the array cannot be folded into the vector above.
+-- Without this index the filter is a scan over every row in the tenant.
 CREATE INDEX products_grapes_idx ON products USING gin (grape_varieties);
 
 -- Trigrams, for the half of search that stemming cannot help with: real
