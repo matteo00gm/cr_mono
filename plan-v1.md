@@ -3569,6 +3569,15 @@ A **generated** column cannot drift from the source fields, unlike a trigger-mai
 
 **Files.** same route file, tests. **~70 lines.**
 
+**As built — four of the five, composed into the shared builder.**
+
+- **Composition is the requirement, not a tidiness preference.** The filters go into `baseConditions`, which every page shares — the column page, the text search and the similarity fallback. A separate query path would work for the list and quietly not for the search, and the bug would be "filters do nothing when you type in the box", reported by a seller months later. There are tests asserting a filter narrows a search *and* its fallback, not only a list.
+- **`wineType` is not a Zod enum, and the row's instruction cannot be followed here.** `wine_type` is `text` rather than an enum in the schema (P0-26) because the taxonomy grows sideways — orange, pét-nat, col fondo — and each addition would otherwise be an `ALTER TYPE` for a label that guards nothing. Enumerating it in the API would reintroduce exactly that coupling one layer up, and the failure would be a filter rejecting a wine type the catalogue already contains. It is a bounded string, matched exactly, with a test for `pét-nat`.
+- **An invalid enum value is refused rather than dropped.** A silently ignored filter shows a seller more wines than they asked for and lets them conclude the catalogue holds something it does not — the same failure `matchedBy` (P1-08) exists to prevent, from the other direction.
+- **A price range with its bounds the wrong way round returns nothing, not an error.** It is a slider dragged past itself, not a malformed request, and an empty result is the honest answer rather than one the interface has to explain. Each bound is independently optional, so "under 20 euro" needs no invented floor.
+
+**⚠ The completeness band is not implemented, because there is nothing to band.** The row lists it among the filters; **P1-12** is what computes a completeness score, and it has not been built. Filtering on a score that does not exist would mean inventing the formula here, in the place with no test for it, and P1-13's indicator would then have to agree with a definition it did not choose. It lands with P1-12.
+
 ---
 
 ### P1-10 · Grid component

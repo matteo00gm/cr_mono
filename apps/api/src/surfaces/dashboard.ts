@@ -25,7 +25,14 @@ import {
   InvalidRequestError,
   NotFoundError,
 } from '@catalogorosso/core';
-import { isSortField, MAX_LIMIT, productInsert, productUpdate } from '@catalogorosso/db';
+import {
+  EMBEDDING_STATES,
+  isSortField,
+  MAX_LIMIT,
+  productInsert,
+  productUpdate,
+  STOCK_STATUSES,
+} from '@catalogorosso/db';
 
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
@@ -149,6 +156,25 @@ const listQuery = z.object({
     .enum(['true', 'false'])
     .transform((value) => value === 'true')
     .optional(),
+
+  /* ---- filters (P1-09) ------------------------------------------------- */
+
+  stockStatus: z.enum(STOCK_STATUSES).optional(),
+  embeddingState: z.enum(EMBEDDING_STATES).optional(),
+
+  /**
+   * **Not a Zod enum, and the row's instruction cannot be followed here.**
+   * `wine_type` is `text` rather than an enum in the schema (P0-26), because
+   * the taxonomy grows sideways — orange, pét-nat, col fondo — and each
+   * addition would otherwise be an `ALTER TYPE` for a label that guards
+   * nothing. Enumerating it here would reintroduce exactly that coupling one
+   * layer up, and the failure would be a filter that silently rejects a wine
+   * type the catalogue already contains.
+   */
+  wineType: z.string().trim().min(1).max(64).optional(),
+
+  priceMin: z.coerce.number().int().nonnegative().optional(),
+  priceMax: z.coerce.number().int().nonnegative().optional(),
 });
 
 export const createDashboardApp = ({
@@ -492,7 +518,9 @@ export const createDashboardApp = ({
        */
       throw new InvalidRequestError(
         'Check the query parameters: sort must be one of createdAt, updatedAt, name or ' +
-          `priceCents, direction asc or desc, and limit a whole number up to ${String(MAX_LIMIT)}.`,
+          `priceCents, direction asc or desc, limit a whole number up to ${String(MAX_LIMIT)}, ` +
+          'and stockStatus, embeddingState and the price bounds must be values the ' +
+          'catalogue actually uses.',
       );
     }
 
@@ -864,7 +892,11 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'a filter wearing a search box. When nothing matches the text, the search falls back ' +
         'to trigram similarity over the name and producer — and says so in `matchedBy`, ' +
         'because a fallback presented as an exact match leads a seller to conclude their ' +
-        'catalogue contains something it does not.',
+        'catalogue contains something it does not. Filters — stockStatus, wineType, ' +
+        'embeddingState and a price range in minor units — compose into the same query as ' +
+        'the sort and the search, so they narrow a search exactly as they narrow a list. A ' +
+        'price range whose bounds are the wrong way round returns nothing rather than an ' +
+        'error: that is a slider dragged past itself, not a malformed request.',
       example: {
         items: [
           {
