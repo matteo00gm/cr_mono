@@ -323,3 +323,31 @@ describe('filters', () => {
     expect(queries[0]?.priceMin).toBeUndefined();
   });
 });
+
+describe('the grape filter, which is not a convenience', () => {
+  it('passes a grape through', async () => {
+    queries.length = 0;
+
+    await get(app(), '?grape=Nebbiolo');
+
+    expect(queries[0]?.grape).toBe('Nebbiolo');
+  });
+
+  it('is the only way to ask for a grape, because search cannot', async () => {
+    /*
+     * **Free-text search cannot find by grape.** `array_to_string` is `STABLE`,
+     * so the array could not be folded into the generated tsvector (P1-07) —
+     * which makes this filter the answer to "find me a nebbiolo" rather than a
+     * refinement of one.
+     */
+    queries.length = 0;
+
+    await get(app(), '?q=barolo&grape=Nebbiolo');
+
+    expect(queries[0]).toMatchObject({ q: 'barolo', grape: 'Nebbiolo' });
+  });
+
+  it('refuses an empty grape rather than matching everything', async () => {
+    expect((await get(app(), '?grape=')).status).toBe(422);
+  });
+});

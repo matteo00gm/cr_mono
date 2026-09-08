@@ -626,3 +626,45 @@ describe('accents, now that the column cannot fold them', () => {
     expect(page.items.map((row) => row.sku)).toContain('ACC-1');
   });
 });
+
+describe('the grape filter', () => {
+  it('matches a wine that contains the grape', async () => {
+    /*
+     * Containment, against the array GIN index — and the only way to ask the
+     * question, since `array_to_string` is `STABLE` and the array could not be
+     * folded into the searchable column (P1-07).
+     */
+    await inTenant(async (tx) => {
+      for (const [sku, grapes] of [
+        ['G-NEB', ['Nebbiolo', 'Barbera']],
+        ['G-SAN', ['Sangiovese']],
+      ] as const) {
+        await insertProduct(tx, {
+          tenantId,
+          values: {
+            sku,
+            name: `Vino ${sku}`,
+            wineType: 'red',
+            priceCents: 1000,
+            currency: 'EUR',
+            stockStatus: 'IN_STOCK' as const,
+            grapeVarieties: [...grapes],
+          },
+          contentHash: sku,
+        });
+      }
+    });
+
+    const page = await inTenant((tx) => listProducts(tx, { grape: 'Nebbiolo', limit: 50 }));
+
+    expect(page.items.map((row) => row.sku)).toEqual(['G-NEB']);
+  });
+
+  it('narrows a search as well as a list', async () => {
+    const page = await inTenant((tx) =>
+      listProducts(tx, { q: 'vino', grape: 'Sangiovese', limit: 50 }),
+    );
+
+    expect(page.items.every((row) => (row.grapeVarieties ?? []).includes('Sangiovese'))).toBe(true);
+  });
+});

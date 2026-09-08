@@ -173,6 +173,16 @@ const listQuery = z.object({
    */
   wineType: z.string().trim().min(1).max(64).optional(),
 
+  /**
+   * A grape the wine must contain.
+   *
+   * **This one is not a convenience.** Free-text search cannot find by grape —
+   * `array_to_string` is `STABLE`, so the array could not be folded into the
+   * generated tsvector (P1-07) — so "find me a nebbiolo" has nowhere else to
+   * go. Matched exactly, against the array GIN index.
+   */
+  grape: z.string().trim().min(1).max(64).optional(),
+
   priceMin: z.coerce.number().int().nonnegative().optional(),
   priceMax: z.coerce.number().int().nonnegative().optional(),
 });
@@ -892,9 +902,12 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'a filter wearing a search box. When nothing matches the text, the search falls back ' +
         'to trigram similarity over the name and producer — and says so in `matchedBy`, ' +
         'because a fallback presented as an exact match leads a seller to conclude their ' +
-        'catalogue contains something it does not. Filters — stockStatus, wineType, ' +
+        'catalogue contains something it does not. Filters — stockStatus, wineType, grape, ' +
         'embeddingState and a price range in minor units — compose into the same query as ' +
-        'the sort and the search, so they narrow a search exactly as they narrow a list. A ' +
+        'the sort and the search, so they narrow a search exactly as they narrow a list. ' +
+        '`grape` is the one that is not a convenience: free-text search cannot find by ' +
+        'grape, because the array could not be folded into the searchable column, so it is ' +
+        'the only way to ask "find me a nebbiolo". A ' +
         'price range whose bounds are the wrong way round returns nothing rather than an ' +
         'error: that is a slider dragged past itself, not a malformed request.',
       example: {
