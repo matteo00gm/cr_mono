@@ -475,7 +475,7 @@ describe('archiveProduct', () => {
   const indexProduct = async (productId: string) => {
     await useTenant(db, tenantId);
     await db.execute(sql`
-      insert into product_embeddings (tenant_id, product_id, chunk_index, content_hash, embedding, model)
+      insert into product_embeddings (tenant_id, product_id, chunk_idx, content_hash, embedding, model)
       values (
         ${tenantId}::uuid, ${productId}::uuid, 0, 'hash',
         ${`[${Array.from({ length: 1024 }, () => '0').join(',')}]`}::halfvec(1024),
