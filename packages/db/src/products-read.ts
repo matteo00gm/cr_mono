@@ -164,33 +164,39 @@ export const decodeCursor = (cursor: string): Cursor | undefined => {
   return isMode(mode) ? { mode, value, id } : undefined;
 };
 
-/** The sort value of a row, as the string a cursor carries. */
-const cursorValue = (row: ProductRow, sort: SortField): string => {
-  const value = row[sort];
-  return value instanceof Date ? value.toISOString() : String(value);
+/**
+ * The type each sort column's cursor value is cast back to, in SQL.
+ *
+ * **The cursor is text and the column is not, so the comparison needs a cast —
+ * and the cast has to happen in Postgres rather than in JavaScript.** Two
+ * failures got here first, both found by the integration suite:
+ *
+ * - Handing the raw string to a `timestamp` comparison throws inside Drizzle's
+ *   own driver mapping.
+ * - Converting it back to a JS `Date` fixes that and breaks paging, because a
+ *   `Date` holds **milliseconds** and a `timestamptz` holds **microseconds**.
+ *   The cursor then names an instant slightly *before* the row it came from:
+ *   descending, the boundary excludes every remaining row and paging stops
+ *   after two pages; ascending, it excludes nothing and never terminates.
+ *
+ * Casting in SQL sidesteps both. Postgres renders the value with full precision
+ * and parses it back exactly, and the comparison is still against the bare
+ * column, so the index is still usable.
+ */
+const CURSOR_CASTS: Record<SortField, string> = {
+  createdAt: 'timestamptz',
+  updatedAt: 'timestamptz',
+  name: 'text',
+  priceCents: 'integer',
 };
 
 /**
- * The same value, back into what the *column* compares against.
+ * The sort value as Postgres itself renders it, selected alongside the row.
  *
- * **A cursor is text and a column is not, so encoding needs a matching
- * decoding** — and getting that wrong does not produce a wrong page, it
- * produces a crash. Drizzle maps a bound parameter through the column's own
- * `mapToDriverValue`, so a string handed to a `timestamp` comparison reaches
- * `value.toISOString()` and throws. The integration suite is what found it:
- * page two of the *default* sort was a 500, and a fake transaction cannot see
- * that, because it never maps driver values.
- *
- * A table keyed by `SortField` rather than a `typeof` check, so adding a
- * sortable column is a compile error here until somebody says how its cursor
- * value comes back.
+ * Selected rather than derived from `ProductRow`, because the row has already
+ * lost precision by the time JavaScript holds it — see the note above.
  */
-export const CURSOR_DECODERS: Record<SortField, (value: string) => unknown> = {
-  createdAt: (value) => new Date(value),
-  updatedAt: (value) => new Date(value),
-  name: (value) => value,
-  priceCents: (value) => Number(value),
-};
+const sortValueOf = (sort: SortField): SQL<string> => sql<string>`${SORTABLE[sort]}::text`;
 
 /**
  * One page of the catalogue, newest first by default.
@@ -284,6 +290,22 @@ const baseConditions = (query: ListQuery): SQL[] => {
  * instead of merely silenced — a boundary that came out undefined would quietly
  * return the first page forever, which is the sort of bug a `!` would hide.
  */
+/**
+ * The column boundary, with the cursor value cast by Postgres.
+ *
+ * Written as raw `sql` rather than through `boundaryFor` because the value has
+ * to reach the database as text and be cast there — see `CURSOR_CASTS`. The
+ * ranked boundary below keeps using `boundaryFor`, because a rank is a number
+ * on both sides and has no precision to lose.
+ */
+const columnBoundary = (sort: SortField, cursor: Cursor, direction: SortDirection): SQL => {
+  const column = SORTABLE[sort];
+  const at = sql`${cursor.value}::${sql.raw(CURSOR_CASTS[sort])}`;
+  const compare = direction === 'desc' ? sql`<` : sql`>`;
+
+  return sql`(${column} ${compare} ${at} or (${column} = ${at} and ${products.id} ${compare} ${cursor.id}::uuid))`;
+};
+
 const boundaryFor = (
   /*
    * Whatever `eq` itself accepts — a column or an expression. Naming the union
@@ -326,8 +348,7 @@ const runColumnPage = async (
   const conditions = baseConditions(query);
 
   if (cursor !== undefined) {
-    const boundary = boundaryFor(column, CURSOR_DECODERS[sort](cursor.value), cursor.id, direction);
-    if (boundary !== undefined) conditions.push(boundary);
+    conditions.push(columnBoundary(sort, cursor, direction));
   }
 
   const order = direction === 'desc' ? desc : asc;
@@ -339,7 +360,7 @@ const runColumnPage = async (
    * whether to offer "next", not how many pages there are.
    */
   const rows = await tx
-    .select()
+    .select({ product: products, sortValue: sortValueOf(sort) })
     .from(products)
     .where(conditions.length === 0 ? undefined : and(...conditions))
     .orderBy(order(column), order(products.id))
@@ -349,11 +370,11 @@ const runColumnPage = async (
   const last = items[items.length - 1];
 
   return {
-    items,
+    items: items.map((row) => row.product),
     matchedBy: 'column',
     nextCursor:
       rows.length > limit && last !== undefined
-        ? encodeCursor('column', cursorValue(last, sort), last.id)
+        ? encodeCursor('column', last.sortValue, last.product.id)
         : null,
   };
 };
