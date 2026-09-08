@@ -32,16 +32,22 @@ $$;
 -- the alternative is unaccenting at query time only, which cannot use an index
 -- at all.
 --
--- `SCHEMA public` is fixed in the body, so a caller cannot redirect it with a
--- `search_path`. Without that, a function marked IMMUTABLE and called by an
--- index build is a well-known escalation shape.
+-- **Every name inside is schema-qualified, and there is deliberately no `SET
+-- search_path`.** The qualification is what stops a caller redirecting
+-- resolution with their own path — the escalation shape a function marked
+-- IMMUTABLE and called during an index build would otherwise have.
+--
+-- A `SET` clause would say the same thing more forcefully and *cannot be used
+-- here*: Postgres refuses a function carrying one inside a generated column
+-- expression with `42P17 invalid_object_definition`, because the setting could
+-- change and the stored value could not. CI is what established that — the
+-- first version had the clause, and every migration after this one failed.
 CREATE OR REPLACE FUNCTION immutable_unaccent(text)
   RETURNS text
   LANGUAGE sql
   IMMUTABLE
   PARALLEL SAFE
   STRICT
-  SET search_path = pg_catalog, public
 AS $$
   SELECT public.unaccent('public.unaccent'::regdictionary, $1)
 $$;

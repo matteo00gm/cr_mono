@@ -230,44 +230,14 @@ describe('searching', () => {
   });
 });
 
-describe('filters and ordering, as branches', () => {
+describe('ordering and the boundary', () => {
   /**
-   * These assert *that the branch runs*, not that the SQL is right.
-   *
-   * A fake cannot tell a correct `WHERE` from an incorrect one, and asserting
-   * on Drizzle's internal expression objects would be a test of Drizzle. That a
-   * filter actually narrows the result is `products-read.integration.test.ts`.
-   * What is worth having here is that no branch throws and that each option is
-   * reachable — a filter that crashed for one enum value would otherwise be
-   * found by a seller.
+   * These assert *that the branch runs*, not that the SQL is right. A fake
+   * cannot tell a correct `WHERE` from an incorrect one, and asserting on
+   * Drizzle's internal expression objects would be a test of Drizzle. That a
+   * boundary actually excludes the rows already shown is
+   * `products-read.integration.test.ts`.
    */
-  it.each([
-    ['stock status', { stockStatus: 'IN_STOCK' as const }],
-    ['wine type', { wineType: 'orange' }],
-    ['embedding state', { embeddingState: 'FAILED' as const }],
-    ['a price floor', { priceMin: 1000 }],
-    ['a price ceiling', { priceMax: 5000 }],
-    ['both price bounds', { priceMin: 1000, priceMax: 5000 }],
-    ['archived rows', { includeArchived: true }],
-    [
-      'every filter at once',
-      {
-        stockStatus: 'PREORDER' as const,
-        wineType: 'red',
-        embeddingState: 'STALE' as const,
-        priceMin: 1,
-        priceMax: 2,
-        includeArchived: true,
-      },
-    ],
-  ])('accepts %s', async (_case, filters) => {
-    const { tx, queries } = capturing([product('a')]);
-
-    await listProducts(tx, filters);
-
-    expect(queries).toHaveLength(1);
-  });
-
   it.each([
     ['createdAt', 'desc'],
     ['createdAt', 'asc'],
@@ -320,6 +290,87 @@ describe('filters and ordering, as branches', () => {
     const { tx, queries } = capturing([ranked('a', 0.4)]);
 
     await listProducts(tx, { q: 'barolo', cursor: cursorFor('text', '0.9', 'some-id') });
+
+    expect(queries).toHaveLength(1);
+  });
+});
+
+describe('the search cursor', () => {
+  it('is produced when there is another page of matches', async () => {
+    /*
+     * The rank has to travel in the cursor: paging by relevance needs the
+     * boundary to be the rank of the last row shown, and asking the client to
+     * recompute it would mean publishing the ranking function as part of the
+     * API.
+     */
+    const { tx } = capturing([ranked('a', 0.9), ranked('b', 0.4)]);
+
+    const page = await listProducts(tx, { q: 'barolo', limit: 1 });
+
+    expect(page.items.map((row) => row.id)).toEqual(['a']);
+    expect(decodeCursor(page.nextCursor ?? '')).toEqual({
+      mode: 'text',
+      value: '0.9',
+      id: 'a',
+    });
+  });
+
+  it('says similar when the fallback produced it', async () => {
+    const { tx } = capturing([], [ranked('a', 0.5), ranked('b', 0.3)]);
+
+    const page = await listProducts(tx, { q: 'poderi cola', limit: 1 });
+
+    expect(decodeCursor(page.nextCursor ?? '')).toMatchObject({ mode: 'similar' });
+  });
+
+  it('builds a page with no conditions at all when archived rows are wanted', async () => {
+    /*
+     * The only combination that leaves the condition list empty — and a `where`
+     * built from an empty list is `where ()`, which is a syntax error rather
+     * than "everything".
+     */
+    const { tx, queries } = capturing([product('a')]);
+
+    await listProducts(tx, { includeArchived: true });
+
+    expect(queries).toHaveLength(1);
+  });
+});
+
+describe('filters and ordering, as branches', () => {
+  /**
+   * These assert *that the branch runs*, not that the SQL is right.
+   *
+   * A fake cannot tell a correct `WHERE` from an incorrect one, and asserting
+   * on Drizzle's internal expression objects would be a test of Drizzle. That a
+   * filter actually narrows the result is `products-read.integration.test.ts`.
+   * What is worth having here is that no branch throws and that each option is
+   * reachable — a filter that crashed for one enum value would otherwise be
+   * found by a seller.
+   */
+  it.each([
+    ['stock status', { stockStatus: 'IN_STOCK' as const }],
+    ['wine type', { wineType: 'orange' }],
+    ['embedding state', { embeddingState: 'FAILED' as const }],
+    ['a price floor', { priceMin: 1000 }],
+    ['a price ceiling', { priceMax: 5000 }],
+    ['both price bounds', { priceMin: 1000, priceMax: 5000 }],
+    ['archived rows', { includeArchived: true }],
+    [
+      'every filter at once',
+      {
+        stockStatus: 'PREORDER' as const,
+        wineType: 'red',
+        embeddingState: 'STALE' as const,
+        priceMin: 1,
+        priceMax: 2,
+        includeArchived: true,
+      },
+    ],
+  ])('accepts %s', async (_case, filters) => {
+    const { tx, queries } = capturing([product('a')]);
+
+    await listProducts(tx, filters);
 
     expect(queries).toHaveLength(1);
   });

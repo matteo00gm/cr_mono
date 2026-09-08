@@ -132,9 +132,9 @@ export type MatchMode = 'column' | 'text' | 'similar';
  * **Each part is encoded separately and joined with a dot**, rather than joined
  * first and encoded once. A single encoding needs a separator that cannot occur
  * in any part — and the sort value can be a wine's *name*, which contains
- * spaces and very nearly anything else. The first version used a NUL byte,
- * which worked and made the source file binary to `grep`. Encoding per part
- * removes the question: `.` cannot appear in base64url output.
+ * spaces and very nearly anything else. A control character does the job and
+ * puts one in the source file; encoding per part removes the question, because
+ * `.` cannot appear in base64url output.
  */
 const encodeCursor = (mode: MatchMode, value: string, id: string): string =>
   [mode, value, id].map((part) => Buffer.from(part, 'utf8').toString('base64url')).join('.');
