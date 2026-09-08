@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lt, gt, or, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, sql, type SQL } from 'drizzle-orm';
 
 import { products } from './schema/products.js';
 import type { ProductRow } from './products.js';
@@ -101,33 +101,41 @@ export const decodeCursor = (cursor: string): Cursor | undefined => {
   return value === undefined || id === undefined || id === '' ? undefined : { value, id };
 };
 
-/** The sort value of a row, as the string a cursor carries. */
-const cursorValue = (row: ProductRow, sort: SortField): string => {
-  const value = row[sort];
-  return value instanceof Date ? value.toISOString() : String(value);
+/**
+ * The type each sort column's cursor value is cast back to in SQL.
+ *
+ * **The cursor is text and the column is not, so the comparison needs a cast —
+ * and the cast has to happen in Postgres rather than in JavaScript.** The first
+ * version converted the string back to a `Date` and let Drizzle bind it, which
+ * looked right and was wrong twice over:
+ *
+ * - A JS `Date` holds **milliseconds**; a Postgres `timestamptz` holds
+ *   **microseconds**. A cursor built from the row therefore names an instant
+ *   slightly *before* the row it came from. Descending, the boundary excludes
+ *   every remaining row and paging stops after two pages; ascending, it excludes
+ *   nothing and paging never terminates. Both were found by the integration
+ *   suite, which is the only place a real timestamp exists.
+ * - Before that, handing the raw string to a `timestamp` comparison threw
+ *   inside Drizzle's own driver mapping.
+ *
+ * Casting in SQL sidesteps both: Postgres renders the value with full precision
+ * and parses it back exactly, and the comparison is still against the bare
+ * column, so the index is still usable.
+ */
+const CURSOR_CASTS: Record<SortField, string> = {
+  createdAt: 'timestamptz',
+  updatedAt: 'timestamptz',
+  name: 'text',
+  priceCents: 'integer',
 };
 
 /**
- * The same value, back into what the *column* compares against.
+ * The sort value as Postgres itself renders it, selected alongside the row.
  *
- * **A cursor is text and a column is not, so encoding needs a matching
- * decoding** — and getting that wrong does not produce a wrong page, it
- * produces a crash. Drizzle maps a bound parameter through the column's own
- * `mapToDriverValue`, so a string handed to a `timestamp` comparison reaches
- * `value.toISOString()` and throws. The integration suite is what found it:
- * page two of the *default* sort was a 500, and a fake transaction cannot see
- * that, because it never maps driver values.
- *
- * A table keyed by `SortField` rather than a `typeof` check, so adding a
- * sortable column is a compile error here until somebody says how its cursor
- * value comes back.
+ * Selected rather than derived from `ProductRow`, because the row has already
+ * lost precision by the time JavaScript holds it — see the note above.
  */
-export const CURSOR_DECODERS: Record<SortField, (value: string) => unknown> = {
-  createdAt: (value) => new Date(value),
-  updatedAt: (value) => new Date(value),
-  name: (value) => value,
-  priceCents: (value) => Number(value),
-};
+const sortValueOf = (sort: SortField): SQL<string> => sql<string>`${SORTABLE[sort]}::text`;
 
 /**
  * The tuple boundary: `a < b OR (a = b AND id < cursorId)`.
@@ -145,19 +153,12 @@ export const CURSOR_DECODERS: Record<SortField, (value: string) => unknown> = {
  * hand would pin one of Drizzle's internal generic shapes and break on an
  * upgrade for no benefit.
  */
-const boundaryFor = (
-  sortExpression: Parameters<typeof eq>[0],
-  value: unknown,
-  cursorId: string,
-  direction: SortDirection,
-): SQL | undefined => {
-  const compare = direction === 'desc' ? lt : gt;
-  const tie = direction === 'desc' ? lt(products.id, cursorId) : gt(products.id, cursorId);
-  const tieBreak = and(eq(sortExpression, value), tie);
+const boundaryFor = (sort: SortField, cursor: Cursor, direction: SortDirection): SQL => {
+  const column = SORTABLE[sort];
+  const at = sql`${cursor.value}::${sql.raw(CURSOR_CASTS[sort])}`;
+  const compare = direction === 'desc' ? sql`<` : sql`>`;
 
-  return tieBreak === undefined
-    ? compare(sortExpression, value)
-    : or(compare(sortExpression, value), tieBreak);
+  return sql`(${column} ${compare} ${at} or (${column} = ${at} and ${products.id} ${compare} ${cursor.id}::uuid))`;
 };
 
 /**
@@ -197,10 +198,7 @@ export const listProducts = async (
 
   const cursor = query.cursor === undefined ? undefined : decodeCursor(query.cursor);
 
-  if (cursor !== undefined) {
-    const boundary = boundaryFor(column, CURSOR_DECODERS[sort](cursor.value), cursor.id, direction);
-    if (boundary !== undefined) conditions.push(boundary);
-  }
+  if (cursor !== undefined) conditions.push(boundaryFor(sort, cursor, direction));
 
   const order = direction === 'desc' ? desc : asc;
 
@@ -211,7 +209,7 @@ export const listProducts = async (
    * whether to offer "next", not how many pages there are.
    */
   const rows = await tx
-    .select()
+    .select({ product: products, sortValue: sortValueOf(sort) })
     .from(products)
     .where(conditions.length === 0 ? undefined : and(...conditions))
     .orderBy(order(column), order(products.id))
@@ -221,10 +219,10 @@ export const listProducts = async (
   const last = items[items.length - 1];
 
   return {
-    items,
+    items: items.map((row) => row.product),
     nextCursor:
       rows.length > limit && last !== undefined
-        ? encodeCursor(cursorValue(last, sort), last.id)
+        ? encodeCursor(last.sortValue, last.product.id)
         : null,
   };
 };

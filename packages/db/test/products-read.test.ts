@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  CURSOR_DECODERS,
   DEFAULT_LIMIT,
   decodeCursor,
   isSortField,
@@ -61,6 +60,19 @@ const capturing = (...pages: unknown[][]): Captured => {
 
 const product = (id: string) => ({ id, createdAt: new Date('2026-09-08T09:14:00.000Z') });
 
+/**
+ * A column-page row as the builder now selects it: the product **and** the sort
+ * value as Postgres rendered it.
+ *
+ * The value is selected rather than derived from the row, because a JS `Date`
+ * has already lost the microseconds a `timestamptz` carries — see the note in
+ * `products-read.ts`.
+ */
+const listed = (id: string, sortValue = '2026-09-08 09:14:00.000000+00') => ({
+  product: product(id),
+  sortValue,
+});
+
 /** Built the way the module builds one: each part encoded, joined with a dot. */
 const cursorFor = (value: string, id: string) =>
   [value, id].map((part) => Buffer.from(part, 'utf8').toString('base64url')).join('.');
@@ -87,7 +99,7 @@ describe('isSortField', () => {
 
 describe('decodeCursor', () => {
   it('round-trips what the module produced', async () => {
-    const { tx } = capturing([product('a'), product('b')]);
+    const { tx } = capturing([listed('a'), listed('b')]);
 
     const page = await listProducts(tx, { limit: 1 });
     const cursor = page.nextCursor;
@@ -142,7 +154,7 @@ describe('the limit', () => {
 
 describe('paging', () => {
   it('offers no cursor when the extra row did not come back', async () => {
-    const { tx } = capturing([product('a'), product('b')]);
+    const { tx } = capturing([listed('a'), listed('b')]);
 
     const page = await listProducts(tx, { limit: 5 });
 
@@ -156,7 +168,7 @@ describe('paging', () => {
      * after it must not offer "next", or a client fetches an empty page and
      * shows a spinner for it.
      */
-    const { tx } = capturing([product('a'), product('b'), product('c')]);
+    const { tx } = capturing([listed('a'), listed('b'), listed('c')]);
 
     const page = await listProducts(tx, { limit: 2 });
 
@@ -183,7 +195,7 @@ describe('filters and ordering, as branches', () => {
     ['priceCents', 'desc'],
     ['updatedAt', 'asc'],
   ] as const)('orders by %s %s', async (sort, direction) => {
-    const { tx, queries } = capturing([product('a')]);
+    const { tx, queries } = capturing([listed('a')]);
 
     await listProducts(tx, { sort, direction });
 
@@ -197,7 +209,7 @@ describe('filters and ordering, as branches', () => {
      * page, which is invisible until somebody pages.
      */
     for (const direction of ['asc', 'desc'] as const) {
-      const { tx, queries } = capturing([product('a')]);
+      const { tx, queries } = capturing([listed('a')]);
 
       await listProducts(tx, {
         direction,
@@ -222,7 +234,7 @@ describe('filters and ordering, as branches', () => {
   });
 
   it('shows archived rows when asked', async () => {
-    const { tx, queries } = capturing([product('a')]);
+    const { tx, queries } = capturing([listed('a')]);
 
     await listProducts(tx, { includeArchived: true });
 
@@ -230,51 +242,51 @@ describe('filters and ordering, as branches', () => {
   });
 });
 
-describe('the cursor value, decoded back to the column type', () => {
+describe('the cursor value, and where the cast happens', () => {
   /**
-   * **A cursor is text and a column is not.** Drizzle maps a bound parameter
-   * through the column's own `mapToDriverValue`, so a string handed to a
-   * `timestamp` comparison reaches `value.toISOString()` and throws — page two
-   * of the *default* sort was a 500 until the integration suite found it.
+   * **The cursor is text and the column is not, so the comparison needs a cast
+   * — and the cast has to happen in Postgres.** Two failures got here first,
+   * both found by the integration suite and neither visible to a fake:
    *
-   * A fake transaction cannot see that, because it never maps driver values.
-   * What is assertable here is the half that is ours: each sortable column's
-   * cursor value comes back as the kind of thing that column compares against,
-   * and the table is keyed by `SortField` so a new sortable column is a compile
-   * error until somebody says which.
+   * - Handing the raw string to a `timestamp` comparison threw inside Drizzle's
+   *   own driver mapping.
+   * - Converting it back to a JS `Date` fixed that and broke paging, because a
+   *   `Date` holds milliseconds and a `timestamptz` holds microseconds. The
+   *   cursor then named an instant slightly *before* the row it came from:
+   *   descending, paging stopped after two pages; ascending, it never
+   *   terminated.
+   *
+   * A fake transaction sees none of it, because it neither maps driver values
+   * nor stores a timestamp. What is assertable here is that the boundary is
+   * built at all for every sortable column, and that the value is taken from
+   * the row Postgres returned rather than from the JavaScript one.
    */
-  it('decodes a timestamp cursor to a Date', () => {
-    expect(CURSOR_DECODERS.createdAt('2026-09-08T09:14:00.000Z')).toBeInstanceOf(Date);
-    expect(CURSOR_DECODERS.updatedAt('2026-09-08T09:14:00.000Z')).toBeInstanceOf(Date);
-  });
-
-  it('decodes a numeric cursor to a number, not a numeric string', () => {
-    expect(CURSOR_DECODERS.priceCents('4500')).toBe(4500);
-  });
-
-  it('leaves a text cursor alone', () => {
-    expect(CURSOR_DECODERS.name('Barolo Bussia')).toBe('Barolo Bussia');
-  });
-
-  it('round-trips a timestamp exactly, so the boundary lands on the right row', () => {
-    /*
-     * A boundary a millisecond off either repeats the last row of the previous
-     * page or skips the first of the next — and both are invisible until
-     * somebody counts.
-     */
-    const at = new Date('2026-09-08T09:14:00.123Z');
-    const decoded = CURSOR_DECODERS.createdAt(at.toISOString());
-
-    expect((decoded as Date).getTime()).toBe(at.getTime());
-  });
-
-  it('runs the boundary without throwing for every sortable column', async () => {
+  it('builds a boundary for every sortable column without throwing', async () => {
     for (const sort of ['createdAt', 'updatedAt', 'name', 'priceCents'] as const) {
-      const { tx, queries } = capturing([product('a')]);
+      const { tx, queries } = capturing([listed('a')]);
 
       await listProducts(tx, { sort, cursor: cursorFor('2026-09-08T09:14:00.000Z', 'id-1') });
 
       expect(queries).toHaveLength(1);
     }
+  });
+
+  it('carries the value Postgres rendered, not the one JavaScript held', async () => {
+    /*
+     * The row's `sortValue` comes back from a `::text` cast in the select, so
+     * it keeps whatever precision the column has. Asserted by handing the fake
+     * a value JavaScript could not have produced from a `Date`.
+     */
+    const { tx } = capturing([
+      listed('a', '2026-09-08 09:14:00.123456+00'),
+      listed('b', '2026-09-08 09:13:00.000001+00'),
+    ]);
+
+    const page = await listProducts(tx, { limit: 1 });
+
+    expect(decodeCursor(page.nextCursor ?? '')).toEqual({
+      value: '2026-09-08 09:14:00.123456+00',
+      id: 'a',
+    });
   });
 });
