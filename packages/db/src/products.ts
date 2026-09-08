@@ -18,35 +18,24 @@ import type { DbTransaction } from './with-tenant.js';
  * and a function that opened its own connection could not offer it.
  */
 
-/** unique_violation — a `(tenant_id, sku)` that already exists. */
-const UNIQUE_VIOLATION = '23505';
-
 /**
- * The SQLSTATE, wherever the driver left it.
+ * **A constraint violation cannot be caught and walked away from inside a
+ * transaction, and CI is what established that.**
  *
- * **Both levels, and CI is what established that.** `db.execute` with a raw
- * statement wraps the driver error in a Drizzle one, so the code sits on
- * `cause`; the query builder lets postgres-js's own `PostgresError` through
- * untouched, with the code on the error itself. The first version of this
- * function read only `cause` — and the unit test fabricated a wrapped error, so
- * the fake and the code agreed with each other and not with Postgres. A
- * duplicate SKU escaped as a 500 while every unit test stayed green.
+ * The first version of `insertProduct` wrapped its insert in `try`/`catch`,
+ * read the SQLSTATE and returned an outcome — and the outcome never arrived.
+ * postgres-js marks a transaction failed the moment any statement errors, rolls
+ * it back, and rejects the *outer* `transaction()` promise with the original
+ * error, whatever the callback did with it. Postgres agrees: after an error the
+ * session refuses every further statement until the transaction ends, so there
+ * is nothing to continue into even if the driver allowed it.
  *
- * That is the same shape as A1's timestamp bug, from the same cause: a fixture
- * written from the implementation's assumption rather than from the driver's
- * behaviour. `products.write.test.ts` now builds both forms and names which
- * call site produces each.
- *
- * The message is never matched on. `Failed query: …` is Drizzle's phrasing,
- * which is neither ours nor stable.
+ * The way out is to **never raise**. `ON CONFLICT (tenant_id, sku) DO NOTHING
+ * ... RETURNING` makes the conflict a *result* — an empty row set — rather than
+ * an error: no exception, no poisoned transaction, one round trip, and no race
+ * between checking and inserting. The conflict target is named, so a violation
+ * of any other constraint still raises and is still ours to fix.
  */
-const pgErrorCode = (error: unknown): string | undefined => {
-  const candidate = error as { code?: unknown; cause?: { code?: unknown } } | undefined;
-  const direct = candidate?.code;
-  const wrapped = candidate?.cause?.code;
-
-  return typeof direct === 'string' ? direct : typeof wrapped === 'string' ? wrapped : undefined;
-};
 
 export type ProductRow = typeof products.$inferSelect;
 
@@ -113,41 +102,33 @@ export const insertProduct = async (
   tx: DbTransaction,
   product: NewProduct,
 ): Promise<ProductWriteOutcome> => {
-  let created: ProductRow | undefined;
-
-  try {
-    const rows = await tx
-      .insert(products)
-      .values({
-        ...product.values,
-        tenantId: product.tenantId,
-        contentHash: product.contentHash,
-        /*
-         * Explicit rather than left to the column default. The default is
-         * `PENDING` and this says the same thing — but a row inserted here is
-         * pending *because* the outbox row below exists, and stating it keeps
-         * the two visibly paired at the call site rather than in two schema
-         * files.
-         */
-        embeddingState: 'PENDING',
-      })
-      .returning();
-
-    created = rows[0];
-  } catch (error) {
-    if (pgErrorCode(error) === UNIQUE_VIOLATION) return { outcome: 'duplicate-sku' };
-    throw error;
-  }
-
-  if (created === undefined) {
+  const rows = await tx
+    .insert(products)
+    .values({
+      ...product.values,
+      tenantId: product.tenantId,
+      contentHash: product.contentHash,
+      /*
+       * Explicit rather than left to the column default. The default is
+       * `PENDING` and this says the same thing — but a row inserted here is
+       * pending *because* the outbox row below exists, and stating it keeps
+       * the two visibly paired at the call site rather than in two schema
+       * files.
+       */
+      embeddingState: 'PENDING',
+    })
     /*
-     * Unreachable: `RETURNING` on a single-row insert that did not throw yields
-     * exactly one row. Kept because the alternative to a throw is enqueueing a
-     * job for `undefined.id`, and this package would rather fail than write a
-     * job pointing at nothing.
+     * The conflict is a *result*, not an error — see the note at the top of the
+     * file. The target is named rather than bare, so a violation of any other
+     * constraint still raises: `DO NOTHING` with no target would swallow the
+     * next unique index somebody adds and report a silent success.
      */
-    throw new Error('insertProduct: the insert returned no row, which cannot happen');
-  }
+    .onConflictDoNothing({ target: [products.tenantId, products.sku] })
+    .returning();
+
+  const created = rows[0];
+
+  if (created === undefined) return { outcome: 'duplicate-sku' };
 
   await enqueueEmbedding(tx, {
     tenantId: product.tenantId,
