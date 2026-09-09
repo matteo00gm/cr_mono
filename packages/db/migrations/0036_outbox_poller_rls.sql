@@ -5,15 +5,11 @@
 -- which is what stops a table being added to the list and not to the database.
 
 -- The poller drains every tenant’s queue in one pass, so there is no tenant to scope it to and the boilerplate returns zero rows — silently, which is the failure this would actually have had.
--- Unlike the user and invitation branches above, this one does not narrow to the caller’s own rows; it is an unlock, and it is confined to this table because a policy cannot reach further.
--- An outbox row carries ids, an event name and a one-word reason, never catalogue content, and the worker re-enters withTenant before it reads a product.
-CREATE POLICY outbox_poller_read ON outbox
-  FOR SELECT
-  USING (nullif(current_setting('app.outbox_poller', true), '') = 'on');
---> statement-breakpoint
--- Publishing a job ends in an UPDATE — processed_at, or the attempt counter — so a read-only unlock would leave the poller able to claim work it could never release.
--- Split from the read rather than written as one FOR ALL policy, so the flag admits exactly the two commands the queue needs: no INSERT, so no path can forge a job for another tenant, and no DELETE, so none can drop one.
-CREATE POLICY outbox_poller_release ON outbox
-  FOR UPDATE
-  USING (nullif(current_setting('app.outbox_poller', true), '') = 'on')
-  WITH CHECK (nullif(current_setting('app.outbox_poller', true), '') = 'on');
+-- Unlike the user and invitation branches above, this branch does not narrow to the caller’s own rows: it is a read across every tenant, of a table whose rows carry ids, an event name and a one-word reason rather than anything a seller wrote.
+-- WITH CHECK stays tenant-only, exactly as memberships does, and here it does more work: the poller’s release is an UPDATE, so it has to set app.tenant_id from the row it claimed before it writes.
+-- The flag therefore buys a read and nothing else — no insert of a job naming another tenant, and no delete of one.
+DROP POLICY IF EXISTS tenant_isolation ON outbox;
+CREATE POLICY tenant_isolation ON outbox
+  USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+    OR nullif(current_setting('app.outbox_poller', true), '') = 'on')
+  WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);

@@ -46,7 +46,13 @@ describe('row-level security', () => {
     // `string_to_array` rather than binding a JS array: drizzle expands
     // `${[a, b]}` into a row constructor, which Postgres rejects here with
     // "op ANY/ALL (array) requires array on right side".
-    const names = RLS_POLICIES.map((policy) => policy.table).join(',');
+    /*
+     * De-duplicated, because an entry is not a table. Since P1-31 the list can
+     * carry a *superseding* entry — a later migration replacing an earlier
+     * policy on a table already there — so `RLS_POLICIES.length` counts
+     * definitions and this test is about tables.
+     */
+    const names = [...new Set(RLS_POLICIES.map((policy) => policy.table))].join(',');
     const rows = await db.execute(sql`
       select relname, relrowsecurity, relforcerowsecurity
       from pg_class where relname = any(string_to_array(${names}, ','))
@@ -58,7 +64,7 @@ describe('row-level security', () => {
       ]),
     );
 
-    expect(state.size).toBe(RLS_POLICIES.length);
+    expect(state.size).toBe(new Set(RLS_POLICIES.map((policy) => policy.table)).size);
     for (const { table } of RLS_POLICIES) {
       expect(state.get(table)?.relrowsecurity, `${table} enabled`).toBe(true);
       expect(state.get(table)?.relforcerowsecurity, `${table} forced`).toBe(true);
@@ -71,7 +77,7 @@ describe('row-level security', () => {
     `);
     const tables = [...rows].map((r) => String((r as { tablename: unknown }).tablename)).sort();
 
-    expect(tables).toEqual(RLS_POLICIES.map((p) => p.table).sort());
+    expect(tables).toEqual([...new Set(RLS_POLICIES.map((p) => p.table))].sort());
   });
 
   it('returns nothing at all when no tenant context is set', async () => {

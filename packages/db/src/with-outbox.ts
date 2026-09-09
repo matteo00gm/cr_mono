@@ -23,15 +23,27 @@ import type { DbTransaction } from './with-tenant.js';
  * always empty; at a thousand sellers that is a thousand transactions a minute
  * to move nothing.
  *
- * **What bounds it.** A policy attaches to one table, so this reaches `outbox`
- * and no other. What an outbox row holds is a tenant id, a product id, the
- * string `embedding.requested` and a one-word reason — `enqueueEmbedding` in
- * `products.ts` is the only writer — so what crosses the tenant boundary is
- * that *something changed*, never what. The worker then re-enters `withTenant`
- * before it reads the product itself, so nothing downstream of the claim
- * inherits the unlock. And the policy is split by command: SELECT and UPDATE,
- * never INSERT or DELETE, so this path can move a job through the queue and
- * cannot forge one or lose one.
+ * **What bounds it, and the first bound is the important one: it buys a read.**
+ * The flag appears in `tenant_isolation`'s `USING` and never in its
+ * `WITH CHECK` — the same decision `memberships` made about `app.user_id` — so
+ * a transaction holding it can see the queue and cannot write to it. The
+ * poller's own releases work because `runOutboxPass` sets `app.tenant_id` from
+ * the row it claimed before it updates, which is `withInvitation`'s shape: read
+ * under one context, then narrow to the tenant Postgres itself produced. A path
+ * that never claimed a row has no tenant to narrow to, so it can neither forge
+ * a job nor delete one.
+ *
+ * A **second policy** was the first design and it was wrong. Permissive
+ * policies are OR-ed, so a second one does not modify `tenant_isolation`, it
+ * bypasses it — and `rls-coverage.integration.test.ts` says exactly that,
+ * against a live database, for exactly this reason.
+ *
+ * The rest of the bound is what the read reaches. One table, whose rows hold a
+ * tenant id, a product id, the string `embedding.requested` and a one-word
+ * reason — `enqueueEmbedding` in `products.ts` is the only writer — so what
+ * crosses the tenant boundary is that *something changed*, never what. The
+ * worker re-enters `withTenant` before it reads the product itself, so nothing
+ * downstream of the claim inherits the unlock.
  *
  * **Why a flag and not a secret.** `withInvitation`'s token works because the
  * value is held by the *user* — presenting it is the authorization. A secret

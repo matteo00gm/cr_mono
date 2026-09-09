@@ -3904,18 +3904,25 @@ Enqueue an outbox row **only for rows where `changed`**. Return per-row outcomes
 
 **The fourth RLS scope.** `outbox` carries `tenant_id` and, like every other tenant table, a `tenant_isolation` policy under `ENABLE` + `FORCE`. A poller written the obvious way issues an un-scoped read and gets **zero rows, silently** — a clean pass over an empty queue, once a minute, for ever, while the backlog grows behind it. There is no tenant to scope it to either: draining the platform's queue in one pass is the job, and asking *which* tenants have work is the same cross-tenant read as asking for the work. The same circularity P0-51 hit, from the other side.
 
-So `withOutbox()`, a fourth scope, setting a transaction-local `app.outbox_poller` GUC that two new policies on `outbox` admit — `outbox_poller_read` (`FOR SELECT`) and `outbox_poller_release` (`FOR UPDATE`). Migration `0036_outbox_poller_rls`. Recorded as **ADR 0021**, because ADR 0019 says a fourth scope is a design change rather than a configuration one.
+So `withOutbox()`, a fourth scope, setting a transaction-local `app.outbox_poller` GUC. Migration `0036_outbox_poller_rls` **replaces** `tenant_isolation` on `outbox` with one that admits it:
 
-**It widens where the previous two narrow, and that is the whole review.** `app.user_id` and `app.invitation_token` admit the caller's *own* rows: a wrong value sees less, never more. This one is an unlock — a transaction that sets it reads every tenant's outbox rows. What bounds it, in order of how much work each does:
+```sql
+USING      (tenant_id = app.tenant_id OR app.outbox_poller = 'on')
+WITH CHECK (tenant_id = app.tenant_id)
+```
 
-- A policy attaches to **one table**. The flag reaches `outbox` and nothing else.
-- The split by command. No INSERT, so nothing under the flag can forge a job pointing into another tenant's catalogue; no DELETE, so nothing can drop the evidence of one it failed to publish. This is why it is two policies rather than one `FOR ALL`.
+Recorded as **ADR 0021**, because ADR 0019 says a fourth scope is a design change rather than a configuration one.
+
+**It widens where the previous two narrow, and that is the whole review.** `app.user_id` and `app.invitation_token` admit the caller's *own* rows: a wrong value sees less, never more. This one admits every tenant's outbox rows. What bounds it:
+
+- **`WITH CHECK` stays tenant-only**, exactly as `memberships` does. So the flag buys a *read*: a transaction holding it and nothing else can see the queue and cannot write to it — an INSERT names a tenant it cannot satisfy, and an UPDATE fails the same check. The poller's own releases work because `runOutboxPass` sets `app.tenant_id` **from the row it claimed** before it writes, which is `withInvitation`'s shape.
+- **DELETE is the exception**, and it is closed at the grant. A DELETE is filtered by `USING` alone — no new row, nothing for `WITH CHECK` to refuse — so under the flag `delete from outbox` would match every tenant's rows. Migration `0037` revokes DELETE on `outbox` from `app_rw`: the P0-31 mechanism applied to a queue instead of a ledger, and *wider* than the hole, since it covers every path rather than only the flagged one.
 - The rows are **pointers**. `enqueueEmbedding` writes `{ reason }` and nothing else, so what crosses the boundary is *that* a seller changed something, never what. A future writer putting catalogue content in an outbox payload would make this disclosure large without touching the ADR.
 - The worker re-enters `withTenant(tenantId)` before it reads a product, so nothing downstream of the claim inherits the unlock.
 
-`tenant_isolation` is untouched: permissive policies OR together, so an ordinary request still sees one tenant's rows and still cannot enqueue a job naming another. Both halves are asserted against a real container, including the two that could silently be wrong — that the flag is genuinely *required*, and that it genuinely admits nothing but a read and a release.
+**The first implementation was a second, narrower policy** — `FOR SELECT` plus `FOR UPDATE`, gated on the flag, leaving `tenant_isolation` alone. CI rejected it, and the test that did is one this repository had already written: `rls-coverage.integration.test.ts` asserts no table carries a permissive second policy, because *"a second one added for a plausible reason does not modify `tenant_isolation`, it bypasses it — and every existing isolation test still passes, because they only ever assert what one tenant can see."* Exactly the design, described in advance and refused in advance. The command split it bought is recovered by the `WITH CHECK` asymmetry plus the DELETE revoke, and that combination is tighter.
 
-**A sharp edge the generator now knows about.** `rlsDownSql` emits `DISABLE ROW LEVEL SECURITY` for the table each policy belongs to. For a policy *added* to an already-protected table that is catastrophic in a way nothing reports: reversing this one migration would take `tenant_isolation` and `FORCE` down with it and leave `outbox` unscoped. `RlsPolicy` gained `amends`, and the down file now drops only what the up file created. `RlsPolicy` also gained `name` (a second policy on a table needs one) and `for`; the WITH-CHECK invariant in `rls.test.ts` was restated as *every policy that can write* rather than every policy, because a `FOR SELECT` policy cannot have one and the old form pushed towards writing the unlock as `FOR ALL` to satisfy a literal assertion.
+**A sharp edge the generator now knows about.** `rlsDownSql` emits `DISABLE ROW LEVEL SECURITY` for each policy's table. For a policy that *replaces* an earlier one that is catastrophic in a way nothing reports: reversing `0036` would take `FORCE` down with it and leave `outbox` unscoped — while dropping the new policy and stopping would leave the table with no policy at all and every query returning nothing. `RlsPolicy` gained `supersedes`, and the down file now re-creates the definition it replaced. Two integration assertions that counted `RLS_POLICIES.length` and meant *tables* now de-duplicate, since a table can carry more than one entry once one supersedes another.
 
 **Five smaller departures:**
 
@@ -3925,7 +3932,7 @@ So `withOutbox()`, a fourth scope, setting a transaction-local `app.outbox_polle
 - **The handler refuses to start without `EMBEDDING_QUEUE_URL`.** A poller pointed at nothing still *claims*: it fails to publish, increments every counter, and after six passes the whole backlog is set aside. A misconfiguration would consume the queue instead of failing on the first invocation.
 - **Failures log the SQS `Code` and the error `name`, never the provider `Message`.** P0-56 applied to a log rather than a response: a provider message is free text that has historically carried endpoints and credentials, and the code is a closed set that is also the more useful half for triage.
 
-Not ~120 lines: about 190 of poller, 190 of statements and scope, 60 of policy generator, and three test files.
+Not ~120 lines: about 200 of poller, 200 of statements and scope, 60 of policy generator, two migrations, and four test files.
 
 ---
 

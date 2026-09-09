@@ -1,0 +1,30 @@
+-- The queue is not deletable by the role that drains it (P1-31).
+--
+-- P1-31 adds a branch to `outbox`'s policy so the poller can read across
+-- tenants: draining one queue for the whole platform has no tenant to be
+-- scoped to. The branch is in `USING` and deliberately not in `WITH CHECK`,
+-- which stops it inserting or updating anything without first naming a real
+-- tenant — `runOutboxPass` sets `app.tenant_id` from the row it claimed before
+-- it releases it.
+--
+-- **DELETE is the one command that argument does not cover.** A DELETE is
+-- filtered by `USING` alone; there is no new row, so there is no `WITH CHECK`
+-- to fail. Under the poller's flag `delete from outbox` would therefore match
+-- every tenant's rows, and one stray statement in a scheduled job would empty
+-- the platform's queue — silently, because a drained queue and an erased one
+-- look identical from outside.
+--
+-- Closed at the grant rather than with a second policy, for two reasons. A
+-- second policy is what `rls-coverage.integration.test.ts` forbids and is right
+-- to: permissive policies are OR-ed, so a second one bypasses the first rather
+-- than qualifying it. And a revoke is *wider* than the hole it closes — it
+-- covers every path in the application, not only the one holding the flag.
+--
+-- Nothing deletes an outbox row today. The tenant cascade still works: a
+-- referential cascade is not permission-checked against the invoking role, and
+-- P0-33a already left tenant deletion to a role that is not app_rw.
+--
+-- Retention pruning, when it exists, belongs to that same role — for the reason
+-- P0-30 gives about ledgers: a queue the application can trim is a queue that
+-- gets trimmed by whatever bug reaches the trimming code.
+REVOKE DELETE ON outbox FROM app_rw;

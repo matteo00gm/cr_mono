@@ -17,16 +17,18 @@ rollups. Mostly unbuilt — P1 fills it in.
 - A job runs outside a request, so there is no request context and `audit()`
   will refuse. Establish one deliberately if the work is auditable (P0-53).
 - The **outbox poller is the one exception to the `withTenant()` rule**, and
-  only for the claim itself: `withOutbox()` sets a GUC that reads `outbox` across every
-  tenant, because draining one queue for the whole platform has no tenant to be
-  scoped to (P1-31, ADR 0021). It unlocks that one table, for SELECT and UPDATE
-  only. Everything the worker does _with_ a claimed job runs under
-  `withTenant(tenantId)` in the ordinary way — and the tenant comes from the row
+  only for the claim itself: `withOutbox()` sets a GUC that reads `outbox`
+  across every tenant, because draining one queue for the whole platform has no
+  tenant to be scoped to (P1-31, ADR 0021). The flag sits in that table's
+  `USING` and never in its `WITH CHECK`, so it buys a read — the poller's own
+  releases work because it sets `app.tenant_id` from the row it claimed first.
+  Everything the worker does _with_ a claimed job runs under
+  `withTenant(tenantId)` in the ordinary way, and the tenant comes from the row
   Postgres returned, never from the message body.
-- A queued message names a product; it never describes one. The worker re-reads
-  the row and builds the embedding text from what it finds, which is what makes
-  a redelivery harmless and delivery order irrelevant. Putting the wine's text
-  in the message would quietly break both.
+- A queued message names a product; it never describes one (P1-31). The worker
+  re-reads the row and builds the embedding text from what it finds, which is
+  what makes a redelivery harmless and delivery order irrelevant. Putting the
+  wine's text in the message would quietly break both.
 
 ## Source of truth
 

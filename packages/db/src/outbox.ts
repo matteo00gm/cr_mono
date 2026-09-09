@@ -94,7 +94,7 @@ export const claimOutboxJobs = async (
 };
 
 /**
- * Marks jobs published.
+ * Marks jobs published. Call inside a tenant-scoped part of the transaction.
  *
  * **Called only after a successful send, and the ordering is the guarantee.**
  * Marking first and sending second loses a job on every crash in the gap — and
@@ -161,6 +161,24 @@ export interface OutboxPass {
 }
 
 /**
+ * Scopes the rest of the transaction to one tenant.
+ *
+ * **The poller's releases go through this, and that is what keeps the flag to a
+ * read.** `tenant_isolation` on `outbox` admits the poller flag in `USING` and
+ * not in `WITH CHECK`, so an UPDATE under the flag alone fails: the new row has
+ * to satisfy the tenant branch. Setting the tenant here — from the row Postgres
+ * returned, never from anything that arrived from outside — is what lets the
+ * release succeed, and it is why a transaction holding the flag still cannot
+ * insert a job naming a tenant it did not claim from.
+ *
+ * The same shape `withInvitation` uses: read under one context, then narrow to
+ * the tenant the database itself produced before writing anything.
+ */
+const scopeTo = async (tx: DbTransaction, tenantId: string): Promise<void> => {
+  await tx.execute(sql`SELECT set_config('app.tenant_id', ${tenantId}, true)`);
+};
+
+/**
  * Claims a batch, publishes it, and releases it — in one transaction.
  *
  * **The sequence is the correctness property, so it is a function rather than
@@ -187,15 +205,34 @@ export const runOutboxPass = async (
     const sent = new Set(published);
 
     /*
-     * Only ids we actually claimed. A publisher that returned an id from a
-     * previous pass — a bug, but a plausible one in a batching client — would
-     * otherwise mark a row this transaction never locked.
+     * Only ids this pass actually claimed. A publisher that returned an id from
+     * a previous pass — a bug, but a plausible one in a batching client — would
+     * otherwise mark a row this transaction never locked, and that row may be
+     * in flight inside another poller right now.
      */
-    const confirmed = jobs.map((job) => job.id).filter((id) => sent.has(id));
-    const missed = jobs.map((job) => job.id).filter((id) => !sent.has(id));
+    const claimed = jobs.filter((job) => sent.has(job.id));
+    const missed = jobs.filter((job) => !sent.has(job.id));
 
-    await markOutboxPublished(tx, confirmed);
-    await recordPublishFailure(tx, missed);
+    /*
+     * Released a tenant at a time, because `WITH CHECK` is tenant-only and the
+     * poller's flag does not satisfy it. Grouping is not an optimisation — it
+     * is the only way these updates are legal, and it is what stops the flag
+     * being a write capability. Two statements per tenant with work in the
+     * batch, which for the ordinary case is two statements total.
+     */
+    const tenants = new Set(jobs.map((job) => job.tenantId));
 
-    return { claimed: jobs.length, published: confirmed.length, failed: missed.length };
+    for (const tenantId of tenants) {
+      await scopeTo(tx, tenantId);
+      await markOutboxPublished(
+        tx,
+        claimed.filter((job) => job.tenantId === tenantId).map((job) => job.id),
+      );
+      await recordPublishFailure(
+        tx,
+        missed.filter((job) => job.tenantId === tenantId).map((job) => job.id),
+      );
+    }
+
+    return { claimed: jobs.length, published: claimed.length, failed: missed.length };
   }, options.database);
