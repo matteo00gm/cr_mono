@@ -42,6 +42,21 @@ const client = (reply: (input: BatchInput) => unknown) => {
   return { send, sent, asClient: { send } as never };
 };
 
+/** Sets the queue variable for one test and puts it back afterwards. */
+const withQueueUrl = async (value: string | undefined, run: () => Promise<void>): Promise<void> => {
+  const previous = process.env.EMBEDDING_QUEUE_URL;
+
+  if (value === undefined) delete process.env.EMBEDDING_QUEUE_URL;
+  else process.env.EMBEDDING_QUEUE_URL = value;
+
+  try {
+    await run();
+  } finally {
+    if (previous === undefined) delete process.env.EMBEDDING_QUEUE_URL;
+    else process.env.EMBEDDING_QUEUE_URL = previous;
+  }
+};
+
 const allSucceed = (input: BatchInput) => ({
   Successful: input.Entries.map((entry) => ({ Id: entry.Id })),
   Failed: [],
@@ -293,6 +308,83 @@ describe('draining', () => {
   });
 });
 
+describe('its defaults', () => {
+  it('builds its own SQS client when none is supplied', () => {
+    /*
+     * Construction only — no call is made — so this needs no credentials and no
+     * network. What it pins is that the production path does not require an
+     * injected client, which is the shape every other test here bypasses.
+     */
+    expect(() => sqsPublisher({ queueUrl: 'q' })).not.toThrow();
+  });
+
+  it('claims a hundred a pass when no limit is given', async () => {
+    const runPass = passes([
+      { claimed: 100, published: 100 },
+      { claimed: 1, published: 1 },
+    ]);
+
+    await pollOutbox(() => Promise.resolve([]), { runPass });
+
+    // A full batch at the default limit, so it went round again rather than
+    // stopping on what it could not tell apart from a short one.
+    expect(runPass).toHaveBeenCalledTimes(2);
+  });
+
+  it('survives a reply with neither list in it', async () => {
+    /*
+     * `Successful` and `Failed` are both optional in the SDK's types. A reply
+     * carrying neither is not something SQS does, and reading `.length` off
+     * undefined in a poller would take down the drain for every tenant.
+     */
+    const fake = client(() => ({}));
+
+    expect(await sqsPublisher({ client: fake.asClient, queueUrl: 'q' })([job(1)])).toEqual([]);
+  });
+
+  it('says "unknown" rather than nothing when a failure carries no code', async () => {
+    const fake = client((input) => ({
+      Successful: [],
+      Failed: input.Entries.map((entry) => ({ Id: entry.Id })),
+    }));
+
+    const failures: { id: number; reason: string }[] = [];
+
+    await sqsPublisher({
+      client: fake.asClient,
+      queueUrl: 'q',
+      onFailure: (info) => failures.push(info),
+    })([job(1)]);
+
+    expect(failures).toEqual([{ id: 1, reason: 'unknown' }]);
+  });
+
+  it('says "unknown" for a thrown value with no name', async () => {
+    /*
+     * The name stripped rather than a bare string thrown: a string is what a
+     * transport can genuinely reject with, but the lint rule forbids writing
+     * one and it is right to. This reaches the same branch — a rejection whose
+     * `name` the poller cannot read — without arguing with it.
+     */
+    const nameless = new Error('boom');
+    Object.defineProperty(nameless, 'name', { value: undefined });
+
+    const fake = client(() => {
+      throw nameless;
+    });
+
+    const failures: { id: number; reason: string }[] = [];
+
+    await sqsPublisher({
+      client: fake.asClient,
+      queueUrl: 'q',
+      onFailure: (info) => failures.push(info),
+    })([job(1)]);
+
+    expect(failures).toEqual([{ id: 1, reason: 'unknown' }]);
+  });
+});
+
 describe('the handler', () => {
   it('refuses to run without a queue to publish to', async () => {
     /*
@@ -302,13 +394,64 @@ describe('the handler', () => {
      * is set aside. A misconfiguration would consume the queue instead of
      * failing on the first invocation.
      */
-    const previous = process.env.EMBEDDING_QUEUE_URL;
-    delete process.env.EMBEDDING_QUEUE_URL;
-
-    try {
+    await withQueueUrl(undefined, async () => {
       await expect(handler()).rejects.toThrow(/EMBEDDING_QUEUE_URL/);
-    } finally {
-      if (previous !== undefined) process.env.EMBEDDING_QUEUE_URL = previous;
-    }
+    });
+  });
+
+  it('treats an empty variable the same as a missing one', async () => {
+    // An unset SST binding arrives as the empty string rather than as absent,
+    // which is the shape this would actually have in a half-configured stage.
+    await withQueueUrl('', async () => {
+      await expect(handler()).rejects.toThrow(/EMBEDDING_QUEUE_URL/);
+    });
+  });
+
+  it('drains the queue and reports what it moved', async () => {
+    const runPass = passes([{ claimed: 2, published: 2 }]);
+    const fake = client(allSucceed);
+
+    await withQueueUrl('https://sqs.eu-west-1.amazonaws.com/1/embeddings', async () => {
+      const result = await handler({}, {}, { runPass, client: fake.asClient });
+
+      expect(result).toEqual({ passes: 1, claimed: 2, published: 2, failed: 0 });
+    });
+  });
+
+  it('writes a failure as one structured line, carrying no free text', async () => {
+    /*
+     * The log is the only place a publish failure is recorded, and it is read
+     * by a human during an outage — so it has to be greppable, and it has to
+     * be safe. P0-56 governs what may be written down: the reason here is an
+     * SQS code, never the provider's own message.
+     */
+    const lines: string[] = [];
+    const fake = client((input) => ({
+      Successful: [],
+      Failed: input.Entries.map((entry) => ({ Id: entry.Id, Code: 'InternalError' })),
+    }));
+
+    const runPass = vi.fn(
+      async (publish: (jobs: readonly OutboxJob[]) => Promise<readonly number[]>) => {
+        await publish([job(5)]);
+        return { claimed: 1, published: 0, failed: 1 };
+      },
+    );
+
+    await withQueueUrl('https://sqs.eu-west-1.amazonaws.com/1/embeddings', async () => {
+      await handler(
+        {},
+        {},
+        {
+          runPass: runPass as unknown as typeof import('@catalogorosso/db').runOutboxPass,
+          client: fake.asClient,
+          log: (line) => lines.push(line),
+        },
+      );
+    });
+
+    expect(lines.map((line) => JSON.parse(line) as unknown)).toEqual([
+      { event: 'outbox.publish_failed', outboxId: 5, reason: 'InternalError' },
+    ]);
   });
 });

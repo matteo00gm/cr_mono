@@ -240,13 +240,29 @@ export const pollOutbox = async (
  * got wrong. The schedule is what makes the opportunistic call optional rather
  * than load-bearing: if it never fires, nothing is lost, only delayed.
  */
+export interface HandlerOptions {
+  /** Where a publish failure is written. CloudWatch in production. */
+  readonly log?: ((line: string) => void) | undefined;
+  /**
+   * The transaction, injected for the same reason `pollOutbox` takes one.
+   *
+   * Without it this function is only testable for the branch that throws — and
+   * the branch that throws is the least interesting thing it does.
+   */
+  readonly runPass?: typeof runOutboxPass | undefined;
+  readonly client?: SQSClient | undefined;
+}
+
 export const handler = async (
   _event?: unknown,
   _context?: unknown,
-  log: (line: string) => void = (line) => {
-    console.warn(line);
-  },
+  options: HandlerOptions = {},
 ): Promise<PollResult> => {
+  const log =
+    options.log ??
+    ((line: string) => {
+      console.warn(line);
+    });
   const queueUrl = process.env.EMBEDDING_QUEUE_URL;
 
   if (queueUrl === undefined || queueUrl === '') {
@@ -265,9 +281,11 @@ export const handler = async (
   return pollOutbox(
     sqsPublisher({
       queueUrl,
+      client: options.client,
       onFailure: ({ id, reason }) => {
         log(JSON.stringify({ event: 'outbox.publish_failed', outboxId: id, reason }));
       },
     }),
+    { runPass: options.runPass },
   );
 };
