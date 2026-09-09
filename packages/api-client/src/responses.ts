@@ -236,6 +236,15 @@ export const productUpdatedResponse = productSchema;
 export const productListResponse = z.object({
   items: z.array(productSchema),
   nextCursor: z.string().nullable(),
+  /**
+   * How the rows were matched, when a search phrase was given (P1-08).
+   *
+   * **`similar` means nothing matched exactly**, and saying so is the point: a
+   * fallback presented as an exact match leads a seller to conclude their
+   * catalogue contains something it does not — and the wrong conclusion is the
+   * one the interface encouraged. `null` when there was no search at all.
+   */
+  matchedBy: z.enum(['exact', 'similar']).nullable(),
 });
 
 /**

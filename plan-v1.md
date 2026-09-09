@@ -3587,6 +3587,16 @@ What did ship:
 
 **Files.** same route file, tests. **~80 lines.**
 
+**As built — searching is the same endpoint as listing, and the fallback needed a decision the row does not mention.** `GET /v1/dashboard/products?q=…`. When `q` is present the sort is replaced by relevance, because a search ordered by creation date is a filter wearing a search box.
+
+- **The match mode has to live in the cursor**, and working out why is the interesting part. The fallback runs when the text query matches nothing — but on page two the query is re-run *with a boundary*, and an empty result there means "no more text matches", which is indistinguishable from "the text search never matched". Without the mode in the cursor, page two of a fallback silently switches back to text and reports the end of the results after one page.
+- **The fallback fires only on a first page**, for the same reason from the other side: a later page that runs out of text matches has simply ended, and retrying it as a similarity search would append a second, differently-ranked result set to the end of the first and repeat rows it had already shown.
+- **`matchedBy` is reported to the caller.** A fallback presented as an exact match leads a seller to conclude their catalogue contains something it does not — and that wrong conclusion is the one the interface encouraged. `column` reports as `null` rather than as a third mode, because a client should not have to know that listing and searching share an implementation.
+- **A similarity floor, or the fallback is worse than nothing.** `similarity` returns a value for every row, so without a threshold the fallback becomes "here is your whole catalogue, badly ordered" — which looks like an answer.
+- **Relevance paging reuses the column paging tuple**, with the rank standing in for the column, so ordering and paging are one mechanism rather than two that have to agree. Ranks tie constantly, which is why the id in the cursor matters even more here than it does for `created_at`; there is a test that pages through nine identically-ranked rows.
+- **Accented spellings land in the fallback**, because P1-07 could not put `unaccent` in the stored column — Postgres refuses it three different ways, the last needing superuser. A search for `nebbiolo` against a stored `Nebbiòlo` therefore misses the tsquery and is caught by similarity, and the caller is told so. That is the degradation stated where a reader will meet it.
+- **The phrase is bounded at 200 characters.** It is not injectable — it is a bound parameter — but both the `tsquery` parse and the trigram comparison are work proportional to its length, so a 10,000-character "search" is a cheap way to make the database do something expensive.
+
 ---
 
 ### P1-09 · Catalog filters

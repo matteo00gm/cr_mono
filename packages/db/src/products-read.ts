@@ -1,16 +1,16 @@
-import { and, asc, desc, eq, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, lt, gt, or, sql, type SQL } from 'drizzle-orm';
 
 import { products } from './schema/products.js';
 import type { ProductRow } from './products.js';
 import type { DbTransaction } from './with-tenant.js';
 
 /**
- * Catalogue reads (P1-06).
+ * Catalogue reads (P1-06, P1-08).
  *
  * Separated from `products.ts` because the write path and the read path have
- * almost nothing in common and both will grow: search (P1-08) and filters
- * (P1-09) compose into the query builder here, and none of them touches the
- * outbox pairing that dominates the write file.
+ * almost nothing in common and both will grow: search and filters (P1-09)
+ * compose into the query builder here, and none of them touches the outbox
+ * pairing that dominates the write file.
  */
 
 /**
@@ -50,75 +50,109 @@ export interface ListQuery {
   readonly cursor?: string | undefined;
   /** Archived wines are hidden unless asked for (P1-09 exposes the choice). */
   readonly includeArchived?: boolean | undefined;
+  /**
+   * A search phrase (P1-08).
+   *
+   * When present it replaces the sort entirely: results come back by relevance,
+   * because a search ordered by creation date is a filter wearing a search box.
+   */
+  readonly q?: string | undefined;
 }
 
 export interface ProductPage {
   readonly items: readonly ProductRow[];
   /** `null` on the last page — the client stops when it sees one. */
   readonly nextCursor: string | null;
+  /**
+   * How these rows were matched (P1-08).
+   *
+   * **Reported because a fallback that looks like an exact match is worse than
+   * no results.** A seller searching for a producer they misspelled should be
+   * told "nothing matched, here are similar wines" — otherwise they conclude
+   * the catalogue contains something it does not, and the wrong conclusion is
+   * the one the interface encouraged.
+   */
+  readonly matchedBy: MatchMode;
 }
 
 /**
- * A cursor is the sort value and the id of the last row on a page.
+ * How a page was matched, carried inside the cursor (P1-08).
  *
- * **Both, and the id is what makes it correct.** `created_at` is not unique —
- * a bulk import writes hundreds of rows in the same millisecond — so a cursor
- * carrying only the timestamp either repeats rows or skips them at every page
- * boundary, depending on which way the comparison rounds. The id breaks the tie
- * and is unique by construction.
+ * **The mode has to be in the cursor, and working out why is the interesting
+ * part of the search design.** Search falls back to trigram similarity when the
+ * text query matches nothing. But on page two the query is re-run *with a
+ * boundary*, and an empty result then means "no more text matches" — which is
+ * indistinguishable from "the text search never matched at all". Without the
+ * mode, page two of a fallback result silently switches back to text and
+ * returns nothing, so a misspelled search would show one page and then claim
+ * there was no more.
+ */
+export type MatchMode = 'column' | 'text' | 'similar';
+
+/**
+ * A cursor is the match mode, the sort value, and the id of the last row shown.
  *
- * Base64 rather than a bare pair, because it is **not a contract**: a client
- * that parsed it would depend on the sort implementation, and adding a sort
- * column would then be a breaking change. Opaque means we can change it.
+ * **The id is what makes it correct.** `created_at` is not unique — a bulk
+ * import writes hundreds of rows in the same millisecond — so a cursor carrying
+ * only the timestamp either repeats rows or skips them at every page boundary,
+ * depending on which way the comparison rounds. The id breaks the tie and is
+ * unique by construction. The same applies to a rank, which ties constantly.
+ *
+ * Base64 rather than a readable triple, because it is **not a contract**: a
+ * client that parsed it would depend on the ranking function and the sort
+ * implementation, and changing either would become a breaking change.
  *
  * **Each part is encoded separately and joined with a dot**, rather than joined
  * first and encoded once. A single encoding needs a separator that cannot occur
- * in either part — and the sort value can be a wine's *name*, which contains
+ * in any part — and the sort value can be a wine's *name*, which contains
  * spaces and very nearly anything else. A control character does the job and
  * puts one in the source file; encoding per part removes the question, because
  * `.` cannot appear in base64url output.
  */
-const encodeCursor = (value: string, id: string): string =>
-  [value, id].map((part) => Buffer.from(part, 'utf8').toString('base64url')).join('.');
+const encodeCursor = (mode: MatchMode, value: string, id: string): string =>
+  [mode, value, id].map((part) => Buffer.from(part, 'utf8').toString('base64url')).join('.');
 
 interface Cursor {
+  readonly mode: MatchMode;
   readonly value: string;
   readonly id: string;
 }
 
+const isMode = (value: string): value is MatchMode =>
+  value === 'column' || value === 'text' || value === 'similar';
+
 export const decodeCursor = (cursor: string): Cursor | undefined => {
   const encoded = cursor.split('.');
-  if (encoded.length !== 2) return undefined;
+  if (encoded.length !== 3) return undefined;
 
-  const [value, id] = encoded.map((part) => Buffer.from(part, 'base64url').toString('utf8'));
+  const [mode, value, id] = encoded.map((part) => Buffer.from(part, 'base64url').toString('utf8'));
+  if (mode === undefined || value === undefined || id === undefined || id === '') return undefined;
 
   /*
    * `base64url` decoding does not reject rubbish — it skips what it cannot read
    * — so a malformed cursor arrives here as a short or empty string rather than
-   * as an error. An empty id is the one that matters: it would make the tuple
-   * boundary match nothing and hand back the first page for ever.
+   * as an error. That is why the mode is checked against a closed set: it is
+   * the only part whose value we know in advance.
    */
-  return value === undefined || id === undefined || id === '' ? undefined : { value, id };
+  return isMode(mode) ? { mode, value, id } : undefined;
 };
 
 /**
- * The type each sort column's cursor value is cast back to in SQL.
+ * The type each sort column's cursor value is cast back to, in SQL.
  *
  * **The cursor is text and the column is not, so the comparison needs a cast —
- * and the cast has to happen in Postgres rather than in JavaScript.** The first
- * version converted the string back to a `Date` and let Drizzle bind it, which
- * looked right and was wrong twice over:
+ * and the cast has to happen in Postgres rather than in JavaScript.** Two
+ * failures got here first, both found by the integration suite:
  *
- * - A JS `Date` holds **milliseconds**; a Postgres `timestamptz` holds
- *   **microseconds**. A cursor built from the row therefore names an instant
- *   slightly *before* the row it came from. Descending, the boundary excludes
- *   every remaining row and paging stops after two pages; ascending, it excludes
- *   nothing and paging never terminates. Both were found by the integration
- *   suite, which is the only place a real timestamp exists.
- * - Before that, handing the raw string to a `timestamp` comparison threw
- *   inside Drizzle's own driver mapping.
+ * - Handing the raw string to a `timestamp` comparison throws inside Drizzle's
+ *   own driver mapping.
+ * - Converting it back to a JS `Date` fixes that and breaks paging, because a
+ *   `Date` holds **milliseconds** and a `timestamptz` holds **microseconds**.
+ *   The cursor then names an instant slightly *before* the row it came from:
+ *   descending, the boundary excludes every remaining row and paging stops
+ *   after two pages; ascending, it excludes nothing and never terminates.
  *
- * Casting in SQL sidesteps both: Postgres renders the value with full precision
+ * Casting in SQL sidesteps both. Postgres renders the value with full precision
  * and parses it back exactly, and the comparison is still against the bare
  * column, so the index is still usable.
  */
@@ -138,54 +172,51 @@ const CURSOR_CASTS: Record<SortField, string> = {
 const sortValueOf = (sort: SortField): SQL<string> => sql<string>`${SORTABLE[sort]}::text`;
 
 /**
- * The tuple boundary: `a < b OR (a = b AND id < cursorId)`.
+ * One page of the catalogue, newest first by default.
+ * The parsed query, and why it is `websearch_to_tsquery`.
  *
- * Written out rather than as a row constructor, because the two sides are
- * different types once the sort is a `text` or an `integer`, and Drizzle has no
- * portable tuple comparison across them.
+ * `to_tsquery` **throws** on the quotes, `&`, `|` and `!` that people type into
+ * a search box — so a visitor searching for `Barolo "Bussia"` would get a 500
+ * rather than a result, and the failure would look like a bug in the catalogue
+ * rather than in the parser. `websearch_to_tsquery` reads that the way a search
+ * engine would, and never raises.
  *
- * `and` and `or` are typed as possibly-undefined because both accept empty
- * lists. Guarding rather than asserting keeps the impossible case impossible
- * instead of merely silenced — a boundary that came out undefined would quietly
- * return the first page for ever, which is the sort of bug a `!` would hide.
- *
- * The column parameter takes whatever `eq` itself accepts: naming the union by
- * hand would pin one of Drizzle's internal generic shapes and break on an
- * upgrade for no benefit.
+ * **The phrase is not unaccented, because the column is not either** — Postgres
+ * refuses `unaccent` in a generated column three different ways, and the last
+ * of them needs superuser (P1-07). So an accented spelling misses here and is
+ * caught by the similarity fallback below, which is reported to the caller as
+ * `matchedBy: 'similar'` rather than passed off as an exact hit.
  */
-const boundaryFor = (sort: SortField, cursor: Cursor, direction: SortDirection): SQL => {
-  const column = SORTABLE[sort];
-  const at = sql`${cursor.value}::${sql.raw(CURSOR_CASTS[sort])}`;
-  const compare = direction === 'desc' ? sql`<` : sql`>`;
+const textQuery = (q: string): SQL => sql`websearch_to_tsquery('italian', ${q})`;
 
-  return sql`(${column} ${compare} ${at} or (${column} = ${at} and ${products.id} ${compare} ${cursor.id}::uuid))`;
-};
+const textRank = (q: string): SQL<number> => sql<number>`ts_rank_cd(search_tsv, ${textQuery(q)})`;
 
 /**
- * One page of the catalogue, newest first by default.
+ * Similarity over the two fields people actually misspell.
  *
- * **Keyset, not `OFFSET`.** Offset degrades as the catalogue grows — the
- * database still walks the rows it is skipping — and, worse, it is *wrong* when
- * the data changes between pages: a row inserted while somebody is paging
- * shifts everything down by one, so page two repeats a row page one already
- * showed. On an import screen that is exactly when the data is changing.
+ * `greatest` rather than a sum, so a wine matching the producer well is not
+ * outranked by one matching both fields badly.
  *
- * The comparison is a tuple: `(sortValue, id) < (cursorValue, cursorId)` for a
- * descending sort. Written out as `a < b OR (a = b AND id < cursorId)` rather
- * than as a row constructor, because the two sides are different types once the
- * sort column is a `text` or an `integer` and Drizzle has no portable tuple
- * comparison across them.
+ * This is also where **accented spellings** land, since the stored vector
+ * cannot fold them (P1-07): `nebbiolo` against a stored `Nebbiòlo` misses the
+ * tsquery and scores high here.
  */
-export const listProducts = async (
-  tx: DbTransaction,
-  query: ListQuery = {},
-): Promise<ProductPage> => {
-  const sort: SortField = query.sort ?? 'createdAt';
-  const direction: SortDirection = query.direction ?? 'desc';
-  const column = SORTABLE[sort];
+const similarityRank = (q: string): SQL<number> => sql<number>`greatest(
+  similarity(name, ${q}),
+  similarity(coalesce(producer, ''), ${q})
+)`;
 
-  const limit = Math.min(Math.max(query.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+/**
+ * The similarity below which a row is not a match at all.
+ *
+ * Without a floor, `similarity` returns something for every row in the
+ * catalogue and the fallback becomes "here is your whole catalogue, badly
+ * ordered" — which is worse than no results, because it looks like an answer.
+ */
+const SIMILARITY_FLOOR = 0.2;
 
+/** Conditions every page shares, whatever it is ordered by. */
+const baseConditions = (query: ListQuery): SQL[] => {
   const conditions: SQL[] = [];
 
   /*
@@ -196,9 +227,81 @@ export const listProducts = async (
    */
   if (query.includeArchived !== true) conditions.push(eq(products.status, 'ACTIVE'));
 
-  const cursor = query.cursor === undefined ? undefined : decodeCursor(query.cursor);
+  return conditions;
+};
 
-  if (cursor !== undefined) conditions.push(boundaryFor(sort, cursor, direction));
+/**
+ * The tuple boundary: `a < b OR (a = b AND id < cursorId)`.
+ *
+ * Written out rather than as a row constructor, because the two sides are
+ * different types once the sort is a `text`, an `integer` or a computed rank,
+ * and Drizzle has no portable tuple comparison across them.
+ *
+ * `and` and `or` are typed as possibly-undefined because both accept empty
+ * lists. Guarding rather than asserting keeps the impossible case impossible
+ * instead of merely silenced — a boundary that came out undefined would quietly
+ * return the first page forever, which is the sort of bug a `!` would hide.
+ */
+/**
+ * The column boundary, with the cursor value cast by Postgres.
+ *
+ * Written as raw `sql` rather than through `boundaryFor` because the value has
+ * to reach the database as text and be cast there — see `CURSOR_CASTS`. The
+ * ranked boundary below keeps using `boundaryFor`, because a rank is a number
+ * on both sides and has no precision to lose.
+ */
+const columnBoundary = (sort: SortField, cursor: Cursor, direction: SortDirection): SQL => {
+  const column = SORTABLE[sort];
+  const at = sql`${cursor.value}::${sql.raw(CURSOR_CASTS[sort])}`;
+  const compare = direction === 'desc' ? sql`<` : sql`>`;
+
+  return sql`(${column} ${compare} ${at} or (${column} = ${at} and ${products.id} ${compare} ${cursor.id}::uuid))`;
+};
+
+const boundaryFor = (
+  /*
+   * Whatever `eq` itself accepts — a column or an expression. Naming the union
+   * by hand would pin one of Drizzle's internal generic shapes and break on an
+   * upgrade for no benefit.
+   */
+  sortExpression: Parameters<typeof eq>[0],
+  value: unknown,
+  cursorId: string,
+  direction: SortDirection,
+): SQL | undefined => {
+  const compare = direction === 'desc' ? lt : gt;
+  const tie = direction === 'desc' ? lt(products.id, cursorId) : gt(products.id, cursorId);
+  const tieBreak = and(eq(sortExpression, value), tie);
+
+  return tieBreak === undefined
+    ? compare(sortExpression, value)
+    : or(compare(sortExpression, value), tieBreak);
+};
+
+/**
+ * A page ordered by one of the sortable columns (P1-06).
+ *
+ * **Keyset, not `OFFSET`.** Offset degrades as the catalogue grows — the
+ * database still walks the rows it is skipping — and, worse, it is *wrong* when
+ * the data changes between pages: a row inserted while somebody is paging
+ * shifts everything down by one, so page two repeats a row page one already
+ * showed. On an import screen that is exactly when the data is changing.
+ */
+const runColumnPage = async (
+  tx: DbTransaction,
+  query: ListQuery,
+  limit: number,
+  cursor: Cursor | undefined,
+): Promise<ProductPage> => {
+  const sort: SortField = query.sort ?? 'createdAt';
+  const direction: SortDirection = query.direction ?? 'desc';
+  const column = SORTABLE[sort];
+
+  const conditions = baseConditions(query);
+
+  if (cursor !== undefined) {
+    conditions.push(columnBoundary(sort, cursor, direction));
+  }
 
   const order = direction === 'desc' ? desc : asc;
 
@@ -220,9 +323,100 @@ export const listProducts = async (
 
   return {
     items: items.map((row) => row.product),
+    matchedBy: 'column',
     nextCursor:
       rows.length > limit && last !== undefined
-        ? encodeCursor(last.sortValue, last.product.id)
+        ? encodeCursor('column', last.sortValue, last.product.id)
         : null,
   };
+};
+
+/**
+ * A ranked page, for a text search or for its similarity fallback (P1-08).
+ *
+ * The rank is selected alongside the row because the cursor has to carry it:
+ * paging by relevance needs the boundary to be the rank of the last row shown,
+ * and asking the client to recompute it would mean publishing the ranking
+ * function as part of the API.
+ *
+ * **Relevance paging uses the same tuple shape as column paging**, with the
+ * rank standing in for the column — so ordering and paging are one mechanism
+ * rather than two that have to agree with each other.
+ */
+const runSearch = async (
+  tx: DbTransaction,
+  query: ListQuery,
+  q: string,
+  limit: number,
+  mode: 'text' | 'similar',
+  cursor: Cursor | undefined,
+): Promise<ProductPage> => {
+  const rank = mode === 'text' ? textRank(q) : similarityRank(q);
+
+  const conditions = baseConditions(query);
+
+  conditions.push(
+    mode === 'text'
+      ? sql`search_tsv @@ ${textQuery(q)}`
+      : sql`${similarityRank(q)} >= ${SIMILARITY_FLOOR}`,
+  );
+
+  if (cursor !== undefined) {
+    const boundary = boundaryFor(rank, Number(cursor.value), cursor.id, 'desc');
+    if (boundary !== undefined) conditions.push(boundary);
+  }
+
+  const rows = await tx
+    .select({ product: products, rank })
+    .from(products)
+    .where(and(...conditions))
+    .orderBy(desc(rank), desc(products.id))
+    .limit(limit + 1);
+
+  const items = rows.slice(0, limit);
+  const last = items[items.length - 1];
+
+  return {
+    items: items.map((row) => row.product),
+    matchedBy: mode,
+    nextCursor:
+      rows.length > limit && last !== undefined
+        ? encodeCursor(mode, String(last.rank), last.product.id)
+        : null,
+  };
+};
+
+/**
+ * One page of the catalogue — newest first, or by relevance when `q` is given.
+ *
+ * The fallback to trigram similarity happens **only on a first page**, and that
+ * restriction is the subtle half. A later page that runs out of text matches
+ * has simply ended; retrying it as a similarity search would append a second,
+ * differently-ranked result set to the end of the first and repeat rows it had
+ * already shown.
+ */
+export const listProducts = async (
+  tx: DbTransaction,
+  query: ListQuery = {},
+): Promise<ProductPage> => {
+  const q = query.q?.trim();
+  const cursor = query.cursor === undefined ? undefined : decodeCursor(query.cursor);
+  const limit = Math.min(Math.max(query.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
+
+  if (q === undefined || q === '') return runColumnPage(tx, query, limit, cursor);
+
+  /*
+   * The mode comes from the cursor when there is one. Re-deriving it would mean
+   * asking "did the text search match?" of a query that already carries a
+   * boundary, where an empty answer means "no more" rather than "never".
+   */
+  const mode = cursor?.mode === 'similar' ? 'similar' : 'text';
+
+  const page = await runSearch(tx, query, q, limit, mode, cursor);
+
+  if (page.items.length === 0 && cursor === undefined && mode === 'text') {
+    return runSearch(tx, query, q, limit, 'similar', undefined);
+  }
+
+  return page;
 };

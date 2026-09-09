@@ -64,9 +64,8 @@ const product = (id: string) => ({ id, createdAt: new Date('2026-09-08T09:14:00.
  * A column-page row as the builder now selects it: the product **and** the sort
  * value as Postgres rendered it.
  *
- * The value is selected rather than derived from the row, because a JS `Date`
- * has already lost the microseconds a `timestamptz` carries — see the note in
- * `products-read.ts`.
+ * Selected rather than derived from the row, because a JS `Date` has already
+ * lost the microseconds a `timestamptz` carries — see `CURSOR_CASTS`.
  */
 const listed = (id: string, sortValue = '2026-09-08 09:14:00.000000+00') => ({
   product: product(id),
@@ -74,8 +73,9 @@ const listed = (id: string, sortValue = '2026-09-08 09:14:00.000000+00') => ({
 });
 
 /** Built the way the module builds one: each part encoded, joined with a dot. */
-const cursorFor = (value: string, id: string) =>
-  [value, id].map((part) => Buffer.from(part, 'utf8').toString('base64url')).join('.');
+const cursorFor = (mode: string, value: string, id: string) =>
+  [mode, value, id].map((part) => Buffer.from(part, 'utf8').toString('base64url')).join('.');
+const ranked = (id: string, rank: number) => ({ product: product(id), rank });
 
 describe('isSortField', () => {
   it.each(['createdAt', 'updatedAt', 'name', 'priceCents'])('admits %s', (field) => {
@@ -105,15 +105,16 @@ describe('decodeCursor', () => {
     const cursor = page.nextCursor;
     if (cursor === null) throw new Error('expected a cursor');
 
-    expect(decodeCursor(cursor)).toMatchObject({ id: 'a' });
+    expect(decodeCursor(cursor)).toMatchObject({ mode: 'column', id: 'a' });
   });
 
   it.each([
     ['not base64 at all', 'not-base64!!'],
     ['empty', ''],
     ['base64 of the wrong shape', Buffer.from('abc').toString('base64url')],
-    ['a missing id', cursorFor('value', '')],
-    ['too many parts', 'YWJj.ZGVm.Z2hp'],
+    ['a mode nothing produces', cursorFor('sideways', 'x', 'id')],
+    ['a missing id', cursorFor('column', 'value', '')],
+    ['too few parts', 'YWJj.ZGVm'],
   ])('refuses %s', (_case, cursor) => {
     /*
      * A cursor is client-supplied text: it arrives from an old bookmark or a
@@ -177,16 +178,77 @@ describe('paging', () => {
   });
 });
 
-describe('filters and ordering, as branches', () => {
+describe('searching', () => {
+  it('reports a text match as text', async () => {
+    const { tx } = capturing([ranked('a', 0.9)]);
+
+    expect((await listProducts(tx, { q: 'barolo' })).matchedBy).toBe('text');
+  });
+
+  it('falls back to similarity when the text query found nothing', async () => {
+    const { tx, queries } = capturing([], [ranked('a', 0.4)]);
+
+    const page = await listProducts(tx, { q: 'poderi cola' });
+
+    expect(page.matchedBy).toBe('similar');
+    expect(page.items.map((row) => row.id)).toEqual(['a']);
+    // Two statements: the text attempt, then the fallback.
+    expect(queries).toHaveLength(2);
+  });
+
+  it('does not fall back when the text query found something', async () => {
+    const { tx, queries } = capturing([ranked('a', 0.9)]);
+
+    await listProducts(tx, { q: 'barolo' });
+
+    expect(queries).toHaveLength(1);
+  });
+
+  it('does not fall back on a later page, even when it comes back empty', async () => {
+    /*
+     * **The half the mode-in-the-cursor design is really for.** A later page
+     * that ran out of text matches has simply ended; retrying it as a
+     * similarity search would append a second, differently-ranked result set to
+     * the end of the first and repeat rows it had already shown.
+     */
+    const cursor = cursorFor('text', '0.5', 'some-id');
+    const { tx, queries } = capturing([]);
+
+    const page = await listProducts(tx, { q: 'barolo', cursor });
+
+    expect(page.items).toEqual([]);
+    expect(queries).toHaveLength(1);
+  });
+
+  it('stays in the fallback when the cursor says it was in one', async () => {
+    const cursor = cursorFor('similar', '0.4', 'some-id');
+    const { tx } = capturing([ranked('b', 0.3)]);
+
+    expect((await listProducts(tx, { q: 'poderi cola', cursor })).matchedBy).toBe('similar');
+  });
+
+  it('treats a whitespace-only phrase as no search at all', async () => {
+    /*
+     * Otherwise a search box the user cleared runs a text query for nothing,
+     * finds nothing, falls back to a similarity query for nothing, and reports
+     * an empty catalogue.
+     */
+    const { tx, queries } = capturing([listed('a')]);
+
+    const page = await listProducts(tx, { q: '   ' });
+
+    expect(page.matchedBy).toBe('column');
+    expect(queries).toHaveLength(1);
+  });
+});
+
+describe('ordering and the boundary', () => {
   /**
-   * These assert *that the branch runs*, not that the SQL is right.
-   *
-   * A fake cannot tell a correct `WHERE` from an incorrect one, and asserting
-   * on Drizzle's internal expression objects would be a test of Drizzle. That
-   * a boundary actually excludes the rows already shown is
-   * `products-read.integration.test.ts`. What is worth having here is that no
-   * branch throws and that each option is reachable — an ordering that crashed
-   * for one sort column would otherwise be found by a seller.
+   * These assert *that the branch runs*, not that the SQL is right. A fake
+   * cannot tell a correct `WHERE` from an incorrect one, and asserting on
+   * Drizzle's internal expression objects would be a test of Drizzle. That a
+   * boundary actually excludes the rows already shown is
+   * `products-read.integration.test.ts`.
    */
   it.each([
     ['createdAt', 'desc'],
@@ -195,11 +257,11 @@ describe('filters and ordering, as branches', () => {
     ['priceCents', 'desc'],
     ['updatedAt', 'asc'],
   ] as const)('orders by %s %s', async (sort, direction) => {
-    const { tx, queries } = capturing([listed('a')]);
+    const { tx } = capturing([listed('a')]);
 
-    await listProducts(tx, { sort, direction });
+    const page = await listProducts(tx, { sort, direction });
 
-    expect(queries).toHaveLength(1);
+    expect(page.matchedBy).toBe('column');
   });
 
   it('applies a boundary in both directions', async () => {
@@ -214,7 +276,7 @@ describe('filters and ordering, as branches', () => {
       await listProducts(tx, {
         direction,
         sort: 'name',
-        cursor: cursorFor('Barolo Bussia', 'some-id'),
+        cursor: cursorFor('column', 'Barolo Bussia', 'some-id'),
       });
 
       expect(queries).toHaveLength(1);
@@ -225,15 +287,60 @@ describe('filters and ordering, as branches', () => {
     /*
      * **The reason the cursor encodes each part separately.** A `name` cursor
      * carries a wine's name, which contains spaces — and a single-encoding
-     * scheme needs a separator that cannot occur in either part.
+     * scheme needs a separator that cannot occur in any part. The first version
+     * used a NUL byte, which worked and made the source a binary file to
+     * `grep`.
      */
-    expect(decodeCursor(cursorFor('Barolo Bussia Riserva', 'id-1'))).toEqual({
+    expect(decodeCursor(cursorFor('column', 'Barolo Bussia Riserva', 'id-1'))).toEqual({
+      mode: 'column',
       value: 'Barolo Bussia Riserva',
       id: 'id-1',
     });
   });
 
-  it('shows archived rows when asked', async () => {
+  it('applies a boundary to a ranked page', async () => {
+    const { tx, queries } = capturing([ranked('a', 0.4)]);
+
+    await listProducts(tx, { q: 'barolo', cursor: cursorFor('text', '0.9', 'some-id') });
+
+    expect(queries).toHaveLength(1);
+  });
+});
+
+describe('the search cursor', () => {
+  it('is produced when there is another page of matches', async () => {
+    /*
+     * The rank has to travel in the cursor: paging by relevance needs the
+     * boundary to be the rank of the last row shown, and asking the client to
+     * recompute it would mean publishing the ranking function as part of the
+     * API.
+     */
+    const { tx } = capturing([ranked('a', 0.9), ranked('b', 0.4)]);
+
+    const page = await listProducts(tx, { q: 'barolo', limit: 1 });
+
+    expect(page.items.map((row) => row.id)).toEqual(['a']);
+    expect(decodeCursor(page.nextCursor ?? '')).toEqual({
+      mode: 'text',
+      value: '0.9',
+      id: 'a',
+    });
+  });
+
+  it('says similar when the fallback produced it', async () => {
+    const { tx } = capturing([], [ranked('a', 0.5), ranked('b', 0.3)]);
+
+    const page = await listProducts(tx, { q: 'poderi cola', limit: 1 });
+
+    expect(decodeCursor(page.nextCursor ?? '')).toMatchObject({ mode: 'similar' });
+  });
+
+  it('builds a page with no conditions at all when archived rows are wanted', async () => {
+    /*
+     * The only combination that leaves the condition list empty — and a `where`
+     * built from an empty list is `where ()`, which is a syntax error rather
+     * than "everything".
+     */
     const { tx, queries } = capturing([listed('a')]);
 
     await listProducts(tx, { includeArchived: true });
@@ -256,27 +363,25 @@ describe('the cursor value, and where the cast happens', () => {
    *   descending, paging stopped after two pages; ascending, it never
    *   terminated.
    *
-   * A fake transaction sees none of it, because it neither maps driver values
-   * nor stores a timestamp. What is assertable here is that the boundary is
-   * built at all for every sortable column, and that the value is taken from
-   * the row Postgres returned rather than from the JavaScript one.
+   * A fake sees none of it — it neither maps driver values nor stores a
+   * timestamp — so what is assertable here is that the boundary is built for
+   * every sortable column, and that the value travels from the row Postgres
+   * returned rather than the one JavaScript held.
    */
   it('builds a boundary for every sortable column without throwing', async () => {
     for (const sort of ['createdAt', 'updatedAt', 'name', 'priceCents'] as const) {
       const { tx, queries } = capturing([listed('a')]);
 
-      await listProducts(tx, { sort, cursor: cursorFor('2026-09-08T09:14:00.000Z', 'id-1') });
+      await listProducts(tx, {
+        sort,
+        cursor: cursorFor('column', '2026-09-08 09:14:00.000000+00', 'id-1'),
+      });
 
       expect(queries).toHaveLength(1);
     }
   });
 
   it('carries the value Postgres rendered, not the one JavaScript held', async () => {
-    /*
-     * The row's `sortValue` comes back from a `::text` cast in the select, so
-     * it keeps whatever precision the column has. Asserted by handing the fake
-     * a value JavaScript could not have produced from a `Date`.
-     */
     const { tx } = capturing([
       listed('a', '2026-09-08 09:14:00.123456+00'),
       listed('b', '2026-09-08 09:13:00.000001+00'),
@@ -285,6 +390,7 @@ describe('the cursor value, and where the cast happens', () => {
     const page = await listProducts(tx, { limit: 1 });
 
     expect(decodeCursor(page.nextCursor ?? '')).toEqual({
+      mode: 'column',
       value: '2026-09-08 09:14:00.123456+00',
       id: 'a',
     });
