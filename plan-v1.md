@@ -3554,6 +3554,29 @@ A **generated** column cannot drift from the source fields, unlike a trigger-mai
 
 **Files.** migration, schema update. **~50 lines.**
 
+**As built — the row's accent-insensitivity cannot be built at all, and three attempts established that.** Each was rejected by Postgres for a different reason:
+
+- **`unaccent()` is `STABLE`, not `IMMUTABLE`** — its dictionary can be reloaded — so it cannot appear in a generated column or an expression index.
+- **A SQL wrapper marked `IMMUTABLE` does not help.** Without a `SET` clause it is *inlinable*, so Postgres expands it and sees the `STABLE` function underneath (`42P17`); with a `SET search_path` clause it is not inlinable and still fails, because a function carrying one cannot appear in a stored generation expression either.
+- **PostgreSQL's own recipe — declaring the extension's C entry point a second time as `IMMUTABLE` — needs superuser.** Migrations run as `app_migrate` (`42501`), and raising that would not help: RDS's master is `rds_superuser` and not a superuser either, which **P0-21b** already established.
+
+**The same wall stopped grape varieties reaching the vector.** `array_to_string` is `STABLE` for the same class of reason — it calls the element type's output function — so the array cannot be folded in either, and all three dead ends apply again. Grapes are queried through the array GIN index instead: containment, which is the right question for "does this wine include Nebbiolo", and what **P1-09**'s filter uses. The test asserts both halves — free-text search does *not* find by grape, and the containment query does.
+
+**So accented spellings become fuzzy matches rather than exact ones.** A search for `nebbiolo` against a stored `Nebbiòlo` misses the tsquery and is caught by the trigram fallback (P1-08) — which the API reports honestly as `matchedBy: 'similar'` rather than passing it off as an exact hit. That is a real degradation and the tests state it in both directions rather than quietly asserting the half that still works.
+
+What did ship:
+
+- **The column is weighted, and the weights are a decision.** Name and producer `A`, grapes and region `B`, denomination `C`. Somebody typing "barolo" almost always means the wine called Barolo rather than every wine whose denomination mentions it — and there are a great many of the latter. There is a test asserting the ordering rather than the weights.
+- **The SKU is deliberately not searched.** It is a warehouse code: noise for retrieval to work around, and the field most likely to collide with a real word. The grid filters on it directly instead.
+- **The row's "finds by grape" is served by a filter rather than by search**, which is a reduction in what a single free-text query covers and is written into the migration rather than left to be discovered.
+- **Two trigram indexes, not one.** The row names `name`; producer misspellings are the ones visitors actually produce — `Poderi Cola` for `Poderi Colla` — and a tsquery for those matches nothing at all. They now carry the accent cases as well.
+- **The `italian` configuration is asserted at migration time.** A database built without the Italian dictionary would silently index with `simple`, stop stemming, and the symptom would be "search finds fewer things than it should", months later.
+- **`search_tsv` is not declared in the Drizzle schema**, which is a departure from "contracts are derived from the schema" (P0-42) and is deliberate: declaring it would put a large tsvector into `ProductRow` and fetch it on every catalogue read for a column nothing displays.
+
+**⚠ The indexes' existence is asserted; their *use* is not, and that is a concession.** The obvious test is an `EXPLAIN` showing the index in the plan, because a silently unused index is a latency cliff nobody notices — retrieval keeps returning correct results and simply gets slower. Three attempts failed, and **the planner was right every time**: at a few thousand rows the whole table is a handful of pages, so a sequential scan genuinely beats a GIN bitmap scan's startup cost. Seeding enough rows to reverse that would mean a catalogue far larger than the ~2,500 SKUs per tenant §5.0 plans for, and the assertion would then be about a table this product does not have. Whether these indexes are used at real scale belongs to **P7-05**'s retrieval headroom check, which exists for exactly that.
+
+**A related flake was fixed on the way.** `product-embeddings.integration.test.ts` has an equivalent HNSW plan assertion that failed, then **passed on a re-run of the identical commit** — contention rather than a regression, because every integration file starts its own container and the suite had just grown by three. `vitest.integration.config.ts` now caps that at four at a time.
+
 ---
 
 ### P1-08 · Catalog search endpoint
