@@ -5,7 +5,13 @@ name: CI
 # behind `needs` would hide a test failure until a lint failure was fixed,
 # costing a round trip to learn something we could have reported at once.
 on:
+  # `edited` as well as the default three, because of P0-61's check. It reads
+  # the body from `github.event.pull_request.body`, which is frozen in the event
+  # payload — so a PR that fails for a missing `## Why` heading cannot be fixed
+  # by writing one. Re-running replays the same stale payload, and the only way
+  # back to green is an unrelated push. Three PRs have now been through that.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
