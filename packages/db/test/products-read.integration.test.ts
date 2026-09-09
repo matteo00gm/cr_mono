@@ -6,7 +6,7 @@ import { decodeCursor, listProducts, MAX_LIMIT } from '../src/products-read.js';
 import { archiveProduct, insertProduct } from '../src/products.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 import { startPostgres } from './support/postgres.js';
-import { createTenant } from './support/tenant.js';
+import { createTenant, useTenant } from './support/tenant.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 
 /**
@@ -466,6 +466,137 @@ describe('searching', () => {
   });
 });
 
+describe('filters', () => {
+  const wine = (
+    sku: string,
+    overrides: Partial<{
+      wineType: string;
+      priceCents: number;
+      stockStatus: 'IN_STOCK' | 'OUT_OF_STOCK' | 'PREORDER';
+      name: string;
+    }> = {},
+  ) =>
+    inTenant((tx) =>
+      insertProduct(tx, {
+        tenantId,
+        values: {
+          sku,
+          name: overrides.name ?? `Vino ${sku}`,
+          wineType: overrides.wineType ?? 'red',
+          priceCents: overrides.priceCents ?? 2000,
+          currency: 'EUR',
+          stockStatus: overrides.stockStatus ?? 'IN_STOCK',
+        },
+        contentHash: sku,
+      }),
+    );
+
+  const skus = async (query: Record<string, unknown>) => {
+    const page = await inTenant((tx) => listProducts(tx, { limit: 50, ...query }));
+    return page.items.map((row) => row.sku).sort();
+  };
+
+  it('filters by stock status', async () => {
+    await wine('F-IN', { stockStatus: 'IN_STOCK' });
+    await wine('F-OUT', { stockStatus: 'OUT_OF_STOCK' });
+
+    expect(await skus({ stockStatus: 'OUT_OF_STOCK' })).toEqual(['F-OUT']);
+  });
+
+  it('filters by wine type, exactly', async () => {
+    await wine('F-RED', { wineType: 'red' });
+    await wine('F-ORANGE', { wineType: 'orange' });
+
+    expect(await skus({ wineType: 'orange' })).toEqual(['F-ORANGE']);
+  });
+
+  it('filters by embedding state', async () => {
+    await wine('F-PENDING');
+    await wine('F-INDEXED');
+
+    await useTenant(db, tenantId);
+    await db.execute(sql`update products set embedding_state = 'INDEXED' where sku = 'F-INDEXED'`);
+
+    expect(await skus({ embeddingState: 'INDEXED' })).toEqual(['F-INDEXED']);
+  });
+
+  it('filters by a price range, inclusive at both ends', async () => {
+    await wine('F-1000', { priceCents: 1000 });
+    await wine('F-2000', { priceCents: 2000 });
+    await wine('F-3000', { priceCents: 3000 });
+
+    expect(await skus({ priceMin: 1000, priceMax: 2000 })).toEqual(['F-1000', 'F-2000']);
+  });
+
+  it('accepts one bound alone, so "under 20 euro" needs no invented floor', async () => {
+    await wine('F-CHEAP', { priceCents: 500 });
+    await wine('F-DEAR', { priceCents: 9000 });
+
+    expect(await skus({ priceMax: 1000 })).toEqual(['F-CHEAP']);
+    expect(await skus({ priceMin: 5000 })).toEqual(['F-DEAR']);
+  });
+
+  it('returns nothing for a range with its bounds the wrong way round', async () => {
+    /*
+     * A slider dragged past itself, not a malformed request — so the honest
+     * answer is an empty result rather than an error the interface has to
+     * explain.
+     */
+    await wine('F-MID', { priceCents: 2000 });
+
+    expect(await skus({ priceMin: 5000, priceMax: 1000 })).toEqual([]);
+  });
+
+  it('combines two filters rather than applying the last one', async () => {
+    await wine('F-A', { wineType: 'red', priceCents: 1000 });
+    await wine('F-B', { wineType: 'red', priceCents: 9000 });
+    await wine('F-C', { wineType: 'white', priceCents: 1000 });
+
+    expect(await skus({ wineType: 'red', priceMax: 5000 })).toEqual(['F-A']);
+  });
+
+  it('narrows a search exactly as it narrows a list', async () => {
+    /*
+     * **The assertion the row is really about.** Filters compose into the
+     * shared builder, so a second query path cannot work for one and silently
+     * not for the other — which would surface as "filters do nothing when you
+     * type in the box".
+     */
+    await wine('F-S1', { name: 'Barolo Economico', priceCents: 1000 });
+    await wine('F-S2', { name: 'Barolo Costoso', priceCents: 9000 });
+
+    const page = await inTenant((tx) =>
+      listProducts(tx, { q: 'barolo', priceMax: 5000, limit: 50 }),
+    );
+
+    expect(page.items.map((row) => row.sku)).toEqual(['F-S1']);
+    expect(page.matchedBy).toBe('text');
+  });
+
+  it('applies to the similarity fallback too', async () => {
+    await wine('F-S3', { name: 'Barolo Bussia', priceCents: 1000 });
+    await wine('F-S4', { name: 'Barolo Bussia', priceCents: 9000 });
+
+    const page = await inTenant((tx) =>
+      listProducts(tx, { q: 'Barlo Busia', priceMax: 5000, limit: 50 }),
+    );
+
+    expect(page.matchedBy).toBe('similar');
+    expect(page.items.map((row) => row.sku)).toEqual(['F-S3']);
+  });
+
+  it('still hides archived wines when a filter is applied', async () => {
+    await wine('F-ARCH', { wineType: 'red' });
+    const page = await inTenant((tx) => listProducts(tx, { wineType: 'red', limit: 50 }));
+    const victim = page.items.find((row) => row.sku === 'F-ARCH');
+    if (victim === undefined) throw new Error('expected the wine');
+
+    await inTenant((tx) => archiveProduct(tx, victim.id));
+
+    expect(await skus({ wineType: 'red' })).not.toContain('F-ARCH');
+  });
+});
+
 describe('accents, now that the column cannot fold them', () => {
   it('finds an accented wine through the similarity fallback', async () => {
     /*
@@ -493,5 +624,47 @@ describe('accents, now that the column cannot fold them', () => {
 
     expect(page.matchedBy).toBe('similar');
     expect(page.items.map((row) => row.sku)).toContain('ACC-1');
+  });
+});
+
+describe('the grape filter', () => {
+  it('matches a wine that contains the grape', async () => {
+    /*
+     * Containment, against the array GIN index — and the only way to ask the
+     * question, since `array_to_string` is `STABLE` and the array could not be
+     * folded into the searchable column (P1-07).
+     */
+    await inTenant(async (tx) => {
+      for (const [sku, grapes] of [
+        ['G-NEB', ['Nebbiolo', 'Barbera']],
+        ['G-SAN', ['Sangiovese']],
+      ] as const) {
+        await insertProduct(tx, {
+          tenantId,
+          values: {
+            sku,
+            name: `Vino ${sku}`,
+            wineType: 'red',
+            priceCents: 1000,
+            currency: 'EUR',
+            stockStatus: 'IN_STOCK' as const,
+            grapeVarieties: [...grapes],
+          },
+          contentHash: sku,
+        });
+      }
+    });
+
+    const page = await inTenant((tx) => listProducts(tx, { grape: 'Nebbiolo', limit: 50 }));
+
+    expect(page.items.map((row) => row.sku)).toEqual(['G-NEB']);
+  });
+
+  it('narrows a search as well as a list', async () => {
+    const page = await inTenant((tx) =>
+      listProducts(tx, { q: 'vino', grape: 'Sangiovese', limit: 50 }),
+    );
+
+    expect(page.items.every((row) => (row.grapeVarieties ?? []).includes('Sangiovese'))).toBe(true);
   });
 });

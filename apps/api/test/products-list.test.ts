@@ -247,3 +247,107 @@ describe('searching', () => {
     expect((await get(app(), `?q=${encodeURIComponent(q)}`)).status).toBe(200);
   });
 });
+
+describe('filters', () => {
+  it('passes each one through', async () => {
+    queries.length = 0;
+
+    await get(
+      app(),
+      '?stockStatus=IN_STOCK&wineType=red&embeddingState=INDEXED&priceMin=1000&priceMax=5000',
+    );
+
+    expect(queries[0]).toMatchObject({
+      stockStatus: 'IN_STOCK',
+      wineType: 'red',
+      embeddingState: 'INDEXED',
+      priceMin: 1000,
+      priceMax: 5000,
+    });
+  });
+
+  it('narrows a search as well as a list', async () => {
+    /*
+     * **The row's real requirement**, and the reason the filters compose into
+     * the shared builder rather than getting their own query path. A second
+     * path would work for the list and quietly not for the search, and the bug
+     * would be "filters do nothing when you type in the box" — reported by a
+     * seller, months later.
+     */
+    queries.length = 0;
+
+    await get(app(), '?q=barolo&stockStatus=OUT_OF_STOCK');
+
+    expect(queries[0]).toMatchObject({ q: 'barolo', stockStatus: 'OUT_OF_STOCK' });
+  });
+
+  it.each([
+    ['an unknown stock status', 'stockStatus=MAYBE'],
+    ['an unknown embedding state', 'embeddingState=THINKING'],
+    ['a negative price floor', 'priceMin=-1'],
+    ['a fractional price ceiling', 'priceMax=19.99'],
+    ['a non-numeric price', 'priceMin=cheap'],
+    ['an empty wine type', 'wineType='],
+  ])('refuses %s rather than ignoring it', async (_case, query) => {
+    /*
+     * Refused, not dropped. A filter that is silently ignored shows a seller
+     * more wines than they asked for and lets them conclude the catalogue holds
+     * something it does not — the same failure `matchedBy` exists to prevent,
+     * arrived at from the other direction.
+     */
+    queries.length = 0;
+
+    expect((await get(app(), `?${query}`)).status).toBe(422);
+    expect(queries).toEqual([]);
+  });
+
+  it('accepts a wine type the schema has never heard of', async () => {
+    /*
+     * `wine_type` is `text` rather than an enum (P0-26) because the taxonomy
+     * grows sideways. Enumerating it in the API would reintroduce exactly that
+     * coupling one layer up, and the failure would be a filter that rejects a
+     * wine type the catalogue already contains.
+     */
+    queries.length = 0;
+
+    expect((await get(app(), '?wineType=pét-nat')).status).toBe(200);
+    expect(queries[0]?.wineType).toBe('pét-nat');
+  });
+
+  it('accepts one bound without inventing the other', async () => {
+    queries.length = 0;
+
+    await get(app(), '?priceMax=2000');
+
+    expect(queries[0]?.priceMax).toBe(2000);
+    expect(queries[0]?.priceMin).toBeUndefined();
+  });
+});
+
+describe('the grape filter, which is not a convenience', () => {
+  it('passes a grape through', async () => {
+    queries.length = 0;
+
+    await get(app(), '?grape=Nebbiolo');
+
+    expect(queries[0]?.grape).toBe('Nebbiolo');
+  });
+
+  it('is the only way to ask for a grape, because search cannot', async () => {
+    /*
+     * **Free-text search cannot find by grape.** `array_to_string` is `STABLE`,
+     * so the array could not be folded into the generated tsvector (P1-07) —
+     * which makes this filter the answer to "find me a nebbiolo" rather than a
+     * refinement of one.
+     */
+    queries.length = 0;
+
+    await get(app(), '?q=barolo&grape=Nebbiolo');
+
+    expect(queries[0]).toMatchObject({ q: 'barolo', grape: 'Nebbiolo' });
+  });
+
+  it('refuses an empty grape rather than matching everything', async () => {
+    expect((await get(app(), '?grape=')).status).toBe(422);
+  });
+});

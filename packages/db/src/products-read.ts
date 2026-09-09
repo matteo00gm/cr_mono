@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lt, gt, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lt, gt, lte, or, sql, type SQL } from 'drizzle-orm';
 
 import { products } from './schema/products.js';
 import type { ProductRow } from './products.js';
@@ -57,7 +57,44 @@ export interface ListQuery {
    * because a search ordered by creation date is a filter wearing a search box.
    */
   readonly q?: string | undefined;
+
+  /* ---- filters (P1-09) ------------------------------------------------- */
+
+  readonly stockStatus?: StockStatus | undefined;
+  /**
+   * An exact match on a free-text column, deliberately.
+   *
+   * `wine_type` is `text` rather than an enum (P0-26): the taxonomy grows
+   * sideways — orange, pét-nat, col fondo — and each addition would otherwise
+   * be an `ALTER TYPE` for a label that guards nothing. So this cannot be
+   * validated against a Zod enum the way the row assumes; it is a bounded
+   * string, matched exactly, and the value comes from the facet list a screen
+   * builds out of the catalogue itself.
+   */
+  readonly wineType?: string | undefined;
+  /**
+   * A grape the wine must contain (P1-07, P1-09).
+   *
+   * **Containment, and it carries more weight than the other filters**, because
+   * free-text search cannot answer it: `array_to_string` is `STABLE`, so the
+   * grape array could not be folded into the generated tsvector and "find me a
+   * nebbiolo" has nowhere else to go. The array GIN index is what makes it
+   * cheap.
+   */
+  readonly grape?: string | undefined;
+  /** Minor units, inclusive, like every price in this system. */
+  readonly priceMin?: number | undefined;
+  readonly priceMax?: number | undefined;
+  readonly embeddingState?: EmbeddingState | undefined;
 }
+
+/** The stock states from P0-26, as the filter accepts them. */
+export const STOCK_STATUSES = ['IN_STOCK', 'OUT_OF_STOCK', 'PREORDER'] as const;
+export type StockStatus = (typeof STOCK_STATUSES)[number];
+
+/** Where a row sits in the embedding pipeline. */
+export const EMBEDDING_STATES = ['PENDING', 'INDEXED', 'FAILED', 'STALE'] as const;
+export type EmbeddingState = (typeof EMBEDDING_STATES)[number];
 
 export interface ProductPage {
   readonly items: readonly ProductRow[];
@@ -226,6 +263,41 @@ const baseConditions = (query: ListQuery): SQL[] => {
    * reason to show it.
    */
   if (query.includeArchived !== true) conditions.push(eq(products.status, 'ACTIVE'));
+
+  /*
+   * **Composed into the same builder rather than given their own query path**,
+   * which is the row's real requirement: a second code path would work for the
+   * list and quietly not for the search, and the bug would be "filters do
+   * nothing when you type in the box" — reported by a seller, months later.
+   * Every page above shares these conditions by construction.
+   */
+  if (query.stockStatus !== undefined) {
+    conditions.push(eq(products.stockStatus, query.stockStatus));
+  }
+
+  if (query.wineType !== undefined) conditions.push(eq(products.wineType, query.wineType));
+
+  /*
+   * `@>` rather than `= ANY`, because containment is what the GIN index
+   * answers — and the index is the whole reason this filter is affordable on a
+   * catalogue of any size.
+   */
+  if (query.grape !== undefined) {
+    conditions.push(sql`${products.grapeVarieties} @> array[${query.grape}]::text[]`);
+  }
+
+  if (query.embeddingState !== undefined) {
+    conditions.push(eq(products.embeddingState, query.embeddingState));
+  }
+
+  /*
+   * Inclusive at both ends, and independently optional so "under 20 euro" needs
+   * no invented floor. A range with the bounds the wrong way round returns
+   * nothing rather than erroring: it is a slider dragged past itself, not a
+   * malformed request, and the honest answer is an empty result.
+   */
+  if (query.priceMin !== undefined) conditions.push(gte(products.priceCents, query.priceMin));
+  if (query.priceMax !== undefined) conditions.push(lte(products.priceCents, query.priceMax));
 
   return conditions;
 };

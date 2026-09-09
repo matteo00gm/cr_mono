@@ -242,13 +242,17 @@ export {
 export {
   DEFAULT_LIMIT,
   decodeCursor,
+  EMBEDDING_STATES,
   isSortField,
   listProducts,
   MAX_LIMIT,
   SORTABLE,
+  STOCK_STATUSES,
+  type EmbeddingState,
   type ListQuery,
   type MatchMode,
   type ProductPage,
   type SortDirection,
   type SortField,
+  type StockStatus,
 } from './products-read.js';

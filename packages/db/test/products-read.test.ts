@@ -396,3 +396,42 @@ describe('the cursor value, and where the cast happens', () => {
     });
   });
 });
+
+describe('filters and ordering, as branches', () => {
+  /**
+   * These assert *that the branch runs*, not that the SQL is right.
+   *
+   * A fake cannot tell a correct `WHERE` from an incorrect one, and asserting
+   * on Drizzle's internal expression objects would be a test of Drizzle. That a
+   * filter actually narrows the result is `products-read.integration.test.ts`.
+   * What is worth having here is that no branch throws and that each option is
+   * reachable — a filter that crashed for one enum value would otherwise be
+   * found by a seller.
+   */
+  it.each([
+    ['stock status', { stockStatus: 'IN_STOCK' as const }],
+    ['wine type', { wineType: 'orange' }],
+    ['embedding state', { embeddingState: 'FAILED' as const }],
+    ['a price floor', { priceMin: 1000 }],
+    ['a price ceiling', { priceMax: 5000 }],
+    ['both price bounds', { priceMin: 1000, priceMax: 5000 }],
+    ['archived rows', { includeArchived: true }],
+    [
+      'every filter at once',
+      {
+        stockStatus: 'PREORDER' as const,
+        wineType: 'red',
+        embeddingState: 'STALE' as const,
+        priceMin: 1,
+        priceMax: 2,
+        includeArchived: true,
+      },
+    ],
+  ])('accepts %s', async (_case, filters) => {
+    const { tx, queries } = capturing([product('a')]);
+
+    await listProducts(tx, filters);
+
+    expect(queries).toHaveLength(1);
+  });
+});
