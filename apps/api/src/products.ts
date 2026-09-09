@@ -3,10 +3,13 @@ import { contentHashOf } from '@catalogorosso/core';
 import {
   archiveProduct,
   insertProduct,
+  listProducts,
   updateProduct,
   withTenant,
+  type ListQuery,
   type ProductArchiveOutcome,
   type ProductInsert,
+  type ProductPage,
   type ProductRow,
   type ProductUpdate,
   type ProductUpdateOutcome,
@@ -89,10 +92,15 @@ export interface ArchiveProductCommand {
   readonly productId: string;
 }
 
+export interface ListProductsCommand extends ListQuery {
+  readonly tenantId: string;
+}
+
 export interface ProductsPort {
   create(command: CreateProductCommand): Promise<ProductWriteOutcome>;
   update(command: UpdateProductCommand): Promise<ProductUpdateOutcome>;
   archive(command: ArchiveProductCommand): Promise<ProductArchiveOutcome>;
+  list(command: ListProductsCommand): Promise<ProductPage>;
 }
 
 /**
@@ -116,6 +124,7 @@ export const unconfiguredProducts: ProductsPort = {
   create: () => Promise.reject(new ProductsPortNotConfiguredError()),
   update: () => Promise.reject(new ProductsPortNotConfiguredError()),
   archive: () => Promise.reject(new ProductsPortNotConfiguredError()),
+  list: () => Promise.reject(new ProductsPortNotConfiguredError()),
 };
 
 /* -------------------------------------------------------------------------- */
@@ -165,4 +174,12 @@ export const createProductsPort = (): ProductsPort => ({
     ),
 
   archive: (command) => withTenant(command.tenantId, (tx) => archiveProduct(tx, command.productId)),
+
+  /*
+   * The tenant is peeled off and everything else is the query. Splitting it
+   * this way means the port cannot accidentally pass a tenant *into* the query
+   * builder, where it would be a second, unscoped filter competing with the RLS
+   * policy that is already doing the work.
+   */
+  list: ({ tenantId, ...query }) => withTenant(tenantId, (tx) => listProducts(tx, query)),
 });
