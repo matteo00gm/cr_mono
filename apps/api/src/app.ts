@@ -9,11 +9,13 @@ import type { MembersPort } from './members.js';
 import type { ProductsPort } from './products.js';
 import { assertEveryRouteDeclared } from './middleware/capability.js';
 import { errorHandler, normaliseThrown, notFoundHandler } from './middleware/error.js';
-import { DASHBOARD_PREFIX, WIDGET_PREFIX } from './routes.js';
+import { DASHBOARD_PREFIX, WEBHOOK_PREFIX, WIDGET_PREFIX } from './routes.js';
 import { requestContext } from './middleware/logger.js';
 import { requireOriginSecret } from './middleware/origin-secret.js';
 import { createDashboardApp, DASHBOARD_ROUTE_ACCESS } from './surfaces/dashboard.js';
+import { createWebhookApp, WEBHOOK_ROUTE_ACCESS } from './surfaces/webhooks.js';
 import { createWidgetApp } from './surfaces/widget.js';
+import type { WebhooksPort } from './webhooks.js';
 
 /**
  * The API composition root (P0-54).
@@ -79,6 +81,22 @@ export interface AppOptions {
    * every call with a wiring error rather than answering plausibly.
    */
   readonly products?: ProductsPort | undefined;
+
+  /**
+   * Provider delivery events (P0-64b). Optional, and absent refuses every call
+   * with a wiring error — the `members` shape, not the `originSecret` one.
+   */
+  readonly webhooks?: WebhooksPort | undefined;
+
+  /**
+   * The Resend endpoint signing secret.
+   *
+   * Absent is **restrictive** here, unlike `originSecret`: with nothing to
+   * verify against, the endpoint refuses every delivery. So there is no startup
+   * guard, only the warning `index.ts` logs — what absence costs is bounces
+   * going unrecorded, which is E7 rather than a hole.
+   */
+  readonly resendWebhookSecret?: string | undefined;
 }
 
 export const createApp = ({
@@ -87,6 +105,8 @@ export const createApp = ({
   members,
   products,
   originSecret,
+  webhooks,
+  resendWebhookSecret,
 }: AppOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
@@ -150,6 +170,7 @@ export const createApp = ({
 
   app.route(DASHBOARD_PREFIX, createDashboardApp({ auth, readMemberships, members, products }));
   app.route(WIDGET_PREFIX, createWidgetApp());
+  app.route(WEBHOOK_PREFIX, createWebhookApp({ webhooks, resendWebhookSecret }));
 
   /*
    * Fails closed, at boot (P0-49).
@@ -166,6 +187,19 @@ export const createApp = ({
    * mounted — the form P0-50's matrix also walks.
    */
   assertEveryRouteDeclared(app, DASHBOARD_ROUTE_ACCESS, DASHBOARD_PREFIX);
+
+  /*
+   * The same check for the webhook surface (P0-64b), and it needs its own call
+   * rather than a shared table because `assertEveryRouteDeclared` filters by
+   * prefix — a dashboard table would find no webhook route and pass while
+   * declaring nothing.
+   *
+   * Worth having even though every route here is public by construction: what
+   * the declaration records is *why* it is public, and this is the surface
+   * where an undeclared route would be reachable by the whole internet with no
+   * session in the way.
+   */
+  assertEveryRouteDeclared(app, WEBHOOK_ROUTE_ACCESS, WEBHOOK_PREFIX);
 
   return app;
 };
