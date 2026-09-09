@@ -1,9 +1,11 @@
 import type { Product } from '@catalogorosso/api-client';
 import { contentHashOf } from '@catalogorosso/core';
 import {
+  archiveProduct,
   insertProduct,
   updateProduct,
   withTenant,
+  type ProductArchiveOutcome,
   type ProductInsert,
   type ProductRow,
   type ProductUpdate,
@@ -82,9 +84,15 @@ export interface UpdateProductCommand {
   readonly values: ProductUpdate;
 }
 
+export interface ArchiveProductCommand {
+  readonly tenantId: string;
+  readonly productId: string;
+}
+
 export interface ProductsPort {
   create(command: CreateProductCommand): Promise<ProductWriteOutcome>;
   update(command: UpdateProductCommand): Promise<ProductUpdateOutcome>;
+  archive(command: ArchiveProductCommand): Promise<ProductArchiveOutcome>;
 }
 
 /**
@@ -107,6 +115,7 @@ export class ProductsPortNotConfiguredError extends Error {
 export const unconfiguredProducts: ProductsPort = {
   create: () => Promise.reject(new ProductsPortNotConfiguredError()),
   update: () => Promise.reject(new ProductsPortNotConfiguredError()),
+  archive: () => Promise.reject(new ProductsPortNotConfiguredError()),
 };
 
 /* -------------------------------------------------------------------------- */
@@ -154,4 +163,6 @@ export const createProductsPort = (): ProductsPort => ({
         hashOf: (merged) => contentHashOf(merged),
       }),
     ),
+
+  archive: (command) => withTenant(command.tenantId, (tx) => archiveProduct(tx, command.productId)),
 });

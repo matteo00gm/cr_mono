@@ -3482,6 +3482,16 @@ The first diagnosis was that `pgErrorCode` read the SQLSTATE only from `error.ca
 
 **Files.** same route file. **~70 lines.**
 
+**As built — two kinds of delete, and the assertion that the cascade is not doing the work.** `DELETE /v1/dashboard/products/:id` behind `catalog:write`. `archiveProduct` sets `status = 'ARCHIVED'` and deletes the vectors in one transaction.
+
+- **The explicit delete is required, and the integration test proves it rather than asserting it.** `product_embeddings.product_id` carries `ON DELETE CASCADE`, which fires when the *product row* goes — and this path deliberately keeps the row. A reader who knows the cascade exists is exactly the reader who would assume this is handled, and the symptom of that assumption is a removed wine that keeps being recommended. The test indexes a product, archives it, and reads the vector count back.
+- **The rollback assertion is the one that matters most.** An archive that committed the row while rolling back the vector delete would leave a wine hidden from the seller and still recommended to visitors — worse than either failure alone, and invisible from the dashboard.
+- **Idempotent, because a repeated click is not a conflict.** The seller's intent is already satisfied; answering 409 would make the dashboard explain something that is not a problem. The second call reports `vectorsRemoved: 0`.
+- **The response says `noLongerRecommended`, not just a status code.** That is the property a seller cares about and a *different* claim from "the row is gone" — the row is not gone. Stating it means the dashboard does not infer it from a 204, which is the sort of inference that goes stale the day the behaviour changes. `vectorsRemoved` is reported because zero is meaningful: the wine had never been indexed, which is not the same as a delete that failed to clean up.
+- **A cross-tenant delete removes nothing, asserted from the other side.** The `where` clause names only the product id, so RLS is what stops one tenant clearing another's index — and there is a test that reads the victim's vector count back afterwards, rather than trusting that the policy applies.
+
+**⚠ P1-05 is still open and is the assertion that matters.** What is asserted here is that the vector rows are gone; what P1-05 asserts is that *retrieval cannot return the product*, through the real retrieval function. Those are not the same statement, which is precisely why that row exists — and it depends on **P2-20**.
+
 ---
 
 ### P1-05 · Test: deleted product unretrievable

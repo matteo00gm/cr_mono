@@ -1,6 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 
 import { outbox } from './schema/outbox.js';
+import { productEmbeddings } from './schema/product-embeddings.js';
 import { products } from './schema/products.js';
 import type { ProductInsert, ProductUpdate } from './contracts.js';
 import type { DbTransaction } from './with-tenant.js';
@@ -302,4 +303,55 @@ export const updateProduct = async (
   }
 
   return { outcome: 'updated', product: updated, reindexed };
+};
+
+export type ProductArchiveOutcome =
+  | { readonly outcome: 'archived'; readonly product: ProductRow; readonly vectorsRemoved: number }
+  | { readonly outcome: 'not-found' };
+
+/**
+ * Archives a product and **deletes its vectors**, in one transaction (P1-04).
+ *
+ * **The two halves are different kinds of delete on purpose.** The row is soft-
+ * deleted — `status = 'ARCHIVED'` — because an order placed last month refers to
+ * it, and a catalogue that forgets what it sold cannot answer a customer's
+ * question about their own purchase. The vectors are hard-deleted, because a
+ * vector is not history: it is the thing retrieval searches, and leaving it
+ * means the wine keeps being recommended after the seller removed it. That is a
+ * visible, embarrassing bug rather than a data-integrity one.
+ *
+ * **`ON DELETE CASCADE` does not help here and the explicit delete is
+ * required.** The cascade on `product_embeddings.product_id` fires when the
+ * *product row* goes, and this path deliberately keeps it. A reader who knows
+ * the cascade exists is exactly the reader who would assume this is handled.
+ *
+ * Archiving twice is not an error. The seller's intent — stop recommending this
+ * — is already satisfied, and answering 409 to a repeated click would make a
+ * dashboard explain a conflict that is not one. The vector delete is idempotent
+ * for the same reason: the second call removes nothing and says so.
+ */
+export const archiveProduct = async (
+  tx: DbTransaction,
+  productId: string,
+): Promise<ProductArchiveOutcome> => {
+  const updated = await tx
+    .update(products)
+    .set({ status: 'ARCHIVED', updatedAt: sql`now()` })
+    .where(eq(products.id, productId))
+    .returning();
+
+  const product = updated[0];
+  /*
+   * A row this tenant cannot see matches nothing under the policy, so an id
+   * from another winery arrives here as `not-found` — §3.5's 404 without a
+   * tenant comparison anybody could get wrong.
+   */
+  if (product === undefined) return { outcome: 'not-found' };
+
+  const removed = await tx
+    .delete(productEmbeddings)
+    .where(eq(productEmbeddings.productId, productId))
+    .returning({ id: productEmbeddings.id });
+
+  return { outcome: 'archived', product, vectorsRemoved: removed.length };
 };

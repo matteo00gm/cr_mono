@@ -218,11 +218,13 @@ export {
  * stays in `apps/api`; this returns an outcome.
  */
 export {
+  archiveProduct,
   EMBEDDING_EVENT,
   enqueueEmbedding,
   insertProduct,
   updateProduct,
   type NewProduct,
+  type ProductArchiveOutcome,
   type ProductPatch,
   type ProductRow,
   type ProductUpdateOutcome,

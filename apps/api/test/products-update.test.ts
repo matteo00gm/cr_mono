@@ -1,10 +1,10 @@
 import { productUpdatedResponse } from '@catalogorosso/api-client';
-import type { ProductRow } from '@catalogorosso/db';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/app.js';
 import type { ProductsPort, UpdateProductCommand } from '../src/products.js';
 import { fakeAuth, oneMembership, signedIn } from './support/auth.js';
+import { productsPort, storedProduct } from './support/products.js';
 
 /**
  * `PATCH /v1/dashboard/products/:id` (P1-03).
@@ -18,47 +18,18 @@ const TENANT = '11111111-1111-1111-1111-111111111111';
 const ID = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
 const PATH = `/v1/dashboard/products/${ID}`;
 
-const AT = new Date('2026-09-08T09:14:00.000Z');
-
-const ROW = {
-  id: ID,
-  tenantId: TENANT,
-  sku: 'BAR-2019',
-  externalVariantId: null,
-  name: 'Barolo Bussia',
-  producer: null,
-  vintage: null,
-  wineType: 'red',
-  grapeVarieties: null,
-  region: null,
-  denomination: null,
-  styleTags: null,
-  tastingNotes: null,
-  foodPairings: null,
-  alcoholPct: null,
-  priceCents: 4500,
-  currency: 'EUR',
-  stockStatus: 'IN_STOCK',
-  stockQty: null,
-  productUrl: null,
-  imageUrl: null,
-  status: 'ACTIVE',
-  contentHash: 'a'.repeat(64),
-  embeddingState: 'INDEXED',
-  createdAt: AT,
-  updatedAt: AT,
-} as ProductRow;
+const ROW = storedProduct({ id: ID, embeddingState: 'INDEXED' });
 
 const commands: UpdateProductCommand[] = [];
 
-const port = (overrides: Partial<ProductsPort> = {}): ProductsPort => ({
-  create: () => Promise.reject(new Error('not stubbed')),
-  update: (command) => {
-    commands.push(command);
-    return Promise.resolve({ outcome: 'updated', product: ROW, reindexed: false });
-  },
-  ...overrides,
-});
+const port = (overrides: Partial<ProductsPort> = {}): ProductsPort =>
+  productsPort({
+    update: (command) => {
+      commands.push(command);
+      return Promise.resolve({ outcome: 'updated', product: ROW, reindexed: false });
+    },
+    ...overrides,
+  });
 
 const app = (role: 'OWNER' | 'EDITOR' = 'EDITOR', products: Partial<ProductsPort> = {}) =>
   createApp({

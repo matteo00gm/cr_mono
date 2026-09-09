@@ -1070,6 +1070,84 @@
         }
       },
       "/v1/dashboard/products/:id": {
+        "delete": {
+          "summary": "Remove a wine from the catalogue",
+          "description": "Archives the product and deletes its vectors in one transaction. Two different kinds of delete, deliberately: the row survives because an order placed last month refers to it, and a catalogue that forgets what it sold cannot answer a customer about their own purchase — while the vectors go outright, because a vector is not history but the thing retrieval searches, so leaving one means the wine keeps being recommended after it was removed. Archiving twice is not an error: the intent is already satisfied. A product belonging to another winery answers 404, never 403.\n\nRequires the `catalog:write` capability.",
+          "operationId": "deleteV1DashboardProducts:id",
+          "x-required-capability": "catalog:write",
+          "responses": {
+            "200": {
+              "description": "Remove a wine from the catalogue",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string",
+                        "const": "ARCHIVED"
+                      },
+                      "noLongerRecommended": {
+                        "type": "boolean",
+                        "const": true
+                      },
+                      "vectorsRemoved": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "status",
+                      "noLongerRecommended",
+                      "vectorsRemoved"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                    "status": "ARCHIVED",
+                    "noLongerRecommended": true,
+                    "vectorsRemoved": 1
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "patch": {
           "summary": "Edit a wine",
           "description": "Applies a partial update. Re-embedding is queued only when the change touches something the model actually reads — a price or stock correction costs nothing, which is what keeps the embedding bill tracking the catalogue rather than how often it is edited. An edit that does re-embed leaves the row STALE: still findable under its previous description while the new one is built, as opposed to PENDING, which means never indexed at all. A product belonging to another winery answers 404 and never 403, so this cannot be used to discover which product ids exist elsewhere.\n\nRequires the `catalog:write` capability.",

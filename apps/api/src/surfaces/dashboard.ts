@@ -8,6 +8,7 @@ import {
   meResponse,
   memberRemovedResponse,
   pendingInvitationsResponse,
+  productArchivedResponse,
   productCreatedResponse,
   productUpdatedResponse,
   roleChangeResponse,
@@ -397,6 +398,38 @@ export const createDashboardApp = ({
     return c.json(toProductResponse(result.product));
   });
 
+  /**
+   * Remove a wine from the catalogue.
+   *
+   * **Two different kinds of delete, deliberately.** The row is archived rather
+   * than deleted, because an order placed last month refers to it and a
+   * catalogue that forgets what it sold cannot answer a customer's question
+   * about their own purchase. The vectors are deleted outright, because a
+   * vector is not history — it is the thing retrieval searches, so leaving it
+   * means the wine keeps being recommended after the seller removed it.
+   *
+   * The response says the wine will no longer be recommended, which is the
+   * property the seller cares about and a different claim from "the row is
+   * gone". P1-05 asserts it through the real retrieval path rather than by
+   * counting rows, because an empty vectors table and an unretrievable product
+   * are not the same statement.
+   */
+  app.delete('/products/:id', requireCapability('catalog:write'), async (c) => {
+    const result = await products.archive({
+      tenantId: c.get('tenantId'),
+      productId: c.req.param('id'),
+    });
+
+    if (result.outcome === 'not-found') throw new NotFoundError('No such product.');
+
+    return c.json({
+      id: result.product.id,
+      status: 'ARCHIVED' as const,
+      noLongerRecommended: true as const,
+      vectorsRemoved: result.vectorsRemoved,
+    });
+  });
+
   /* ---- the members screen (E8) ---------------------------------------- */
 
   /**
@@ -707,6 +740,29 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         updatedAt: '2026-09-08T11:02:00.000Z',
       },
       response: productUpdatedResponse,
+    },
+  ],
+  [
+    routeKey('DELETE', `${DASHBOARD_PREFIX}/products/:id`),
+    {
+      access: requires('catalog:write'),
+      summary: 'Remove a wine from the catalogue',
+      description:
+        'Archives the product and deletes its vectors in one transaction. Two different ' +
+        'kinds of delete, deliberately: the row survives because an order placed last ' +
+        'month refers to it, and a catalogue that forgets what it sold cannot answer a ' +
+        'customer about their own purchase — while the vectors go outright, because a ' +
+        'vector is not history but the thing retrieval searches, so leaving one means the ' +
+        'wine keeps being recommended after it was removed. Archiving twice is not an ' +
+        'error: the intent is already satisfied. A product belonging to another winery ' +
+        'answers 404, never 403.',
+      example: {
+        id: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+        status: 'ARCHIVED',
+        noLongerRecommended: true,
+        vectorsRemoved: 1,
+      },
+      response: productArchivedResponse,
     },
   ],
   [
