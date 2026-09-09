@@ -2955,6 +2955,8 @@ Implementation: `POST .../members/invite` requires `members:manage`, creates an 
 - An **un-scoped connection**, like `@catalogorosso/db/auth`. Rejected: it puts a second table outside RLS to solve a problem inside it, and the connection then exists for anything else to reach. The value of one audited escape hatch is that there is one.
 - A **third scope**, `withInvitation()`, which sets a GUC holding the token's *hash*; the policy on `invitations` admits a row matching it beside the usual tenant branch. The tenant GUC is then set **from the matched row**, in the same transaction — so the membership write is scoped by a value Postgres produced rather than one the request supplied. The P0-48 invariant holds on a path with no membership to read it from.
 
+*(P1-31 later added a fourth, `withOutbox()`, and it is the one that breaks the pattern: it widens instead of narrowing. See ADR 0021.)*
+
 Why a token is safe here where a tenant id would not be: P0-48 is about *identifiers*. Naming a tenant asserts something the caller has no standing to assert; holding 256 bits from a CSPRNG **is** the authorization, the way a session cookie is. Recorded as **ADR 0019**, including the alternative worth revisiting (scoping by the accepting user's address, which would also make a pending-invitations view natural and which widens the read from one row to every invitation ever sent to that person).
 
 **Six further departures, each because building it made the reason concrete:**
@@ -3873,6 +3875,33 @@ Enqueue an outbox row **only for rows where `changed`**. Return per-row outcomes
 **Tests.** Two concurrent pollers each claim disjoint rows; a send failure leaves `processed_at` null and increments `attempts`.
 
 **Files.** `apps/worker/src/outbox-poller.ts`, tests. **~120 lines.**
+
+**As built.** The claim and the send are both here, and so is a thing the row did not price: **the queue is under RLS, and the poller has no tenant.**
+
+**The fourth RLS scope.** `outbox` carries `tenant_id` and, like every other tenant table, a `tenant_isolation` policy under `ENABLE` + `FORCE`. A poller written the obvious way issues an un-scoped read and gets **zero rows, silently** — a clean pass over an empty queue, once a minute, for ever, while the backlog grows behind it. There is no tenant to scope it to either: draining the platform's queue in one pass is the job, and asking *which* tenants have work is the same cross-tenant read as asking for the work. The same circularity P0-51 hit, from the other side.
+
+So `withOutbox()`, a fourth scope, setting a transaction-local `app.outbox_poller` GUC that two new policies on `outbox` admit — `outbox_poller_read` (`FOR SELECT`) and `outbox_poller_release` (`FOR UPDATE`). Migration `0036_outbox_poller_rls`. Recorded as **ADR 0021**, because ADR 0019 says a fourth scope is a design change rather than a configuration one.
+
+**It widens where the previous two narrow, and that is the whole review.** `app.user_id` and `app.invitation_token` admit the caller's *own* rows: a wrong value sees less, never more. This one is an unlock — a transaction that sets it reads every tenant's outbox rows. What bounds it, in order of how much work each does:
+
+- A policy attaches to **one table**. The flag reaches `outbox` and nothing else.
+- The split by command. No INSERT, so nothing under the flag can forge a job pointing into another tenant's catalogue; no DELETE, so nothing can drop the evidence of one it failed to publish. This is why it is two policies rather than one `FOR ALL`.
+- The rows are **pointers**. `enqueueEmbedding` writes `{ reason }` and nothing else, so what crosses the boundary is *that* a seller changed something, never what. A future writer putting catalogue content in an outbox payload would make this disclosure large without touching the ADR.
+- The worker re-enters `withTenant(tenantId)` before it reads a product, so nothing downstream of the claim inherits the unlock.
+
+`tenant_isolation` is untouched: permissive policies OR together, so an ordinary request still sees one tenant's rows and still cannot enqueue a job naming another. Both halves are asserted against a real container, including the two that could silently be wrong — that the flag is genuinely *required*, and that it genuinely admits nothing but a read and a release.
+
+**A sharp edge the generator now knows about.** `rlsDownSql` emits `DISABLE ROW LEVEL SECURITY` for the table each policy belongs to. For a policy *added* to an already-protected table that is catastrophic in a way nothing reports: reversing this one migration would take `tenant_isolation` and `FORCE` down with it and leave `outbox` unscoped. `RlsPolicy` gained `amends`, and the down file now drops only what the up file created. `RlsPolicy` also gained `name` (a second policy on a table needs one) and `for`; the WITH-CHECK invariant in `rls.test.ts` was restated as *every policy that can write* rather than every policy, because a `FOR SELECT` policy cannot have one and the old form pushed towards writing the unlock as `FOR ALL` to satisfy a literal assertion.
+
+**Five smaller departures:**
+
+- **The statements live in `packages/db/src/outbox.ts`**, not in the worker. P0-09 forbids an app importing a driver, and the right answer to that was to put the queries where queries belong. `runOutboxPass` is one function rather than three exported calls, for the same reason `insertProduct` pairs the product with its outbox row: mark-then-send loses a job on every crash in the gap, and that ordering has no failing test — it works perfectly until a process dies.
+- **A bounded drain loop**, not one pass per tick. One claim of 100 per minute drains a 5,000-wine import in most of an hour, with the catalogue half-searchable and nothing reporting a problem. `pollOutbox` keeps going while batches come back full, capped at 20 passes because a Lambda has a wall clock. It stops early on a **short** batch (the queue ended, or another poller holds the rest — either way somebody is on it) and on a full batch that published **nothing**, since nineteen more rounds against an unreachable queue burn the attempt budget of two hundred wines during a single outage.
+- **`MAX_PUBLISH_ATTEMPTS = 6`, and the row is set aside rather than deleted.** Six failed *publishes* is almost never a bad row — it is a queue that was unreachable. `countStuckJobs` exists because a queue quietly dropping work and a queue with nothing to do look identical from outside: both publish nothing. That count is the only thing that tells them apart, and P1-50 reads it.
+- **The handler refuses to start without `EMBEDDING_QUEUE_URL`.** A poller pointed at nothing still *claims*: it fails to publish, increments every counter, and after six passes the whole backlog is set aside. A misconfiguration would consume the queue instead of failing on the first invocation.
+- **Failures log the SQS `Code` and the error `name`, never the provider `Message`.** P0-56 applied to a log rather than a response: a provider message is free text that has historically carried endpoints and credentials, and the code is a closed set that is also the more useful half for triage.
+
+Not ~120 lines: about 190 of poller, 190 of statements and scope, 60 of policy generator, and three test files.
 
 ---
 

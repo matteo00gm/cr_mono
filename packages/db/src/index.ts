@@ -238,3 +238,33 @@ export {
   type SortField,
   type StockStatus,
 } from './products-read.js';
+
+/**
+ * The outbox drain (P1-31), and the scope it needs.
+ *
+ * **`withOutbox` is not another `withUser`.** The two contexts exported above
+ * narrow to the caller's own rows; this one admits every tenant's outbox rows
+ * at once, because draining a queue for the whole platform has no tenant to be
+ * scoped to. It is exported by name, from here, rather than hidden behind a
+ * subpath — the same decision `@catalogorosso/db/auth` did *not* get — because
+ * what it unlocks is one table whose rows carry ids and an event name, and the
+ * worker re-enters `withTenant` before it reads anything a seller wrote. The
+ * argument for that, and the alternatives it rejects, are in `with-outbox.ts`.
+ *
+ * `runOutboxPass` is the sequence worth having as one function: claim, publish,
+ * release, in a transaction and in that order. Marking before sending loses
+ * jobs on a crash, and that mistake has no failing test.
+ */
+export { OUTBOX_POLLER_GUC, withOutbox } from './with-outbox.js';
+
+export {
+  CLAIM_LIMIT,
+  claimOutboxJobs,
+  countStuckJobs,
+  markOutboxPublished,
+  MAX_PUBLISH_ATTEMPTS,
+  recordPublishFailure,
+  runOutboxPass,
+  type OutboxJob,
+  type OutboxPass,
+} from './outbox.js';

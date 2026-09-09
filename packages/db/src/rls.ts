@@ -44,9 +44,65 @@ const USER = "nullif(current_setting('app.user_id', true), '')";
  */
 const INVITATION = "nullif(current_setting('app.invitation_token', true), '')";
 
+/**
+ * The outbox poller's flag (P1-31), and the **fourth** GUC.
+ *
+ * It is worth saying plainly what makes this one different from the two above,
+ * because the difference is the whole risk. `app.user_id` and
+ * `app.invitation_token` *narrow*: each admits the rows belonging to the caller
+ * and nothing else, so a caller with the wrong value sees less, never more.
+ * This one does not narrow. It is an unlock, and a transaction that sets it
+ * reads every tenant's rows.
+ *
+ * That is unavoidable for the job. The poller drains the queue for the whole
+ * platform in one pass; there is no tenant to scope it to, and asking "which
+ * tenants have work" is itself the cross-tenant read. The alternative was a
+ * transaction per tenant per minute, forever, over mostly-empty queues.
+ *
+ * What keeps it bounded is that a policy attaches to one table. This admits
+ * `outbox` and nothing else — and an outbox row carries a tenant id, a product
+ * id, an event name and a one-word reason (`enqueueEmbedding` in
+ * `products.ts`), so what crosses the boundary is the *fact* that a tenant
+ * edited something, never what they edited. The worker re-enters `withTenant`
+ * before it reads a product, so nothing downstream inherits the unlock.
+ *
+ * A flag rather than a secret, deliberately. A secret would have to be stored
+ * where the poller can read it, which is where anyone who can call
+ * `set_config` can read it too — it would look like authorization and be
+ * nothing of the kind. `withInvitation`'s token is a secret held by the *user*,
+ * which is a different thing entirely.
+ */
+const POLLER = "nullif(current_setting('app.outbox_poller', true), '') = 'on'";
+
 export interface RlsPolicy {
   /** Table the policy is attached to. */
   readonly table: string;
+  /**
+   * Policy name. Defaults to `tenant_isolation`, which every table's first
+   * policy is called — a second policy on the same table needs its own name or
+   * the CREATE fails.
+   */
+  readonly name?: string;
+  /**
+   * Which commands the policy covers. Defaults to `ALL`.
+   *
+   * Postgres ORs permissive policies together, so a narrow second policy adds
+   * exactly the access it names and nothing more. Splitting the poller's unlock
+   * into SELECT and UPDATE is what stops it also admitting an INSERT or a
+   * DELETE, which the queue has no reason to allow from that path.
+   */
+  readonly for?: 'ALL' | 'SELECT' | 'UPDATE';
+  /**
+   * True when the table already has RLS from an earlier migration.
+   *
+   * It changes both directions. The up stops claiming to enable RLS — the
+   * statement would be a harmless no-op and a misleading one, since a reader
+   * would take this file for the place isolation begins. The down stops
+   * *disabling* it, which is the one that matters: reversing this migration
+   * must drop the policy it added and leave the table protected, not strip
+   * `tenant_isolation` and FORCE along with it.
+   */
+  readonly amends?: boolean;
   /** Rows this role may see. */
   readonly using: string;
   /** Rows this role may write. Defaults to `using` where they agree. */
@@ -79,6 +135,7 @@ export const BASE_RLS_MIGRATION = '0025_rls';
 const HEADERS: Readonly<Record<string, string>> = {
   '0025_rls': 'Row-level security (P0-37).',
   '0033_invitations_rls': 'Row-level security for invitations (P0-51).',
+  '0036_outbox_poller_rls': 'The outbox poller reads across tenants (P1-31).',
 };
 
 /** Every migration file this list generates, in first-appearance order. */
@@ -88,6 +145,9 @@ export const rlsMigrations = (): readonly string[] => [
 
 const forMigration = (migration: string): readonly RlsPolicy[] =>
   RLS_POLICIES.filter((policy) => (policy.migration ?? BASE_RLS_MIGRATION) === migration);
+
+/** Defaulted here rather than at every use, so the two renderers cannot drift. */
+const policyName = (policy: RlsPolicy): string => policy.name ?? 'tenant_isolation';
 
 const boilerplate = (table: string): RlsPolicy => ({
   table,
@@ -161,6 +221,37 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
   },
   boilerplate('token_revocations'),
   boilerplate('outbox'),
+  {
+    table: 'outbox',
+    name: 'outbox_poller_read',
+    migration: '0036_outbox_poller_rls',
+    for: 'SELECT',
+    amends: true,
+    using: POLLER,
+    note:
+      'The poller drains every tenant’s queue in one pass, so there is no tenant to scope ' +
+      'it to and the boilerplate returns zero rows — silently, which is the failure this ' +
+      'would actually have had. Unlike the user and invitation branches above, this one does ' +
+      'not narrow to the caller’s own rows; it is an unlock, and it is confined to this ' +
+      'table because a policy cannot reach further. An outbox row carries ids, an event name ' +
+      'and a one-word reason, never catalogue content, and the worker re-enters withTenant ' +
+      'before it reads a product.',
+  },
+  {
+    table: 'outbox',
+    name: 'outbox_poller_release',
+    migration: '0036_outbox_poller_rls',
+    for: 'UPDATE',
+    amends: true,
+    using: POLLER,
+    withCheck: POLLER,
+    note:
+      'Publishing a job ends in an UPDATE — processed_at, or the attempt counter — so a ' +
+      'read-only unlock would leave the poller able to claim work it could never release. ' +
+      'Split from the read rather than written as one FOR ALL policy, so the flag admits ' +
+      'exactly the two commands the queue needs: no INSERT, so no path can forge a job for ' +
+      'another tenant, and no DELETE, so none can drop one.',
+  },
 ];
 
 /**
@@ -181,7 +272,6 @@ export const rlsMigrationSql = (migration: string = BASE_RLS_MIGRATION): string 
   ].join('\n');
 
   const blocks = forMigration(migration).map((policy) => {
-    const withCheck = policy.withCheck ?? policy.using;
     const note = policy.note
       ? policy.note
           .split(/(?<=\.) (?=[A-Z])/)
@@ -189,13 +279,32 @@ export const rlsMigrationSql = (migration: string = BASE_RLS_MIGRATION): string 
           .join('\n') + '\n'
       : '';
 
-    return [
-      note + `ALTER TABLE ${policy.table} ENABLE ROW LEVEL SECURITY;`,
-      `ALTER TABLE ${policy.table} FORCE ROW LEVEL SECURITY;`,
-      `CREATE POLICY tenant_isolation ON ${policy.table}`,
-      `  USING (${policy.using})`,
-      `  WITH CHECK (${withCheck});`,
-    ].join('\n');
+    /*
+     * A SELECT policy takes no WITH CHECK — there is no new row to check — and
+     * Postgres rejects the statement outright rather than ignoring the clause.
+     * Which is the right refusal: it is what keeps a read-only unlock from
+     * quietly becoming a writable one.
+     */
+    const checked = policy.for !== 'SELECT';
+    const withCheck = policy.withCheck ?? policy.using;
+
+    const enable = policy.amends
+      ? []
+      : [
+          `ALTER TABLE ${policy.table} ENABLE ROW LEVEL SECURITY;`,
+          `ALTER TABLE ${policy.table} FORCE ROW LEVEL SECURITY;`,
+        ];
+
+    const create = [
+      `CREATE POLICY ${policyName(policy)} ON ${policy.table}`,
+      ...(policy.for !== undefined && policy.for !== 'ALL' ? [`  FOR ${policy.for}`] : []),
+      `  USING (${policy.using})${checked ? '' : ';'}`,
+      ...(checked ? [`  WITH CHECK (${withCheck});`] : []),
+    ];
+
+    const lines = [...enable, ...create];
+
+    return note + lines.join('\n');
   });
 
   return `${header}\n\n${blocks.join('\n--> statement-breakpoint\n')}\n`;
@@ -209,9 +318,19 @@ export const rlsDownSql = (migration: string = BASE_RLS_MIGRATION): string =>
     forMigration(migration)
       .map((policy) =>
         [
-          `DROP POLICY IF EXISTS tenant_isolation ON ${policy.table};`,
-          `ALTER TABLE ${policy.table} NO FORCE ROW LEVEL SECURITY;`,
-          `ALTER TABLE ${policy.table} DISABLE ROW LEVEL SECURITY;`,
+          `DROP POLICY IF EXISTS ${policyName(policy)} ON ${policy.table};`,
+          /*
+           * A policy added to a table that was already protected reverses to
+           * *just* that DROP. Emitting the disable here as well would take
+           * tenant_isolation and FORCE down with it, so reversing one migration
+           * would silently unscope the table it was amending.
+           */
+          ...(policy.amends
+            ? []
+            : [
+                `ALTER TABLE ${policy.table} NO FORCE ROW LEVEL SECURITY;`,
+                `ALTER TABLE ${policy.table} DISABLE ROW LEVEL SECURITY;`,
+              ]),
         ].join('\n'),
       )
       .join('\n\n'),

@@ -58,13 +58,27 @@ describe('rls migration', () => {
     }
   });
 
-  it('gives every policy a WITH CHECK as well as a USING', () => {
-    // USING filters reads. Without WITH CHECK a bug could still insert a row
-    // carrying another tenant's id, which reads back as isolation working.
+  it('gives every policy that can write a WITH CHECK as well as a USING', () => {
+    /*
+     * USING filters reads. Without WITH CHECK a bug could still insert a row
+     * carrying another tenant's id, which reads back as isolation working.
+     *
+     * *(Amended by P1-31.)* This used to require a WITH CHECK on every policy,
+     * counted against the length of the list. A `FOR SELECT` policy cannot have
+     * one — Postgres rejects the statement, because there is no new row to
+     * check — so the old form did not merely fail for the poller's read policy,
+     * it pushed towards writing that policy as `FOR ALL` to satisfy the test.
+     * That is the wrong direction: it would have turned a read-only unlock into
+     * one admitting INSERT and DELETE, to keep an assertion literally true. So
+     * the rule is stated as what it always meant — anything that can write a
+     * row says which rows it may write.
+     */
     const sql = allMigrationSql();
+    const writable = RLS_POLICIES.filter((policy) => policy.for !== 'SELECT');
 
     expect(sql.match(/USING \(/g)).toHaveLength(RLS_POLICIES.length);
-    expect(sql.match(/WITH CHECK \(/g)).toHaveLength(RLS_POLICIES.length);
+    expect(sql.match(/WITH CHECK \(/g)).toHaveLength(writable.length);
+    expect(writable.length).toBeLessThan(RLS_POLICIES.length);
   });
 
   it('wraps every GUC read in nullif', () => {
@@ -107,6 +121,78 @@ describe('rls migration', () => {
     expect(tables).not.toContain('rate_limit_buckets');
     // P0-64: a bounce protects the sending domain, which belongs to no tenant.
     expect(tables).not.toContain('email_suppressions');
+  });
+
+  it('unlocks the outbox for reading and releasing, and for nothing else', () => {
+    /*
+     * The poller's flag is the one context here that *widens*: a transaction
+     * that sets it sees every tenant's outbox rows, which is what draining one
+     * queue for the whole platform requires (P1-31, and the argument is in
+     * with-outbox.ts).
+     *
+     * What keeps that bounded is the command split, so it is asserted rather
+     * than left to the reader of the SQL. A `FOR ALL` unlock would also admit
+     * INSERT — a path that could forge a job pointing at another tenant — and
+     * DELETE, a path that could drop one. Neither is anything the poller does,
+     * and a policy that grants what its caller never uses is a policy nobody
+     * will notice being used.
+     */
+    const poller = RLS_POLICIES.filter((policy) => policy.using.includes('app.outbox_poller'));
+
+    expect(poller.map((policy) => policy.for)).toEqual(['SELECT', 'UPDATE']);
+    expect(poller.every((policy) => policy.table === 'outbox')).toBe(true);
+  });
+
+  it('leaves the outbox scoped by tenant for everybody else', () => {
+    /*
+     * The poller policy is *additional*. Postgres ORs permissive policies
+     * together, so the danger of amending a protected table is not that the new
+     * policy is too narrow — it is that the old one stops being there. A
+     * request that sets no flag must still see one tenant's rows, and the
+     * writer that enqueues a job must still be unable to name another tenant.
+     */
+    const tenantIsolation = RLS_POLICIES.find(
+      (policy) => policy.table === 'outbox' && policy.name === undefined,
+    );
+
+    expect(tenantIsolation?.using).toContain("current_setting('app.tenant_id'");
+    /*
+     * The comments are stripped before matching, and both halves of that are
+     * deliberate. Matching the bare word would hit the notes, which say "no
+     * INSERT" and "no DELETE" in prose; matching `FOR ALL` would hit the note
+     * explaining why the policy is *not* written that way. What is left is the
+     * SQL, which is the only part Postgres reads.
+     */
+    const statements = rlsMigrationSql('0036_outbox_poller_rls')
+      .split('\n')
+      .filter((line) => !line.startsWith('--'))
+      .join('\n');
+
+    expect(statements).not.toMatch(/FOR (INSERT|DELETE|ALL)\b/);
+    expect(statements).toMatch(/FOR SELECT/);
+    expect(statements).toMatch(/FOR UPDATE/);
+  });
+
+  it('reverses an amending migration without unscoping the table it amended', () => {
+    /*
+     * **The failure this exists for is silent and total.** The generated down
+     * file for a normal policy disables RLS on its table; emitted for a policy
+     * that was *added* to an already-protected table, it would take
+     * tenant_isolation and FORCE down with it. Rolling back P1-31 would then
+     * leave `outbox` with no row-level security at all, and every query against
+     * it would start returning every tenant's rows — with nothing failing.
+     */
+    const down = rlsDownSql('0036_outbox_poller_rls');
+
+    expect(down).toContain('DROP POLICY IF EXISTS outbox_poller_read ON outbox;');
+    expect(down).not.toContain('DISABLE ROW LEVEL SECURITY');
+    expect(down).not.toContain('NO FORCE ROW LEVEL SECURITY');
+  });
+
+  it('does not claim to enable RLS in a migration that only adds a policy', () => {
+    // Harmless as SQL — the statement is idempotent — and misleading as a
+    // record: a reader would take this file for the place isolation begins.
+    expect(rlsMigrationSql('0036_outbox_poller_rls')).not.toContain('ENABLE ROW LEVEL SECURITY');
   });
 
   it('puts a policy added after P0-37 in its own migration', () => {

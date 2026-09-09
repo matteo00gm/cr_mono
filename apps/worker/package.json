@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1127.0",
+    "@aws-sdk/client-sqs": "^3.1128.0",
     "@catalogorosso/core": "workspace:*",
     "@catalogorosso/db": "workspace:*"
   },
