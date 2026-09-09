@@ -8,6 +8,7 @@ import {
   meResponse,
   memberRemovedResponse,
   pendingInvitationsResponse,
+  productCreatedResponse,
   roleChangeResponse,
   rosterResponse,
   surfaceResponse,
@@ -17,15 +18,18 @@ import { z } from 'zod';
 
 import {
   assertMemberWriteSucceeded,
+  ConflictError,
   InvalidRequestError,
   NotFoundError,
 } from '@catalogorosso/core';
+import { productInsert } from '@catalogorosso/db';
 
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
 import { requireCapability, routeKey } from '../middleware/capability.js';
 import { resolveTenant } from '../middleware/tenant.js';
 import { unconfiguredMembers, type MembersPort } from '../members.js';
+import { toProductResponse, unconfiguredProducts, type ProductsPort } from '../products.js';
 import { AUTH_ROUTE_PREFIX, DASHBOARD_PREFIX } from '../routes.js';
 
 /**
@@ -54,6 +58,12 @@ export interface DashboardOptions {
    * open, so this one is allowed a default and that one is not.
    */
   readonly members?: MembersPort | undefined;
+
+  /**
+   * The catalogue (P1-02). Optional on the same terms as `members`: absent
+   * refuses every call with a wiring error rather than answering plausibly.
+   */
+  readonly products?: ProductsPort | undefined;
 }
 
 /**
@@ -107,6 +117,7 @@ export const createDashboardApp = ({
   auth,
   readMemberships,
   members = unconfiguredMembers,
+  products = unconfiguredProducts,
 }: DashboardOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
@@ -262,6 +273,72 @@ export const createDashboardApp = ({
       created: result.created,
       outcome: result.outcome,
     });
+  });
+
+  /* ---- the catalogue (P1-02) ------------------------------------------ */
+
+  /**
+   * Create a product.
+   *
+   * **The transaction shape every later write copies.** The product row and its
+   * outbox row commit together or not at all (§4.1) — a committed product with
+   * no queued embedding job is invisible to search, and the seller sees a
+   * catalogue that silently lacks it: no error, no failed job, nothing to
+   * retry. `insertProduct` writes both, which is why it is one call rather than
+   * two made in order here.
+   *
+   * **No audit row, and that is a decision rather than an omission.** P1-28
+   * audits an *import*, which is one deliberate act over hundreds of rows.
+   * A row per product save would bury the entries that matter — a role change,
+   * a member removal — under ordinary catalogue churn, and an audit log nobody
+   * can read is worse than a smaller one.
+   */
+  app.post('/products', requireCapability('catalog:write'), async (c) => {
+    /*
+     * **Not `.strict()`, unlike the member bodies above, and the difference is
+     * about who is sending.** P0-42 omits `tenant_id`, `id` and the timestamps
+     * from this contract, and zod strips what it does not know — so a body
+     * carrying `tenantId` parses cleanly with the field discarded, and the
+     * field is not merely ignored but unrepresentable in the resulting type.
+     * Strictness would add nothing there and would break the paste and file
+     * import paths (P1-14, P1-16), which arrive carrying whatever columns a
+     * seller's spreadsheet had.
+     */
+    const parsed = productInsert.safeParse(await readJson(c));
+
+    if (!parsed.success) {
+      throw new InvalidRequestError('Send a JSON body describing a product.');
+    }
+
+    const result = await products.create({
+      /*
+       * From a `memberships` row, never from the body (P0-48). The contract
+       * makes the alternative impossible rather than merely discouraged.
+       */
+      tenantId: c.get('tenantId'),
+      values: parsed.data,
+    });
+
+    if (result.outcome === 'duplicate-sku') {
+      /*
+       * 409 and not 404, and the message names the SKU's role rather than the
+       * constraint. A SKU is the seller's own identifier — they are entitled to
+       * know it is taken, because they are the one who chose it, and this is
+       * not a cross-tenant probe: the uniqueness is scoped to their winery, so
+       * the answer discloses nothing about anybody else's catalogue.
+       */
+      throw new ConflictError(
+        `A product with SKU "${parsed.data.sku}" already exists in this catalogue. ` +
+          'Edit that one, or choose a different SKU.',
+      );
+    }
+
+    /*
+     * Projected, never returned verbatim. The row carries `content_hash` and
+     * `tenant_id`, and neither is in the published contract — see
+     * `toProductResponse`.
+     */
+    return c.json(toProductResponse(result.product), 201);
   });
 
   /* ---- the members screen (E8) ---------------------------------------- */
@@ -486,6 +563,51 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'to discover which invitations exist.',
       example: { tenantId: '9f2c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a', role: 'EDITOR' },
       response: acceptInviteResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/products`),
+    {
+      access: requires('catalog:write'),
+      summary: 'Add a wine to the catalogue',
+      description:
+        'Creates a product and queues it for embedding in the same transaction, so a ' +
+        'wine that exists is always a wine that will become findable — there is no ' +
+        'state where one committed and the other did not. The tenant comes from a ' +
+        'memberships row and never from the body, which the contract makes ' +
+        'unrepresentable rather than merely discouraged. A SKU already used in this ' +
+        'winery answers 409 and names it; the uniqueness is scoped to the winery the ' +
+        'caller belongs to, so the answer discloses nothing about any other catalogue. ' +
+        'The response ' +
+        'is the row as stored, including the defaults the server filled in, so the ' +
+        'client need not re-fetch to learn them.',
+      example: {
+        id: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+        sku: 'BAR-2019',
+        externalVariantId: '43215678901234',
+        name: 'Barolo Bussia',
+        producer: 'Poderi Colla',
+        vintage: 2019,
+        wineType: 'red',
+        grapeVarieties: ['Nebbiolo'],
+        region: 'Piemonte',
+        denomination: 'Barolo DOCG',
+        styleTags: ['strutturato', 'tannico'],
+        tastingNotes: 'Rosa appassita, catrame e ciliegia sotto spirito.',
+        foodPairings: ['brasato al Barolo', 'formaggi stagionati'],
+        alcoholPct: '14.50',
+        priceCents: 4500,
+        currency: 'EUR',
+        stockStatus: 'IN_STOCK',
+        stockQty: 24,
+        productUrl: 'https://cantina.example/barolo-bussia',
+        imageUrl: 'https://cantina.example/img/barolo-bussia.jpg',
+        status: 'ACTIVE',
+        embeddingState: 'PENDING',
+        createdAt: '2026-09-08T09:14:00.000Z',
+        updatedAt: '2026-09-08T09:14:00.000Z',
+      },
+      response: productCreatedResponse,
     },
   ],
   [

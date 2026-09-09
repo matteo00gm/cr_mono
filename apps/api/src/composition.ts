@@ -13,6 +13,7 @@ import type { RateLimiter } from '@catalogorosso/security';
 import { isSuppressed, readMembershipsForUser, withUser } from '@catalogorosso/db';
 
 import { createMembersPort, type MembersPort } from './members.js';
+import { createProductsPort, type ProductsPort } from './products.js';
 import { createWebhooksPort, type WebhooksPort } from './webhooks.js';
 import type { AuthPort } from './middleware/auth.js';
 import { AUTH_PUBLIC_PATH } from './routes.js';
@@ -123,6 +124,8 @@ export interface Dependencies {
   readonly originSecret?: string | undefined;
   readonly readMemberships: MembershipReader;
   readonly members: MembersPort;
+  /** The catalogue (P1-02). */
+  readonly products: ProductsPort;
   /** Records provider delivery events (P0-64b). */
   readonly webhooks: WebhooksPort;
   /** Passed through to `createApp`; absent means the endpoint refuses. */
@@ -239,6 +242,13 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
       sendEmail: sendEmailWith({ isSuppressed: () => Promise.resolve(false) }),
       acceptUrlBase: config.acceptUrlBase ?? `${config.authBaseUrl}/invito`,
     }),
+
+    /*
+     * Built unconditionally: there is no configuration that makes writing a
+     * product wrong, and every gate in front of it — the session, the tenant,
+     * the capability — is applied before this is reached.
+     */
+    products: createProductsPort(),
 
     /*
      * Built unconditionally, unlike the secret beside it. The port is what

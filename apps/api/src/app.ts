@@ -6,6 +6,7 @@ import type { MembershipReader } from '@catalogorosso/core';
 import type { AppEnv } from './env.js';
 import type { AuthPort } from './middleware/auth.js';
 import type { MembersPort } from './members.js';
+import type { ProductsPort } from './products.js';
 import { assertEveryRouteDeclared } from './middleware/capability.js';
 import { errorHandler, normaliseThrown, notFoundHandler } from './middleware/error.js';
 import { DASHBOARD_PREFIX, WEBHOOK_PREFIX, WIDGET_PREFIX } from './routes.js';
@@ -76,6 +77,12 @@ export interface AppOptions {
   readonly originSecret?: string | undefined;
 
   /**
+   * The catalogue (P1-02). Optional on the `members` terms: absent refuses
+   * every call with a wiring error rather than answering plausibly.
+   */
+  readonly products?: ProductsPort | undefined;
+
+  /**
    * Provider delivery events (P0-64b). Optional, and absent refuses every call
    * with a wiring error — the `members` shape, not the `originSecret` one.
    */
@@ -96,6 +103,7 @@ export const createApp = ({
   auth,
   readMemberships,
   members,
+  products,
   originSecret,
   webhooks,
   resendWebhookSecret,
@@ -160,7 +168,7 @@ export const createApp = ({
    */
   app.get('/v1/health', (c) => c.json({ status: 'ok' as const, sha: buildSha() }));
 
-  app.route(DASHBOARD_PREFIX, createDashboardApp({ auth, readMemberships, members }));
+  app.route(DASHBOARD_PREFIX, createDashboardApp({ auth, readMemberships, members, products }));
   app.route(WIDGET_PREFIX, createWidgetApp());
   app.route(WEBHOOK_PREFIX, createWebhookApp({ webhooks, resendWebhookSecret }));
 

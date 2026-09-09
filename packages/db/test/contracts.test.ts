@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import * as contracts from '../src/contracts.js';
+import type { ProductInsert } from '../src/contracts.js';
 import {
   chatRequest,
   membershipInsert,
@@ -197,6 +198,50 @@ describe('the hand-written shapes', () => {
     };
 
     expect(pairingResponse.safeParse(valid).success).toBe(true);
+  });
+});
+
+describe('the inferred type and the runtime schema', () => {
+  /**
+   * **They must agree about what is optional, and they did not.**
+   *
+   * `productInsert` refines `stockQty`, which is a nullable column. Refining
+   * one of those made the *inferred type* demand a value while the schema went
+   * on accepting an omission — so `parse()` returned an object whose
+   * `stockQty` was `undefined` under a type that said it could not be, and any
+   * caller doing arithmetic on it was reading a lie the compiler had endorsed.
+   * Found by P1-02, which is the first code to construct one of these by hand.
+   *
+   * The assertion is the assignment itself: this file is typechecked, so a
+   * recurrence is a `pnpm typecheck` failure rather than a runtime surprise.
+   * It catches the *class* — any nullable column that acquires a refinement —
+   * rather than the one instance, which is the same reasoning as the `ZodAny`
+   * check below.
+   */
+  it('agree that a nullable column may be omitted', () => {
+    const minimal: ProductInsert = {
+      sku: 'BAROLO-2019',
+      name: 'Barolo DOCG 2019',
+      wineType: 'RED',
+      priceCents: 4200,
+      currency: 'EUR',
+      stockStatus: 'IN_STOCK',
+    };
+
+    // And the runtime half, so neither side can drift alone.
+    expect(productInsert.safeParse(minimal).success).toBe(true);
+    expect(productInsert.parse(minimal)).not.toHaveProperty('stockQty');
+  });
+
+  it('still refuses a bad value for the column that is now optional', () => {
+    /*
+     * The direction `.nullish()` could have broken: making a field optional is
+     * one edit away from making it unvalidated, and a negative stock quantity
+     * is a number that reaches a storefront.
+     */
+    expect(productInsert.safeParse({ ...validProduct, stockQty: -1 }).success).toBe(false);
+    expect(productInsert.safeParse({ ...validProduct, stockQty: 1.5 }).success).toBe(false);
+    expect(productInsert.safeParse({ ...validProduct, stockQty: null }).success).toBe(true);
   });
 });
 

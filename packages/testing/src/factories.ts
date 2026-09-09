@@ -146,7 +146,7 @@ export const makeProduct = (index = 0, overrides: Overrides<ProductInsert> = {})
     foodPairings: wine.foodPairings ?? null,
     alcoholPct: wine.alcoholPct ?? null,
     ...overrides,
-  } as ProductInsert;
+  };
 };
 
 export const makeMembership = (overrides: Overrides<MembershipInsert> = {}): MembershipInsert => ({

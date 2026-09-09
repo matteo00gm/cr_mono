@@ -141,6 +141,13 @@ export default {
           // reaching a tenant table from inside it would be a design change,
           // and would get nothing back.
           '|^packages/db/src/webhooks[.]ts$' +
+          // src/products.ts is exempt from P1-02 on the same terms as audit.ts
+          // and invitations.ts: it writes statements and takes the connection
+          // from its caller, opening nothing. Its tables *are* tenant-scoped
+          // and under policy, so unlike the three above there is no second
+          // argument to make — the caller is inside withTenant, which is the
+          // ordinary case this rule exists to preserve.
+          '|^packages/db/src/products[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
           '|^packages/core/src/auth[.]ts$' +

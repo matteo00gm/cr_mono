@@ -207,3 +207,21 @@ export {
   type ClaimedRun,
   type WebhookEvent,
 } from './webhooks.js';
+
+/**
+ * The catalogue write statements (P1-02).
+ *
+ * `insertProduct` writes the product **and** its outbox row, which is why it is
+ * one export rather than two: §4.1's guarantee is that a committed product
+ * always has a queued embedding job, and two calls left in a caller's hands is
+ * a convention rather than a guarantee. What a duplicate SKU means over HTTP
+ * stays in `apps/api`; this returns an outcome.
+ */
+export {
+  EMBEDDING_EVENT,
+  enqueueEmbedding,
+  insertProduct,
+  type NewProduct,
+  type ProductRow,
+  type ProductWriteOutcome,
+} from './products.js';
