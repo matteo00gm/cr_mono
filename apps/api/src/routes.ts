@@ -21,3 +21,15 @@ export const AUTH_ROUTE_PREFIX = '/auth';
 
 /** The full public path, which is what Better Auth must be configured with. */
 export const AUTH_PUBLIC_PATH = `${DASHBOARD_PREFIX}${AUTH_ROUTE_PREFIX}`;
+
+/**
+ * Where provider webhooks arrive (P0-64b).
+ *
+ * A third prefix rather than a route on the dashboard, because what
+ * authenticates a request here is neither a session nor an origin token but the
+ * provider's own signature — and P0-33's Stripe handler needs the same rules.
+ * Under `/v1/` so it reaches the Lambda through the CloudFront behaviour that
+ * already exists, and so it carries the A2 origin secret like every other
+ * request rather than needing a hole cut for it.
+ */
+export const WEBHOOK_PREFIX = '/v1/webhooks';

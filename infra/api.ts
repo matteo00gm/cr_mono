@@ -47,6 +47,21 @@ const emailFrom = new sst.Secret('EmailFrom', 'AI Sommelier <noreply@localhost>'
  * accidentally reach a customer.
  */
 const emailAllowlist = new sst.Secret('EmailAllowlist', '');
+
+/**
+ * The Resend webhook endpoint signing secret, `whsec_…` (P0-64b).
+ *
+ * Empty by default, on the same terms as `ResendApiKey` and for the same
+ * reason: creating the endpoint in Resend's dashboard is operator work, and a
+ * secret with no default would block every deploy on it. Empty reads as absent,
+ * and the endpoint then refuses every delivery — restrictive rather than
+ * permissive, so an unset value costs recorded bounces (E7) and exposes
+ * nothing.
+ *
+ * Set it from stdin so the value never reaches a shell history file:
+ *   `sst secret set ResendWebhookSecret --stage <stage>`
+ */
+const resendWebhookSecret = new sst.Secret('ResendWebhookSecret', '');
 import { vpc } from './vpc';
 
 /**
@@ -230,6 +245,16 @@ export const api = new sst.aws.Function('Api', {
     EMAIL_FROM: emailFrom.value,
     RESEND_API_KEY: resendApiKey.value,
     EMAIL_ALLOWLIST: emailAllowlist.value,
+
+    /**
+     * Verifies inbound Resend delivery events (P0-64b).
+     *
+     * Absent is restrictive here — the endpoint refuses everything — so unlike
+     * `ORIGIN_SECRET` the API starts without it and logs a warning instead. The
+     * cost of forgetting it is silent in exactly the way E7 describes: an empty
+     * suppression list is indistinguishable from a domain with no bounces.
+     */
+    RESEND_WEBHOOK_SECRET: resendWebhookSecret.value,
   },
 
   /**

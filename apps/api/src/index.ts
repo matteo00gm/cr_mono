@@ -98,6 +98,33 @@ if (stage !== 'unknown' && originSecret === undefined) {
  */
 const rateLimiter = stage === 'unknown' ? undefined : createRateLimiter();
 
+/**
+ * The Resend endpoint signing secret (P0-64b).
+ *
+ * **A warning rather than a throw, and the asymmetry with `ORIGIN_SECRET` above
+ * is the reasoning, not an inconsistency.** Absent there is *permissive* — the
+ * API answers callers who bypassed the edge — so a deployed stage must refuse
+ * to start. Absent here is restrictive: the endpoint rejects every delivery, so
+ * nothing is exposed.
+ *
+ * What it costs is the thing E7 is about. The suppression list stays empty, a
+ * hard-bounced address keeps being mailed, and the bounce-rate alarm has
+ * nothing to alarm on — and an empty list looks exactly like a sending domain
+ * with no bounces. Creating the endpoint in Resend's dashboard is operator work
+ * that no deploy can do, so blocking the deploy on it would be the wrong trade
+ * (the same one `ResendApiKey` already makes); saying so once per container is
+ * the right one.
+ */
+const resendWebhookSecret = optionalEnvironment('RESEND_WEBHOOK_SECRET');
+
+if (stage !== 'unknown' && resendWebhookSecret === undefined) {
+  logger.warn(
+    { kind: 'webhook_secret_absent' },
+    'RESEND_WEBHOOK_SECRET is not set, so bounce and complaint events are refused and ' +
+      'the suppression list will stay empty (E7, P0-64b)',
+  );
+}
+
 const dependencies = buildDependencies({
   authSecret: requireEnvironment('AUTH_SECRET'),
   authBaseUrl: requireEnvironment('AUTH_BASE_URL'),
@@ -110,6 +137,7 @@ const dependencies = buildDependencies({
   stage,
   ...(originSecret === undefined ? {} : { originSecret }),
   ...(rateLimiter === undefined ? {} : { rateLimiter }),
+  ...(resendWebhookSecret === undefined ? {} : { resendWebhookSecret }),
 
   emailFrom: optionalEnvironment('EMAIL_FROM') ?? 'AI Sommelier <noreply@localhost>',
   resendApiKey: optionalEnvironment('RESEND_API_KEY'),
