@@ -75,6 +75,7 @@ const port = (overrides: Partial<ProductsPort> = {}): ProductsPort => ({
       product: stored(command.values as unknown as Record<string, unknown>),
     });
   },
+  update: () => Promise.reject(new Error('not stubbed')),
   ...overrides,
 });
 

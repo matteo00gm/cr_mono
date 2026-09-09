@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
-import { enqueueEmbedding, insertProduct } from '../src/products.js';
+import { enqueueEmbedding, insertProduct, updateProduct } from '../src/products.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 import { startPostgres } from './support/postgres.js';
 import { createTenant, useTenant } from './support/tenant.js';
@@ -199,6 +199,8 @@ describe('insertProduct', () => {
     const result = await inTenant((tx) =>
       insertProduct(tx, {
         tenantId,
+        // Cast because the type refuses it — which is P0-48's guarantee, and
+        // exactly what this asserts the statement also ignores at runtime.
         values: { ...VALUES, tenantId: '99999999-9999-9999-9999-999999999999' } as never,
         contentHash: 'h',
       }),
@@ -245,5 +247,217 @@ describe('RLS, which the route depends on and never checks', () => {
      * policy here is what makes that omission safe rather than lucky.
      */
     expect(await productCount()).toBe(0);
+  });
+});
+
+/**
+ * A stand-in for `contentHashOf`, and deliberately not the real one.
+ *
+ * `packages/db` cannot import `packages/core` — core depends on db, so the
+ * boundary rules forbid the cycle. That constraint is a good one here: what
+ * `updateProduct` promises is *call the injected rule and compare against the
+ * stored hash*, and which fields the real rule covers is a domain decision with
+ * its own tests in `packages/core/test/catalog`. Using the real function would
+ * couple these assertions to a field list they have no business pinning.
+ *
+ * So this covers the sommelier fields and ignores price and stock, which is
+ * enough to exercise both branches.
+ */
+interface Hashable {
+  readonly name?: string | null | undefined;
+  readonly tastingNotes?: string | null | undefined;
+  readonly region?: string | null | undefined;
+  readonly wineType?: string | null | undefined;
+}
+
+const testHash = (row: Hashable): string =>
+  JSON.stringify([row.name, row.tastingNotes, row.region, row.wineType]);
+
+describe('updateProduct', () => {
+  /** Seeds a product and returns it, hashed the way the route would. */
+  const seed = async () => {
+    const result = await inTenant((tx) =>
+      insertProduct(tx, { tenantId, values: VALUES, contentHash: testHash(VALUES) }),
+    );
+    if (result.outcome !== 'created') throw new Error('expected a created product');
+    return result.product;
+  };
+
+  const patch = (productId: string, values: Record<string, unknown>) =>
+    inTenant((tx) =>
+      updateProduct(tx, {
+        productId,
+        values: values,
+        hashOf: (merged) => testHash(merged),
+      }),
+    );
+
+  it('applies the patch and leaves everything else alone', async () => {
+    const product = await seed();
+
+    const result = await patch(product.id, { priceCents: 4900 });
+
+    expect(result.outcome).toBe('updated');
+    if (result.outcome !== 'updated') return;
+
+    expect(result.product.priceCents).toBe(4900);
+    /*
+     * The fields the patch did not mention. A merge that spread `undefined`
+     * over the row would blank every one of them, and the damage would show in
+     * the hash before it showed in the data.
+     */
+    expect(result.product.name).toBe(VALUES.name);
+    expect(result.product.sku).toBe(VALUES.sku);
+  });
+
+  it('queues nothing when the change is invisible to the model', async () => {
+    /*
+     * **The row's whole point, and the only place it can be proved.** A seller
+     * correcting stock or fixing a price edits rows constantly; embedding every
+     * one of those is a bill that tracks how often people use the product
+     * rather than what is in it.
+     */
+    const product = await seed();
+    await useTenant(db, tenantId);
+    const before = await jobCount();
+
+    const result = await patch(product.id, { priceCents: 9900, stockQty: 3 });
+
+    expect(result).toMatchObject({ outcome: 'updated', reindexed: false });
+
+    await useTenant(db, tenantId);
+    expect(await jobCount()).toBe(before);
+  });
+
+  it('leaves the embedding state alone when nothing was re-embedded', async () => {
+    const product = await seed();
+
+    // Pretend the worker finished, which is the state a real catalogue is in.
+    await useTenant(db, tenantId);
+    await db.execute(
+      sql`update products set embedding_state = 'INDEXED' where id = ${product.id}::uuid`,
+    );
+
+    const result = await patch(product.id, { priceCents: 1234 });
+
+    if (result.outcome !== 'updated') throw new Error('expected an update');
+    /*
+     * A price edit must not make a wine look unindexed. Setting `STALE`
+     * unconditionally would be the easy implementation and would tell every
+     * seller their catalogue needed rebuilding after every price change.
+     */
+    expect(result.product.embeddingState).toBe('INDEXED');
+  });
+
+  it('queues exactly one job when the change reaches the model', async () => {
+    const product = await seed();
+    await useTenant(db, tenantId);
+    const before = await jobCount();
+
+    const result = await patch(product.id, { tastingNotes: 'Completely different notes.' });
+
+    expect(result).toMatchObject({ outcome: 'updated', reindexed: true });
+
+    await useTenant(db, tenantId);
+    expect(await jobCount()).toBe(before + 1);
+
+    const rows = await db.execute(
+      sql`select payload from outbox where aggregate_id = ${product.id}::uuid order by id desc limit 1`,
+    );
+    expect(([...rows][0] as { payload: { reason: string } }).payload).toEqual({
+      reason: 'updated',
+    });
+  });
+
+  it('marks a re-embedded row STALE rather than PENDING', async () => {
+    const product = await seed();
+    await useTenant(db, tenantId);
+    await db.execute(
+      sql`update products set embedding_state = 'INDEXED' where id = ${product.id}::uuid`,
+    );
+
+    const result = await patch(product.id, { region: 'Toscana' });
+
+    if (result.outcome !== 'updated') throw new Error('expected an update');
+    /*
+     * The distinction P1-40's grid shows a seller. `PENDING` means this wine
+     * has never been indexed and cannot be recommended yet; `STALE` means it is
+     * findable under its previous description while the new one is built.
+     * Collapsing them would tell somebody their catalogue had gone dark during
+     * an ordinary edit.
+     */
+    expect(result.product.embeddingState).toBe('STALE');
+  });
+
+  it('stores the new hash, so the next identical edit costs nothing', async () => {
+    const product = await seed();
+
+    await patch(product.id, { region: 'Toscana' });
+    const second = await patch(product.id, { region: 'Toscana' });
+
+    expect(second).toMatchObject({ reindexed: false });
+  });
+
+  it('leaves neither the row nor a job when the transaction fails afterwards', async () => {
+    const product = await seed();
+    await useTenant(db, tenantId);
+    const before = await jobCount();
+
+    await expect(
+      inTenant(async (tx) => {
+        await updateProduct(tx, {
+          productId: product.id,
+          values: { tastingNotes: 'New notes.' },
+          hashOf: (merged) => testHash(merged),
+        });
+        throw new Error('something failed after the update');
+      }),
+    ).rejects.toThrow('something failed after the update');
+
+    await useTenant(db, tenantId);
+    const rows = await db.execute(
+      sql`select tasting_notes from products where id = ${product.id}::uuid`,
+    );
+
+    expect(([...rows][0] as { tasting_notes: string | null }).tasting_notes).toBeNull();
+    expect(await jobCount()).toBe(before);
+  });
+
+  it('answers not-found for another winery product, without a tenant check', async () => {
+    /*
+     * **§3.5 falls out of RLS rather than being coded.** Nothing here compares
+     * the row's tenant to the caller's — the read simply matches nothing under
+     * the other winery policy. The natural hand-written version returns 403,
+     * which tells an attacker the resource exists.
+     */
+    const product = await seed();
+
+    const other = await createTenant(db, 'nosy-winery');
+    const result = await db.transaction(async (tx) => {
+      await tx.execute(sql`select set_config('app.tenant_id', ${other}, true)`);
+      return updateProduct(tx, {
+        productId: product.id,
+        values: { priceCents: 1 },
+        hashOf: () => 'irrelevant',
+      });
+    });
+
+    expect(result).toEqual({ outcome: 'not-found' });
+  });
+
+  it('reports a SKU collision as an outcome', async () => {
+    await seed();
+    const second = await inTenant((tx) =>
+      insertProduct(tx, {
+        tenantId,
+        values: { ...VALUES, sku: 'OTHER-2020' },
+        contentHash: testHash(VALUES),
+      }),
+    );
+    if (second.outcome !== 'created') throw new Error('expected a created product');
+
+    expect(await patch(second.product.id, { sku: VALUES.sku })).toEqual({
+      outcome: 'duplicate-sku',
+    });
   });
 });
