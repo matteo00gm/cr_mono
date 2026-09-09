@@ -241,3 +241,23 @@ describe('a SKU that is already taken', () => {
     }
   });
 });
+
+describe('the fields a client must never write', () => {
+  it.each([
+    ['status', { status: 'ARCHIVED' }],
+    ['embeddingState', { embeddingState: 'INDEXED' }],
+    ['contentHash', { contentHash: 'b'.repeat(64) }],
+  ])('strips %s on create too', async (field, extra) => {
+    /*
+     * The create path already overrode `contentHash` and `embeddingState` after
+     * spreading the body, so this was not reachable here — but `status` was,
+     * and relying on one call site to remember is what the contract change
+     * replaced. Asserted on both paths so neither can regress alone.
+     */
+    commands.length = 0;
+
+    await post(app('EDITOR'), { ...VALID, ...extra });
+
+    expect(commands[0]?.values).not.toHaveProperty(field);
+  });
+});

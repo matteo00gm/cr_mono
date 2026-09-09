@@ -3408,6 +3408,23 @@ It also delivers the contract testing promised in §6.1 as a side effect: a brea
 
 **Files.** `apps/dashboard/src/features/catalog/ProductForm.tsx`, tests. **~180 lines.** *Split if it grows: fieldsets into subcomponents.*
 
+**As built — the row's "validate with the P0-42 schema" cannot be done directly, and working out why found a hole.** `packages/api-client` depends on `zod` and nothing else, deliberately: the dashboard and the widget bundle it, and importing `productInsert` would pull `drizzle-orm` and the whole schema into a browser. So the request shape is written by hand there — a departure from "refine, never redefine" — and `apps/api/test/product-contracts.test.ts` pins it field-for-field against the derived contract, in the one package where both are importable. Without that test the departure would be an invitation to drift, and the symptom is a field the form offers and the server strips: a value a seller typed and lost, with no error to explain it.
+
+**Writing the wire shape out is what exposed the hole.** `productInsert` omitted only `id`, `tenant_id` and the timestamps — so a client could send `status`, `embedding_state` and `content_hash`, and each does something different if it gets through:
+
+- **`status` is the one with teeth.** Archiving through `PATCH` sets it *without* deleting the vectors, leaving a wine hidden from its seller and still recommended to visitors. That is precisely the failure P1-04 exists to prevent, reachable by writing a field instead of calling the route.
+- **`embedding_state: INDEXED`** makes a wine claim to be searchable before it has a vector — and a patch that changes nothing the model reads does not overwrite it, so the lie sticks.
+- **`content_hash`** is the re-embedding gate: pinning it means the wine stays findable only under its original description, for ever, silently.
+
+`PRODUCT_SERVER_OWNED` now omits all three, so they are unrepresentable rather than merely refused — the same reasoning as `tenant_id`. Asserted on both write paths, so neither can regress alone.
+
+**Two decisions inside the form itself.**
+
+- **An ambiguous price is refused rather than guessed at.** `1.234` is one thousand two hundred and thirty-four euro to an Italian and a shade over one euro to a parser that assumed decimals; `12,505` is either a twelve-thousand-euro bottle or a third decimal typed by accident. Every rule that picks a side is silently wrong for the other by a factor of a hundred or a thousand, in the direction that still looks plausible on a receipt. So it asks — and the message says *what to write* (`1234` or `1.234,00`) rather than reporting a rule. `1.234,56` and `1,234.56` are not ambiguous and are read normally.
+- **The two pieces of help text are part of the feature, and have tests.** `external_variant_id` says where in Shopify to find it *and* what happens without one — a recommendation that dead-ends at the checkout. `food_pairings` says why specificity helps, with the concrete contrast ("brasato al Barolo" against "carne"), because the seller is the only person who knows the specific answer and the only reason to write it is being told why.
+
+**The mapping is exported and pure**, so what the form *sends* is asserted without rendering anything: a dropped field is a value somebody typed and lost, and testing that through a rendered component tests the rendering as much as the mapping. `parsePriceToCents` is in its own module for the reuse **P1-20** needs — two implementations of "what does 12,50 mean" is how a catalogue ends up with some wines priced in euros and some in cents.
+
 ---
 
 ### P1-02 · Product create endpoint

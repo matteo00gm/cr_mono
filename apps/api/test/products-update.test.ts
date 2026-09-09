@@ -237,3 +237,32 @@ describe('who may call it', () => {
     expect(commands).toEqual([]);
   });
 });
+
+describe('the fields a client must never write', () => {
+  it.each([
+    ['status', { status: 'ARCHIVED' }],
+    ['embeddingState', { embeddingState: 'INDEXED' }],
+    ['contentHash', { contentHash: 'b'.repeat(64) }],
+  ])('strips %s', async (_field, body) => {
+    /*
+     * **Found by the contract-agreement test, not by review**, and each of the
+     * three does something different if it gets through:
+     *
+     * - `status` is the one with teeth. Archiving here would set it *without*
+     *   deleting the vectors, leaving a wine hidden from its seller and still
+     *   recommended to visitors — precisely the failure P1-04 exists to
+     *   prevent, reachable by writing a field instead of calling the route.
+     * - `embeddingState: INDEXED` makes a wine claim to be searchable before it
+     *   has a vector, and a patch that changes nothing the model reads does not
+     *   overwrite it, so the lie sticks.
+     * - `contentHash` is the re-embedding gate: pinning it means the wine stays
+     *   findable only under its original description, for ever, silently.
+     */
+    commands.length = 0;
+
+    const response = await patch(app(), { priceCents: 4900, ...body });
+
+    expect(response.status).toBe(200);
+    expect(commands[0]?.values).toEqual({ priceCents: 4900 });
+  });
+});

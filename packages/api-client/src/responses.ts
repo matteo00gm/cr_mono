@@ -199,6 +199,56 @@ export const productSchema = z.object({
 });
 
 /**
+ * What a client may send when creating or editing a wine (P1-01).
+ *
+ * **Hand-written, and only safe because something checks it.** This package
+ * depends on `zod` and nothing else on purpose — the dashboard and the widget
+ * bundle it, and importing `productInsert` would pull `drizzle-orm` and the
+ * whole schema into a browser. So the wire shape is written out here, which
+ * departs from "refine, never redefine" (P0-42).
+ *
+ * `apps/api/test/product-contracts.test.ts` asserts that this and
+ * `productInsert` accept the same fields and require the same ones. Without
+ * that, a field the form offers and the server strips is a value a seller typed
+ * and lost, with no error to explain it — and a field required here but not
+ * there is a wine nobody can save for a reason that is not real.
+ *
+ * `tenantId`, `id` and the timestamps are absent for the reason P0-42 gives:
+ * they are server-owned, and a body carrying one is either confused or probing.
+ */
+export const productRequest = z.object({
+  sku: z.string().min(1).max(64),
+  externalVariantId: z.string().nullish(),
+  name: z.string().min(1).max(200),
+  producer: z.string().nullish(),
+  vintage: z.number().int().nullish(),
+  wineType: z.string(),
+  grapeVarieties: z.array(z.string()).nullish(),
+  region: z.string().nullish(),
+  denomination: z.string().nullish(),
+  styleTags: z.array(z.string()).nullish(),
+  tastingNotes: z.string().nullish(),
+  foodPairings: z.array(z.string()).nullish(),
+  /** `numeric` on the wire is a string, so 13.50 round-trips exactly. */
+  alcoholPct: z.string().nullish(),
+  priceCents: z.number().int().nonnegative(),
+  currency: z.string(),
+  stockStatus: z.enum(['IN_STOCK', 'OUT_OF_STOCK', 'PREORDER']),
+  stockQty: z.number().int().nonnegative().nullish(),
+  productUrl: z.string().nullish(),
+  imageUrl: z.string().nullish(),
+  /*
+   * `status`, `embeddingState` and `contentHash` are absent, and each for a
+   * concrete reason rather than tidiness — see `PRODUCT_SERVER_OWNED` in
+   * `packages/db/src/contracts.ts`. The short version: archiving through a
+   * field rather than the route would leave the vectors in place, so a wine
+   * would be hidden from its seller and still recommended to visitors.
+   */
+});
+
+export type ProductRequest = z.infer<typeof productRequest>;
+
+/**
  * The created product, returned in full.
  *
  * Not just an id: the server fills in defaults the form never sent — `status`,
