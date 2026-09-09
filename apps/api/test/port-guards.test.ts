@@ -46,8 +46,7 @@ describe('unconfiguredProducts', () => {
         tenantId: TENANT,
         values: { sku: 'BAR-2019', name: 'Barolo' } as never,
       }),
-    update: () =>
-      unconfiguredProducts.update({ tenantId: TENANT, productId: PRODUCT, values: {} }),
+    update: () => unconfiguredProducts.update({ tenantId: TENANT, productId: PRODUCT, values: {} }),
     archive: () => unconfiguredProducts.archive({ tenantId: TENANT, productId: PRODUCT }),
     list: () => unconfiguredProducts.list({ tenantId: TENANT }),
   };
@@ -78,8 +77,7 @@ describe('unconfiguredProducts', () => {
 
 describe('unconfiguredWebhooks', () => {
   const calls: Record<keyof WebhooksPort, () => Promise<unknown>> = {
-    record: () =>
-      unconfiguredWebhooks.record({ eventId: 'evt_1', type: 'email.bounced' } as never),
+    record: () => unconfiguredWebhooks.record({ eventId: 'evt_1', type: 'email.bounced' } as never),
   };
 
   it.each(Object.keys(calls) as (keyof WebhooksPort)[])(
