@@ -185,13 +185,13 @@ jobs:
       - name: Assert the API function receives the email environment
         run: |
           missing=""
-          for key in SST_STAGE EMAIL_FROM RESEND_API_KEY EMAIL_ALLOWLIST; do
+          for key in SST_STAGE EMAIL_FROM RESEND_API_KEY EMAIL_ALLOWLIST RESEND_WEBHOOK_SECRET; do
             if ! grep -qE "^[[:space:]]*$key:" infra/api.ts; then
               missing="$missing $key"
             fi
           done
           if [ -n "$missing" ]; then
-            echo "::error::infra/api.ts does not inject:$missing — apps/api/src/composition.ts reads them, and an absent value degrades silently to the log transport (P0-64, E9)"
+            echo "::error::infra/api.ts does not inject:$missing — apps/api/src/composition.ts reads them, and an absent value degrades silently: the log transport for mail (P0-64, E9), and a webhook endpoint that refuses every bounce for RESEND_WEBHOOK_SECRET (P0-64b, E7)"
             exit 1
           fi
           echo "the API function receives the email environment."
@@ -226,6 +226,24 @@ jobs:
             exit 1
           fi
           echo "reserved concurrency is set."
+
+      # The SPA reaches the bucket only if `sst.config.ts` imports the module
+      # that puts it there. This is the E9 shape exactly: a seam correct on both
+      # sides with nothing joining them, and the symptom of the missing import
+      # is a distribution that serves the *previous* deploy's files forever
+      # while every resource reports success. `typecheck:infra` is local-only
+      # (E3), so a grep is the guard available.
+      - name: Assert the dashboard build is actually deployed
+        run: |
+          if ! grep -q "await import('./infra/dashboard')" sst.config.ts; then
+            echo "::error::sst.config.ts does not import ./infra/dashboard — the SPA build would never reach the bucket, and the distribution would keep serving the previous deploy with nothing failing (P0-58)"
+            exit 1
+          fi
+          if ! grep -q "cacheControl: asset.cacheControl" infra/dashboard.ts; then
+            echo "::error::infra/dashboard.ts does not set cacheControl from the decision in static-assets.ts — an unset header falls to the distribution's 24h defaultTtl, which caches index.html and serves a stale console after every deploy (P0-58)"
+            exit 1
+          fi
+          echo "the dashboard build is wired into the deploy."
 
       # The notification that a dependency wants to run code at install time.
       #

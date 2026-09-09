@@ -90,6 +90,15 @@ export default $config({
     await import('./infra/cdn');
 
     /*
+     * cdn before dashboard: the SPA's objects go into the bucket the
+     * distribution already serves (P0-58). It is a separate module rather than
+     * more of `cdn.ts` because it is the only part of the stack that depends on
+     * a *build artifact* existing — and it fails at synth when one does not,
+     * which is a different kind of failure from anything else here.
+     */
+    await import('./infra/dashboard');
+
+    /*
      * The deploy-time database path (P0-21b). Last, and independent of the
      * others: it is never invoked by a deploy, only created by one. See
      * `infra/migrator.ts` for why running migrations automatically is not

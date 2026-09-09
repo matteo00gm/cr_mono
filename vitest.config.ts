@@ -29,9 +29,9 @@ const NODE_PROJECTS = [
 /** Browser-side code: needs a DOM to render into. */
 const DOM_PROJECTS = ['apps/dashboard', 'apps/widget'];
 
-const project = (root: string, environment: 'node' | 'jsdom') => ({
+const project = (root: string, environment: 'node' | 'jsdom', name?: string) => ({
   test: {
-    name: root.split('/')[1],
+    name: name ?? root.split('/')[1],
     root,
     environment,
     /*
@@ -63,6 +63,19 @@ export default defineConfig({
     projects: [
       ...NODE_PROJECTS.map((root) => project(root, 'node')),
       ...DOM_PROJECTS.map((root) => project(root, 'jsdom')),
+
+      /*
+       * `infra/` is not a package and has no `tsconfig` in the build graph —
+       * `pnpm typecheck:infra` is local-only because it needs `sst install`
+       * first (E3). So its one file that carries a *decision* rather than a
+       * resource declaration is tested here instead: `static-assets.ts` chooses
+       * which files may be cached for a year, and getting that backwards serves
+       * a stale console to everybody with nothing failing (P0-58).
+       *
+       * Named explicitly because the helper derives a name from the second path
+       * segment, and `infra` has only one.
+       */
+      project('infra', 'node', 'infra'),
     ],
     coverage: {
       provider: 'v8',
