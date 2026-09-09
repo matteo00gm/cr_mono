@@ -149,6 +149,18 @@ export default {
           // because the limiter also counts callers who belong to no tenant — so
           // there is no scoped read for a missing context to narrow.
           '|^packages/db/src/rate-limit[.]ts$' +
+          // src/webhooks.ts is exempt from P0-64b, and unlike the two files
+          // above it really does open a connection. A webhook arrives outside
+          // any request — no session, no membership row, no tenant to set — and
+          // both tables it touches are among the handful with no tenant_id and
+          // no policy: `processed_webhooks` because the tenant is derived *from*
+          // the event and may not exist, `email_suppressions` because the
+          // reputation it protects belongs to the sending domain rather than to
+          // one winery. So nothing scoped is read and nothing widens. It is not
+          // a fourth GUC: no setting is set and no policy admits one. A handler
+          // reaching a tenant table from inside it would be a design change,
+          // and would get nothing back.
+          '|^packages/db/src/webhooks[.]ts$' +
           // src/products.ts is exempt from P1-02 on the same terms as audit.ts
           // and invitations.ts: it writes statements and takes the connection
           // from its caller, opening nothing. Its tables *are* tenant-scoped
