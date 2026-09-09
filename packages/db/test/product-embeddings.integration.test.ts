@@ -140,6 +140,28 @@ describe('product_embeddings', () => {
     expect([...rows]).toHaveLength(0);
   });
 
+  it('has an HNSW index on the vector, with the operator class cosine needs', async () => {
+    /*
+     * The half of the plan assertion that cannot flake: the index exists, it is
+     * HNSW, and it is built for the operator the retrieval query uses.
+     *
+     * **`halfvec_cosine_ops` is the load-bearing word.** An index built for L2
+     * (`halfvec_l2_ops`) is a perfectly valid index that the `<=>` operator can
+     * never use, so retrieval would silently fall back to a scan — the same
+     * latency cliff as having no index, with an index in the schema to reassure
+     * whoever goes looking.
+     */
+    const rows = await db.execute(sql`
+      select indexdef from pg_indexes
+      where tablename = 'product_embeddings' and indexname = 'product_embeddings_embedding_hnsw'
+    `);
+
+    const definition = ([...rows][0] as { indexdef?: string } | undefined)?.indexdef ?? '';
+
+    expect(definition).toContain('USING hnsw');
+    expect(definition).toContain('halfvec_cosine_ops');
+  });
+
   it('serves a similarity search from the HNSW index rather than a scan', async () => {
     /*
      * The assertion the plan asks for, set up so it can actually hold.
@@ -150,8 +172,26 @@ describe('product_embeddings', () => {
      * that here: enough rows that the index is cheaper than a sort, and
      * statistics, which means ANALYZE — and ANALYZE requires table ownership,
      * so it runs on an app_migrate connection rather than app_rw.
+     *
+     * **The EXPLAIN itself runs on the admin connection, and that is a fix for
+     * a flake rather than a convenience.** Under RLS the query carries an
+     * implicit `tenant_id = current_setting('app.tenant_id')`, and the planner
+     * cannot estimate the selectivity of a comparison against a STABLE function
+     * — it falls back to a guess derived from `n_distinct`. That guess depends
+     * on how many *other* tenants happen to have rows in the table when ANALYZE
+     * samples it, which depends on which other integration files were
+     * interleaved with this one. Three CI runs on unrelated branches failed
+     * here for exactly that reason, and each passed on a re-run of the same
+     * commit.
+     *
+     * What is asserted is unchanged: given a similarity search, the planner
+     * reaches for the index instead of sorting the table. Whether it still does
+     * so behind a tenant filter is a real production question and a genuinely
+     * data-dependent one — it belongs in a benchmark with a known corpus (P7-03),
+     * not in an equality assertion that has to hold on an empty CI database.
      */
     const migrator = createDbClient(started.roleUrl('app_migrate'), { max: 1 });
+    const admin = createDbClient(started.adminUrl, { max: 1 });
 
     // Its own connection, so it needs its own context. FORCE ROW LEVEL
     // SECURITY applies to the table owner too — which is the whole reason
@@ -173,7 +213,7 @@ describe('product_embeddings', () => {
       `);
       await migrator.db.execute(sql`analyze product_embeddings`);
 
-      const plan = await db.execute(sql`
+      const plan = await admin.db.execute(sql`
         explain (format json)
         select id from product_embeddings
         order by embedding <=> ${randomVector()}::halfvec
@@ -183,6 +223,7 @@ describe('product_embeddings', () => {
       expect(JSON.stringify([...plan][0])).toContain('product_embeddings_embedding_hnsw');
     } finally {
       await migrator.close();
+      await admin.close();
     }
   }, 120_000);
 });
