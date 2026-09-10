@@ -3442,8 +3442,8 @@ It also delivers the contract testing promised in §6.1 as a side effect: a brea
 **As built — the transaction shape, plus two defects the row surfaced.** `POST /v1/dashboard/products` behind `catalog:write`, with the product row and its outbox row written by a single `insertProduct` call inside one `withTenant` transaction. All four tests the row asks for exist, and the atomicity one is asserted the way it has to be — a failure *after* the insert, then a count showing neither row survived.
 
 - **`insertProduct` writes both rows, rather than a route making two calls in order.** The §4.1 guarantee is that a committed product always has a queued embedding job; a product without one is invisible to search, and the seller sees a catalogue that silently lacks it — no error, no failed job, nothing to retry. Two exported calls make that a convention every future route has to remember, and P0-54 is this repository's own evidence for how long a convention like that survives.
-- **`content_hash` is real, not the stub the row permits.** The row says to stub it to a constant and note the dependency on P1-34. A constant makes P1-03's central behaviour — enqueue only if the hash changed — untestable, so the field set is decided now in `packages/core/src/catalog`. What is *in* it matters less than what is out: price, stock, URLs, SKU and currency are all displayed and none is embedded, so a seller adjusting stock daily costs nothing. Both directions are asserted per field, because a hash that moves too easily bills for every stock correction and one that moves too rarely leaves a wine described by an embedding of its previous description.
-- **The hash carries a version.** P1-33 will change how the text is rendered, and a new rendering that left old hashes intact would leave a catalogue half-embedded under two schemes — retrieval would still work and still return plausible results while comparing vectors built from different text. `EMBEDDING_TEXT_VERSION` makes that a deliberate, visible, one-off re-index, and gives **P1-49** something to hang off.
+- **`content_hash` is real, not the stub the row permits.** The row says to stub it to a constant and note the dependency on P1-34. A constant makes P1-03's central behaviour — enqueue only if the hash changed — untestable, so the field set is decided now. What is *in* it matters less than what is out: stock, URLs, SKU and currency are all displayed and none is embedded, so a seller adjusting stock daily costs nothing. Both directions are asserted per field, because a hash that moves too easily bills for every stock correction and one that moves too rarely leaves a wine described by an embedding of its previous description. **P1-33 later corrected two details of this** — arrays now sort, and a price *band* is included — each argued in that row.
+- **The hash carries a version.** P1-33 changes how the text is rendered, and a new rendering that left old hashes intact would leave a catalogue half-embedded under two schemes — retrieval would still work and still return plausible results while comparing vectors built from different text. `EMBEDDING_TEXT_VERSION` makes that a deliberate, visible, one-off re-index, and gives **P1-49** something to hang off.
 - **A duplicate SKU is an outcome, not an exception**, on P0-52's reasoning: what a refusal means to a caller is HTTP-shaped and `packages/db` has no HTTP. The route answers **409** and names the SKU — a disclosure decision rather than a convenience, since the uniqueness is scoped to the caller's own winery and says nothing about anybody else's catalogue, unlike a cross-tenant id (§3.5). The constraint name never reaches the caller.
 - **No audit row, deliberately.** P1-28 audits an *import*, which is one act over hundreds of rows. A row per product save would bury the entries that matter — a role change, a member removal — under ordinary catalogue churn.
 
@@ -3930,6 +3930,15 @@ The connection arithmetic that produces 5: `db.t4g.micro` allows roughly 100 con
 
 **Files.** `packages/core/src/rag/embedding-text.ts`, tests. **~110 lines.**
 
+**As built — shipped with P1-34, because the text and its hash are one thing.** The hash is `sha256` over the *text itself*, which is what makes it meaningful rather than merely stable: two products with the same hash produce the same document, so re-embedding one cannot produce a different vector. A hash over some other projection of the row would usually agree with the text and occasionally not, and that failure is a wine described by an embedding of its previous description.
+
+**Two corrections to P1-02, which decided the field set early because P1-03 needed something to gate on.**
+
+- **Arrays are sorted now, where P1-02 preserved the author's order.** That decision argued a reorder is not free, because the text handed to the model is built in that order — and it rested on an assumption this row removes. Once the *text* sorts, both orders produce the same document and the same vector, so charging for a reorder was charging for nothing. `localeCompare` is deliberately not used: a sort that depends on the runtime's locale is exactly the nondeterminism this file exists to exclude.
+- **A price *band* is included, where P1-02 excluded price entirely.** The case for excluding it is that a price edit must not cost an embedding. The case for the band is that "qualcosa sotto i venti euro" is one of the commonest things a visitor says, and a retrieval layer that cannot see price answers it by accident or not at all. The band reconciles them: an edit *within* a band costs nothing — 18,50 to 19,00 is the ordinary case — while crossing one re-embeds, which is rare and correct, because the wine has moved into a different answer. The boundaries are round numbers a person would say out loud rather than quantiles, because a band nobody would name is a band the model cannot be asked about.
+
+**Every line is labelled**, and that is not formatting: the labels are what let the model tell a *region* called Barolo from a *wine* called Barolo, which is most of what a wine query turns on. They also give the rendered text the same protection the hash already had — a producer typed into a name field cannot produce the same document as the two filled in properly.
+
 ---
 
 ### P1-34 · `content_hash` + skip-unchanged
@@ -3939,6 +3948,12 @@ The connection arithmetic that produces 5: `db.t4g.micro` allows roughly 100 con
 **Tests.** Re-running the worker on an unchanged product makes zero provider calls (assert on a spy — the call count *is* the money). Changing a sommelier field triggers exactly one.
 
 **Files.** `content-hash.ts`, worker change, tests. **~80 lines.**
+
+**As built — the hash shipped with P1-33; `shouldEmbed` is here; the worker's use of it is P1-37.**
+
+**The second check earns its place, and the reason is that it guards something different from the first.** P1-03 already avoids enqueueing when the hash did not move, which is what stops ordinary edits costing money. This one stops a *redelivered* SQS message, a manual reindex of an unchanged wine, and any future path that enqueues without thinking — and the provider call is the part that costs. A stored hash of `null` is not "unchanged": it means the row has never been embedded, and it must embed.
+
+`product_embeddings.content_hash` already exists (P0-27), so there is no migration here: the comparison is between the product's hash and the hash stored on the vector, which is the only pair that answers "is this vector still a description of this wine".
 
 ---
 

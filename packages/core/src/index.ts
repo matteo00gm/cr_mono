@@ -8,4 +8,4 @@ export * from './email/index.js';
 export * from './invitations.js';
 export * from './rate-limit.js';
 export * from './webhooks/index.js';
-export * from './catalog/index.js';
+export * from './rag/index.js';
