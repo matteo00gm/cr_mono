@@ -140,16 +140,62 @@ describe('product_embeddings', () => {
     expect([...rows]).toHaveLength(0);
   });
 
-  it('serves a similarity search from the HNSW index rather than a scan', async () => {
+  it('has an HNSW index on the vector, with the operator class cosine needs', async () => {
     /*
-     * The assertion the plan asks for, set up so it can actually hold.
+     * The half of the plan assertion that cannot flake: the index exists, it is
+     * HNSW, and it is built for the operator the retrieval query uses.
      *
-     * A silently unused index is a latency cliff nobody notices until a tenant
-     * with a real catalog arrives — retrieval keeps returning correct results
-     * and simply gets slower. Two things are needed for the planner to reveal
-     * that here: enough rows that the index is cheaper than a sort, and
-     * statistics, which means ANALYZE — and ANALYZE requires table ownership,
-     * so it runs on an app_migrate connection rather than app_rw.
+     * **`halfvec_cosine_ops` is the load-bearing word.** An index built for L2
+     * (`halfvec_l2_ops`) is a perfectly valid index that the `<=>` operator can
+     * never use, so retrieval would silently fall back to a scan — the same
+     * latency cliff as having no index, with an index in the schema to reassure
+     * whoever goes looking.
+     */
+    const rows = await db.execute(sql`
+      select indexdef from pg_indexes
+      where tablename = 'product_embeddings' and indexname = 'product_embeddings_embedding_hnsw'
+    `);
+
+    const definition = ([...rows][0] as { indexdef?: string } | undefined)?.indexdef ?? '';
+
+    expect(definition).toContain('USING hnsw');
+    expect(definition).toContain('halfvec_cosine_ops');
+  });
+
+  it('can serve the ordering from the HNSW index at all', async () => {
+    /*
+     * **The failure this catches is the one that has actually happened**, and
+     * migration 0011's own comment records it: with an l2 index in place, the
+     * cosine query plans as a Seq Scan. An index built for the wrong operator
+     * class is a valid index that `<=>` can never use, so retrieval silently
+     * falls back to sorting the table — a latency cliff nobody notices until a
+     * tenant with a real catalogue arrives.
+     *
+     * Asserted by taking the alternatives away rather than by hoping the
+     * planner prefers the index. With `enable_seqscan` and `enable_sort` off,
+     * the only remaining way to produce rows in distance order is an ordered
+     * index scan on the vector — so if the index cannot serve the operator, the
+     * plan falls back to a disabled node and this fails. Disabled nodes are
+     * costed at 1e10, not forbidden, so the planner still answers honestly.
+     *
+     * **This is not the same claim as "the planner chooses it", and the
+     * difference is why the previous version of this test flaked.** That
+     * version asserted the *default* plan, and at this data size the two plans
+     * are within five per cent of each other. From the run that failed:
+     *
+     *     Seq Scan  cost 212.02, rows 5001
+     *     Sort      cost 324.55
+     *     Limit     cost 312.06   <- what the index had to beat
+     *
+     * A margin that thin is decided by the index's page count, which varies
+     * with five thousand random vectors, so the outcome was a coin flip. It
+     * came up tails on four CI runs across branches that touch nothing near
+     * this file, and heads on a re-run of each of those same commits.
+     *
+     * Whether the planner *prefers* the index is a real question and a
+     * genuinely data-dependent one — it is about the corpus, not about our
+     * schema — so it belongs in P7-03's benchmark, where the row count is
+     * chosen to answer it rather than to make an equality assertion hold.
      */
     const migrator = createDbClient(started.roleUrl('app_migrate'), { max: 1 });
 
@@ -173,12 +219,17 @@ describe('product_embeddings', () => {
       `);
       await migrator.db.execute(sql`analyze product_embeddings`);
 
-      const plan = await db.execute(sql`
-        explain (format json)
-        select id from product_embeddings
-        order by embedding <=> ${randomVector()}::halfvec
-        limit 8
-      `);
+      const plan = await db.transaction(async (tx) => {
+        await tx.execute(sql`set local enable_seqscan = off`);
+        await tx.execute(sql`set local enable_sort = off`);
+
+        return tx.execute(sql`
+          explain (format json)
+          select id from product_embeddings
+          order by embedding <=> ${randomVector()}::halfvec
+          limit 8
+        `);
+      });
 
       expect(JSON.stringify([...plan][0])).toContain('product_embeddings_embedding_hnsw');
     } finally {
