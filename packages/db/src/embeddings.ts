@@ -199,10 +199,19 @@ export const writeEmbeddingStatus = async (
       embeddingError: status.error,
       embeddingAttempts: status.attempts,
       /*
-       * `updated_at` is deliberately not touched. It means "when did the
-       * seller last change this wine", and a background job moving it would
-       * make the catalogue's sort-by-recently-edited useless the first time a
-       * bulk re-index ran.
+       * **`updated_at` is not set here and moves anyway**, and that is worth
+       * knowing rather than discovering. P0-22 puts a `BEFORE UPDATE` trigger
+       * on every table: `NEW.updated_at = now()`, unconditionally, so no
+       * statement can decline it and supplying the old value does not help.
+       *
+       * The consequence is real and is recorded in the plan. `updatedAt` is a
+       * sortable column (P1-06), so a bulk re-index moves every wine to the top
+       * of "recently edited" without a seller having touched one. The column
+       * means "when did this row last change" and the trigger enforces exactly
+       * that; what the catalogue actually wants to sort by is "when did *I*
+       * last change it", which is a different fact the schema does not hold.
+       * Fixing it means a separate column or a narrower trigger, not a
+       * statement here quietly opting out.
        */
     })
     .where(eq(products.id, productId));

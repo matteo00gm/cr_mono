@@ -276,12 +276,25 @@ describe('the state and the vector', () => {
     });
   });
 
-  it('leaves updated_at alone, because a background job is not an edit', async () => {
+  it('moves updated_at, because P0-22’s trigger owns that column', async () => {
     /*
-     * `updated_at` means "when did the seller last change this wine". A
-     * re-index moving it makes the catalogue's sort-by-recently-edited useless
-     * the first time a bulk re-embed runs — and the seller has no way to tell
-     * why every wine suddenly looks freshly touched.
+     * **Written the other way first, and CI was right.** The statement does not
+     * set `updated_at`; the database does. P0-22 puts a `BEFORE UPDATE` trigger
+     * on every table — `NEW.updated_at = now()`, unconditionally — so no
+     * statement can decline it, and supplying the old value would not help
+     * either.
+     *
+     * The consequence is real and is recorded in the plan rather than worked
+     * around here. `updatedAt` is a sortable column (P1-06), so a bulk re-index
+     * moves every wine to the top of "recently edited" without a seller having
+     * touched one. The column means "when did this row last change" and the
+     * trigger enforces precisely that; what the catalogue wants to sort by is
+     * "when did *I* last change it", which the schema does not hold. That needs
+     * a separate column or a narrower trigger — not a statement quietly opting
+     * out of an invariant the whole schema depends on.
+     *
+     * Asserted rather than left implicit, so the day somebody adds the
+     * distinction this test is what tells them it changed.
      */
     await useTenant(db, tenantId);
     const before = await db.execute(
@@ -299,6 +312,6 @@ describe('the state and the vector', () => {
       sql`select updated_at from products where id = ${productId}::uuid`,
     );
 
-    expect(String([...after][0]?.updated_at)).toBe(String([...before][0]?.updated_at));
+    expect(String([...after][0]?.updated_at)).not.toBe(String([...before][0]?.updated_at));
   });
 });

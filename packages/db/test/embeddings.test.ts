@@ -201,12 +201,11 @@ describe('writeEmbeddingStatus', () => {
     });
   });
 
-  it('does not touch updated_at', async () => {
+  it('does not name updated_at, which the database owns anyway', async () => {
     /*
-     * `updated_at` means "when did the seller last change this wine". A
-     * background job moving it makes sort-by-recently-edited useless the first
-     * time a bulk re-index runs, and the seller cannot tell why every wine
-     * suddenly looks freshly touched.
+     * P0-22's `BEFORE UPDATE` trigger sets it unconditionally, so naming it
+     * here would be a statement that looks like it decides something and does
+     * not. The integration suite asserts what actually happens to the column.
      */
     const fake = fakeTx();
 
