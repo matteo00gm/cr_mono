@@ -162,36 +162,42 @@ describe('product_embeddings', () => {
     expect(definition).toContain('halfvec_cosine_ops');
   });
 
-  it('serves a similarity search from the HNSW index rather than a scan', async () => {
+  it('can serve the ordering from the HNSW index at all', async () => {
     /*
-     * The assertion the plan asks for, set up so it can actually hold.
+     * **The failure this catches is the one that has actually happened**, and
+     * migration 0011's own comment records it: with an l2 index in place, the
+     * cosine query plans as a Seq Scan. An index built for the wrong operator
+     * class is a valid index that `<=>` can never use, so retrieval silently
+     * falls back to sorting the table — a latency cliff nobody notices until a
+     * tenant with a real catalogue arrives.
      *
-     * A silently unused index is a latency cliff nobody notices until a tenant
-     * with a real catalog arrives — retrieval keeps returning correct results
-     * and simply gets slower. Two things are needed for the planner to reveal
-     * that here: enough rows that the index is cheaper than a sort, and
-     * statistics, which means ANALYZE — and ANALYZE requires table ownership,
-     * so it runs on an app_migrate connection rather than app_rw.
+     * Asserted by taking the alternatives away rather than by hoping the
+     * planner prefers the index. With `enable_seqscan` and `enable_sort` off,
+     * the only remaining way to produce rows in distance order is an ordered
+     * index scan on the vector — so if the index cannot serve the operator, the
+     * plan falls back to a disabled node and this fails. Disabled nodes are
+     * costed at 1e10, not forbidden, so the planner still answers honestly.
      *
-     * **The EXPLAIN itself runs on the admin connection, and that is a fix for
-     * a flake rather than a convenience.** Under RLS the query carries an
-     * implicit `tenant_id = current_setting('app.tenant_id')`, and the planner
-     * cannot estimate the selectivity of a comparison against a STABLE function
-     * — it falls back to a guess derived from `n_distinct`. That guess depends
-     * on how many *other* tenants happen to have rows in the table when ANALYZE
-     * samples it, which depends on which other integration files were
-     * interleaved with this one. Three CI runs on unrelated branches failed
-     * here for exactly that reason, and each passed on a re-run of the same
-     * commit.
+     * **This is not the same claim as "the planner chooses it", and the
+     * difference is why the previous version of this test flaked.** That
+     * version asserted the *default* plan, and at this data size the two plans
+     * are within five per cent of each other. From the run that failed:
      *
-     * What is asserted is unchanged: given a similarity search, the planner
-     * reaches for the index instead of sorting the table. Whether it still does
-     * so behind a tenant filter is a real production question and a genuinely
-     * data-dependent one — it belongs in a benchmark with a known corpus (P7-03),
-     * not in an equality assertion that has to hold on an empty CI database.
+     *     Seq Scan  cost 212.02, rows 5001
+     *     Sort      cost 324.55
+     *     Limit     cost 312.06   <- what the index had to beat
+     *
+     * A margin that thin is decided by the index's page count, which varies
+     * with five thousand random vectors, so the outcome was a coin flip. It
+     * came up tails on four CI runs across branches that touch nothing near
+     * this file, and heads on a re-run of each of those same commits.
+     *
+     * Whether the planner *prefers* the index is a real question and a
+     * genuinely data-dependent one — it is about the corpus, not about our
+     * schema — so it belongs in P7-03's benchmark, where the row count is
+     * chosen to answer it rather than to make an equality assertion hold.
      */
     const migrator = createDbClient(started.roleUrl('app_migrate'), { max: 1 });
-    const admin = createDbClient(started.adminUrl, { max: 1 });
 
     // Its own connection, so it needs its own context. FORCE ROW LEVEL
     // SECURITY applies to the table owner too — which is the whole reason
@@ -213,17 +219,21 @@ describe('product_embeddings', () => {
       `);
       await migrator.db.execute(sql`analyze product_embeddings`);
 
-      const plan = await admin.db.execute(sql`
-        explain (format json)
-        select id from product_embeddings
-        order by embedding <=> ${randomVector()}::halfvec
-        limit 8
-      `);
+      const plan = await db.transaction(async (tx) => {
+        await tx.execute(sql`set local enable_seqscan = off`);
+        await tx.execute(sql`set local enable_sort = off`);
+
+        return tx.execute(sql`
+          explain (format json)
+          select id from product_embeddings
+          order by embedding <=> ${randomVector()}::halfvec
+          limit 8
+        `);
+      });
 
       expect(JSON.stringify([...plan][0])).toContain('product_embeddings_embedding_hnsw');
     } finally {
       await migrator.close();
-      await admin.close();
     }
   }, 120_000);
 });

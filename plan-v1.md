@@ -5740,6 +5740,10 @@ Reuse P5-03's HMAC verification and P5-04's `processed_webhooks` idempotency. Hi
 
 **Files.** `load/chat.js`, CI nightly job. **~110 lines.**
 
+**Added here from P0-27.** *Does the planner actually choose the HNSW index, at a corpus size a real seller has?* `product-embeddings.integration.test.ts` used to assert that on 5,000 synthetic rows, and at that size the two plans are within five per cent — Seq Scan 212.02, Sort 324.55, Limit 312.06, against an index whose estimated cost moves with its page count and therefore with five thousand random vectors. It came up the wrong way on four CI runs across branches touching nothing near it, and the right way on a re-run of each of those same commits. That is not a flaky test, it is a coin flip written as an equality assertion.
+
+What stayed in the correctness suite is the failure that has actually happened and cannot flake: the index exists, it is `hnsw`, it is built with `halfvec_cosine_ops`, and with `enable_seqscan`/`enable_sort` off the planner *can* serve the ordering from it. Migration 0011's own comment records why that matters — with an l2 index in place, the cosine query plans as a Seq Scan. **Which plan wins on cost belongs here**, with a row count chosen to answer the question rather than to make an assertion hold.
+
 ---
 
 ### P7-04 · k6: abuse scenario
