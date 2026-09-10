@@ -3952,6 +3952,20 @@ The connection arithmetic that produces 5: `db.t4g.micro` allows roughly 100 con
 
 **Files.** `infra/queue.ts`. **~70 lines.**
 
+**As built.** The concurrency argument is the row's, unchanged, and `ScalingConfig.MaximumConcurrency: 5` is set. Four departures.
+
+**The numbers live in `infra/queue-config.ts`, not in `queue.ts`.** Nothing can import `queue.ts` outside a deploy — it constructs SST resources at module load and needs `$app` and the `sst.*` globals — so every figure in it would have been checked by nobody. The two that fail *silently* are now asserted both by a unit test and at synth time: a visibility timeout under the handler's own budget produces duplicate embeddings and no error, and a concurrency raised on its own exhausts `max_connections` while the symptom reads as an application fault. `assertConnectionBudget` refuses the realistic mistake — somebody raising the worker's concurrency because the queue is backing up.
+
+**`visibilityTimeout` is 6× the worker's 300s, and the multiple is derived rather than written twice.** SST types the Lambda timeout as a template literal, so the seconds have to appear as a literal there; the module throws at synth if the two disagree. Two constants that must match is exactly how a visibility timeout ends up shorter than the handler it covers.
+
+**The poller is `sst.aws.Cron`, not a bare `EventRule`.** A rule with no target and no invoke permission fires happily and calls nothing — the queue stays full while CloudWatch shows a healthy rule at a hundred per cent success. That is the failure this task exists to remove, one level up.
+
+**The opportunistic invocation after a write is deliberately absent** (it belongs to P1-31's row). The schedule is what makes it optional: if it never fires, nothing is lost, only delayed by up to a minute. Adding it costs the API an `lambda:InvokeFunction` grant and a call on the write path that can fail, paid on every product save.
+
+Two smaller things: `bedrock:InvokeModel` is scoped to the Titan ARN rather than `*` — a wildcard would let a bug here invoke models billed at fifty times the rate, and the bill is the only place that shows up — and the poller holds `sqs:SendMessage` only, never receive or delete, so a poller bug cannot drain the queue without anything being embedded.
+
+**The deploy smoke test is not written.** It needs a deployed stage, and nothing is deployed. The partial-batch-failure half the row asks for is unit-tested in P1-37's suite; the load test stays with P7-03.
+
 ---
 
 ### P1-33 · Embedding text builder
