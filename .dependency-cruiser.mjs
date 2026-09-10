@@ -120,8 +120,28 @@ export default {
         // src/invitations.ts and src/users.ts are exempt on the same terms as
         // audit.ts: they import `sql` to write statements and take the
         // connection from their caller, opening nothing.
+        //
+        // src/with-outbox.ts is exempt from P1-31, and it is the fourth RLS
+        // context the note above says should be treated as a design change. It
+        // was: ADR 0021 records it. What it is not is a fifth un-scoped path —
+        // everything it reaches is still under a policy — but it is the first
+        // context here that *widens* rather than narrows. `withUser` and
+        // `withInvitation` each admit the caller's own rows; this one admits
+        // every tenant's, because draining one queue for the whole platform
+        // has no tenant to be scoped to. What bounds it is that a policy
+        // attaches to one table: it unlocks `outbox` and nothing else, for
+        // SELECT and UPDATE and nothing else, and the worker re-enters
+        // withTenant before it reads anything a seller wrote.
+        //
+        // src/outbox.ts is exempt on the same terms as products.ts — it writes
+        // statements and takes the transaction from its caller — with one
+        // difference worth naming: `runOutboxPass` opens a transaction through
+        // withOutbox rather than receiving one, because the claim, the send and
+        // the release have to be the same transaction for the ordering to mean
+        // anything. It is listed separately so that difference stays visible.
         pathNot:
-          '^packages/db/src/(client|with-tenant|with-user|with-invitation|deploy|auth-db|memberships|members-write|audit|users|invitations)[.]ts$' +
+          '^packages/db/src/(client|with-tenant|with-user|with-invitation|with-outbox|deploy|auth-db|memberships|members-write|audit|users|invitations)[.]ts$' +
+          '|^packages/db/src/outbox[.]ts$' +
           '|^packages/db/src/email-suppressions[.]ts$' +
           // src/rate-limit.ts is exempt from P2-02 on the same terms: it writes a
           // statement and takes the connection from its caller. Its table has no

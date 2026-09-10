@@ -253,6 +253,20 @@
       "when": 1788654188570,
       "tag": "0035_embedding_diagnostics",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1788654188571,
+      "tag": "0036_outbox_poller_rls",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1788654188572,
+      "tag": "0037_outbox_no_delete",
+      "breakpoints": true
     }
   ]
 }
