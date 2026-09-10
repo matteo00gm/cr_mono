@@ -105,6 +105,9 @@ importers:
       '@catalogorosso/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
+      '@catalogorosso/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@catalogorosso/security':
         specifier: workspace:*
         version: link:../../packages/security

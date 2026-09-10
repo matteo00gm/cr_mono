@@ -74,3 +74,77 @@ body {
      session check feel like a wait. */
   min-height: 2rem;
 }
+
+/* Completeness indicator (P1-13).
+   Colour carries the band, and never carries it alone: the percentage and the
+   band's own words are always present. A seller with a red-green deficiency —
+   or a seller who has turned colour off — reads exactly what everyone else
+   does. */
+.cr-completeness {
+  --cr-completeness-colour: var(--cr-ink-soft);
+
+  display: block;
+  font-size: 0.875rem;
+}
+
+.cr-completeness--sparse {
+  --cr-completeness-colour: var(--cr-wine);
+}
+
+.cr-completeness--partial {
+  --cr-completeness-colour: #b45309;
+}
+
+.cr-completeness--rich {
+  --cr-completeness-colour: #15803d;
+}
+
+.cr-completeness__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+
+.cr-completeness__title {
+  color: var(--cr-ink-soft);
+}
+
+.cr-completeness__score {
+  font-variant-numeric: tabular-nums;
+  color: var(--cr-completeness-colour);
+  font-weight: 600;
+}
+
+.cr-completeness__track {
+  display: block;
+  height: 6px;
+  border-radius: var(--cr-radius);
+  background: var(--cr-line);
+  overflow: hidden;
+}
+
+.cr-completeness__fill {
+  display: block;
+  height: 100%;
+  background: var(--cr-completeness-colour);
+  /* No transition: this updates while somebody types, and an animated bar
+     chasing each keystroke is movement in the corner of the eye rather than
+     feedback. */
+}
+
+.cr-completeness__hint {
+  margin: 6px 0 0;
+  color: var(--cr-ink-soft);
+}
+
+.cr-completeness--compact {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cr-completeness--compact .cr-completeness__track {
+  width: 64px;
+  flex: none;
+}

@@ -3696,6 +3696,18 @@ What did ship:
 
 **Files.** `CompletenessIndicator.tsx`, tests. **~90 lines.**
 
+**As built.** A bar rather than a ring — a ring is harder to read at a glance in a grid cell, and the grid is where the gap is actually visible. Four things the row did not price.
+
+**The dashboard cannot import `@catalogorosso/core`.** The package depends on `@catalogorosso/db` and Better Auth, so one barrel import in a Preact component drags `drizzle-orm`, the whole schema and an auth server into a file a visitor downloads — nothing fails, the build succeeds, the bundle is several hundred kilobytes larger than anybody intended. Same reason `ProductForm` validates against `api-client` rather than the table contracts. So `packages/core` gained a `./completeness` **subpath export**, the mechanism `@catalogorosso/db/auth` already uses, resolving to one file that imports nothing. A new boundary rule, `no-core-barrel-in-browser-bundles`, refuses the barrel from `apps/dashboard` and `apps/widget` — and was verified by importing the barrel and watching it fail.
+
+**One component, two variants**, not two components. `bar` for the form and `compact` for the grid cell: a seller fixing one wine at a time never sees that forty of them are sparse, and a column does. Two components would be two places for the bands to drift apart.
+
+**The bar is decorative and the announcement carries everything.** A `progressbar` with only `aria-valuenow` is read out as "47", which could be anything, so `aria-valuetext` carries the percentage *and* the band's words. The hint is `aria-live="polite"` because it changes while the seller types — without it a screen-reader user fills in the pairings field and is told nothing happened — and polite rather than assertive so it does not interrupt the field they are still in. Colour is never the only signal: the percentage and the band's own words are always present.
+
+**It sits above the Sommelier fieldset**, not at the end of the form. The score is almost entirely made of that section's fields, so the prompt goes where the work is; a bar at the bottom is read after somebody has already decided they are finished.
+
+The form's values are all strings — arrays comma-joined — and `completenessOf` reads them directly. A test renders the real form and types into it, because that is the one thing neither unit suite can show: if the score expected arrays it would report zero for every wine in the editor, for ever, and both suites would still pass.
+
 ---
 
 ### P1-14 · Paste handler (TSV)
