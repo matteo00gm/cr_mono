@@ -9,3 +9,4 @@ export * from './invitations.js';
 export * from './rate-limit.js';
 export * from './webhooks/index.js';
 export * from './rag/index.js';
+export * from './completeness.js';

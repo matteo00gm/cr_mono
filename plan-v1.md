@@ -3676,6 +3676,16 @@ What did ship:
 
 **Files.** `packages/core/src/completeness.ts`, tests. **~90 lines.**
 
+**As built.** The weighting and the shape are the row's. Three decisions it did not name.
+
+**`name`, `wine_type` and `price_cents` are not scored.** They are NOT NULL, so every product has them — scoring them would put a constant under every wine, and a score whose floor is 30 tells a seller their empty product is a third of the way there. The scale has to start at zero for an empty product or the number is a reassurance rather than a prompt.
+
+**The two heavy fields come to 47 of 100, deliberately just under half.** The first draft of the test asserted they were worth more than everything else combined, and the numbers did not support it — which is the useful kind of failing test. More than half would say a wine with pairings and notes and nothing else is better described than one carrying grape, region, denomination, producer, style, vintage and alcohol; a visitor asking for "un rosso piemontese" needs the second one. Under half keeps both halves worth filling in while still making the pairing fields the ones that move the number most.
+
+**Absent, null, `''`, `'   '` and `[]` are one thing.** A field cleared to empty and a field never filled in describe the same wine, so scoring them differently would score two identical catalogues differently — and whitespace especially, because three spaces in a tasting note describes nothing and rewarding it makes the score gameable by accident. `0` counts as present: no field reaches it today, and the rule is worth stating before one does.
+
+`bandOf` and `FIELD_LABELS` ship here rather than in P1-13, so the boundary a colour uses and the boundary the score uses cannot drift, and so a missing label is a typecheck error rather than "Aggiungi undefined" in front of a seller.
+
 ---
 
 ### P1-13 · Completeness indicator UI
