@@ -3965,6 +3965,10 @@ The connection arithmetic that produces 5: `db.t4g.micro` allows roughly 100 con
 
 **Files.** `packages/core/src/rag/embedding-provider.ts`, tests. **~60 lines.**
 
+**As built — and it gained a second assertion the row does not ask for.** `assertProviderFitsColumn` is the row's dimension check, made a *boot* failure for the reason the row gives: a mismatch that reached the database surfaces as a DLQ full of products that look like embedding failures (P1-50's triage) rather than as one wrong number.
+
+`assertBatchAligned` is the addition, and it earns its five lines because its failure mode does not throw. **A response one element short pairs every vector after the gap with the wrong product**, so each wine ends up described by its neighbour — retrieval works, the answers are quietly wrong, and nothing points at the cause. Every provider promises not to do this; the check is what makes the promise checkable.
+
 ---
 
 ### P1-36 · Titan V2 adapter
@@ -3974,6 +3978,16 @@ The connection arithmetic that produces 5: `db.t4g.micro` allows roughly 100 con
 **Tests.** Integration test behind a flag hitting real Bedrock (dimension, normalisation) plus unit tests with a mocked client for batching, retry and truncation.
 
 **Files.** `packages/core/src/rag/providers/titan.ts`, tests. **~120 lines.**
+
+**As built — in `apps/worker`, not `packages/core`, because the boundary rule forbids the AWS SDK there.** That rule exists for exactly this case: the moment `core` imports an AWS client, testing anything in that package needs a mocked cloud, and the suites that are fast and trusted stop being either (P0-09). The *port* stays in core, which is what every other module compiles against; the adapter lives beside its only consumer, with the client injected so none of its tests need credentials or a network.
+
+- **`normalize: true` is not a formatting preference.** Normalised vectors make cosine distance equivalent to inner product and keep magnitudes consistent across rows, so a long tasting note does not outrank a short one for having more words in it. pgvector's `<=>` *is* cosine distance, and mixing normalised and unnormalised vectors in one index gives answers that are wrong in a way nothing reports.
+- **The token limit is budgeted in characters**, because tokens are the model's unit and there is no tokeniser here — pulling one in would be a dependency and a version to keep aligned with a remote model. Four characters per token is conservative for Italian, and being conservative costs a slightly shorter tail on a very long note where being wrong the other way costs a rejected call the retry loop then repeats.
+- **Truncation cuts at a sentence boundary**, and the reason is not tidiness: a hard cut can end on a fragment that inverts the clause before it — a note ending "non adatto a" says the opposite of what the seller wrote. **The first version of that ladder was wrong and a test caught it**: `Math.max(lastIndexOf(' '), MAX)` always picks `MAX`, because an index is smaller than a length, so the word-boundary fallback never ran.
+- **Only throttling and transient server errors retry.** A validation error is ours to fix, and repeating it turns one mistake into four before landing the message in the DLQ looking like a provider problem — the confusion P1-50 exists to resolve. The backoff carries full jitter, because a bulk import fans out from every worker at once and a batch that all waits the same interval hits the limit again.
+- **A fixed pool of five, not `Promise.all` over the batch.** Titan embeds one text per call, so `embed(texts)` is a fan-out — and the batch-first signature exists precisely so this loop lives in one place instead of in every caller. The peak in flight is asserted, and so is *order*: a fan-out returning results in completion order would pair each vector with whichever product finished in that slot.
+
+**⚠ The integration test the row asks for is deliberately absent.** It needs Bedrock model access granted in the account, which has not happened — and a test that silently skips when a credential is missing reports success for never running. It belongs with **P1-47**'s bake-off, where real calls are the point.
 
 ---
 
