@@ -120,6 +120,28 @@ export const products = pgTable(
     contentHash: text('content_hash'),
     embeddingState: productEmbeddingState('embedding_state').notNull().default('PENDING'),
 
+    /**
+     * Why the last attempt failed, in the provider's own words (P1-38).
+     *
+     * Free text rather than an enum, for the reason `audit_log.action` is
+     * (P0-31): a provider that invents a new failure next month must not need a
+     * migration before it can be recorded. Cleared on success, so a row that
+     * carries one is a row that is currently broken rather than one that ever
+     * was.
+     */
+    embeddingError: text('embedding_error'),
+
+    /**
+     * How many times the *provider* has been asked and refused.
+     *
+     * **Deliberately not `outbox.attempts`**, which counts how many times the
+     * poller tried to publish a job. A wine published once and failed four
+     * times is a different problem from one published four times and never
+     * embedded, and a single counter cannot tell them apart — which is exactly
+     * the distinction P1-50's triage turns on.
+     */
+    embeddingAttempts: integer('embedding_attempts').notNull().default(0),
+
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },

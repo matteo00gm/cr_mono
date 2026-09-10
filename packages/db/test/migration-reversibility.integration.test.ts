@@ -138,6 +138,10 @@ describe('migration up / down / up', () => {
       ['security_events', 'DELETE'],
       ['processed_webhooks', 'UPDATE'],
       ['processed_webhooks', 'DELETE'],
+      // P1-31. A DELETE is filtered by USING alone, and the poller's branch
+      // lives there — so without this revoke one stray `delete from outbox` in
+      // a scheduled job empties the platform's queue rather than one tenant's.
+      ['outbox', 'DELETE'],
     ];
 
     for (const [table, privilege] of denied) {
@@ -155,6 +159,10 @@ describe('migration up / down / up', () => {
       ['audit_log', 'INSERT'],
       ['usage_events', 'INSERT'],
       ['processed_webhooks', 'INSERT'],
+      // The write the outbox revoke must not have taken with it: every product
+      // write enqueues a job, so an over-broad revoke breaks the catalogue.
+      ['outbox', 'INSERT'],
+      ['outbox', 'UPDATE'],
     ] as const) {
       const rows = await db.execute(
         sql`select has_table_privilege('app_rw', ${table}, ${privilege}) as allowed`,

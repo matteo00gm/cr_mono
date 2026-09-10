@@ -60,6 +60,8 @@ export const storedProduct = (overrides: Partial<ProductRow> = {}): ProductRow =
   status: 'ACTIVE',
   contentHash: 'a'.repeat(64),
   embeddingState: 'PENDING',
+  embeddingError: null,
+  embeddingAttempts: 0,
   createdAt: STORED_AT,
   updatedAt: STORED_AT,
   ...overrides,

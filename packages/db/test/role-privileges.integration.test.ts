@@ -205,6 +205,37 @@ describe('app_rw privileges', () => {
     expect(await hasPrivilege('tenants', 'SELECT')).toBe(true);
   });
 
+  it('cannot delete from the embedding queue', async () => {
+    /*
+     * **P1-31, and it closes the one gap the policy could not.** The poller
+     * reads across tenants through a branch in `tenant_isolation`'s `USING`,
+     * which is safe for SELECT and — because `WITH CHECK` stays tenant-only —
+     * for INSERT and UPDATE too. DELETE is the exception: it is filtered by
+     * `USING` alone, so there is nothing for `WITH CHECK` to refuse, and under
+     * the flag `delete from outbox` matches every tenant's rows.
+     *
+     * A second, narrower policy would have closed it and is exactly what
+     * `rls-coverage.integration.test.ts` forbids — permissive policies are
+     * OR-ed, so a second one bypasses the first rather than qualifying it. The
+     * revoke is both allowed and wider: it covers every path in the
+     * application, not only the one holding the flag.
+     *
+     * Nothing deletes an outbox row today. Retention pruning, when it exists,
+     * belongs to a role that is not app_rw — the P0-30 argument about ledgers,
+     * applied to a queue.
+     */
+    expect(await hasPrivilege('outbox', 'DELETE')).toBe(false);
+  });
+
+  it('may still enqueue and release a job', async () => {
+    // The revoke is narrow on purpose. Every product write enqueues a job, and
+    // the poller marks it published — an over-broad revoke would break the
+    // catalogue rather than protect it.
+    expect(await hasPrivilege('outbox', 'INSERT')).toBe(true);
+    expect(await hasPrivilege('outbox', 'UPDATE')).toBe(true);
+    expect(await hasPrivilege('outbox', 'SELECT')).toBe(true);
+  });
+
   it('cannot rewrite the webhook idempotency ledger', async () => {
     /*
      * `processed_webhooks` never got a revoke, so the default privileges left

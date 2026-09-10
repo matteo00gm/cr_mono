@@ -109,6 +109,75 @@ describe('rls migration', () => {
     expect(tables).not.toContain('email_suppressions');
   });
 
+  it('keeps the outbox WITH CHECK tenant-only, so the poller flag buys a read', () => {
+    /*
+     * **The line that keeps a cross-tenant read from being a cross-tenant
+     * write.** The flag has to appear in USING — draining one queue for the
+     * whole platform has no tenant to be scoped to — and it must not appear in
+     * WITH CHECK, or a transaction holding it could insert a job naming any
+     * tenant and delete anybody's. The poller's own releases work because
+     * `runOutboxPass` sets app.tenant_id from the row it claimed before it
+     * updates, which is the same shape `withInvitation` uses.
+     *
+     * Same rule as memberships, one line below, and for a reason of the same
+     * kind: a GUC that widens reads must never widen writes.
+     */
+    const outbox = RLS_POLICIES.filter((policy) => policy.table === 'outbox');
+    const current = outbox.at(-1);
+
+    expect(current?.using).toContain('app.outbox_poller');
+    expect(current?.withCheck).not.toContain('app.outbox_poller');
+    expect(current?.withCheck).toContain("current_setting('app.tenant_id'");
+  });
+
+  it('replaces the outbox policy rather than adding a second one', () => {
+    /*
+     * **A second permissive policy does not modify the first, it bypasses it**
+     * — Postgres ORs them — and every existing isolation test still passes,
+     * because they only assert what one tenant can see.
+     * `rls-coverage.integration.test.ts` asserts this against a live database;
+     * this is the same rule at the level of the list, where it is cheaper to
+     * notice. So a policy that has to change is dropped and re-created under
+     * its own name.
+     */
+    const sql = rlsMigrationSql('0036_outbox_poller_rls');
+
+    expect(sql).toContain('DROP POLICY IF EXISTS tenant_isolation ON outbox;');
+    expect(sql.match(/CREATE POLICY (\w+)/g)).toEqual(['CREATE POLICY tenant_isolation']);
+  });
+
+  it('reverses a superseding migration to the policy it replaced', () => {
+    /*
+     * **Two silent failures live here, and the second is the dangerous one.**
+     * A down file that drops the new policy and stops leaves the table with no
+     * policy while RLS stays forced — every query returns nothing. One that
+     * disables RLS instead leaves the table with no isolation at all, and
+     * nothing fails. The correct reverse re-creates what was there before.
+     */
+    const down = rlsDownSql('0036_outbox_poller_rls');
+
+    expect(down).toContain('CREATE POLICY tenant_isolation ON outbox');
+    expect(down).not.toContain('app.outbox_poller');
+    expect(down).not.toContain('DISABLE ROW LEVEL SECURITY');
+    expect(down).not.toContain('NO FORCE ROW LEVEL SECURITY');
+  });
+
+  it('does not claim to enable RLS in a migration that only replaces a policy', () => {
+    // Harmless as SQL — the statement is idempotent — and misleading as a
+    // record: a reader would take this file for the place isolation begins.
+    expect(rlsMigrationSql('0036_outbox_poller_rls')).not.toContain('ENABLE ROW LEVEL SECURITY');
+  });
+
+  it('leaves 0025 describing what 0025 actually applied', () => {
+    /*
+     * The superseding entry must not rewrite history. A database that ran 0025
+     * got the boilerplate policy, and the file has to keep saying so — the
+     * whole reason a later policy needs its own migration.
+     */
+    expect(rlsMigrationSql()).toContain('CREATE POLICY tenant_isolation ON outbox');
+    expect(rlsMigrationSql()).not.toContain('app.outbox_poller');
+  });
+
   it('puts a policy added after P0-37 in its own migration', () => {
     /*
      * The property that keeps generation honest as the schema grows. Appending

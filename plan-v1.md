@@ -2955,6 +2955,8 @@ Implementation: `POST .../members/invite` requires `members:manage`, creates an 
 - An **un-scoped connection**, like `@catalogorosso/db/auth`. Rejected: it puts a second table outside RLS to solve a problem inside it, and the connection then exists for anything else to reach. The value of one audited escape hatch is that there is one.
 - A **third scope**, `withInvitation()`, which sets a GUC holding the token's *hash*; the policy on `invitations` admits a row matching it beside the usual tenant branch. The tenant GUC is then set **from the matched row**, in the same transaction — so the membership write is scoped by a value Postgres produced rather than one the request supplied. The P0-48 invariant holds on a path with no membership to read it from.
 
+*(P1-31 later added a fourth, `withOutbox()`, and it is the one that breaks the pattern: it widens instead of narrowing. See ADR 0021.)*
+
 Why a token is safe here where a tenant id would not be: P0-48 is about *identifiers*. Naming a tenant asserts something the caller has no standing to assert; holding 256 bits from a CSPRNG **is** the authorization, the way a session cookie is. Recorded as **ADR 0019**, including the alternative worth revisiting (scoping by the accepting user's address, which would also make a pending-invitations view natural and which widens the read from one row to every invitation ever sent to that person).
 
 **Six further departures, each because building it made the reason concrete:**
@@ -3898,6 +3900,40 @@ Enqueue an outbox row **only for rows where `changed`**. Return per-row outcomes
 
 **Files.** `apps/worker/src/outbox-poller.ts`, tests. **~120 lines.**
 
+**As built.** The claim and the send are both here, and so is a thing the row did not price: **the queue is under RLS, and the poller has no tenant.**
+
+**The fourth RLS scope.** `outbox` carries `tenant_id` and, like every other tenant table, a `tenant_isolation` policy under `ENABLE` + `FORCE`. A poller written the obvious way issues an un-scoped read and gets **zero rows, silently** — a clean pass over an empty queue, once a minute, for ever, while the backlog grows behind it. There is no tenant to scope it to either: draining the platform's queue in one pass is the job, and asking *which* tenants have work is the same cross-tenant read as asking for the work. The same circularity P0-51 hit, from the other side.
+
+So `withOutbox()`, a fourth scope, setting a transaction-local `app.outbox_poller` GUC. Migration `0036_outbox_poller_rls` **replaces** `tenant_isolation` on `outbox` with one that admits it:
+
+```sql
+USING      (tenant_id = app.tenant_id OR app.outbox_poller = 'on')
+WITH CHECK (tenant_id = app.tenant_id)
+```
+
+Recorded as **ADR 0021**, because ADR 0019 says a fourth scope is a design change rather than a configuration one.
+
+**It widens where the previous two narrow, and that is the whole review.** `app.user_id` and `app.invitation_token` admit the caller's *own* rows: a wrong value sees less, never more. This one admits every tenant's outbox rows. What bounds it:
+
+- **`WITH CHECK` stays tenant-only**, exactly as `memberships` does. So the flag buys a *read*: a transaction holding it and nothing else can see the queue and cannot write to it — an INSERT names a tenant it cannot satisfy, and an UPDATE fails the same check. The poller's own releases work because `runOutboxPass` sets `app.tenant_id` **from the row it claimed** before it writes, which is `withInvitation`'s shape.
+- **DELETE is the exception**, and it is closed at the grant. A DELETE is filtered by `USING` alone — no new row, nothing for `WITH CHECK` to refuse — so under the flag `delete from outbox` would match every tenant's rows. Migration `0037` revokes DELETE on `outbox` from `app_rw`: the P0-31 mechanism applied to a queue instead of a ledger, and *wider* than the hole, since it covers every path rather than only the flagged one.
+- The rows are **pointers**. `enqueueEmbedding` writes `{ reason }` and nothing else, so what crosses the boundary is *that* a seller changed something, never what. A future writer putting catalogue content in an outbox payload would make this disclosure large without touching the ADR.
+- The worker re-enters `withTenant(tenantId)` before it reads a product, so nothing downstream of the claim inherits the unlock.
+
+**The first implementation was a second, narrower policy** — `FOR SELECT` plus `FOR UPDATE`, gated on the flag, leaving `tenant_isolation` alone. CI rejected it, and the test that did is one this repository had already written: `rls-coverage.integration.test.ts` asserts no table carries a permissive second policy, because *"a second one added for a plausible reason does not modify `tenant_isolation`, it bypasses it — and every existing isolation test still passes, because they only ever assert what one tenant can see."* Exactly the design, described in advance and refused in advance. The command split it bought is recovered by the `WITH CHECK` asymmetry plus the DELETE revoke, and that combination is tighter.
+
+**A sharp edge the generator now knows about.** `rlsDownSql` emits `DISABLE ROW LEVEL SECURITY` for each policy's table. For a policy that *replaces* an earlier one that is catastrophic in a way nothing reports: reversing `0036` would take `FORCE` down with it and leave `outbox` unscoped — while dropping the new policy and stopping would leave the table with no policy at all and every query returning nothing. `RlsPolicy` gained `supersedes`, and the down file now re-creates the definition it replaced. Two integration assertions that counted `RLS_POLICIES.length` and meant *tables* now de-duplicate, since a table can carry more than one entry once one supersedes another.
+
+**Five smaller departures:**
+
+- **The statements live in `packages/db/src/outbox.ts`**, not in the worker. P0-09 forbids an app importing a driver, and the right answer to that was to put the queries where queries belong. `runOutboxPass` is one function rather than three exported calls, for the same reason `insertProduct` pairs the product with its outbox row: mark-then-send loses a job on every crash in the gap, and that ordering has no failing test — it works perfectly until a process dies.
+- **A bounded drain loop**, not one pass per tick. One claim of 100 per minute drains a 5,000-wine import in most of an hour, with the catalogue half-searchable and nothing reporting a problem. `pollOutbox` keeps going while batches come back full, capped at 20 passes because a Lambda has a wall clock. It stops early on a **short** batch (the queue ended, or another poller holds the rest — either way somebody is on it) and on a full batch that published **nothing**, since nineteen more rounds against an unreachable queue burn the attempt budget of two hundred wines during a single outage.
+- **`MAX_PUBLISH_ATTEMPTS = 6`, and the row is set aside rather than deleted.** Six failed *publishes* is almost never a bad row — it is a queue that was unreachable. `countStuckJobs` exists because a queue quietly dropping work and a queue with nothing to do look identical from outside: both publish nothing. That count is the only thing that tells them apart, and P1-50 reads it.
+- **The handler refuses to start without `EMBEDDING_QUEUE_URL`.** A poller pointed at nothing still *claims*: it fails to publish, increments every counter, and after six passes the whole backlog is set aside. A misconfiguration would consume the queue instead of failing on the first invocation.
+- **Failures log the SQS `Code` and the error `name`, never the provider `Message`.** P0-56 applied to a log rather than a response: a provider message is free text that has historically carried endpoints and credentials, and the code is a closed set that is also the more useful half for triage.
+
+Not ~120 lines: about 200 of poller, 200 of statements and scope, 60 of policy generator, two migrations, and four test files.
+
 ---
 
 ### P1-32 · SST: SQS + DLQ + worker
@@ -4008,6 +4044,17 @@ The connection arithmetic that produces 5: `db.t4g.micro` allows roughly 100 con
 **Tests.** Legal transitions succeed, illegal ones throw; error text is stored and cleared on success.
 
 **Files.** `embedding-state.ts`, tests. **~80 lines.**
+
+**As built — the transitions take *events*, not target states, and that is the design.** A caller saying "set it to INDEXED" is asserting a conclusion; a caller saying "embedded" is reporting what happened and letting one function decide what it means. Only the second is incapable of lying about a wine it never embedded — which matters because a state is just a word in a column, and nothing about `INDEXED` prevents a row from having no vector.
+
+- **`STALE` is the state that carries meaning**, and the machine is where its rules live: an edit moves `INDEXED → STALE` (findable under its previous description while the new one is built), leaves `PENDING` alone (already going to be embedded), and returns `FAILED → PENDING`, because the edit may well be the fix. P1-02, P1-03 and P1-04 already write three of these edges between them; this is what stops a fourth author inventing a fifth.
+- **Redelivery is a no-op by construction.** SQS redelivers and the poller can publish twice, so `queued` from `PENDING` and `embedded` from `INDEXED` both return the status unchanged. A transition that only works once is a transition that breaks the day something is retried.
+- **The error text is cleared on success and the attempt count is not**, which are opposite decisions for opposite reasons. A row that is `INDEXED` while carrying last week's failure tells an operator a wine is broken when it is not — and P1-50's triage reads that column. A wine that needed four tries is worth knowing about *after* it succeeds, because four tries usually means a text the provider keeps struggling with.
+- **A failure with no reason is refused at the call site.** A `FAILED` row with nothing in `embedding_error` reports a problem and withholds the only thing anyone could act on.
+
+**Migration `0035` adds `embedding_error` and `embedding_attempts`**, and the counter is deliberately *not* the outbox's. `outbox.attempts` counts how many times the poller tried to publish; this counts how many times the provider was asked and refused. A wine published once and failed four times is a different problem from one published four times and never embedded, and a single counter cannot tell them apart — which is exactly the distinction P1-50's triage turns on. Both columns are in `PRODUCT_SERVER_OWNED`: a client that could set the error could make a working wine look broken, and one that could reset the counter could hide a wine that has been failing for a week.
+
+**⚠ Neither column is published to the API yet.** The provider's own words are operator-facing — "ValidationException" tells a winery nothing it can act on — and **P1-50 owns turning that into something that does. Publishing the raw text now would set a contract around a string we intend to replace.**
 
 ---
 

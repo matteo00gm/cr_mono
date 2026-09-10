@@ -70,6 +70,15 @@ const PRODUCT_SERVER_OWNED = {
   contentHash: true,
   status: true,
   embeddingState: true,
+  /*
+   * P1-38's diagnostics, on the same terms. A client that could set
+   * `embedding_error` could make a working wine look broken to whoever reads
+   * P1-50's triage, and one that could reset `embedding_attempts` could hide a
+   * wine that has been failing for a week — which is precisely the row the
+   * counter exists to surface.
+   */
+  embeddingError: true,
+  embeddingAttempts: true,
 } as const;
 
 /**
