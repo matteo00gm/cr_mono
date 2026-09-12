@@ -105,6 +105,25 @@ jobs:
           BODY: ${{ github.event.pull_request.body }}
         run: node scripts/check-pr-why.mjs
 
+      # The half of `infra/` that needs no SST, typechecked here (P1-32a).
+      #
+      # `pnpm typecheck:infra` covers all of it and cannot run in CI: the files
+      # depend on globals declared by `.sst/platform/config.d.ts`, a ~340 MB
+      # tree that `sst install` generates and git ignores. So those files were
+      # gated only by a local script — and a local script is one somebody
+      # forgets. `ConnectionBudget` shipped in #106 typed as
+      # `typeof CONNECTIONS`, which made the value its own test needed a type
+      # error, and no job here looked.
+      #
+      # Several infra modules need none of that: `queue-config.ts`,
+      # `static-assets.ts`, `stage.ts` and every test under `infra/test/` are
+      # ordinary code over node built-ins. The script splits them by the
+      # `/// <reference ... .sst/platform ...>` directive each SST-dependent
+      # file must carry anyway, so the boundary is read rather than listed and a
+      # new pure module is covered the day it is written.
+      - name: Typecheck the infra modules that need no SST
+        run: pnpm typecheck:infra-pure
+
       # Architectural boundaries (P0-09). Separate from lint because these are
       # graph properties across packages, which no per-file linter can see.
       - name: Check architectural boundaries

@@ -3988,6 +3988,10 @@ The connection arithmetic that produces 5: `db.t4g.micro` allows roughly 100 con
 
 Two smaller things: `bedrock:InvokeModel` is scoped to the Titan ARN rather than `*` — a wildcard would let a bug here invoke models billed at fifty times the rate, and the bill is the only place that shows up — and the poller holds `sqs:SendMessage` only, never receive or delete, so a poller bug cannot drain the queue without anything being embedded.
 
+**`typecheck:infra` does not run in CI, and that let a type error ship** *(closed by P1-32a)*. Everything under `infra/` is excluded from every package tsconfig because most of it needs globals from `.sst/platform/config.d.ts` — a ~340 MB tree `sst install` generates and git ignores — so those files were gated only by a local script, and a local script is one somebody forgets. `ConnectionBudget` shipped here typed as `typeof CONNECTIONS`, which made the value its own test needed a *type error*, and nothing in CI looked.
+
+Several infra modules need none of that: `queue-config.ts`, `static-assets.ts`, `stage.ts` and every test under `infra/test/` are ordinary code over node built-ins. `pnpm typecheck:infra-pure` checks exactly those in CI, splitting them by the `/// <reference ... .sst/platform ...>` directive every SST-dependent file must carry anyway — so the boundary is **read rather than listed**, a new pure module is covered the day it is written, and a file carrying the directive without using SST is reported rather than silently exempted. Verified by reintroducing the shipped error and watching it fail.
+
 **The deploy smoke test is not written.** It needs a deployed stage, and nothing is deployed. The partial-batch-failure half the row asks for is unit-tested in P1-37's suite; the load test stays with P7-03.
 
 ---
