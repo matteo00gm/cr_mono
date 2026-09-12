@@ -1,6 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm';
 
-import type { EmbeddingState } from './products-read.js';
+import type { EmbeddingState } from './embedding-status.js';
 import { productEmbeddings } from './schema/product-embeddings.js';
 import { products } from './schema/products.js';
 import type { DbTransaction } from './with-tenant.js';
@@ -172,44 +172,9 @@ export const upsertEmbedding = async (
     });
 };
 
-export interface EmbeddingStatusWrite {
-  readonly state: EmbeddingState;
-  readonly error: string | null;
-  readonly attempts: number;
-}
-
 /**
- * Records where a product now sits in the pipeline.
- *
- * The three columns move together because they are one fact: a `FAILED` row
- * with last week's error, or an `INDEXED` row still carrying one, tells an
- * operator something untrue — and P1-50's triage reads exactly these. The
- * decision about what the next state *is* belongs to `nextEmbeddingStatus` in
- * `packages/core`; this only writes what it was handed.
+ * Re-exported from `embedding-status.ts`, where it moved so that `products.ts`
+ * could call it without closing an import cycle through `products-read.ts`
+ * (P1-39). Kept here because this is where the worker looks for it.
  */
-export const writeEmbeddingStatus = async (
-  tx: DbTransaction,
-  productId: string,
-  status: EmbeddingStatusWrite,
-): Promise<void> => {
-  await tx
-    .update(products)
-    .set({
-      embeddingState: status.state,
-      embeddingError: status.error,
-      embeddingAttempts: status.attempts,
-      /*
-       * **`updated_at` is not named here and does not move**, which took a
-       * migration to make true. P0-22's shared trigger stamps every UPDATE, so
-       * until `0038` a bulk re-index moved every wine to the top of "recently
-       * edited" — a sort P1-06 offers sellers — without anybody having touched
-       * one. `products` now has its own trigger that ignores exactly the three
-       * columns below, so the column keeps meaning what a seller reads it as.
-       *
-       * Which is why these three are written *alone*. Adding a fourth column to
-       * this `set` would be an edit as far as the trigger is concerned, and the
-       * sort would start lying again.
-       */
-    })
-    .where(eq(products.id, productId));
-};
+export { writeEmbeddingStatus, type EmbeddingStatusWrite } from './embedding-status.js';
