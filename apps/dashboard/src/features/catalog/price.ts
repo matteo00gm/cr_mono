@@ -9,6 +9,26 @@
 /** What a price field can be wrong about. */
 export type PriceError = 'empty' | 'not-a-number' | 'negative' | 'too-precise' | 'ambiguous';
 
+/**
+ * What to tell a seller about each way a price can be wrong, in Italian.
+ *
+ * Shared by the form (P1-01) and the grid's inline editor (P1-11), so a price
+ * refused in one place is refused in the same words in the other.
+ */
+export const PRICE_MESSAGES: Readonly<Record<PriceError, string>> = {
+  empty: 'Indica un prezzo.',
+  'not-a-number': 'Scrivi solo cifre, ad esempio 12,50.',
+  negative: 'Il prezzo non può essere negativo.',
+  'too-precise': 'Al massimo due decimali.',
+  /*
+   * The ambiguous case, and the message has to *say what to write* rather than
+   * report a rule. "1.234 può voler dire due cose" is a fact about parsing;
+   * telling somebody to type `1234` or `1.234,00` is an instruction they can
+   * follow without knowing why.
+   */
+  ambiguous: 'Non è chiaro se sia un separatore di migliaia: scrivi 1234 oppure 1.234,00.',
+};
+
 export type PriceResult =
   | { readonly ok: true; readonly cents: number }
   | { readonly ok: false; readonly reason: PriceError };
