@@ -4125,7 +4125,7 @@ Several infra modules need none of that: `queue-config.ts`, `static-assets.ts`, 
 
 Four assertions, because a trigger that never fires is not a narrower trigger: a status write leaves the stamp, an ordinary edit moves it, a column nobody thought about moves it, and every generated column is in the ignore list. (The first version of this code claimed it opted out of the shared trigger; CI's integration run is what said otherwise.)
 
-**The failure is written in its own transaction.** The one that threw has rolled back — postgres-js poisons a transaction at the first statement error — so the reason could not be recorded inside it even if the code tried. Its own errors are swallowed and logged: a database refusing writes is a plausible cause of the original failure, and letting the bookkeeping throw would replace the real reason with "could not record the reason". The reason stored is the provider's error **name**, never its message: P0-56 applied to a column P1-40 shows the seller.
+**The failure is written in its own transaction.** The one that threw has rolled back — postgres-js poisons a transaction at the first statement error — so the reason could not be recorded inside it even if the code tried. Its own errors are swallowed and logged: a database refusing writes is a plausible cause of the original failure, and letting the bookkeeping throw would replace the real reason with "could not record the reason". The reason stored is the provider's error **name**, never its message: P0-56 applied to a column a seller will eventually see — through P1-50's readable reason, since P1-40 does not publish the raw name.
 
 Statements in `packages/db/src/embeddings.ts` (P0-09), records processed in sequence rather than fanned out — P1-32 budgets two connections per invocation, not ten.
 
@@ -4192,6 +4192,18 @@ The same broken harness had "verified" P0-63's request-shaping commit. Re-run ho
 
 **Files.** grid column, tests. **~80 lines.**
 
+**The tooltip explains the state, not the provider's reason** *(deviation)*. `embedding_error` is not in the product response, and that is a recorded decision rather than an oversight: `product-contracts.test.ts` lists it as withheld because it holds an error *name* — "ValidationException" tells a winery nothing — and publishing it before P1-50 replaces it with a seller-readable sentence would set a contract around a string that is meant to change. So each state's tooltip says what it means *for the seller* ("non viene consigliato… usa «Reindicizza» per riprovare"), which is true now and stays true once P1-50's reason sits beside it. "The error tooltip shows the reason" becomes "the failed tooltip names the consequence and the action".
+
+**It polls while `PENDING` *or* `STALE`, with backoff** *(deviation from "while any row is PENDING")*. Reindexing an `INDEXED` wine makes it `STALE` (P1-39), so a poll keyed on `PENDING` alone would leave the button's own result on screen until a reload. And one state never settles by itself — a wine whose outbox row was lost stays `PENDING` until somebody presses Reindex — so a fixed five-second poll would spend 720 list queries an hour per open tab waiting on it. The delay starts at 3 s, doubles to a 60 s cap, and starts over whenever the number of settling wines changes; a hidden tab neither fetches nor backs off.
+
+**The banner counts the wines it was given, and says "tra quelli mostrati".** The list is keyset-paginated with no total (P1-06), so a catalogue-wide count is a claim this component cannot back — and it is a number a seller would act on.
+
+**No Reindex on a draft or error row, or on an archived wine.** A draft has no server id; an archived wine has no vector and the API refuses it.
+
+**A failed request says so in Italian, with the request id — never the server's message**, which is English API-contract text (P0-55).
+
+**Not yet mounted on a screen.** `/catalogo` is still P0-57's placeholder, and no row in this phase owns composing the list endpoint, the grid, the form and this column into it — the same position P1-10 and P1-13 shipped in. That screen needs a row. The catalogue-wide `reindex-all` action (P1-39) belongs on it too, beside row selection, rather than in a per-row column.
+
 ---
 
 ### P1-49 · Embedding-version affordance
@@ -4234,6 +4246,8 @@ Worth knowing before this feels daunting: re-embedding is **cheap**. At Titan's 
 | **Unknown** | anything unclassified | Treat as transient once, then permanent — so a new error class surfaces rather than looping |
 
 Store a message the seller can act on — *"Le note di degustazione superano il limite (8.000 parole). Riducile per indicizzare il prodotto."* — not a stack trace or a provider error code. Surface it in the P1-40 grid.
+
+**What surfacing it takes, as P1-40 left things.** The grid does not show `embedding_error` today: `apps/api/test/product-contracts.test.ts` withholds it from the product response on purpose, until this row makes it worth reading. Publishing the reason means taking it off that withheld list (or adding a derived, seller-readable field), adding it to `productSchema` and `toProductResponse`, and putting it beside the state description in `IndexStatusCell`'s tooltip.
 
 **The loop closes on its own**, which is worth noting because it means no extra code: editing the product changes `content_hash`, which enqueues a fresh outbox row (P1-03), which re-embeds. The seller fixes the text and the product indexes itself. Add a manual **Riprova** button for the transient case.
 
