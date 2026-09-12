@@ -12,6 +12,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./completeness": {
+      "types": "./dist/completeness.d.ts",
+      "default": "./dist/completeness.js"
     }
   },
   "files": [

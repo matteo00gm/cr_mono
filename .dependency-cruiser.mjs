@@ -202,6 +202,39 @@ export default {
     },
 
     {
+      /**
+       * The browser bundles must not pull in the `core` barrel (P1-13).
+       *
+       * `packages/core` depends on `@catalogorosso/db` and Better Auth, so one
+       * `import { ... } from '@catalogorosso/core'` in a Preact component drags
+       * `drizzle-orm`, the whole schema and an auth server into a file a
+       * visitor downloads. Nothing fails: the build succeeds, the page works,
+       * and the bundle is several hundred kilobytes larger than anybody
+       * intended - the same reason `ProductForm` validates against
+       * `api-client` rather than against the table contracts.
+       *
+       * The `/completeness` subpath is exempt and is the only one. It resolves
+       * to a single file that imports nothing at all, which is what lets the
+       * dashboard and the API score a product with the *same* function rather
+       * than with two that disagree. A second subpath appearing here should be
+       * checked the same way: does it, and everything it imports, belong in a
+       * browser?
+       */
+      name: 'no-core-barrel-in-browser-bundles',
+      severity: 'error',
+      comment:
+        'apps/dashboard and apps/widget may import @catalogorosso/core only through a ' +
+        'narrow subpath. The package barrel pulls drizzle-orm and Better Auth into a ' +
+        'browser bundle, silently.',
+      from: {
+        path: '^apps/(dashboard|widget)/',
+      },
+      to: {
+        path: '(^|/)node_modules/@catalogorosso/core/(dist/)?index|^@catalogorosso/core$',
+      },
+    },
+
+    {
       // The companion to the packages/testing exemption above. Without it, that
       // exemption would let any module reach a raw connection by importing the
       // harness — the rule would be satisfied and the guarantee gone.

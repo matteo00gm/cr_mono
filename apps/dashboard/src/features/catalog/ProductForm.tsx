@@ -2,6 +2,7 @@ import { productRequest, type ProductRequest } from '@catalogorosso/api-client';
 import type { JSX } from 'preact';
 import { useState } from 'preact/hooks';
 
+import { CompletenessIndicator } from './CompletenessIndicator.js';
 import { formatCents, parsePriceToCents, type PriceError } from './price.js';
 
 /**
@@ -382,6 +383,14 @@ export const ProductForm = ({ initial, onSubmit, submitLabel }: ProductFormProps
         {field('vintage', 'Annata')}
         {field('styleTags', 'Stile', { help: 'Separati da virgola: strutturato, tannico' })}
       </fieldset>
+
+      {/*
+       * Above the Sommelier fieldset, not below it and not at the end of the
+       * form (P1-13). This is the section whose fields the score is almost
+       * entirely made of, so the prompt sits where the work is — a bar at the
+       * bottom is read after somebody has already decided they are finished.
+       */}
+      <CompletenessIndicator product={values} />
 
       <fieldset>
         <legend>Sommelier</legend>

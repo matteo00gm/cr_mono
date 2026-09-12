@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@catalogorosso/api-client": "workspace:*",
+    "@catalogorosso/core": "workspace:*",
     "@catalogorosso/security": "workspace:*",
     "better-auth": "^1.7.2",
     "preact": "^10.29.8",
