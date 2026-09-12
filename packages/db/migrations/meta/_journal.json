@@ -267,6 +267,13 @@
       "when": 1788654188572,
       "tag": "0037_outbox_no_delete",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1788654188573,
+      "tag": "0038_products_edit_timestamp",
+      "breakpoints": true
     }
   ]
 }
