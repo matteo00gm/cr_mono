@@ -1,10 +1,11 @@
-import { ApiError, type ApiClient, type Product } from '@catalogorosso/api-client';
+import { ApiError, type Product } from '@catalogorosso/api-client';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Layout } from '../src/app.js';
 import { CatalogScreen, mergeProducts, PAGE_SIZE } from '../src/features/catalog/CatalogScreen.js';
 import { INDEX_STATE_COPY, POLL_START_MS } from '../src/features/catalog/IndexStatus.js';
+import { fakeClient, listOf } from './support/client.js';
 import { wine } from './support/wine.js';
 
 /**
@@ -27,29 +28,6 @@ afterEach(() => {
   vi.useRealTimers();
   globalThis.history.pushState({}, '', '/');
 });
-
-interface Sent {
-  readonly query?: Readonly<Record<string, unknown>>;
-  readonly params?: Readonly<Record<string, string>>;
-}
-
-type Route = (init: Sent | undefined) => Promise<unknown>;
-
-const fakeClient = (routes: Readonly<Record<string, Route>>) => {
-  const request = vi.fn((endpoint: string, init?: Sent) => {
-    const route = routes[endpoint];
-    return route === undefined
-      ? Promise.reject(new Error(`unexpected call: ${endpoint}`))
-      : route(init);
-  });
-
-  return { client: { request } as unknown as ApiClient, request };
-};
-
-const listOf = (
-  items: readonly Product[],
-  over: { nextCursor?: string | null; matchedBy?: 'exact' | 'similar' | null } = {},
-) => ({ items, nextCursor: null, matchedBy: null, ...over });
 
 /** The name cell of every data row, in the order a seller reads them. */
 const names = (): (string | null | undefined)[] =>

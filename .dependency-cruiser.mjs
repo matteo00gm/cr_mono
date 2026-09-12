@@ -222,12 +222,13 @@ export default {
        * intended - the same reason `ProductForm` validates against
        * `api-client` rather than against the table contracts.
        *
-       * The `/completeness` subpath is exempt and is the only one. It resolves
-       * to a single file that imports nothing at all, which is what lets the
-       * dashboard and the API score a product with the *same* function rather
-       * than with two that disagree. A second subpath appearing here should be
-       * checked the same way: does it, and everything it imports, belong in a
-       * browser?
+       * Two subpaths are exempt, and each resolves to a single file that
+       * imports nothing at all: `/completeness`, which lets the dashboard and
+       * the API score a product with the *same* function rather than with two
+       * that disagree, and `/inline-edit` (P1-11), which lets the grid and the
+       * hash test agree on which fields a cell may edit. This rule cannot see
+       * what a subpath imports, so `packages/core/test/browser-subpaths.test.ts`
+       * holds every declared subpath to "imports nothing".
        */
       name: 'no-core-barrel-in-browser-bundles',
       severity: 'error',
