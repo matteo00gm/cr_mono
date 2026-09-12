@@ -175,6 +175,15 @@ export default {
           // because opening that transaction with the tenant named in a queue
           // message is what makes a message for the wrong tenant match no row.
           '|^packages/db/src/embeddings[.]ts$' +
+          // src/embedding-status.ts is exempt from P1-39 on the same terms as
+          // embeddings.ts, which is where this statement used to live. It moved
+          // because three modules need it and `products-read.ts` already
+          // imports from `products.ts`, so leaving the write beside either one
+          // closed an import cycle — which `no-circular` below caught. It
+          // imports `eq` to write one UPDATE and takes the transaction from its
+          // caller, opening nothing; `products` is tenant-scoped and under
+          // policy, and the caller is inside withTenant.
+          '|^packages/db/src/embedding-status[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
           '|^packages/core/src/auth[.]ts$' +
