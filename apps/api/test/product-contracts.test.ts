@@ -23,14 +23,51 @@ import { describe, expect, it } from 'vitest';
 const keysOf = (schema: { shape: Record<string, unknown> }): string[] =>
   Object.keys(schema.shape).sort();
 
+/**
+ * Fields the response carries that are not columns.
+ *
+ * **An explicit list, because "it is computed" is exactly what somebody would
+ * say about a field they forgot to fill.** The check above is what catches a
+ * column renamed in the schema leaving a response field nothing writes — so an
+ * escape from it has to be one line per field with a reason, not a predicate
+ * that lets any new key through.
+ */
+const DERIVED_FIELDS: Readonly<Record<string, string>> = {
+  completeness:
+    'P1-12. A weighted score over the columns beside it, computed by ' +
+    '`completenessOf` rather than stored — the weights are a product decision ' +
+    'that gets tuned, and a stored column would mean a table rewrite each time. ' +
+    'Sent rather than left to the client because P1-09 filters by it in SQL, and ' +
+    'a client that recomputed could disagree with what was filtered.',
+};
+
 describe('the published product shape', () => {
-  it('names only columns the table actually has', () => {
+  it('names only columns the table actually has, or a declared derived field', () => {
     const published = keysOf(productSchema);
     const columns = new Set(keysOf(productSelect));
 
-    const strays = published.filter((key) => !columns.has(key));
+    const strays = published.filter(
+      (key) => !columns.has(key) && !Object.hasOwn(DERIVED_FIELDS, key),
+    );
 
     expect(strays).toEqual([]);
+  });
+
+  it('keeps the derived list honest', () => {
+    /*
+     * Two ways this escape hatch rots, and both leave it looking used. A field
+     * listed here that *is* a column no longer needs the exemption and is now
+     * hiding that column from the check above. A field listed with no reason is
+     * an exemption nobody can evaluate.
+     */
+    const columns = new Set(keysOf(productSelect));
+    const published = new Set(keysOf(productSchema));
+
+    for (const [field, reason] of Object.entries(DERIVED_FIELDS)) {
+      expect(published.has(field), `${field} is declared derived but is not published`).toBe(true);
+      expect(columns.has(field), `${field} is a real column and needs no exemption`).toBe(false);
+      expect(reason.length, `${field} has no reason`).toBeGreaterThan(40);
+    }
   });
 
   it('publishes every column a client could need, and states what it withholds', () => {

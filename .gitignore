@@ -40,3 +40,10 @@ reports/
 # Written and deleted by `pnpm typecheck:infra-pure`. Present only if that
 # script was interrupted.
 .tsconfig.infra-pure.json
+
+# Written and removed by `apps/api/test/tenant-from-input.test.ts`, which lints a
+# fixture at a real path so the P0-48 rule is tested the way it runs. The
+# cleanup is a `finally`, which a killed test process never reaches — so an
+# interrupted run leaves this behind, where `pnpm lint` then fails on the `any`
+# in it for a reason nobody could trace back to a test.
+apps/api/src/handler-fixture.ts

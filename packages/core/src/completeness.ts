@@ -140,7 +140,38 @@ export const completenessOf = (product: ScorableProduct): Completeness => {
  * effectively name-only; above 75 it has both plus most of the catalogue
  * detail, and the remaining fields move the answer very little.
  */
-export type CompletenessBand = 'sparse' | 'partial' | 'rich';
+export const COMPLETENESS_BANDS = ['sparse', 'partial', 'rich'] as const;
+export type CompletenessBand = (typeof COMPLETENESS_BANDS)[number];
+
+/**
+ * The lowest score in each band.
+ *
+ * **Exported as data because two things need it, and they must not disagree.**
+ * The UI colours a band; the catalogue filters by one, which the database does
+ * as a numeric range (P1-09). A boundary written twice is a filter that shows a
+ * seller a wine the indicator beside it calls something else — and both would
+ * look right in isolation.
+ */
+export const BAND_FLOOR: Readonly<Record<CompletenessBand, number>> = {
+  sparse: 0,
+  partial: 40,
+  rich: 75,
+};
 
 export const bandOf = (score: number): CompletenessBand =>
-  score < 40 ? 'sparse' : score < 75 ? 'partial' : 'rich';
+  score >= BAND_FLOOR.rich ? 'rich' : score >= BAND_FLOOR.partial ? 'partial' : 'sparse';
+
+/**
+ * The score range a band covers, inclusive at both ends.
+ *
+ * Derived from the same floors `bandOf` reads, so the filter and the label
+ * cannot drift. `rangeOfBand(b)` round-tripping through `bandOf` is asserted —
+ * which is what makes "derived" mean something rather than "written next to".
+ */
+export const rangeOfBand = (band: CompletenessBand): { min: number; max: number } => {
+  const floors = COMPLETENESS_BANDS.map((name) => BAND_FLOOR[name]).sort((a, b) => a - b);
+  const min = BAND_FLOOR[band];
+  const next = floors.find((floor) => floor > min);
+
+  return { min, max: next === undefined ? 100 : next - 1 };
+};

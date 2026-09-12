@@ -967,6 +967,11 @@
                                 "STALE"
                               ]
                             },
+                            "completeness": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 100
+                            },
                             "createdAt": {
                               "type": "string",
                               "format": "date-time",
@@ -1001,6 +1006,7 @@
                             "imageUrl",
                             "status",
                             "embeddingState",
+                            "completeness",
                             "createdAt",
                             "updatedAt"
                           ],
@@ -1275,6 +1281,11 @@
                           "STALE"
                         ]
                       },
+                      "completeness": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100
+                      },
                       "createdAt": {
                         "type": "string",
                         "format": "date-time",
@@ -1309,6 +1320,7 @@
                       "imageUrl",
                       "status",
                       "embeddingState",
+                      "completeness",
                       "createdAt",
                       "updatedAt"
                     ],
@@ -1630,6 +1642,11 @@
                           "STALE"
                         ]
                       },
+                      "completeness": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 100
+                      },
                       "createdAt": {
                         "type": "string",
                         "format": "date-time",
@@ -1664,6 +1681,7 @@
                       "imageUrl",
                       "status",
                       "embeddingState",
+                      "completeness",
                       "createdAt",
                       "updatedAt"
                     ],

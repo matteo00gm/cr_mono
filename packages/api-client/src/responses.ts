@@ -194,6 +194,18 @@ export const productSchema = z.object({
    * after saving: "is this wine findable yet?" (P1-40 renders it in the grid.)
    */
   embeddingState: z.enum(['PENDING', 'INDEXED', 'FAILED', 'STALE']),
+
+  /**
+   * How completely this wine is described, 0-100 (P1-12).
+   *
+   * **The one field here that is not a column**, and it is sent rather than
+   * left to the client for a reason that is about agreement, not effort: the
+   * catalogue can *filter* by completeness band (P1-09), and that filtering
+   * happens in SQL. If the client recomputed the score, a deployment where the
+   * two disagreed would show a seller a wine under "Da completare" with a
+   * "Buono" badge beside it. Sending it means there is one number.
+   */
+  completeness: z.number().int().min(0).max(100),
   createdAt: timestamp,
   updatedAt: timestamp,
 });

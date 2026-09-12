@@ -258,6 +258,21 @@ export {
 } from './products-read.js';
 
 /**
+ * The completeness filter's SQL half (P1-09, deferred there until P1-12).
+ *
+ * **The weights are not here**, and that is the design: `packages/core` owns
+ * what a field is worth, this package owns which column holds it, and the API
+ * — the only layer that may import both — joins them. Writing the weights in
+ * SQL as well would be the failure `completeness.ts` opens by naming, that a
+ * score computed twice disagrees with itself in front of the seller.
+ */
+export {
+  completenessExpression,
+  type CompletenessFilter,
+  type CompletenessWeight,
+} from './products-read.js';
+
+/**
  * The outbox drain (P1-31), and the scope it needs.
  *
  * **`withOutbox` is not another `withUser`.** The two contexts exported above
