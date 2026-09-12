@@ -128,11 +128,26 @@ export const embeddingWorker = new sst.aws.Function('EmbeddingWorker', {
    * In the VPC, because RDS lives in private subnets with no inbound path from
    * the internet.
    *
-   * Bedrock does not: it is reached over the public internet, which means this
-   * function needs the NAT gateway the VPC already provisions. That is a real
-   * per-GB cost on every embedding call and it is worth knowing about — a VPC
-   * endpoint for Bedrock would remove it, and is worth revisiting once the
-   * volume justifies the hourly charge.
+   * Bedrock does not: it is reached over the public internet, so this function
+   * egresses through the VPC's NAT. **That is a NAT *instance*, not a gateway**
+   * — `infra/vpc.ts` sets `nat: "ec2"` precisely to avoid the ~$32/month/AZ a
+   * managed gateway costs (P0-12) — and it is already provisioned for Stripe,
+   * Resend and domain verification, so Bedrock traffic adds no fixed cost at
+   * all, only EC2 data-out.
+   *
+   * **A PrivateLink endpoint for Bedrock is not worth it and will not become
+   * worth it**, which is worth stating as a number rather than left as "revisit
+   * later" — because acting on that would cost real money for no return.
+   *
+   * At the ceiling this product is built for, ten tenants: 20,000 wines, three
+   * full re-index passes over their lifetime, and ~2 KB of text per request
+   * (the 1,024-float response is *inbound* and free) is **0.11 GB outbound in
+   * total** — about one cent at $0.09/GB. An interface endpoint is ~$0.011/hour
+   * per AZ, and RDS pins the VPC at two AZs, so ~$16/month. **$193 a year to
+   * save a cent.**
+   *
+   * Revisit only if the volume changes by four orders of magnitude, which for
+   * ten sellers it cannot.
    */
   vpc,
 
