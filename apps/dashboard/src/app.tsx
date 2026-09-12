@@ -1,8 +1,10 @@
 import type { JSX } from 'preact';
+import { useMemo } from 'preact/hooks';
 import { Link, Route, Switch, useLocation } from 'wouter-preact';
 
+import { CatalogScreen } from './features/catalog/CatalogScreen.js';
 import { navFor } from './nav.js';
-import { rememberTenant, useSession, type SessionState } from './session.js';
+import { apiFor, rememberTenant, useSession, type SessionState } from './session.js';
 import type { ApiClient } from '@catalogorosso/api-client';
 import type { Membership } from '@catalogorosso/api-client';
 
@@ -113,6 +115,24 @@ const Placeholder = ({ title }: { readonly title: string }): JSX.Element => (
 );
 
 /**
+ * The catalogue, with a client built once per winery (P1-10b).
+ *
+ * Memoised because the screen's effects deliberately do not depend on the
+ * client: `apiFor` returns a new object on every call, and a screen keyed on it
+ * would refetch on every render of the shell.
+ */
+const CatalogRoute = ({
+  tenantId,
+  clientFor,
+}: {
+  readonly tenantId: string;
+  readonly clientFor: (tenantId: string) => ApiClient;
+}): JSX.Element => {
+  const client = useMemo(() => clientFor(tenantId), [tenantId, clientFor]);
+  return <CatalogScreen client={client} />;
+};
+
+/**
  * The signed-in layout.
  *
  * Split from `App` so a test can render it with a role directly, without
@@ -121,8 +141,14 @@ const Placeholder = ({ title }: { readonly title: string }): JSX.Element => (
  */
 export const Layout = ({
   session,
+  clientFor = apiFor,
 }: {
   readonly session: Extract<SessionState, { status: 'signed-in' }>;
+  /**
+   * How a screen gets a client for the active winery. Injected so a test can
+   * mount a real screen without a network, the same seam `App` offers.
+   */
+  readonly clientFor?: ((tenantId: string) => ApiClient) | undefined;
 }): JSX.Element => {
   const { active, memberships } = session;
 
@@ -162,7 +188,7 @@ export const Layout = ({
             <Placeholder title="Panoramica" />
           </Route>
           <Route path="/catalogo">
-            <Placeholder title="Catalogo" />
+            <CatalogRoute tenantId={active.tenantId} clientFor={clientFor} />
           </Route>
           <Route path="/membri">
             <Placeholder title="Membri" />

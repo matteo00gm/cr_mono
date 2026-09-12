@@ -1223,6 +1223,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P1-08 | Catalog search endpoint | name, producer, sku, grape, region | P1-07 |
 | P1-09 | Catalog filters | availability, type, price band, `embedding_state`, completeness | P1-06 |
 | P1-10 | Grid component | virtualised table, row selection | P1-06 |
+| P1-10b | Catalogue screen | list, search, more rows, index status, reindex-all; the page P1-10, P1-13 and P1-40 shipped without | P1-10,40 |
 | P1-11 | Inline edit: price / stock only | the three weekly-churn fields | P1-10 |
 | P1-12 | Completeness score fn + test | pure function in `core` | P0-42 |
 | P1-13 | Completeness indicator UI | score + named missing fields + why-it-matters copy | P1-12,01 |
@@ -3678,7 +3679,28 @@ Two implementations of one definition is the arrangement `completeness.ts` opens
 
 `windowFor` is exported and pure, so the arithmetic is tested without a DOM — an off-by-one there hides a row from a seller rather than crashing. The completeness column is what gives P1-13's compact variant its first consumer.
 
-**Not built here: the screen.** The grid takes rows; fetching them needs query parameters, which `packages/api-client`'s `request` did not accept — it took an endpoint key and nothing else. That half is now done, under P0-63 where the client lives; what remains is the screen that wires the two together.
+**Not built here: the screen.** The grid takes rows; fetching them needs query parameters, which `packages/api-client`'s `request` did not accept — it took an endpoint key and nothing else. That half is now done, under P0-63 where the client lives; what remains is the screen that wires the two together. That is P1-10b.
+
+---
+
+### P1-10b · Catalogue screen
+
+**What.** The page at `/catalogo`: the seller's wines in the P1-10 grid, with search, more rows, P1-13's completeness column, P1-40's index status and a catalogue-wide reindex.
+
+**Why.** *Added, not in the original backlog.* P1-10, P1-13 and P1-40 each shipped a component with nothing mounting it, and P1-40 recorded it as an open point: a seller still could not see their own catalogue. No row owned composing them.
+
+**As built.**
+
+- **Fifty rows at a time and "Carica altri vini", not numbered pages.** The list is keyset-paginated (P1-06), so there are no page numbers to offer.
+- **A late answer to an older search is discarded.** A generation counter moves on with every search and on unmount; without it a slow reply to "barolo" landing after a fast one to "etna" replaces the list the seller asked for with the one they abandoned.
+- **The background refresh re-reads the rows already on screen, up to the server's ceiling of 100, and replaces them by id.** It never appends and never reorders: a wine created elsewhere jumping into the list would move the row under the seller's pointer. Rows loaded past the first hundred keep their last state until a reload or their own Reindex; paging the whole list every few seconds to keep a status dot current is not worth its queries.
+- **Reindex-all says how many wines were queued.** A 409 is stated as "già in corso" rather than reported as a failure, and the remaining count is *not* parsed out of the server's English message; the index column already shows every settling wine.
+- **The client is built once per winery.** `Layout` memoises it, because the screen's effects deliberately do not depend on it and `apiFor` returns a new object on every call.
+- **A failed load offers Riprova;** a failed "more" keeps the rows already shown. Both quote the request id through `describeFailure`, now shared with P1-40's cell.
+
+**Tests.** First page and its query; more rows with the cursor, and the button gone when there is none; a failed "more" keeps rows; retry after a failed load; search sends the trimmed phrase and states a similar-only match; a late answer to an abandoned search is discarded; an empty search result says so rather than calling the catalogue empty; reindex-all's count wording at 0, 1 and many, and the new states read back; a 409 in Italian with no request id; any other refusal with one; a row replaced by its own reindex answer; settling wines refreshed on the poll; `mergeProducts` never appends; `/catalogo` mounts the screen with a client for the active winery.
+
+**Not here.** The filter controls (the API has taken them since P1-09), row selection and bulk actions, and mounting `ProductForm` for create and edit. Each is a screen affordance over an endpoint that already exists.
 
 ---
 
@@ -4202,7 +4224,7 @@ The same broken harness had "verified" P0-63's request-shaping commit. Re-run ho
 
 **A failed request says so in Italian, with the request id — never the server's message**, which is English API-contract text (P0-55).
 
-**Not yet mounted on a screen.** `/catalogo` is still P0-57's placeholder, and no row in this phase owns composing the list endpoint, the grid, the form and this column into it — the same position P1-10 and P1-13 shipped in. That screen needs a row. The catalogue-wide `reindex-all` action (P1-39) belongs on it too, beside row selection, rather than in a per-row column.
+**Not yet mounted on a screen.** `/catalogo` is still P0-57's placeholder, and no row in this phase owns composing the list endpoint, the grid, the form and this column into it — the same position P1-10 and P1-13 shipped in. That screen is P1-10b, added for exactly this, and it carries the catalogue-wide `reindex-all` action (P1-39) rather than a per-row column.
 
 ---
 

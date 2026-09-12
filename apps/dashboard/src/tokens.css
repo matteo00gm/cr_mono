@@ -325,3 +325,42 @@ body {
   border-inline-start-width: 4px;
   background: #fff8f8;
 }
+
+/* Catalogue screen (P1-10b). */
+.cr-catalog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cr-gap);
+  margin-bottom: var(--cr-gap);
+}
+
+.cr-catalog__header h1 {
+  margin: 0;
+}
+
+.cr-catalog__search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: var(--cr-gap);
+}
+
+.cr-catalog__search input {
+  flex: 1;
+  max-width: 32rem;
+  padding: 6px 10px;
+  border: 1px solid var(--cr-line);
+  border-radius: var(--cr-radius);
+  font: inherit;
+}
+
+.cr-catalog__notice,
+.cr-catalog__hint,
+.cr-catalog__loading {
+  margin: 0 0 var(--cr-gap);
+  color: var(--cr-ink-soft);
+}
+
+.cr-catalog__more {
+  margin-top: var(--cr-gap);
+}
