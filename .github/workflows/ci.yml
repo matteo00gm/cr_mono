@@ -233,6 +233,58 @@ jobs:
           fi
           echo "reserved concurrency is set."
 
+      # The worker's concurrency model, which P1-32 exists to get right and
+      # which no test can see: `infra/queue.ts` constructs SST resources at
+      # import time, so nothing outside a deploy can load it.
+      #
+      # Reserved concurrency on an SQS event source does not slow polling — it
+      # throttles invocations. SQS keeps delivering, throttled messages return
+      # to the queue, **each return increments the receive count**, and past
+      # `maxReceiveCount` they land in the DLQ. The result is a dead-letter
+      # queue full of perfectly valid products that were never attempted,
+      # looking exactly like the embedding failures P1-50 exists to triage.
+      #
+      # It is the intuitive fix for a backed-up queue, which is why it needs a
+      # guard rather than a comment.
+      - name: Assert the embedding worker caps concurrency on the mapping
+        run: |
+          if grep -qE "concurrency: *\{ *reserved:" infra/queue.ts; then
+            echo "::error::infra/queue.ts sets reserved concurrency — see P1-32; on an SQS event source that throttles invocations rather than slowing polling, and every throttled return increments the receive count until valid products reach the DLQ unattempted"
+            exit 1
+          fi
+          if ! grep -qE "scalingConfig: *\{" infra/queue.ts || ! grep -qE "maximumConcurrency: *[A-Za-z0-9_.]+," infra/queue.ts; then
+            echo "::error::infra/queue.ts must set scalingConfig.maximumConcurrency — see P1-32; an unbounded mapping competes with live widget traffic for the ~100 connections a t4g.micro has"
+            exit 1
+          fi
+          if ! grep -qE "functionResponseTypes: *\['ReportBatchItemFailures'\]" infra/queue.ts; then
+            echo "::error::infra/queue.ts must set functionResponseTypes: ['ReportBatchItemFailures'] — see P1-32; without it one malformed message fails the whole batch, so nine wines that embedded successfully are redelivered, re-embedded and paid for again"
+            exit 1
+          fi
+          echo "the worker caps concurrency on the mapping and reports partial failures."
+
+      # The poller is only useful if something invokes it, and a bare
+      # `aws.cloudwatch.EventRule` has no target and no invoke permission — it
+      # fires happily and calls nothing. The queue then stays empty while
+      # CloudWatch shows a healthy rule at a hundred per cent success, which is
+      # the failure the whole embedding pipeline exists to remove, one level up.
+      # This was written the wrong way first.
+      - name: Assert the outbox poller is actually invoked on a schedule
+        run: |
+          # Anchored on the constructor call, not the name: the comment above it
+          # in queue.ts says "sst.aws.Cron rather than a bare EventRule", and a
+          # bare grep for the name would be satisfied by that prose while the
+          # code did the opposite. Two tests in this repository have already
+          # been caught passing on their own explanation.
+          if ! grep -qE "new sst\.aws\.Cron\(" infra/queue.ts; then
+            echo "::error::infra/queue.ts must schedule the poller with sst.aws.Cron — see P1-32; a bare EventRule has no target and no invoke permission, so it fires and calls nothing while reporting success"
+            exit 1
+          fi
+          if ! grep -qE "EMBEDDING_QUEUE_URL: *[A-Za-z]" infra/queue.ts; then
+            echo "::error::infra/queue.ts does not inject EMBEDDING_QUEUE_URL — see P1-31; the poller refuses to start without it, which is the loud failure, but the deploy should not get that far"
+            exit 1
+          fi
+          echo "the poller is scheduled with a target and receives its queue."
+
       # The SPA reaches the bucket only if `sst.config.ts` imports the module
       # that puts it there. This is the E9 shape exactly: a seam correct on both
       # sides with nothing joining them, and the symptom of the missing import
@@ -372,13 +424,79 @@ jobs:
       - name: Build
         run: pnpm build
 
-      # No Docker setup step: `ubuntu-latest` ships with the daemon running,
-      # and Testcontainers pulls the image itself. The image is pinned to
-      # pgvector/pgvector:0.8.0-pg16 (P0-44) — pinned *low*, so a capability
-      # that works here works on the version RDS actually offers.
+      # `ubuntu-latest` ships with the daemon running, so there is no Docker
+      # setup step. The image is pinned to pgvector/pgvector:0.8.0-pg16 (P0-44)
+      # — pinned *low*, so a capability that works here works on the version
+      # RDS actually offers.
       #
-      # Deliberately not cached. Restoring a ~430 MB image from the Actions
-      # cache is not reliably faster than pulling it, and a stale cache entry
-      # would silently test the wrong Postgres.
+      # **Pulled once, here, rather than by Testcontainers.** Forty-one suite
+      # files start containers across four workers, and each start asks Docker
+      # Hub for the manifest. Anonymous pulls are rate-limited per IP and
+      # Actions runners share IPs, so on a bad morning the registry answers a
+      # 500 or resets the connection and unrelated suites fail with
+      # `read: connection reset by peer`. That is what broke `main` after #108,
+      # with nothing wrong in the tree.
+      #
+      # One pull puts both images in the local daemon and every container start
+      # after it is a cache hit. Still not the Actions *cache*: restoring ~430 MB
+      # is not reliably faster than pulling it, and a stale entry would silently
+      # test the wrong Postgres.
+      #
+      # Retried because the failure being worked around is transient by
+      # definition — a single attempt here would just move the flake one step
+      # earlier. Backoff rather than three immediate tries, since the thing
+      # being waited out is a rate limit.
+      - name: Pull the container images
+        run: |
+          pull() {
+            for attempt in 1 2 3 4; do
+              if docker pull --quiet "$1"; then
+                return 0
+              fi
+              echo "::warning::pull of $1 failed (attempt $attempt); retrying"
+              sleep $((attempt * 15))
+            done
+            echo "::error::could not pull $1 after four attempts — Docker Hub is refusing, which is a registry problem rather than a change in this pull request"
+            return 1
+          }
+
+          # The Postgres image. Failing here is correct: without it every suite
+          # fails anyway, and one clear message beats forty confusing ones.
+          pull pgvector/pgvector:0.8.0-pg16
+
+          # Testcontainers' reaper, whose manifest request is the one that
+          # actually failed on the run that prompted this step.
+          #
+          # Its tag is read out of the installed package rather than written
+          # here, because it belongs to Testcontainers and moves on upgrade — a
+          # hard-coded tag would turn a routine dependency bump into a CI
+          # failure about an image nobody changed.
+          #
+          # Best-effort on purpose. If the tag cannot be found, or the pull
+          # fails, Testcontainers still fetches it itself: that is the status
+          # quo, which is worth a warning and not a red build.
+          ryuk=$(grep -rhoE 'testcontainers/ryuk:[0-9.]+' node_modules/.pnpm/testcontainers@*/node_modules/testcontainers/build/reaper/reaper.js 2>/dev/null | head -1)
+          if [ -n "$ryuk" ]; then
+            pull "$ryuk" || echo "::warning::could not pre-pull $ryuk; Testcontainers will fetch it"
+          else
+            echo "::warning::could not find the ryuk tag in node_modules; skipping its pre-pull"
+          fi
+
+      # The image tag lives in two files — `packages/testing` for the suites
+      # that use the shared harness, `packages/db/test/support` for the ones
+      # that predate it — and the step above pulls a third copy of the string.
+      # Three places that must agree, and disagreeing is silent: the pull warms
+      # one image and the tests download another, which is the flake this step
+      # exists to remove, wearing a disguise.
+      - name: Assert the pulled image is the one the suites ask for
+        run: |
+          for file in packages/testing/src/db-harness.ts packages/db/test/support/postgres.ts; do
+            if ! grep -q "pgvector/pgvector:0.8.0-pg16" "$file"; then
+              echo "::error::$file no longer pins pgvector/pgvector:0.8.0-pg16 — update the pull step above, or it warms an image the suites never use"
+              exit 1
+            fi
+          done
+          echo "the pulled image matches what the suites start."
+
       - name: Integration tests
         run: pnpm test:integration

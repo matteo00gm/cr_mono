@@ -24,3 +24,12 @@ packages/db/migrations/meta/
 # would fail on the commit that introduced it.
 docs/api/openapi.json
 docs/api/consumers.md
+
+# Claude Code's scratch worktrees.
+#
+# Checkouts of this same repository, created under `.claude/worktrees/` when an
+# agent needs an isolated tree. `.git/info/exclude` keeps them out of git, but
+# that file is local and Prettier does not read it — so without this line
+# `pnpm format:check` fails on somebody else's checkout of the same code, and
+# the fix looks like formatting the whole repository.
+.claude/

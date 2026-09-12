@@ -12,6 +12,12 @@ export default tseslint.config(
       '**/.sst/**',
       '**/sst-env.d.ts',
       '**/coverage/**',
+      // Claude Code's scratch worktrees: checkouts of this same repository,
+      // created under `.claude/worktrees/` when an agent needs an isolated
+      // tree. `.git/info/exclude` keeps them out of git, but that file is local
+      // and ESLint does not read it — so without this, `pnpm lint` reports
+      // errors in somebody else's checkout of the same code.
+      '.claude/**',
       // SST owns these. They depend on globals ($config, $app, sst.aws.*)
       // typed by .sst/platform/config.d.ts, which `sst install` generates and
       // git ignores — so they belong to no tsconfig and type-aware rules have
