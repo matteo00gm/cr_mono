@@ -330,6 +330,43 @@ describe('the state and the vector', () => {
     expect(String([...after][0]?.updated_at)).not.toBe(String([...before][0]?.updated_at));
   });
 
+  it('ignores every generated column, checked against the catalogue', async () => {
+    /*
+     * **The guard on the mistake that made the first version of this trigger a
+     * no-op.** Postgres computes a stored generated column *after* BEFORE
+     * triggers run, so inside the function `NEW.search_tsv` is NULL while
+     * `OLD.search_tsv` holds the last write's value. The two rows are therefore
+     * always distinct, whatever the statement changed — the narrowing did
+     * nothing, every embedding write still moved the stamp, and the function
+     * looked entirely correct. It *was* correct on a table with no generated
+     * column, which is how a minimal reproduction confirmed logic that did not
+     * work in place.
+     *
+     * So the list is checked against the catalogue rather than reviewed. A
+     * second generated column added to `products` and not named in the function
+     * breaks the narrowing in exactly the same invisible way.
+     */
+    const generated = await db.execute(sql`
+      select attname from pg_attribute
+      where attrelid = 'products'::regclass and attgenerated <> '' and not attisdropped
+    `);
+
+    const definition = await db.execute(sql`
+      select pg_get_functiondef('products_set_updated_at()'::regprocedure) as body
+    `);
+
+    const body = ([...definition][0] as { body?: string } | undefined)?.body ?? '';
+    const columns = [...generated].map((row) => (row as { attname: string }).attname);
+
+    expect(columns.length).toBeGreaterThan(0);
+
+    for (const column of columns) {
+      expect(body, `${column} is generated and must be in the trigger's ignore list`).toContain(
+        `'${column}'`,
+      );
+    }
+  });
+
   it('counts a column nobody thought about as an edit', async () => {
     /*
      * **The direction the comparison is written in.** It excludes the three
