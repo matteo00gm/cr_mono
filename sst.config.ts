@@ -99,6 +99,13 @@ export default $config({
     await import('./infra/dashboard');
 
     /*
+     * The embedding pipeline (P1-32): the queue, the worker that consumes it,
+     * and the poller that fills it. After `config` for the database URL, and
+     * independent of the API — the two share a database and nothing else.
+     */
+    await import('./infra/queue');
+
+    /*
      * The deploy-time database path (P0-21b). Last, and independent of the
      * others: it is never invoked by a deploy, only created by one. See
      * `infra/migrator.ts` for why running migrations automatically is not
