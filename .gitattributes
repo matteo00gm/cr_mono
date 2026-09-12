@@ -18,3 +18,8 @@ pnpm-lock.yaml linguist-generated=true -diff
 *.woff binary
 *.woff2 binary
 *.xlsx binary
+
+# Import fixtures are bytes, not text (P1-17). Normalising a Windows-1252
+# fixture to UTF-8, or its CRLFs to LF, would leave the tests that exist for
+# exactly those bytes passing on a file that no longer contains them.
+apps/dashboard/test/fixtures/*.csv binary
