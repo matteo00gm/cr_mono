@@ -43,21 +43,29 @@ export default defineConfig({
      * **Four containers at a time, not one per file.**
      *
      * Every file here starts its own Postgres, and the default is to run them
-     * all at once. That was survivable at thirty files and stopped being so at
-     * thirty-seven: `product-embeddings.integration.test.ts` asserts that a
-     * vector search is planned as an HNSW index scan, and it began failing —
-     * then **passing on a re-run of the identical commit**, which is what
-     * establishes contention rather than a regression.
+     * all at once. Forty-one containers on a four-vCPU runner is the reason
+     * for a cap: each one is a real server with its own shared buffers, and
+     * the work is mostly the container starting rather than the assertions
+     * running. One worker per vCPU keeps every worker's container the thing it
+     * is waiting on.
      *
-     * The number is a guess at a runner's headroom rather than a measurement,
-     * and it is deliberately not 1: a fully serial suite would be minutes
-     * slower on every pull request, and a suite people avoid running is the
-     * thing this repository has already decided to spend money to prevent
-     * (§6.4).
+     * **This cap was originally added on a theory that turned out to be
+     * wrong**, and the correction is worth keeping rather than quietly
+     * rewriting. It was introduced because
+     * `product-embeddings.integration.test.ts` asserted a vector search plans
+     * as an HNSW index scan, failed, and passed on a re-run of the identical
+     * commit — which reads as contention. It was not. The two plans were
+     * within five per cent of each other on cost, so which one won moved with
+     * the index's page count over five thousand random vectors. Capping
+     * workers made a coin flip land the right way more often, which is the
+     * worst kind of fix: it worked, and it worked for a reason that was not
+     * true. The assertion was rewritten in #104 to something that cannot flake.
      *
-     * If a plan assertion flakes again despite this, the cause is not
-     * contention and the next step is to assert the *property* — that the query
-     * did not read every row — rather than the planner's choice of name.
+     * So the number stays, on its own merits, and the old reason is gone.
+     * Deliberately not 1: a fully serial suite would be minutes slower on every
+     * pull request, and a suite people avoid running is the thing this
+     * repository has already decided to spend money to prevent (§6.4). At four
+     * the whole suite is ~124s on a GitHub runner and ~115s locally.
      */
     maxWorkers: 4,
     minWorkers: 1,
