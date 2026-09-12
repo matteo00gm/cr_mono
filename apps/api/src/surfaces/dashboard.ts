@@ -21,9 +21,12 @@ import { z } from 'zod';
 
 import {
   assertMemberWriteSucceeded,
+  COMPLETENESS_BANDS,
+  COMPLETENESS_FIELDS,
   ConflictError,
   InvalidRequestError,
   NotFoundError,
+  rangeOfBand,
 } from '@catalogorosso/core';
 import {
   EMBEDDING_STATES,
@@ -185,6 +188,17 @@ const listQuery = z.object({
 
   priceMin: z.coerce.number().int().nonnegative().optional(),
   priceMax: z.coerce.number().int().nonnegative().optional(),
+
+  /**
+   * How completely a wine is described (P1-09, which deferred this to P1-12).
+   *
+   * **A band rather than a number**, because the number is not the seller's
+   * unit. Nobody asks for "wines scoring under 40"; they ask to see the ones
+   * that need work, which is what the indicator beside each row already calls
+   * *Da completare*. Taking a raw range here would let a client invent a
+   * fourth band the interface has no word for.
+   */
+  completeness: z.enum(COMPLETENESS_BANDS).optional(),
 });
 
 export const createDashboardApp = ({
@@ -529,12 +543,33 @@ export const createDashboardApp = ({
       throw new InvalidRequestError(
         'Check the query parameters: sort must be one of createdAt, updatedAt, name or ' +
           `priceCents, direction asc or desc, limit a whole number up to ${String(MAX_LIMIT)}, ` +
-          'and stockStatus, embeddingState and the price bounds must be values the ' +
-          'catalogue actually uses.',
+          'and stockStatus, embeddingState, completeness and the price bounds must be ' +
+          'values the catalogue actually uses.',
       );
     }
 
-    const page = await products.list({ tenantId: c.get('tenantId'), ...parsed.data });
+    const { completeness, ...query } = parsed.data;
+
+    const page = await products.list({
+      tenantId: c.get('tenantId'),
+      ...query,
+      /*
+       * **This layer is the join, and it is the only one that can be.** The
+       * weights are a product decision and live in `packages/core`; the columns
+       * are a schema fact and live in `packages/db`; `core` already depends on
+       * `db`, so `db` cannot import the weights without a cycle. `apps/api`
+       * imports both, so it hands one to the other — which keeps a single
+       * definition of what a field is worth rather than a copy in SQL.
+       */
+      ...(completeness === undefined
+        ? {}
+        : {
+            completeness: {
+              ...rangeOfBand(completeness),
+              weights: COMPLETENESS_FIELDS.map(([field, weight]) => ({ field, weight })),
+            },
+          }),
+    });
 
     return c.json({
       items: page.items.map(toProductResponse),

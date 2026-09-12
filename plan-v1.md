@@ -3634,7 +3634,17 @@ What did ship:
 - **An invalid enum value is refused rather than dropped.** A silently ignored filter shows a seller more wines than they asked for and lets them conclude the catalogue holds something it does not — the same failure `matchedBy` (P1-08) exists to prevent, from the other direction.
 - **A price range with its bounds the wrong way round returns nothing, not an error.** It is a slider dragged past itself, not a malformed request, and an empty result is the honest answer rather than one the interface has to explain. Each bound is independently optional, so "under 20 euro" needs no invented floor.
 
-**⚠ The completeness band is not implemented, because there is nothing to band.** The row lists it among the filters; **P1-12** is what computes a completeness score, and it has not been built. Filtering on a score that does not exist would mean inventing the formula here, in the place with no test for it, and P1-13's indicator would then have to agree with a definition it did not choose. It lands with P1-12.
+**⚠ The completeness band was not implemented, because there was nothing to band** *(landed as P1-09a, after P1-12)*. The row lists it among the filters; P1-12 is what computes the score, and it did not exist. Filtering on a score that did not exist would have meant inventing the formula here, in the place with no test for it, and P1-13's indicator would then have had to agree with a definition it did not choose.
+
+**As built (P1-09a).** The filter takes a *band* — `sparse`, `partial`, `rich` — not a raw range, because the number is not the seller's unit: nobody asks for "wines scoring under 40", they ask to see the ones that need work, which is what the indicator beside each row already calls *Da completare*. A raw range would let a client invent a fourth band the interface has no word for.
+
+**The score is computed in SQL, and the weights are not written there.** `packages/core` owns what a field is worth — a product decision that gets tuned — and `packages/db` owns which column holds it. Neither can import the other (`core` already depends on `db`, so the reverse is a cycle the boundary rules refuse), so **`apps/api` joins them**: it passes `COMPLETENESS_FIELDS` down as weights, and the query builder maps each field to a column through its own allowlist. A field scored in core with no column here **throws** rather than scoring as absent — skipping it would lower every wine's score by that weight and silently re-band the catalogue.
+
+Two implementations of one definition is the arrangement `completeness.ts` opens by warning about, so the integration suite drives both over the same rows and compares — including the cases that separate a careless `IS NOT NULL` from the real rule, an empty array and a blank string. Five mutations, five failures.
+
+**Computed per row rather than stored.** A generated column would be free to filter and index, and would put the weights in a migration — a third place to disagree, and a table rewrite every time a weight is tuned. At this catalogue size the expression is cheap.
+
+**The score is also returned on every product**, which is the one field in the response that is not a column. Not for convenience: the filter runs in SQL, so a client that recomputed the score could disagree with what was filtered — a wine listed under *Da completare* with a *Buono* badge beside it. `product-contracts.test.ts` gained a declared list of derived fields, each needing a written reason, so "it is computed" cannot become a way to publish a field nothing fills.
 
 ---
 

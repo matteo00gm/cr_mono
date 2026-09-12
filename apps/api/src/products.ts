@@ -1,5 +1,5 @@
 import type { Product } from '@catalogorosso/api-client';
-import { contentHashOf } from '@catalogorosso/core';
+import { completenessOf, contentHashOf } from '@catalogorosso/core';
 import {
   archiveProduct,
   insertProduct,
@@ -70,6 +70,13 @@ export const toProductResponse = (row: ProductRow): Product => ({
   imageUrl: row.imageUrl,
   status: row.status,
   embeddingState: row.embeddingState,
+  /*
+   * Computed here rather than stored, and sent rather than left to the client.
+   * The catalogue filters by completeness band in SQL (P1-09), so a client
+   * recomputing it could disagree with what was filtered — a wine listed under
+   * "Da completare" with a "Buono" badge beside it. One number, computed once.
+   */
+  completeness: completenessOf(row).score,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });

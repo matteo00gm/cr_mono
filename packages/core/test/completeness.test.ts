@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   bandOf,
   completenessOf,
+  COMPLETENESS_BANDS,
   COMPLETENESS_FIELDS,
   FIELD_LABELS,
+  rangeOfBand,
   type ScorableProduct,
 } from '../src/completeness.js';
 
@@ -213,6 +215,36 @@ describe('the bands', () => {
     expect(bandOf(40)).toBe('partial');
     expect(bandOf(74)).toBe('partial');
     expect(bandOf(75)).toBe('rich');
+  });
+
+  it('covers every score with exactly one band, with no gap and no overlap', () => {
+    /*
+     * **The property that keeps the filter and the label agreeing.** The UI
+     * colours a band; the catalogue filters by one, which the database does as
+     * a numeric range. A boundary written twice is a filter that returns a wine
+     * the indicator beside it calls something else — and both look right on
+     * their own.
+     *
+     * Round-tripped rather than compared to literals: asserting `rangeOfBand`
+     * against numbers would be writing the boundary a third time.
+     */
+    for (const band of COMPLETENESS_BANDS) {
+      const { min, max } = rangeOfBand(band);
+
+      expect(bandOf(min), `${band} floor`).toBe(band);
+      expect(bandOf(max), `${band} ceiling`).toBe(band);
+      expect(max).toBeGreaterThanOrEqual(min);
+    }
+
+    // Every score belongs to the band whose range contains it, and to one only.
+    for (let score = 0; score <= 100; score += 1) {
+      const containing = COMPLETENESS_BANDS.filter((band) => {
+        const { min, max } = rangeOfBand(band);
+        return score >= min && score <= max;
+      });
+
+      expect(containing, `score ${String(score)}`).toEqual([bandOf(score)]);
+    }
   });
 
   it('leaves a wine with only its heaviest field short of rich', () => {
