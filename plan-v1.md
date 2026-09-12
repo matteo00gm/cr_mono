@@ -3853,6 +3853,15 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 
 **Files.** `encoding.ts`, tests + binary fixtures. **~90 lines.**
 
+**As built.**
+
+- **`decodeFile(bytes, override?)`** tries `TextDecoder('utf-8', { fatal: true })` and falls back to Windows-1252 when it throws. An override wins and is reported as *chosen* rather than *detected*, so the notice can say which. A test pins why `fatal` is the whole trick: a lenient decoder "succeeds" on the Windows-1252 fixture and returns U+FFFD.
+- **The UTF-8 byte-order mark is removed by `TextDecoder` itself.** P1-16's `stripBom` stays, for text that did not come through a decoder.
+- **Double encoding is flagged** *(addition)*. The row notes that a file can be valid UTF-8 and still wrong, which is why the override exists — but detection cannot see that case, so nothing would tell a seller to use it. `looksDoubleEncoded` looks for `Ã` or `Â` followed by a Latin-1 supplement character, the signature "è" leaves as "Ã¨" after one wrong save, and the notice asks the seller to check the preview before importing.
+- **The fixtures are bytes, and guarded as bytes.** `cp1252.csv`, `utf8.csv` and `utf8-bom.csv` are written with their bytes spelled out, and `.gitattributes` marks `apps/dashboard/test/fixtures/*.csv binary`. The first test asserts `à` is still one byte, the mark is still there and the CRLFs survived; the second asserts the attribute. A fixture some tool re-saved as UTF-8 would otherwise leave every assertion passing on a file that tests nothing.
+- Fixture paths come from `import.meta.dirname`: under the jsdom environment `import.meta.url` is not a `file:` URL, and `new URL('./fixtures/…', import.meta.url)` resolves to the drive root.
+- **Not here: the override control.** `decodeFile` takes the choice; the control that offers it belongs to the import screen (P1-23).
+
 ---
 
 ### P1-18 · XLSX via dynamic import
