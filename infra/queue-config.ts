@@ -59,15 +59,27 @@ export const DLQ_RETENTION_SECONDS = 1_209_600;
  * concurrent × 2 per container = 20; the worker at 5 × 2 = 10. Thirty in use,
  * leaving headroom for sweep jobs, migrations and a human with `psql`.
  */
-export const CONNECTIONS = {
+export interface ConnectionBudget {
   /** Postgres `max_connections` on the instance class in `database.ts`. */
+  readonly instanceMax: number;
+  readonly apiConcurrency: number;
+  readonly workerConcurrency: number;
+  readonly perContainer: number;
+}
+
+/*
+ * An interface rather than `typeof CONNECTIONS`, so the assertions below can be
+ * driven with a budget that should trip them. `as const` makes every field a
+ * literal type, which means `{ ...CONNECTIONS, workerConcurrency: 60 }` is a
+ * type error — and a guard that cannot be handed a failing value is a guard
+ * nobody can prove fires.
+ */
+export const CONNECTIONS: ConnectionBudget = {
   instanceMax: 100,
   apiConcurrency: 10,
   workerConcurrency: 5,
   perContainer: 2,
-} as const;
-
-export type ConnectionBudget = typeof CONNECTIONS;
+};
 
 /** How many connections the API and worker together can hold at their caps. */
 export const budgetedConnections = (budget: ConnectionBudget = CONNECTIONS): number =>
