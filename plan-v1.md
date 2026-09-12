@@ -3650,6 +3650,20 @@ What did ship:
 
 **Files.** `apps/dashboard/src/features/catalog/CatalogGrid.tsx`, tests. **~200 lines.** *Split: grid shell / row renderer / cell renderer if review is heavy.*
 
+**As built.** The row model is the row's, unchanged — `{ id, data, state, errors }` with `draft` and `error` built before anything produces them, because retrofitting them means changing the row type, every cell renderer and every test at once.
+
+**Hand-rolled windowing rather than `@tanstack/virtual`**, which the row offers as an option. Fixed-height windowing is about forty lines; the library's surface is mostly the cases this grid does not have — variable heights, horizontal virtualisation, dynamic measurement. The row's own note, "a few hundred rows do not need a library, and thousands do", is an argument for *having* virtualisation rather than for importing one.
+
+**A virtualised table lies to a screen reader unless it is told not to, and that is the half the row does not mention.** Only a slice is in the DOM, so assistive technology announces "row 3 of 12" for a catalogue of five thousand — a table that is navigable by eye and unusable by anything else, with nothing on screen to suggest it. `aria-rowcount` carries the real total, `aria-rowindex` each row's real position, and the checkbox labels are numbered by that rather than by the rendered index. Three of the ten mutations are about exactly this.
+
+**Errors render per cell, not per row.** "3 errors" at the end of a line is a row somebody has to open; the message beside the value is one they can fix in place, which is the point of reviewing an import in a grid rather than in a list of complaints.
+
+**Selection is controlled**, because the actions that act on one — bulk reindex (P1-39), bulk archive — live above the grid, and a grid holding its own selection makes "what is selected" two answers. No checkboxes are rendered when nothing can act on them: a control that does nothing invites a seller to select rows and then offers them nothing to do.
+
+`windowFor` is exported and pure, so the arithmetic is tested without a DOM — an off-by-one there hides a row from a seller rather than crashing. The completeness column is what gives P1-13's compact variant its first consumer.
+
+**Not built here: the screen.** The grid takes rows; fetching them needs query parameters, which `packages/api-client`'s `request` does not yet accept — it takes an endpoint key and nothing else. That is its own piece of work and belongs with the catalogue screen rather than with the component.
+
 ---
 
 ### P1-11 · Inline edit: price and stock only
