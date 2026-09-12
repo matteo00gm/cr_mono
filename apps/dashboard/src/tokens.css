@@ -148,3 +148,97 @@ body {
   width: 64px;
   flex: none;
 }
+
+/* Catalogue grid (P1-10).
+   CSS grid rather than a <table>: the row model carries draft and error states
+   that need per-cell decoration, and a virtualised <table> needs its rows
+   absolutely positioned — which is exactly what table layout refuses to do.
+   The ARIA roles are what keep it a table to anyone not looking at it. */
+.cr-grid {
+  border: 1px solid var(--cr-line);
+  border-radius: var(--cr-radius);
+  overflow: hidden;
+  font-size: 0.875rem;
+}
+
+.cr-grid__head,
+.cr-grid__row {
+  display: grid;
+  align-items: center;
+  column-gap: var(--cr-gap);
+  padding: 0 var(--cr-gap);
+}
+
+.cr-grid__head {
+  height: 40px;
+  border-bottom: 1px solid var(--cr-line);
+  background: var(--cr-paper);
+  color: var(--cr-ink-soft);
+  font-weight: 600;
+}
+
+.cr-grid__viewport {
+  overflow-y: auto;
+  position: relative;
+}
+
+.cr-grid__sizer {
+  position: relative;
+}
+
+.cr-grid__row {
+  position: absolute;
+  inset-inline: 0;
+  height: 40px;
+  border-bottom: 1px solid var(--cr-line);
+  background: var(--cr-paper);
+}
+
+/* A draft is not yet saved and an error will not save at all. Both are carried
+   by a left border as well as a tint, so the distinction survives a monochrome
+   screen and a colour-vision deficiency. */
+.cr-grid__row--draft {
+  border-inline-start: 3px solid var(--cr-ink-soft);
+}
+
+.cr-grid__row--error {
+  border-inline-start: 3px solid var(--cr-wine);
+  background: #fff8f8;
+}
+
+.cr-grid__cell {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.cr-grid__cell--numeric {
+  justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+
+.cr-grid__cell--check {
+  justify-content: center;
+}
+
+/* Truncation is a consequence of the fixed row height, which is what makes
+   virtualisation possible: a cell that wrapped would make every row a
+   different height and the window arithmetic meaningless. The full value is in
+   the editor. */
+.cr-grid__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cr-grid__error {
+  color: var(--cr-wine);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.cr-grid__empty {
+  padding: var(--cr-gap);
+  color: var(--cr-ink-soft);
+}
