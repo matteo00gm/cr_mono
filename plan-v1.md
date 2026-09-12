@@ -4621,6 +4621,27 @@ Every rejection returns an identical generic `401` — the reason goes to `secur
 
 **Files.** `packages/core/src/rag/vector-search.ts`, tests. **~100 lines.**
 
+**⚠ Before building this — a filtered HNSW search can return fewer rows than it was asked for, and at skew it returns none.** Measured on the pinned image, and it is the reason the `EXPLAIN`-shows-an-index-scan assertion above must not be written as specified.
+
+pgvector's HNSW index is **global and unpartitioned**. A search walks the graph, collects `ef_search` (default 40) candidates across *every* tenant, and the tenant predicate discards them afterwards. So the budget is spent before the filter is applied. With 50,000 rows for one seller and 20 for another — an entirely ordinary shape at ten tenants — a forced index scan for the small seller returned **0 of 8 rows**, where the exact answer is 8:
+
+```
+Index Scan using emb_hnsw on emb
+  Order By: (embedding <=> $0)
+  Filter: (tenant_id = 2)
+-> 0 rows.   Sequential scan, same query: 8 rows.
+```
+
+`hnsw.iterative_scan` exists on 0.8.0 for exactly this and **did not rescue it** — `off`, `relaxed_order` and `strict_order` all returned 0, with `max_scan_tuples` raised past the table size. (The GUCs were confirmed in `pg_settings` after loading the extension in the session; an earlier attempt set them before the library was loaded, where Postgres accepts them silently and they do nothing.)
+
+Three consequences for this row:
+
+1. **Do not assert that `EXPLAIN` shows an index scan.** At the scale this product is built for the planner chooses a sequential scan and is right to (see P7-03: 5.9 ms, exact). An assertion demanding the index would be a test pushing retrieval towards the plan that loses rows.
+2. **Assert the result instead.** The durable guard is that the query returns the *exact* top-k — compare against a brute-force ordering over the same tenant's rows. That catches under-return whatever plan is chosen, and it is the failure a seller would experience as "my wine is never recommended".
+3. **`hnsw.ef_search` per transaction is not a sufficient tuning knob here**, contrary to the note above. It raises the candidate budget spent *before* the filter, so it reduces the problem without bounding it, and the cost is paid on every query.
+
+The index is kept — it is cheap at this size and a corpus that outgrows the scan will want it — but which plan serves retrieval is now a decision this row must make deliberately rather than inherit from the planner.
+
 ---
 
 ### P2-19 · Lexical search query
@@ -5904,9 +5925,19 @@ Reuse P5-03's HMAC verification and P5-04's `processed_webhooks` idempotency. Hi
 
 **Files.** `load/chat.js`, CI nightly job. **~110 lines.**
 
-**Added here from P0-27.** *Does the planner actually choose the HNSW index, at a corpus size a real seller has?* `product-embeddings.integration.test.ts` used to assert that on 5,000 synthetic rows, and at that size the two plans are within five per cent — Seq Scan 212.02, Sort 324.55, Limit 312.06, against an index whose estimated cost moves with its page count and therefore with five thousand random vectors. It came up the wrong way on four CI runs across branches touching nothing near it, and the right way on a re-run of each of those same commits. That is not a flaky test, it is a coin flip written as an equality assertion.
+**Was to inherit a question from P0-27; it is answered, and does not need a load test.** *Does the planner actually choose the HNSW index, at a corpus size a real seller has?* Measured on the pinned `pgvector/pgvector:0.8.0-pg16`, at this product's stated ceiling — **ten tenants × 2,000 wines, `halfvec(1024)`** — and the answer is no, correctly:
 
-What stayed in the correctness suite is the failure that has actually happened and cannot flake: the index exists, it is `hnsw`, it is built with `halfvec_cosine_ops`, and with `enable_seqscan`/`enable_sort` off the planner *can* serve the ordering from it. Migration 0011's own comment records why that matters — with an l2 index in place, the cosine query plans as a Seq Scan. **Which plan wins on cost belongs here**, with a row count chosen to answer the question rather than to make an assertion hold.
+```
+Limit (actual time=5.912..5.914 rows=8)
+  -> Sort  Sort Method: top-N heapsort  Memory: 25kB
+       -> Seq Scan on real_emb (actual time=0.014..5.796 rows=2000)
+            Filter: (tenant_id = 3)   Rows Removed by Filter: 18000
+Execution Time: 5.924 ms
+```
+
+**5.9 ms for an exact answer.** Forcing the scan gives 5.6 ms — the planner's choice *is* the scan, and it is not close. The HNSW index is unused at this scale, and that is the right outcome rather than a defect: an exact top-8 over two thousand vectors is faster than an approximate graph walk, and it cannot be wrong.
+
+So there is nothing here for a load test to discover, and the P7-03 entry this created is closed. What the measurement did surface belongs to **P2-18**, and it is a correctness problem rather than a performance one — see that row.
 
 ---
 

@@ -192,10 +192,18 @@ describe('product_embeddings', () => {
      * came up tails on four CI runs across branches that touch nothing near
      * this file, and heads on a re-run of each of those same commits.
      *
-     * Whether the planner *prefers* the index is a real question and a
-     * genuinely data-dependent one — it is about the corpus, not about our
-     * schema — so it belongs in P7-03's benchmark, where the row count is
-     * chosen to answer it rather than to make an equality assertion hold.
+     * Whether the planner *prefers* the index has since been measured, and the
+     * answer is no: at this product's ceiling — ten tenants of two thousand
+     * wines — an exact sequential scan over one tenant's vectors is ~6 ms and
+     * wins outright. That is correct rather than a defect, and it is why this
+     * file asserts the index is *usable* rather than *used*.
+     *
+     * The measurement surfaced something worse, recorded on P2-18: a filtered
+     * search through this index can return fewer rows than asked for — zero of
+     * eight at realistic tenant skew — because the graph walk spends its
+     * candidate budget before the tenant predicate is applied. So an assertion
+     * that retrieval *uses* this index would be a test pushing retrieval
+     * towards the plan that loses rows.
      */
     const migrator = createDbClient(started.roleUrl('app_migrate'), { max: 1 });
 

@@ -18,6 +18,20 @@
 -- m = 16 / ef_construction = 64 are pgvector's defaults, stated explicitly
 -- because they are a recall-versus-build-time trade-off worth seeing in a diff
 -- if anyone changes them.
+--
+-- *(Measured later, and worth knowing before relying on this index.)* At this
+-- product's ceiling — ten tenants of two thousand wines — the planner does not
+-- use it: an exact sequential scan over one tenant's vectors is ~6 ms, and it
+-- wins. That is the right outcome rather than a defect.
+--
+-- More importantly, **a filtered search through this index can return fewer
+-- rows than asked for.** The index is global, so a graph walk spends its
+-- `ef_search` budget across every tenant and the tenant predicate discards the
+-- results afterwards; at 50,000 rows for one seller and 20 for another, a
+-- forced index scan returned zero of eight. `hnsw.iterative_scan` did not
+-- rescue it in any mode. P2-18 carries the detail and the consequences — the
+-- short version is that retrieval must assert its *results*, never that a plan
+-- used this index.
 CREATE INDEX product_embeddings_embedding_hnsw
   ON product_embeddings
   USING hnsw (embedding halfvec_cosine_ops)
