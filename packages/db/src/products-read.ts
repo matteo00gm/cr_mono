@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, gte, lt, gt, lte, or, sql, type SQL } from 'drizzle-orm';
 
+import type { EmbeddingState } from './embedding-status.js';
 import { products } from './schema/products.js';
 import type { ProductRow } from './products.js';
 import type { DbTransaction } from './with-tenant.js';
@@ -192,9 +193,14 @@ export const completenessExpression = (weights: readonly CompletenessWeight[]): 
 export const STOCK_STATUSES = ['IN_STOCK', 'OUT_OF_STOCK', 'PREORDER'] as const;
 export type StockStatus = (typeof STOCK_STATUSES)[number];
 
-/** Where a row sits in the embedding pipeline. */
-export const EMBEDDING_STATES = ['PENDING', 'INDEXED', 'FAILED', 'STALE'] as const;
-export type EmbeddingState = (typeof EMBEDDING_STATES)[number];
+/**
+ * Where a row sits in the embedding pipeline.
+ *
+ * Defined in `embedding-status.ts` and re-exported here, because the filter
+ * below and the write that moves the column have to agree and only one of them
+ * can own the list.
+ */
+export { EMBEDDING_STATES, type EmbeddingState } from './embedding-status.js';
 
 export interface ProductPage {
   readonly items: readonly ProductRow[];

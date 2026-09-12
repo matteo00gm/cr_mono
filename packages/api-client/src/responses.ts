@@ -331,6 +331,46 @@ export const productArchivedResponse = z.object({
 });
 
 /**
+ * The answer to a single reindex (P1-39).
+ *
+ * **The product comes back, which is what makes the button honest.** A reindex
+ * moves the wine's embedding state — an `INDEXED` one becomes `STALE`, a
+ * `FAILED` one returns to `PENDING` with its error cleared — and P1-40's grid
+ * has to show that immediately. Returning the row means the grid re-renders
+ * from the server's answer rather than guessing the transition, which is the
+ * difference between a column that is right and a column that agrees with
+ * itself.
+ */
+export const productReindexedResponse = z.object({
+  product: productSchema,
+  /**
+   * **Not a promise that anything will be re-computed**, and the name is chosen
+   * to avoid making one. A wine whose vector already matches its text costs no
+   * provider call by design (P1-34) — the job runs, finds nothing to do and
+   * reconciles the state. What is true is that a job is queued.
+   */
+  queued: z.literal(true),
+});
+
+/**
+ * The answer to a catalogue-wide reindex (P1-39).
+ *
+ * `queued` is the number of wines re-queued, which is the count of *active*
+ * products — archived ones are left alone, because re-embedding one would put
+ * it back in front of visitors.
+ *
+ * `batchId` identifies this run on every outbox row it created. It is not a
+ * handle to poll: there is no job table behind it, and inventing one to give
+ * this endpoint a status URL would be a design decision taken for the sake of a
+ * response shape. What it buys is the ability to tell one run's rows from
+ * another's when reading the queue.
+ */
+export const catalogueReindexedResponse = z.object({
+  batchId: z.string(),
+  queued: z.number().int().nonnegative(),
+});
+
+/**
  * Every dashboard response, keyed by `METHOD path`.
  *
  * The client's `request()` is typed off this, so calling an endpoint returns
@@ -351,6 +391,8 @@ export const DASHBOARD_RESPONSES = {
   'PATCH /v1/dashboard/products/:id': productUpdatedResponse,
   'DELETE /v1/dashboard/products/:id': productArchivedResponse,
   'GET /v1/dashboard/products': productListResponse,
+  'POST /v1/dashboard/products/reindex-all': catalogueReindexedResponse,
+  'POST /v1/dashboard/products/:id/reindex': productReindexedResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

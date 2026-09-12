@@ -1,8 +1,8 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import process from 'node:process';
 import { ESLint } from 'eslint';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
  * The lint half of P0-48, asserting itself.
@@ -21,6 +21,9 @@ import { describe, expect, it } from 'vitest';
 
 const ROOT = join(import.meta.dirname, '..', '..', '..');
 
+/** Every directory this suite writes a fixture into, for the sweep below. */
+const FIXTURE_DIRS = ['apps/api/src', 'apps/api/src/middleware', 'packages/core/src'];
+
 // Each case shells the whole flat config through the type-aware parser, which
 // is slow enough under coverage instrumentation to pass the 5s default.
 const LINT_TIMEOUT_MS = 30_000;
@@ -32,14 +35,64 @@ const LINT_TIMEOUT_MS = 30_000;
  * parser's project service refuses a file it cannot find in a tsconfig. Since
  * the thing under test is the *repository's* configuration — including a
  * file-scoped exception — linting a real path is also the more honest check.
+ *
+ * **The directory is what the configuration keys on; the filename is not.**
+ * `eslint.config.js` exempts `apps/api/src/middleware/tenant.ts` by exact path
+ * and otherwise selects by directory, so the suffix below changes nothing about
+ * which rules apply — which is what makes a unique name per call safe.
  */
+let fixtureCounter = 0;
+
+/**
+ * A fresh filename for every lint, in the directory the caller asked for.
+ *
+ * Two reasons, and the second is the one that cost an afternoon.
+ *
+ * The type-aware project service caches a file by path. Writing different
+ * sources to the *same* path in quick succession — which this suite does,
+ * once per forbidden shape — invites it to lint content that is no longer
+ * there, on a machine fast enough that the mtimes collide. This suite failed
+ * once in a full run and never in isolation, which is the shape of exactly
+ * that; a unique path removes the mechanism whether or not it was the cause.
+ *
+ * And a killed test process never reaches the `finally` below, so an
+ * interrupted run leaves a fixture in `src/`, where `pnpm lint` then fails on
+ * the `any` inside it for a reason nobody would trace back to a test. A
+ * predictable suffix is what lets `.gitignore` and the sweep below match them
+ * all rather than the one somebody remembered.
+ */
+const fixturePath = (relativePath: string): string => {
+  fixtureCounter += 1;
+
+  return relativePath.replace(/\.ts$/, `.${String(fixtureCounter)}.fixture.ts`);
+};
+
+/**
+ * Removes fixtures an interrupted run left behind.
+ *
+ * Cheap, and it runs before anything else: a stray from a previous session
+ * would otherwise sit in `src/` failing lint for everyone until somebody
+ * noticed the filename was not one of ours.
+ */
+const sweepStrays = () => {
+  for (const dir of FIXTURE_DIRS) {
+    const absolute = join(ROOT, dir);
+    if (!existsSync(absolute)) continue;
+
+    for (const name of readdirSync(absolute)) {
+      if (name.includes('.fixture.ts')) rmSync(join(absolute, name), { force: true });
+    }
+  }
+};
+
 const lintSource = async (source: string, relativePath: string) => {
-  const absolute = join(ROOT, relativePath);
+  const scoped = fixturePath(relativePath);
+  const absolute = join(ROOT, scoped);
   mkdirSync(dirname(absolute), { recursive: true });
   writeFileSync(absolute, source, 'utf8');
 
   try {
-    return await lintFile(relativePath);
+    return await lintFile(scoped);
   } finally {
     rmSync(absolute, { force: true });
   }
@@ -55,6 +108,11 @@ const lintSource = async (source: string, relativePath: string) => {
  */
 const eslint = new ESLint({ cwd: process.cwd() });
 
+// Before anything, and after everything: a stray from an interrupted run is a
+// lint failure nobody would trace back to a test suite.
+beforeAll(sweepStrays);
+afterAll(sweepStrays);
+
 const lintFile = async (relativePath: string) => {
   const [result] = await eslint.lintFiles([join(ROOT, relativePath)]);
   const messages = result?.messages ?? [];
@@ -67,7 +125,7 @@ const lintFile = async (relativePath: string) => {
   return messages.filter((message) => message.ruleId === 'no-restricted-syntax');
 };
 
-const HANDLER = 'apps/api/src/handler-fixture.ts';
+const HANDLER = 'apps/api/src/handler.ts';
 
 describe('shapes the rule must reject', () => {
   const forbidden: readonly [string, string][] = [
@@ -138,9 +196,7 @@ describe('the single exception', () => {
         `const ACTIVE_TENANT_HEADER = 'x-active-tenant';\n` +
         `export const f = (c: any) => c.req.header(ACTIVE_TENANT_HEADER);`;
 
-      expect(
-        await lintSource(source, 'apps/api/src/middleware/neighbour-fixture.ts'),
-      ).not.toHaveLength(0);
+      expect(await lintSource(source, 'apps/api/src/middleware/neighbour.ts')).not.toHaveLength(0);
     },
   );
 });
@@ -179,6 +235,6 @@ describe('scope', () => {
      */
     const source = `export const f = (i: { requestedTenantId?: string }) => i.requestedTenantId;`;
 
-    expect(await lintSource(source, 'packages/core/src/scratch-fixture.ts')).toHaveLength(0);
+    expect(await lintSource(source, 'packages/core/src/scratch.ts')).toHaveLength(0);
   });
 });
