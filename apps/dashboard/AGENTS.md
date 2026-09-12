@@ -1,7 +1,8 @@
 # apps/dashboard
 
 Vite + Preact SPA, static, served from S3 behind CloudFront. The shell is built
-(P0-57); the screens behind it are placeholders.
+(P0-57); the catalogue (P1-10b) is the first real screen, and the rest are
+still placeholders.
 
 ## Invariants
 
