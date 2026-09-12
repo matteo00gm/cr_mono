@@ -17,6 +17,9 @@ importers:
       '@testcontainers/postgresql':
         specifier: ^12.1.0
         version: 12.1.0(supports-color@7.2.0)
+      '@types/node':
+        specifier: ^26.4.0
+        version: 26.4.0
       '@vitest/coverage-v8':
         specifier: ^4.1.11
         version: 4.1.11(vitest@4.1.11)

@@ -36,3 +36,7 @@ coverage/
 # Stryker
 reports/
 .stryker-tmp/
+
+# Written and deleted by `pnpm typecheck:infra-pure`. Present only if that
+# script was interrupted.
+.tsconfig.infra-pure.json
