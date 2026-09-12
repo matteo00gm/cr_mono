@@ -10,3 +10,6 @@ complete only because raw `fetch` to our own API is forbidden outside
 | Endpoint | Called from |
 |---|---|
 | `GET /v1/dashboard/me` | apps/dashboard/src/session.ts:150 |
+| `GET /v1/dashboard/products` | apps/dashboard/src/features/catalog/CatalogScreen.tsx:132 |
+| `POST /v1/dashboard/products/:id/reindex` | apps/dashboard/src/features/catalog/IndexStatus.tsx:167 |
+| `POST /v1/dashboard/products/reindex-all` | apps/dashboard/src/features/catalog/CatalogScreen.tsx:230 |

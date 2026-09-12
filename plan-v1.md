@@ -574,7 +574,7 @@ Token buckets behind a **`RateLimiter` interface** — one atomic upsert per che
 - The **monthly quota is checked before the model call** — that is the actual cost gate.
 - `429` responses carry `Retry-After` and `X-RateLimit-Limit`/`-Remaining`/`-Reset`.
 - Soft cap at 100% (widget shows `QUOTA_EXCEEDED`, tenant emailed), hard stop above a configurable overage.
-- Also rate-limit the *expensive dashboard* paths: bulk paste/upsert, bulk reindex, domain verification retries, invite sends.
+- Also rate-limit the *expensive dashboard* paths: bulk paste/upsert, bulk reindex, domain verification retries, invite sends. **Bulk reindex is the one on this list that turned out not to be expensive** — P1-34's hash check means a reindex of an unchanged catalogue makes no provider call at all — so P1-39 guards it against a *second batch queued on top of the first* rather than against a clock. It still belongs in the general budget here; it is no longer the urgent entry.
 - **AWS WAF on the CloudFront distribution** for L3/L4, managed bot-control and reputation rules, and per-path rate rules — a coarse outer layer in front of the fine-grained application limits above. Optional **Turnstile** (or WAF CAPTCHA) challenge on session mint when a tenant's anomaly score spikes — off by default, one flag to enable per tenant.
 
 ### 3.7 LLM-layer security
@@ -1223,6 +1223,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P1-08 | Catalog search endpoint | name, producer, sku, grape, region | P1-07 |
 | P1-09 | Catalog filters | availability, type, price band, `embedding_state`, completeness | P1-06 |
 | P1-10 | Grid component | virtualised table, row selection | P1-06 |
+| P1-10b | Catalogue screen | list, search, more rows, index status, reindex-all; the page P1-10, P1-13 and P1-40 shipped without | P1-10,40 |
 | P1-11 | Inline edit: price / stock only | the three weekly-churn fields | P1-10 |
 | P1-12 | Completeness score fn + test | pure function in `core` | P0-42 |
 | P1-13 | Completeness indicator UI | score + named missing fields + why-it-matters copy | P1-12,01 |
@@ -3388,6 +3389,12 @@ It also delivers the contract testing promised in §6.1 as a side effect: a brea
 
 **Generated artifacts are excluded from Prettier** *(consequence).* `lint-staged` runs `prettier --write` on every staged `.json` and `.md`, so the drift checks would have failed on the very commit that introduced them.
 
+**`request` took an endpoint and nothing else, so five of the fourteen endpoints could not be called at all** *(gap, closed later).* Every path with a `:id` in it, plus every filtered list. The client typechecked, the tests passed, and the shape was only noticed when P1-10 needed to fetch a page of products. It now takes path parameters, a query object and a body.
+
+Two of those are typed from the endpoint literal rather than declared: `PathParam<E>` reads the `:name` segments out of the string, and `params` is required exactly when there is one to fill — so a path that *gains* a segment turns every existing call site into a compile error instead of a 404 nobody can explain. The runtime half matters too, because the type cannot see a value that was `undefined` anyway: a missing parameter throws and names itself rather than sending `/products/:id`.
+
+The three failures worth naming are the ones that produce a **plausible wrong answer** rather than an error. A `?q=undefined` is a filter the server honours, and the seller sees an empty catalogue that looks exactly like an empty catalogue. An unencoded `/` in a SKU adds a path segment and changes which route matches. And the `x-active-tenant` header was set by *replacing* the header object, so adding a body would have dropped the tenant selection silently. Each has a test, and all eight mutations of this code are caught.
+
 **Tests.** Generated types compile against real handlers; a deliberately mismatched response shape fails typecheck (verify in a scratch commit); the consumer map lists a known call site; the lint rule catches a raw `fetch`.
 
 **Files.** `packages/api-client/**`, `scripts/api-consumers.mjs`, ESLint rule, CI steps. **~130 lines.** *(No `gen-client.ts` — see the first note.)*
@@ -3672,7 +3679,28 @@ Two implementations of one definition is the arrangement `completeness.ts` opens
 
 `windowFor` is exported and pure, so the arithmetic is tested without a DOM — an off-by-one there hides a row from a seller rather than crashing. The completeness column is what gives P1-13's compact variant its first consumer.
 
-**Not built here: the screen.** The grid takes rows; fetching them needs query parameters, which `packages/api-client`'s `request` does not yet accept — it takes an endpoint key and nothing else. That is its own piece of work and belongs with the catalogue screen rather than with the component.
+**Not built here: the screen.** The grid takes rows; fetching them needs query parameters, which `packages/api-client`'s `request` did not accept — it took an endpoint key and nothing else. That half is now done, under P0-63 where the client lives; what remains is the screen that wires the two together. That is P1-10b.
+
+---
+
+### P1-10b · Catalogue screen
+
+**What.** The page at `/catalogo`: the seller's wines in the P1-10 grid, with search, more rows, P1-13's completeness column, P1-40's index status and a catalogue-wide reindex.
+
+**Why.** *Added, not in the original backlog.* P1-10, P1-13 and P1-40 each shipped a component with nothing mounting it, and P1-40 recorded it as an open point: a seller still could not see their own catalogue. No row owned composing them.
+
+**As built.**
+
+- **Fifty rows at a time and "Carica altri vini", not numbered pages.** The list is keyset-paginated (P1-06), so there are no page numbers to offer.
+- **A late answer to an older search is discarded.** A generation counter moves on with every search and on unmount; without it a slow reply to "barolo" landing after a fast one to "etna" replaces the list the seller asked for with the one they abandoned.
+- **The background refresh re-reads the rows already on screen, up to the server's ceiling of 100, and replaces them by id.** It never appends and never reorders: a wine created elsewhere jumping into the list would move the row under the seller's pointer. Rows loaded past the first hundred keep their last state until a reload or their own Reindex; paging the whole list every few seconds to keep a status dot current is not worth its queries.
+- **Reindex-all says how many wines were queued.** A 409 is stated as "già in corso" rather than reported as a failure, and the remaining count is *not* parsed out of the server's English message; the index column already shows every settling wine.
+- **The client is built once per winery.** `Layout` memoises it, because the screen's effects deliberately do not depend on it and `apiFor` returns a new object on every call.
+- **A failed load offers Riprova;** a failed "more" keeps the rows already shown. Both quote the request id through `describeFailure`, now shared with P1-40's cell.
+
+**Tests.** First page and its query; more rows with the cursor, and the button gone when there is none; a failed "more" keeps rows; retry after a failed load; search sends the trimmed phrase and states a similar-only match; a late answer to an abandoned search is discarded; an empty search result says so rather than calling the catalogue empty; reindex-all's count wording at 0, 1 and many, and the new states read back; a 409 in Italian with no request id; any other refusal with one; a row replaced by its own reindex answer; settling wines refreshed on the poll; `mergeProducts` never appends; `/catalogo` mounts the screen with a client for the active winery.
+
+**Not here.** The filter controls (the API has taken them since P1-09), row selection and bulk actions, and mounting `ProductForm` for create and edit. Each is a screen affordance over an endpoint that already exists.
 
 ---
 
@@ -4119,7 +4147,7 @@ Several infra modules need none of that: `queue-config.ts`, `static-assets.ts`, 
 
 Four assertions, because a trigger that never fires is not a narrower trigger: a status write leaves the stamp, an ordinary edit moves it, a column nobody thought about moves it, and every generated column is in the ignore list. (The first version of this code claimed it opted out of the shared trigger; CI's integration run is what said otherwise.)
 
-**The failure is written in its own transaction.** The one that threw has rolled back — postgres-js poisons a transaction at the first statement error — so the reason could not be recorded inside it even if the code tried. Its own errors are swallowed and logged: a database refusing writes is a plausible cause of the original failure, and letting the bookkeeping throw would replace the real reason with "could not record the reason". The reason stored is the provider's error **name**, never its message: P0-56 applied to a column P1-40 shows the seller.
+**The failure is written in its own transaction.** The one that threw has rolled back — postgres-js poisons a transaction at the first statement error — so the reason could not be recorded inside it even if the code tried. Its own errors are swallowed and logged: a database refusing writes is a plausible cause of the original failure, and letting the bookkeeping throw would replace the real reason with "could not record the reason". The reason stored is the provider's error **name**, never its message: P0-56 applied to a column a seller will eventually see — through P1-50's readable reason, since P1-40 does not publish the raw name.
 
 Statements in `packages/db/src/embeddings.ts` (P0-09), records processed in sequence rather than fanned out — P1-32 budgets two connections per invocation, not ten.
 
@@ -4160,6 +4188,22 @@ SET LOCAL maintenance_work_mem = '128MB';
 
 **Files.** route, tests. **~100 lines.**
 
+**Nothing clears a hash, and the row's "forcing recompute" would not have forced one** *(deviation, and it is the cost control)*. The row says both paths clear `content_hash`. Two things have changed since it was written. The hash the worker compares against is the one stored **beside the vector** (P1-37), not `products.content_hash` — so clearing the product's column would force nothing, while making the *next* ordinary edit look like a content change and pay for an embedding it did not need. And `shouldEmbed`'s own docstring names "a manual reindex of an unchanged product" as one of the three things it exists to stop costing money.
+
+So a reindex of a wine whose vector is current calls no provider, by design. What it repairs is every way a row and its vector can disagree — a `FAILED` wine gets another attempt, a wine whose outbox row was lost gets a new one, a `PENDING` wine that does in fact have a good vector is corrected to `INDEXED` by the worker's own reconciliation. Those are the reasons a seller reaches for the button. The one case that genuinely needs a recompute — the embedding text or the model changing — already forces one without help, because `EMBEDDING_TEXT_VERSION` is part of the hash and every product's moves at once.
+
+**The rejection is "a batch is still draining", not a clock** *(deviation from "rate-limited per tenant")*. The row defers the limit to P2-04 anyway, and the reasoning it was written from does not survive the paragraph above: reindex-all on an unchanged catalogue is close to free, so the expensive thing it wanted bounded is not expensive here. What is worth refusing is a *second batch on top of the first* — two of them index nothing twice, they only double the work before either finishes — and that is a tenant-scoped count of unpublished `product.embed` rows, reached under RLS. The 409 carries how many are left, because "no" without a number gives a seller no way to tell a stuck run from a long one. A general per-tenant budget across every write endpoint stays P2-04's.
+
+**`maintenance_work_mem` has no call site in this design, so none was written** *(deviation)*. The row's `SET LOCAL` belongs where a reindex triggers an index *build*; here it triggers none. Reindex enqueues outbox rows, and the worker writes vectors one at a time with `INSERT ... ON CONFLICT DO UPDATE` — incremental HNSW insertion, which `maintenance_work_mem` does not govern. The guard becomes real for an explicit `REINDEX` or a bulk index rebuild, which is P7-05's territory; writing a `SET LOCAL` here would be a line that reads as protection and is not, which is worse than its absence. Its test ("assert it is unset on the connection afterwards") goes with it.
+
+**`queued` was an unused edge until now, and it is exactly right.** P1-38 wrote it for the poller, which does not apply it. A manual reindex is its first caller and wants precisely its transitions: `INDEXED → STALE` (findable under its previous description while a new one is built), `FAILED → PENDING` with the error cleared, `PENDING → PENDING` as a no-op. The attempt count survives on purpose — a wine that needed four tries is worth knowing about afterwards.
+
+**One statement, not batches** *(deviation)*. Batching bounds the memory of code that materialises rows; `reindexCatalogue` materialises none — the `UPDATE` feeds the `INSERT` through a CTE and only a count crosses the wire. Applying the transition set-wise means the `queued` edge has to reach SQL, so it travels **as data**: `apps/api` derives a `Record<EmbeddingState, EmbeddingState>` by asking `nextEmbeddingStatus` for each state, and `packages/db` renders it as a `CASE`. A second hand-written transition table is the thing P1-38 exists to prevent, and a test asserts the derived map and the function agree for every state.
+
+**Thirteen mutations, and the harness was the first thing that failed.** The script ran `subprocess.run([...], shell=True)` with a forward-slash path, which `cmd.exe` rejects in command position — so every invocation failed before vitest started and returned 1, which the harness read as "the test noticed". It reported a clean sweep having run nothing. It now asserts a passing baseline first, which is the check that would have caught it. Two of the thirteen then needed correcting rather than the code: `updated_at = now()` is an equivalent mutation, because 0038's trigger restores `OLD.updated_at` in its `ELSE` branch (the mutation that *does* move the stamp is clearing `content_hash` — what the row asked for); and a bare `.for('update')` pattern silently mutated `updateProduct`'s identical lines earlier in the file.
+
+The same broken harness had "verified" P0-63's request-shaping commit. Re-run honestly, seven of eight fired and one did not — the assertion that no `content-type` is sent without a body was made on a call with no active tenant either, where the `headers` object is never constructed at all, so the branch was not on that path. Fixed there.
+
 ---
 
 ### P1-40 · Index status in grid
@@ -4169,6 +4213,18 @@ SET LOCAL maintenance_work_mem = '128MB';
 **Tests.** Each state renders; the error tooltip shows the reason; the action calls the endpoint.
 
 **Files.** grid column, tests. **~80 lines.**
+
+**The tooltip explains the state, not the provider's reason** *(deviation)*. `embedding_error` is not in the product response, and that is a recorded decision rather than an oversight: `product-contracts.test.ts` lists it as withheld because it holds an error *name* — "ValidationException" tells a winery nothing — and publishing it before P1-50 replaces it with a seller-readable sentence would set a contract around a string that is meant to change. So each state's tooltip says what it means *for the seller* ("non viene consigliato… usa «Reindicizza» per riprovare"), which is true now and stays true once P1-50's reason sits beside it. "The error tooltip shows the reason" becomes "the failed tooltip names the consequence and the action".
+
+**It polls while `PENDING` *or* `STALE`, with backoff** *(deviation from "while any row is PENDING")*. Reindexing an `INDEXED` wine makes it `STALE` (P1-39), so a poll keyed on `PENDING` alone would leave the button's own result on screen until a reload. And one state never settles by itself — a wine whose outbox row was lost stays `PENDING` until somebody presses Reindex — so a fixed five-second poll would spend 720 list queries an hour per open tab waiting on it. The delay starts at 3 s, doubles to a 60 s cap, and starts over whenever the number of settling wines changes; a hidden tab neither fetches nor backs off.
+
+**The banner counts the wines it was given, and says "tra quelli mostrati".** The list is keyset-paginated with no total (P1-06), so a catalogue-wide count is a claim this component cannot back — and it is a number a seller would act on.
+
+**No Reindex on a draft or error row, or on an archived wine.** A draft has no server id; an archived wine has no vector and the API refuses it.
+
+**A failed request says so in Italian, with the request id — never the server's message**, which is English API-contract text (P0-55).
+
+**Not yet mounted on a screen.** `/catalogo` is still P0-57's placeholder, and no row in this phase owns composing the list endpoint, the grid, the form and this column into it — the same position P1-10 and P1-13 shipped in. That screen is P1-10b, added for exactly this, and it carries the catalogue-wide `reindex-all` action (P1-39) rather than a per-row column.
 
 ---
 
@@ -4212,6 +4268,8 @@ Worth knowing before this feels daunting: re-embedding is **cheap**. At Titan's 
 | **Unknown** | anything unclassified | Treat as transient once, then permanent — so a new error class surfaces rather than looping |
 
 Store a message the seller can act on — *"Le note di degustazione superano il limite (8.000 parole). Riducile per indicizzare il prodotto."* — not a stack trace or a provider error code. Surface it in the P1-40 grid.
+
+**What surfacing it takes, as P1-40 left things.** The grid does not show `embedding_error` today: `apps/api/test/product-contracts.test.ts` withholds it from the product response on purpose, until this row makes it worth reading. Publishing the reason means taking it off that withheld list (or adding a derived, seller-readable field), adding it to `productSchema` and `toProductResponse`, and putting it beside the state description in `IndexStatusCell`'s tooltip.
 
 **The loop closes on its own**, which is worth noting because it means no extra code: editing the product changes `content_hash`, which enqueues a fresh outbox row (P1-03), which re-embeds. The seller fixes the text and the product indexes itself. Add a manual **Riprova** button for the transient case.
 
