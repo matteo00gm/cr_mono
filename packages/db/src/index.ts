@@ -286,3 +286,21 @@ export {
   type OutboxJob,
   type OutboxPass,
 } from './outbox.js';
+
+/**
+ * Reading a product for embedding and writing the vector back (P1-37).
+ *
+ * Same terms as the other statement modules: they write SQL and take the
+ * transaction from their caller, so nothing here reaches a connection. The
+ * decision about *what* text a wine becomes, and whether it is worth
+ * re-embedding, stays in `packages/core/src/rag`.
+ */
+export {
+  EMBEDDING_CHUNK,
+  readProductForEmbedding,
+  upsertEmbedding,
+  writeEmbeddingStatus,
+  type EmbeddableRow,
+  type EmbeddingStatusWrite,
+  type StoredEmbedding,
+} from './embeddings.js';

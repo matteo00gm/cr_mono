@@ -4035,6 +4035,22 @@ The connection arithmetic that produces 5: `db.t4g.micro` allows roughly 100 con
 
 **Files.** `apps/worker/src/embed.ts`, tests. **~130 lines.**
 
+**As built.** The shape is the row's. Five things it did not price, and the first is a defect the row's own wording would have produced.
+
+**Two columns are called `content_hash` and they mean different things.** `products.content_hash` is written at *edit* time by `insertProduct` and `updateProduct` — P1-03 compares a patch against it to decide whether an edit is worth re-indexing. `product_embeddings.content_hash` says what the stored vector was actually built from. Only the second answers "does this wine need embedding": feeding `shouldEmbed` the first makes it *false* on every freshly created product, because the insert already set it — so the worker would skip the entire catalogue and report a clean pass doing it. Exactly the shape of failure P1-31 had.
+
+**The tenant check is structural, not an equality comparison.** The row says the message's tenant "must be re-validated against the product row". What that means in practice is that the tenant *opens* the transaction: a message naming the wrong tenant matches no product under the policy, and the job reports `gone`. Comparing `row.tenantId` to `message.tenantId` afterwards would read the answer out of the same query it is meant to check. What makes the id trustworthy in the first place is that it came from an `outbox` row whose `WITH CHECK` is tenant-only (P1-31), so it cannot name a tenant its writer was not in.
+
+**Three outcomes the row treats as one.** `gone` (deleted, or another tenant's — RLS makes those identical) and `archived` are not failures and must not throw: three retries and a DLQ entry for a wine that no longer exists reads as a provider problem. `archived` is its own case because P1-04 deletes an archived wine's vectors deliberately, so re-embedding one puts it back in front of visitors — the one thing archiving means to stop, done by a job the seller cannot see.
+
+**A no-op delivery still writes state.** A redelivery whose vector is already current finds a row that may still say `PENDING` — reachable, because a crash between the vector write and the state write on an earlier delivery leaves exactly that. One `UPDATE`, no provider call, and the disagreement P1-38 exists to prevent is corrected rather than left.
+
+**`updated_at` moves on a re-index, and nothing can stop it here.** The status write does not set the column; P0-22's `BEFORE UPDATE` trigger does, unconditionally, on every table. The consequence is real: `updatedAt` is a sortable column (P1-06), so a bulk re-index moves every wine to the top of "recently edited" without a seller having touched one. The column means "when did this row last change" and the trigger enforces exactly that — what the catalogue wants to sort by is "when did *I* last change it", which the schema does not hold. **Open point**: that needs a separate `edited_at`, or a trigger that ignores the embedding columns, before P1-40 offers the sort as "recently edited". A statement quietly opting out of the invariant is not the fix. (The first version of the code claimed it did opt out; CI's integration run is what said otherwise.)
+
+**The failure is written in its own transaction.** The one that threw has rolled back — postgres-js poisons a transaction at the first statement error — so the reason could not be recorded inside it even if the code tried. Its own errors are swallowed and logged: a database refusing writes is a plausible cause of the original failure, and letting the bookkeeping throw would replace the real reason with "could not record the reason". The reason stored is the provider's error **name**, never its message: P0-56 applied to a column P1-40 shows the seller.
+
+Statements in `packages/db/src/embeddings.ts` (P0-09), records processed in sequence rather than fanned out — P1-32 budgets two connections per invocation, not ten.
+
 ---
 
 ### P1-38 · `embedding_state` transitions

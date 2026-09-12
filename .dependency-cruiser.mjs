@@ -168,6 +168,13 @@ export default {
           // argument to make — the caller is inside withTenant, which is the
           // ordinary case this rule exists to preserve.
           '|^packages/db/src/products(-read)?[.]ts$' +
+          // src/embeddings.ts is exempt from P1-37 on the same terms as
+          // products.ts: it writes statements and takes the transaction from
+          // its caller, opening nothing. Its tables are tenant-scoped and under
+          // policy, and the caller is inside withTenant — which is the point,
+          // because opening that transaction with the tenant named in a queue
+          // message is what makes a message for the wrong tenant match no row.
+          '|^packages/db/src/embeddings[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
           '|^packages/core/src/auth[.]ts$' +
