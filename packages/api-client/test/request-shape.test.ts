@@ -177,16 +177,32 @@ describe('the body', () => {
     expect(headersOf(calls[0]?.init ?? {})['content-type']).toBe('application/json');
   });
 
-  it('sends no content-type when there is no body', async () => {
-    /*
-     * A `content-type: application/json` on a GET buys nothing and is the kind
-     * of header a CORS preflight or a caching proxy treats differently — an
-     * extra round trip for a request that carries no content.
-     */
+  it('sends no headers at all when there is nothing to put in them', async () => {
     const { calls, send } = capturing();
 
     await send('GET /v1/dashboard/me');
 
+    expect(calls[0]?.init.headers).toBeUndefined();
+  });
+
+  it('sends no content-type on a request that has other headers and no body', async () => {
+    /*
+     * A `content-type: application/json` on a GET buys nothing and is the kind
+     * of header a CORS preflight or a caching proxy treats differently — an
+     * extra round trip for a request that carries no content.
+     *
+     * **The active tenant is what makes this test mean anything**, and the
+     * version without it did not. With no tenant and no body the `headers`
+     * object is never constructed at all, so a mutation that sends a
+     * content-type on *every* request changed a branch that call never reaches
+     * — the assertion held, and held just as well against the broken code.
+     * Found by mutation testing after the harness itself was fixed.
+     */
+    const { calls, send } = capturing('tenant-1');
+
+    await send('GET /v1/dashboard/me');
+
+    expect(headersOf(calls[0]?.init ?? {})['x-active-tenant']).toBe('tenant-1');
     expect(headersOf(calls[0]?.init ?? {})['content-type']).toBeUndefined();
   });
 
