@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  completenessExpression,
   DEFAULT_LIMIT,
   decodeCursor,
   isSortField,
@@ -417,6 +418,27 @@ describe('filters and ordering, as branches', () => {
     ['both price bounds', { priceMin: 1000, priceMax: 5000 }],
     ['archived rows', { includeArchived: true }],
     [
+      'a completeness floor',
+      { completeness: { min: 40, weights: [{ field: 'foodPairings', weight: 25 }] } },
+    ],
+    [
+      'a completeness ceiling',
+      { completeness: { max: 74, weights: [{ field: 'tastingNotes', weight: 22 }] } },
+    ],
+    [
+      'a completeness band',
+      {
+        completeness: {
+          min: 40,
+          max: 74,
+          weights: [
+            { field: 'foodPairings', weight: 25 },
+            { field: 'tastingNotes', weight: 22 },
+          ],
+        },
+      },
+    ],
+    [
       'every filter at once',
       {
         stockStatus: 'PREORDER' as const,
@@ -425,6 +447,7 @@ describe('filters and ordering, as branches', () => {
         priceMin: 1,
         priceMax: 2,
         includeArchived: true,
+        completeness: { min: 0, max: 100, weights: [{ field: 'region', weight: 10 }] },
       },
     ],
   ])('accepts %s', async (_case, filters) => {
@@ -433,5 +456,47 @@ describe('filters and ordering, as branches', () => {
     await listProducts(tx, filters);
 
     expect(queries).toHaveLength(1);
+  });
+});
+
+describe('completenessExpression', () => {
+  /**
+   * The half of the completeness filter a fake can check (P1-09a).
+   *
+   * **What it cannot check is the only thing that really matters** — that the
+   * number Postgres computes equals the one `completenessOf` computes in
+   * TypeScript. That needs both packages and a database, and lives in
+   * `apps/api/test/completeness-filter.integration.test.ts`, which is the one
+   * layer that may import `core` and `db` together.
+   *
+   * What belongs here are the two ways a caller gets the weights wrong, because
+   * both fail in the direction that looks like working software.
+   */
+  it('refuses a field it has no column for', () => {
+    /*
+     * Skipping it would lower every wine's score by that weight and re-band the
+     * catalogue with nothing failing — a seller's "Buono" wines quietly
+     * becoming "Da completare" because somebody added a field to
+     * `COMPLETENESS_FIELDS` and not to the column map.
+     */
+    expect(() => completenessExpression([{ field: 'imaginary', weight: 10 }])).toThrow(/no column/);
+  });
+
+  it('refuses weights that sum to nothing', () => {
+    // Division by zero aside: every wine would score the same, so the filter
+    // would be a no-op wearing a filter's clothes.
+    expect(() => completenessExpression([])).toThrow(/sum to zero/);
+    expect(() => completenessExpression([{ field: 'region', weight: 0 }])).toThrow(/sum to zero/);
+  });
+
+  it('builds an expression from the weights it was given', () => {
+    // Shape only — that it is SQL at all, and that it did not throw. Whether
+    // the arithmetic is right is the integration suite's question.
+    expect(
+      completenessExpression([
+        { field: 'foodPairings', weight: 25 },
+        { field: 'tastingNotes', weight: 22 },
+      ]),
+    ).toBeDefined();
   });
 });
