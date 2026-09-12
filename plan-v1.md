@@ -3388,6 +3388,12 @@ It also delivers the contract testing promised in §6.1 as a side effect: a brea
 
 **Generated artifacts are excluded from Prettier** *(consequence).* `lint-staged` runs `prettier --write` on every staged `.json` and `.md`, so the drift checks would have failed on the very commit that introduced them.
 
+**`request` took an endpoint and nothing else, so five of the fourteen endpoints could not be called at all** *(gap, closed later).* Every path with a `:id` in it, plus every filtered list. The client typechecked, the tests passed, and the shape was only noticed when P1-10 needed to fetch a page of products. It now takes path parameters, a query object and a body.
+
+Two of those are typed from the endpoint literal rather than declared: `PathParam<E>` reads the `:name` segments out of the string, and `params` is required exactly when there is one to fill — so a path that *gains* a segment turns every existing call site into a compile error instead of a 404 nobody can explain. The runtime half matters too, because the type cannot see a value that was `undefined` anyway: a missing parameter throws and names itself rather than sending `/products/:id`.
+
+The three failures worth naming are the ones that produce a **plausible wrong answer** rather than an error. A `?q=undefined` is a filter the server honours, and the seller sees an empty catalogue that looks exactly like an empty catalogue. An unencoded `/` in a SKU adds a path segment and changes which route matches. And the `x-active-tenant` header was set by *replacing* the header object, so adding a body would have dropped the tenant selection silently. Each has a test, and all eight mutations of this code are caught.
+
 **Tests.** Generated types compile against real handlers; a deliberately mismatched response shape fails typecheck (verify in a scratch commit); the consumer map lists a known call site; the lint rule catches a raw `fetch`.
 
 **Files.** `packages/api-client/**`, `scripts/api-consumers.mjs`, ESLint rule, CI steps. **~130 lines.** *(No `gen-client.ts` — see the first note.)*
@@ -3672,7 +3678,7 @@ Two implementations of one definition is the arrangement `completeness.ts` opens
 
 `windowFor` is exported and pure, so the arithmetic is tested without a DOM — an off-by-one there hides a row from a seller rather than crashing. The completeness column is what gives P1-13's compact variant its first consumer.
 
-**Not built here: the screen.** The grid takes rows; fetching them needs query parameters, which `packages/api-client`'s `request` does not yet accept — it takes an endpoint key and nothing else. That is its own piece of work and belongs with the catalogue screen rather than with the component.
+**Not built here: the screen.** The grid takes rows; fetching them needs query parameters, which `packages/api-client`'s `request` did not accept — it took an endpoint key and nothing else. That half is now done, under P0-63 where the client lives; what remains is the screen that wires the two together.
 
 ---
 
