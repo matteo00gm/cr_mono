@@ -199,19 +199,16 @@ export const writeEmbeddingStatus = async (
       embeddingError: status.error,
       embeddingAttempts: status.attempts,
       /*
-       * **`updated_at` is not set here and moves anyway**, and that is worth
-       * knowing rather than discovering. P0-22 puts a `BEFORE UPDATE` trigger
-       * on every table: `NEW.updated_at = now()`, unconditionally, so no
-       * statement can decline it and supplying the old value does not help.
+       * **`updated_at` is not named here and does not move**, which took a
+       * migration to make true. P0-22's shared trigger stamps every UPDATE, so
+       * until `0038` a bulk re-index moved every wine to the top of "recently
+       * edited" — a sort P1-06 offers sellers — without anybody having touched
+       * one. `products` now has its own trigger that ignores exactly the three
+       * columns below, so the column keeps meaning what a seller reads it as.
        *
-       * The consequence is real and is recorded in the plan. `updatedAt` is a
-       * sortable column (P1-06), so a bulk re-index moves every wine to the top
-       * of "recently edited" without a seller having touched one. The column
-       * means "when did this row last change" and the trigger enforces exactly
-       * that; what the catalogue actually wants to sort by is "when did *I*
-       * last change it", which is a different fact the schema does not hold.
-       * Fixing it means a separate column or a narrower trigger, not a
-       * statement here quietly opting out.
+       * Which is why these three are written *alone*. Adding a fourth column to
+       * this `set` would be an edit as far as the trigger is concerned, and the
+       * sort would start lying again.
        */
     })
     .where(eq(products.id, productId));

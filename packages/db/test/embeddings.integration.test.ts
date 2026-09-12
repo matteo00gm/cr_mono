@@ -276,25 +276,18 @@ describe('the state and the vector', () => {
     });
   });
 
-  it('moves updated_at, because P0-22’s trigger owns that column', async () => {
+  it('leaves updated_at alone, because a re-index is not an edit', async () => {
     /*
-     * **Written the other way first, and CI was right.** The statement does not
-     * set `updated_at`; the database does. P0-22 puts a `BEFORE UPDATE` trigger
-     * on every table — `NEW.updated_at = now()`, unconditionally — so no
-     * statement can decline it, and supplying the old value would not help
-     * either.
+     * **`updated_at` is a sort field sellers use (P1-06), not an internal
+     * timestamp.** Until migration `0038` this test asserted the opposite —
+     * P0-22's shared trigger stamped every UPDATE, so a bulk re-index moved
+     * every wine to the top of "recently edited" without anybody having touched
+     * one. A sort that reshuffles itself for invisible reasons is worse than no
+     * sort, because the person reading it believes it.
      *
-     * The consequence is real and is recorded in the plan rather than worked
-     * around here. `updatedAt` is a sortable column (P1-06), so a bulk re-index
-     * moves every wine to the top of "recently edited" without a seller having
-     * touched one. The column means "when did this row last change" and the
-     * trigger enforces precisely that; what the catalogue wants to sort by is
-     * "when did *I* last change it", which the schema does not hold. That needs
-     * a separate column or a narrower trigger — not a statement quietly opting
-     * out of an invariant the whole schema depends on.
-     *
-     * Asserted rather than left implicit, so the day somebody adds the
-     * distinction this test is what tells them it changed.
+     * `products` now has its own trigger that ignores the three embedding
+     * columns. The pair below is the whole contract: a status write must not
+     * move the stamp, and a real edit must.
      */
     await useTenant(db, tenantId);
     const before = await db.execute(
@@ -308,6 +301,52 @@ describe('the state and the vector', () => {
     );
 
     await useTenant(db, tenantId);
+    const after = await db.execute(
+      sql`select updated_at from products where id = ${productId}::uuid`,
+    );
+
+    expect(String([...after][0]?.updated_at)).toBe(String([...before][0]?.updated_at));
+  });
+
+  it('still moves updated_at when the seller changes something', async () => {
+    /*
+     * The other half, and the one that stops the fix going too far. A trigger
+     * that never stamps is not a narrower trigger, it is a broken one — and
+     * nothing about the column's value would show which it was.
+     */
+    await useTenant(db, tenantId);
+    const before = await db.execute(
+      sql`select updated_at from products where id = ${productId}::uuid`,
+    );
+
+    await db.execute(
+      sql`update products set tasting_notes = 'Riscritta.' where id = ${productId}::uuid`,
+    );
+
+    const after = await db.execute(
+      sql`select updated_at from products where id = ${productId}::uuid`,
+    );
+
+    expect(String([...after][0]?.updated_at)).not.toBe(String([...before][0]?.updated_at));
+  });
+
+  it('counts a column nobody thought about as an edit', async () => {
+    /*
+     * **The direction the comparison is written in.** It excludes the three
+     * embedding columns rather than listing the ones that count, so a column
+     * added later is an edit by default. Forgetting to update the function
+     * makes a timestamp move slightly too often, never too rarely — and too
+     * rarely is the failure a seller cannot see.
+     */
+    await useTenant(db, tenantId);
+    const before = await db.execute(
+      sql`select updated_at from products where id = ${productId}::uuid`,
+    );
+
+    await db.execute(
+      sql`update products set image_url = 'https://example.test/b.jpg' where id = ${productId}::uuid`,
+    );
+
     const after = await db.execute(
       sql`select updated_at from products where id = ${productId}::uuid`,
     );

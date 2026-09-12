@@ -249,6 +249,14 @@ describe('products', () => {
   });
 
   it('stamps updated_at on update', async () => {
+    /*
+     * Since migration `0038` this is a *products-specific* trigger rather than
+     * P0-22's shared one: it ignores the three embedding columns, so a re-index
+     * does not move a stamp sellers sort by (P1-06). `stock_qty` is an ordinary
+     * edit and still stamps — which is the half that keeps the narrowing from
+     * becoming a trigger that never fires. The other half is in
+     * `embeddings.integration.test.ts`, beside the write it exempts.
+     */
     const inserted = await insertMinimal(tenantId, 'SKU-TOUCH');
     const id = [...inserted][0]?.id;
 
