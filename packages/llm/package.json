@@ -18,6 +18,7 @@
     "dist"
   ],
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1127.0",
     "@catalogorosso/core": "workspace:*",
     "@google/genai": "^2.22.0"
