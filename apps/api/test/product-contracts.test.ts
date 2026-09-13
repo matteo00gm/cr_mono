@@ -1,6 +1,10 @@
+import { EMBEDDING_FAILURE_REASONS } from '@catalogorosso/core';
 import { productRequest, productSchema } from '@catalogorosso/api-client';
 import { productInsert, productSelect } from '@catalogorosso/db';
 import { describe, expect, it } from 'vitest';
+
+import { toProductResponse } from '../src/products.js';
+import { storedProduct } from './support/products.js';
 
 /**
  * The published product shapes, kept honest against the derived ones (P1-01).
@@ -39,6 +43,11 @@ const DERIVED_FIELDS: Readonly<Record<string, string>> = {
     'that gets tuned, and a stored column would mean a table rewrite each time. ' +
     'Sent rather than left to the client because P1-09 filters by it in SQL, and ' +
     'a client that recomputed could disagree with what was filtered.',
+  embeddingFailure:
+    'P1-50. The stored `embedding_error` reduced to a closed set of reason codes by ' +
+    '`embeddingFailureOf`, null unless the wine is FAILED. Derived rather than published ' +
+    'raw because wines failed before P1-50 store provider error names, which read as ' +
+    '`unknown` instead of leaking a string no contract promised.',
 };
 
 describe('the published product shape', () => {
@@ -86,11 +95,10 @@ describe('the published product shape', () => {
        */
       'contentHash',
       /*
-       * The provider's own words, and operator-facing rather than
-       * seller-facing: "ValidationException" tells a winery nothing it can act
-       * on. **P1-50 owns turning it into something that does**, and publishing
-       * the raw text before then would set a contract around a string we intend
-       * to replace.
+       * The stored reason and the attempt count, both operator-facing. P1-50
+       * publishes the reason as `embeddingFailure`, a closed set of codes derived
+       * from the column; the column itself stays unpublished because wines failed
+       * before then store provider error names, which no contract should carry.
        */
       'embeddingAttempts',
       'embeddingError',
@@ -131,5 +139,33 @@ describe('the request shape', () => {
         .sort();
 
     expect(requiredIn(productRequest)).toEqual(requiredIn(productInsert));
+  });
+});
+
+describe('the failure reason (P1-50)', () => {
+  it('publishes exactly the reason codes the worker writes', () => {
+    expect(productSchema.shape.embeddingFailure.unwrap().options).toEqual([
+      ...EMBEDDING_FAILURE_REASONS,
+    ]);
+  });
+
+  it.each([
+    [
+      'a failed wine with a code',
+      { embeddingState: 'FAILED', embeddingError: 'input-rejected' },
+      'input-rejected',
+    ],
+    [
+      'a wine failed before P1-50',
+      { embeddingState: 'FAILED', embeddingError: 'ValidationException' },
+      'unknown',
+    ],
+    [
+      'an indexed wine still carrying text',
+      { embeddingState: 'INDEXED', embeddingError: 'input-rejected' },
+      null,
+    ],
+  ] as const)('is derived for %s', (_case, over, expected) => {
+    expect(toProductResponse(storedProduct(over)).embeddingFailure).toBe(expected);
   });
 });

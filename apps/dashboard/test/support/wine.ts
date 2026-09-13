@@ -30,6 +30,7 @@ export const wine = (over: Partial<Product> = {}): Product => ({
   imageUrl: null,
   status: 'ACTIVE',
   embeddingState: 'INDEXED',
+  embeddingFailure: null,
   completeness: 40,
   createdAt: '2026-09-01T10:00:00.000Z',
   updatedAt: '2026-09-01T10:00:00.000Z',

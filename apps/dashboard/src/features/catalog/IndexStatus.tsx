@@ -13,12 +13,10 @@ import { describeFailure } from './request-failure.js';
  * nothing anywhere says why. This column is the only place that gap shows, so
  * it has to be loud where it matters — `FAILED` — and quiet where it does not.
  *
- * **The provider's reason is not shown, deliberately.** `embeddingError` holds
- * an error *name* ("ValidationException"), which tells a winery nothing it can
- * act on, and `product-contracts.test.ts` withholds it from the response until
- * P1-50 replaces it with a sentence that does. The tooltip therefore explains
- * what each state *means for the seller*, which is true today and stays true
- * once a reason sits beside it.
+ * **A failed wine says why, in words a winery can act on** (P1-50). The API
+ * publishes a reason code, never the provider's error, and the sentence for it
+ * lives here beside the state it explains: first what the state *means for the
+ * seller*, then, for `FAILED`, what went wrong and what to do about it.
  */
 
 type EmbeddingState = Product['embeddingState'];
@@ -56,6 +54,37 @@ export const INDEX_STATE_COPY: Readonly<Record<EmbeddingState, StateCopy>> = {
     description:
       'L’indicizzazione non è riuscita, quindi questo vino non viene consigliato. Usa «Reindicizza» per riprovare.',
   },
+};
+
+type IndexFailure = NonNullable<Product['embeddingFailure']>;
+
+/**
+ * What to tell a seller about each failure reason (P1-50).
+ *
+ * Keyed by the response enum, like the states, so a reason added to the
+ * contract is a compile error here rather than a tooltip with nothing after it.
+ * **A refused text points at editing, not at the button**: saving re-queues the
+ * wine by itself, and pressing «Reindicizza» on text the provider refuses only
+ * fails again.
+ */
+export const INDEX_FAILURE_COPY: Readonly<Record<IndexFailure, string>> = {
+  'input-rejected':
+    'Il servizio di indicizzazione ha rifiutato il testo di questo vino. Controlla nome, note e abbinamenti — ad esempio testo copiato da un’intera pagina — e salva: il vino verrà reindicizzato da solo.',
+  'service-unavailable':
+    'Il servizio di indicizzazione non era disponibile. Riproviamo automaticamente; se il vino resta non indicizzato, usa «Reindicizza».',
+  unknown:
+    'L’indicizzazione non è riuscita per un motivo che non sappiamo spiegare. Usa «Reindicizza»; se si ripete, contatta l’assistenza.',
+};
+
+/** The state's meaning, and for a failed wine the reason after it. */
+export const indexStateDescription = (
+  product: Pick<Product, 'embeddingState' | 'embeddingFailure'>,
+): string => {
+  const description = INDEX_STATE_COPY[product.embeddingState].description;
+
+  return product.embeddingState === 'FAILED' && product.embeddingFailure !== null
+    ? `${description} ${INDEX_FAILURE_COPY[product.embeddingFailure]}`
+    : description;
 };
 
 /** The states the worker will move on its own, so a refetch can show progress. */
@@ -134,6 +163,7 @@ export const IndexStatusCell = ({
 }: IndexStatusCellProps): JSX.Element => {
   const product = row.data;
   const copy = INDEX_STATE_COPY[product.embeddingState];
+  const description = indexStateDescription(product);
 
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | undefined>(undefined);
@@ -183,9 +213,9 @@ export const IndexStatusCell = ({
        * cell. A popover would be clipped by the grid's scrolling viewport, and
        * everything a seller must know is also in the banner above it.
        */}
-      <span class="cr-index__state" title={copy.description}>
+      <span class="cr-index__state" title={description}>
         {copy.label}
-        <span class="cr-visually-hidden">{`. ${copy.description}`}</span>
+        <span class="cr-visually-hidden">{`. ${description}`}</span>
       </span>
 
       {actionable && (

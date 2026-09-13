@@ -196,6 +196,16 @@ export const productSchema = z.object({
   embeddingState: z.enum(['PENDING', 'INDEXED', 'FAILED', 'STALE']),
 
   /**
+   * Why a `FAILED` wine did not index, as a code the dashboard words (P1-50).
+   *
+   * `null` unless the state is `FAILED`. A code rather than a sentence, so the
+   * console can say it in Italian and change how it says it without changing
+   * the contract — and never the provider's own message or error name, which
+   * are for an operator.
+   */
+  embeddingFailure: z.enum(['input-rejected', 'service-unavailable', 'unknown']).nullable(),
+
+  /**
    * How completely this wine is described, 0-100 (P1-12).
    *
    * **The one field here that is not a column**, and it is sent rather than

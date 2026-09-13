@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CatalogGrid, type GridRow } from '../src/features/catalog/CatalogGrid.js';
 import {
+  INDEX_FAILURE_COPY,
   INDEX_STATE_COPY,
+  indexStateDescription,
   IndexFailureBanner,
   IndexStatusCell,
   indexStatusColumn,
@@ -415,5 +417,44 @@ describe('polling', () => {
 
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the reason a wine failed (P1-50)', () => {
+  it.each(Object.keys(INDEX_FAILURE_COPY) as NonNullable<Product['embeddingFailure']>[])(
+    'says what %s means after the state, in the tooltip and to a screen reader',
+    (reason) => {
+      const { client } = clientAnswering(() => Promise.resolve({}));
+      const product = wine({ embeddingState: 'FAILED', embeddingFailure: reason });
+
+      render(<IndexStatusCell row={rowOf(product)} client={client} onReindexed={vi.fn()} />);
+
+      const label = screen.getByTitle(indexStateDescription(product));
+      expect(label.title).toContain(INDEX_STATE_COPY.FAILED.description);
+      expect(label.title).toContain(INDEX_FAILURE_COPY[reason]);
+      expect(label.textContent).toContain(INDEX_FAILURE_COPY[reason]);
+    },
+  );
+
+  it('tells a seller whose text was refused to fix it, and the others to press the button', () => {
+    expect(INDEX_FAILURE_COPY['input-rejected']).toMatch(/salva/);
+    expect(INDEX_FAILURE_COPY['input-rejected']).not.toMatch(/Reindicizza/);
+    expect(INDEX_FAILURE_COPY['service-unavailable']).toMatch(/Reindicizza/);
+    expect(INDEX_FAILURE_COPY.unknown).toMatch(/Reindicizza/);
+  });
+
+  it('adds nothing for a wine that is not failed, or a failure with no reason', () => {
+    expect(indexStateDescription({ embeddingState: 'INDEXED', embeddingFailure: 'unknown' })).toBe(
+      INDEX_STATE_COPY.INDEXED.description,
+    );
+    expect(indexStateDescription({ embeddingState: 'FAILED', embeddingFailure: null })).toBe(
+      INDEX_STATE_COPY.FAILED.description,
+    );
+  });
+
+  it('never shows the provider’s own words', () => {
+    for (const text of Object.values(INDEX_FAILURE_COPY)) {
+      expect(text).not.toMatch(/Exception|Bedrock|Titan/);
+    }
   });
 });

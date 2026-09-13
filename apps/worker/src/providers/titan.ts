@@ -6,6 +6,7 @@ import {
 import {
   assertBatchAligned,
   EMBEDDING_TEXT_VERSION,
+  RETRYABLE_PROVIDER_ERRORS,
   type EmbeddingProvider,
 } from '@catalogorosso/core';
 
@@ -56,14 +57,12 @@ const MAX_CHARACTERS = 8_192 * 4;
  */
 const CONCURRENCY = 5;
 
-/** Bedrock's throttling and transient server errors, by name. */
-const RETRYABLE = new Set([
-  'ThrottlingException',
-  'TooManyRequestsException',
-  'ServiceUnavailableException',
-  'ModelTimeoutException',
-  'InternalServerException',
-]);
+/**
+ * Bedrock's throttling and transient server errors, by name — the set P1-50's
+ * classifier reads too, so what this adapter retries and what the worker calls
+ * transient cannot disagree.
+ */
+const RETRYABLE = RETRYABLE_PROVIDER_ERRORS;
 
 export interface TitanOptions {
   readonly client?: BedrockRuntimeClient | undefined;
