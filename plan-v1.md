@@ -4449,6 +4449,15 @@ Worth knowing before this feels daunting: re-embedding is **cheap**. At Titan's 
 
 **Files.** migration, retrieval change, `docs/runbooks/embedding-migration.md`. **~110 lines.**
 
+**As built — the affordance the row describes, with retrieval's half as a predicate because there is no retrieval yet.**
+
+- **Migration `0041_embedding_version`:** `tenants.embedding_version` and `product_embeddings.version`, both `smallint not null default 1` with a `>= 1` CHECK, and the unique key widened to `(tenant_id, product_id, chunk_idx, version)`. The defaults are the generation every stored vector already is, so the migration rewrites no vector and changes no answer. **Its down file refuses rather than choosing** while two generations exist: restoring the three-column key fails on the duplicates and rolls back with every vector intact.
+- **"Retrieval filters on the tenant's active version" is a predicate retrieval must carry** *(deviation)*. P2-18's vector query does not exist yet, so there was nothing to change. `activeEmbeddingVersionFilter(alias)` in `packages/db` is the filter, and a note on P2-18 makes it part of that row. The integration test runs a real `<=>` ordering through it: two generations rank the same wines in opposite orders, the answer follows the pointer, and flipping back restores it.
+- **The worker's read is version-aware** *(addition)*. `readProductForEmbedding` compares against the stored hash of `CURRENT_EMBEDDING_VERSION` (1) only. With two generations stored, the unversioned lookup's `limit 1` would have handed `shouldEmbed` either hash, and the worker would skip or re-embed at random. `upsertEmbedding` takes a version, which is the whole of dual-write at this layer. The worker loop that embeds into two generations at once needs a second provider and is built when a migration is actually run.
+- **The cutover predicate is `switchEmbeddingVersion`.** It locks the tenant row, counts active wines with no chunk-0 vector in the target generation, and refuses with that count, or moves the pointer; rolling back is the same call. **It checks presence, not currency** *(decision)*: a wine edited since its vector was built still counts, or ordinary editing could block a rollback during the incident it is for. Archived wines are not waited for. Nothing calls it yet; it is the guarded step of the runbook.
+- **One HNSW index serves both generations while both are `halfvec(1024)`.** A model with another dimension cannot share the column; the runbook's first step is the migration that gives it its own.
+- `docs/runbooks/embedding-migration.md` is the procedure the row lists, with each step pointing at the code that implements it. It is the first file in `docs/runbooks/`.
+
 ---
 
 ### P1-50 · Embedding failure classification and DLQ triage
@@ -4878,6 +4887,8 @@ Every rejection returns an identical generic `401` — the reason goes to `secur
 **Tests.** Returns products ordered by similarity; `EXPLAIN` shows an index scan (the assertion that catches a silently unused index); tenant B's context returns none of A's; archived products excluded.
 
 **Files.** `packages/core/src/rag/vector-search.ts`, tests. **~100 lines.**
+
+**Note from P1-49.** Filter the embeddings on `activeEmbeddingVersionFilter('e')` from `packages/db`, which reads the tenant's `embedding_version`. Without it a second embedding generation is mixed into the ranking rather than kept beside it: every wine appears twice, and one model's distances are compared with another's.
 
 **⚠ Before building this — a filtered HNSW search can return fewer rows than it was asked for, and at skew it returns none.** Measured on the pinned image, and it is the reason the `EXPLAIN`-shows-an-index-scan assertion above must not be written as specified.
 

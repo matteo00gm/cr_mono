@@ -1,4 +1,4 @@
-import { customType, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { customType, pgEnum, pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 /**
  * `tenants` — the root table (P0-22).
@@ -72,6 +72,17 @@ export const tenants = pgTable('tenants', {
 
   locale: text('locale').notNull().default('it'),
   currency: text('currency').notNull().default('EUR'),
+
+  /**
+   * The embedding generation this tenant's retrieval reads (P1-49).
+   *
+   * A pointer, not a description of the vectors: every vector carries its own
+   * `version`, and this says which of them answer a visitor. Moving it is the
+   * cutover and moving it back is the rollback, which is why it is a column per
+   * tenant rather than a constant — see `docs/runbooks/embedding-migration.md`.
+   * The `>= 1` CHECK lives in migration 0041.
+   */
+  embeddingVersion: smallint('embedding_version').notNull().default(1),
 
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 

@@ -70,4 +70,13 @@ describe('tenants schema', () => {
       expect(columns.get(column)?.getSQLType()).toBe('timestamp with time zone');
     }
   });
+
+  it('points every tenant at embedding generation 1 until a migration moves it', () => {
+    // P1-49. The default is the generation every stored vector already is, so
+    // adding the column changed no answer; a smallint because a generation is a
+    // small whole number, not a model name.
+    expect(columns.get('embedding_version')?.getSQLType()).toBe('smallint');
+    expect(columns.get('embedding_version')?.notNull).toBe(true);
+    expect(columns.get('embedding_version')?.default).toBe(1);
+  });
 });

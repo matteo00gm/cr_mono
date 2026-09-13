@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
 
 import type { EmbeddingState } from './embedding-status.js';
 import { productEmbeddings } from './schema/product-embeddings.js';
@@ -58,6 +58,16 @@ export interface EmbeddableRow {
 export const EMBEDDING_CHUNK = 0;
 
 /**
+ * The embedding generation this pipeline writes and reads today (P1-49).
+ *
+ * Titan Text Embeddings V2 at 1024 dimensions, and the column default in
+ * migration 0041 — so every vector stored before versions existed is this
+ * generation. It moves only when a model change is actually under way, by the
+ * procedure in `docs/runbooks/embedding-migration.md`.
+ */
+export const CURRENT_EMBEDDING_VERSION = 1;
+
+/**
  * Reads one product and the hash of its stored vector.
  *
  * **Scoped by the caller's `withTenant`, and that scoping *is* the tenant
@@ -76,6 +86,7 @@ export const EMBEDDING_CHUNK = 0;
 export const readProductForEmbedding = async (
   tx: DbTransaction,
   productId: string,
+  version = CURRENT_EMBEDDING_VERSION,
 ): Promise<EmbeddableRow | undefined> => {
   const rows = await tx
     .select({
@@ -119,6 +130,13 @@ export const readProductForEmbedding = async (
       and(
         eq(productEmbeddings.productId, productId),
         eq(productEmbeddings.chunkIdx, EMBEDDING_CHUNK),
+        /*
+         * The generation being written, and only it (P1-49). With two stored,
+         * a lookup that ignored the version would hand `shouldEmbed` either
+         * hash — so the worker would skip one generation's stale vector or pay
+         * again for the other's current one, at random.
+         */
+        eq(productEmbeddings.version, version),
       ),
     )
     .limit(1);
@@ -132,6 +150,8 @@ export interface StoredEmbedding {
   readonly contentHash: string;
   readonly embedding: readonly number[];
   readonly model: string;
+  /** The generation this vector belongs to. Omitted, it is the one this pipeline writes today. */
+  readonly version?: number | undefined;
 }
 
 /**
@@ -160,9 +180,15 @@ export const upsertEmbedding = async (
       contentHash: stored.contentHash,
       embedding: [...stored.embedding],
       model: stored.model,
+      version: stored.version ?? CURRENT_EMBEDDING_VERSION,
     })
     .onConflictDoUpdate({
-      target: [productEmbeddings.tenantId, productEmbeddings.productId, productEmbeddings.chunkIdx],
+      target: [
+        productEmbeddings.tenantId,
+        productEmbeddings.productId,
+        productEmbeddings.chunkIdx,
+        productEmbeddings.version,
+      ],
       set: {
         contentHash: stored.contentHash,
         embedding: [...stored.embedding],
@@ -170,6 +196,121 @@ export const upsertEmbedding = async (
         createdAt: sql`now()`,
       },
     });
+};
+
+/**
+ * The generation a tenant's retrieval reads (P1-49).
+ *
+ * Asked by id as well as scoped by the transaction, and refused rather than
+ * defaulted when the row is not visible: a caller whose transaction is for
+ * another tenant must not be told "version 1" and act on it.
+ */
+export const readActiveEmbeddingVersion = async (
+  tx: DbTransaction,
+  tenantId: string,
+): Promise<number> => {
+  const rows = await tx.execute(sql`
+    select embedding_version from tenants where id = ${tenantId}::uuid
+  `);
+  const [row] = [...rows] as { embedding_version: number }[];
+
+  if (row === undefined) {
+    throw new Error('readActiveEmbeddingVersion: the tenant is not visible in this transaction');
+  }
+
+  return row.embedding_version;
+};
+
+/**
+ * How many active wines have no vector in a generation — the cutover predicate.
+ *
+ * **Presence, not currency.** A wine edited since its vector was built still
+ * counts as present: requiring a current hash would let ordinary editing block a
+ * rollback during the very incident a rollback is for, and dual-write keeps both
+ * generations moving anyway. Archived wines have no vector in any generation
+ * and are not waited for.
+ */
+export const missingForEmbeddingVersion = async (
+  tx: DbTransaction,
+  request: { readonly tenantId: string; readonly version: number },
+): Promise<number> => {
+  const rows = await tx.execute(sql`
+    select count(*)::int as missing
+      from products p
+     where p.tenant_id = ${request.tenantId}::uuid
+       and p.status = 'ACTIVE'
+       and not exists (
+         select 1 from product_embeddings e
+          where e.product_id = p.id
+            and e.chunk_idx = ${EMBEDDING_CHUNK}
+            and e.version = ${request.version}
+       )
+  `);
+  const [row] = [...rows] as { missing: number }[];
+
+  return row?.missing ?? 0;
+};
+
+export type EmbeddingVersionSwitch =
+  | { readonly outcome: 'switched'; readonly from: number; readonly to: number }
+  | { readonly outcome: 'incomplete'; readonly version: number; readonly missing: number };
+
+/**
+ * Points a tenant's retrieval at another generation, or refuses (P1-49).
+ *
+ * **Refused while any active wine lacks a vector in the target**, because
+ * retrieval against a partial set recommends from part of the catalogue and
+ * says nothing about the rest. The tenant row is locked first, so two switches
+ * for one tenant serialise instead of each passing the count and both writing.
+ * Rolling back is the same call with the old version.
+ */
+export const switchEmbeddingVersion = async (
+  tx: DbTransaction,
+  request: { readonly tenantId: string; readonly version: number },
+): Promise<EmbeddingVersionSwitch> => {
+  if (!Number.isInteger(request.version) || request.version < 1) {
+    throw new RangeError(
+      `switchEmbeddingVersion: ${String(request.version)} is not a generation; versions are whole numbers from 1`,
+    );
+  }
+
+  const locked = await tx.execute(sql`
+    select embedding_version from tenants where id = ${request.tenantId}::uuid for update
+  `);
+  const [current] = [...locked] as { embedding_version: number }[];
+
+  if (current === undefined) {
+    throw new Error('switchEmbeddingVersion: the tenant is not visible in this transaction');
+  }
+
+  const missing = await missingForEmbeddingVersion(tx, request);
+  if (missing > 0) return { outcome: 'incomplete', version: request.version, missing };
+
+  await tx.execute(sql`
+    update tenants set embedding_version = ${request.version} where id = ${request.tenantId}::uuid
+  `);
+
+  return { outcome: 'switched', from: current.embedding_version, to: request.version };
+};
+
+/**
+ * The predicate every retrieval over `product_embeddings` must carry (P1-49, P2-18).
+ *
+ * **Without it a second generation is not beside the first, it is mixed into
+ * it**: a similarity search would rank one model's vectors against another's,
+ * whose distances mean nothing to each other, and every wine would appear twice.
+ * Takes the alias the query gives the table, so it fits a raw query (`e`) and a
+ * builder query (`product_embeddings`) alike. The alias is an identifier, never
+ * input, and anything else is refused.
+ */
+export const activeEmbeddingVersionFilter = (alias = 'product_embeddings'): SQL => {
+  if (!/^[a-z_][a-z0-9_]*$/.test(alias)) {
+    throw new Error(`activeEmbeddingVersionFilter: ${JSON.stringify(alias)} is not a table alias`);
+  }
+
+  const table = sql.raw(alias);
+
+  return sql`${table}.version = (select t.embedding_version from tenants t where t.id = ${table}.tenant_id)`;
 };
 
 /**

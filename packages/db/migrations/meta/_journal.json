@@ -288,6 +288,13 @@
       "when": 1788654188575,
       "tag": "0040_import_runs_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1788654188576,
+      "tag": "0041_embedding_version",
+      "breakpoints": true
     }
   ]
 }

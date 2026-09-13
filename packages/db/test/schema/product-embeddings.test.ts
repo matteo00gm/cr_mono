@@ -50,18 +50,27 @@ describe('product_embeddings schema', () => {
     expect(columns.get('dim')).toBeUndefined();
   });
 
-  it('keeps one vector per chunk per product', () => {
+  it('keeps one vector per chunk per product per generation', () => {
     // The re-embed key: an update is an upsert, not an append. Without it,
-    // re-indexing a product doubles its vectors and skews every ranking.
+    // re-indexing a product doubles its vectors and skews every ranking. The
+    // version joined it in P1-49, so two generations of a chunk can coexist.
     const constraint = config.uniqueConstraints.find(
-      (c) => c.name === 'product_embeddings_tenant_product_chunk_unique',
+      (c) => c.name === 'product_embeddings_tenant_product_chunk_version_unique',
     );
 
     expect(constraint?.columns.map((c) => c.name)).toEqual([
       'tenant_id',
       'product_id',
       'chunk_idx',
+      'version',
     ]);
+    expect(config.uniqueConstraints).toHaveLength(1);
+  });
+
+  it('files every existing vector under generation 1', () => {
+    expect(columns.get('version')?.getSQLType()).toBe('smallint');
+    expect(columns.get('version')?.notNull).toBe(true);
+    expect(columns.get('version')?.default).toBe(1);
   });
 
   it('cascades from both tenants and products', () => {
