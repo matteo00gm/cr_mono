@@ -264,3 +264,28 @@ describe('structures that would otherwise crash the logger', () => {
     expect(redactValue({ time: when })).toEqual({ time: '2026-09-05T00:00:00.000Z' });
   });
 });
+
+describe('an import audit entry (P1-28)', () => {
+  it('keeps the counts, the entry point and the file name', () => {
+    const metadata = {
+      created: 3,
+      updated: 1,
+      unchanged: 5,
+      duplicateSku: 2,
+      archived: 1,
+      entryPoint: 'file',
+      filename: 'listino-autunno.csv',
+    };
+
+    expect(redactValue(metadata)).toEqual(metadata);
+  });
+
+  it('still scrubs an address out of a file name', () => {
+    // The one free-text name on the list, so the second layer is what guards it.
+    const written = JSON.stringify(
+      redactValue({ filename: 'vini di matteo@cantina-colpetrone.it.csv' }),
+    );
+
+    expect(written).not.toContain('@cantina-colpetrone');
+  });
+});

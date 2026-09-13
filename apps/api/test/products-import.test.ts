@@ -59,6 +59,14 @@ const app = (products: Partial<ProductsPort>) =>
     }),
   });
 
+/** Where the rows came from. Every earlier case sends one, as the dashboard does (P1-28). */
+const SOURCE = { entryPoint: 'paste' } as const;
+
+const withSource = (body: unknown): unknown =>
+  typeof body === 'object' && body !== null && !('source' in body)
+    ? { ...body, source: SOURCE }
+    : body;
+
 const post = (
   built: ReturnType<typeof createApp>,
   body: unknown,
@@ -67,7 +75,7 @@ const post = (
   built.request(IMPORT, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
-    body: typeof body === 'string' ? body : JSON.stringify(body),
+    body: typeof body === 'string' ? body : JSON.stringify(withSource(body)),
   });
 
 const applied = (result: Partial<ImportProductsResult> = {}) =>
@@ -264,7 +272,11 @@ describe('the idempotency key (P1-26)', () => {
     const [claimed] = claimImport.mock.calls[0] ?? [];
     expect(claimed).toMatchObject({ tenantId: TENANT, idempotencyKey: KEY });
     expect(claimed?.requestHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(completeImport).toHaveBeenCalledWith({ tenantId: TENANT, runId: RUN, result: body });
+    expect(completeImport.mock.calls[0]?.[0]).toMatchObject({
+      tenantId: TENANT,
+      runId: RUN,
+      result: body,
+    });
   });
 
   it('fingerprints the rows as parsed, so the same wines in another field order are the same import', async () => {
@@ -350,6 +362,99 @@ describe('the idempotency key (P1-26)', () => {
     const stored = completeImport.mock.calls[0]?.[0].result;
     expect(stored).toMatchObject({ stoppedAt: { batch: 1, fromRow: 1, toRow: 1 } });
     expect(JSON.stringify(stored)).not.toContain('hunter2');
+  });
+});
+
+describe('the audit entry (P1-28)', () => {
+  const storing = () =>
+    vi.fn<(command: CompleteImportCommand) => Promise<void>>(() => Promise.resolve());
+
+  const auditOf = (completeImport: ReturnType<typeof storing>) =>
+    completeImport.mock.calls[0]?.[0].audit;
+
+  it.each([
+    ['no source', { rows: [ROW], source: undefined }],
+    ['an entry point the dashboard does not have', { rows: [ROW], source: { entryPoint: 'api' } }],
+    [
+      'a file name longer than a file system allows',
+      { rows: [ROW], source: { entryPoint: 'file', filename: 'x'.repeat(256) } },
+    ],
+    [
+      'anything else in the source',
+      { rows: [ROW], source: { entryPoint: 'file', path: 'C:/vini' } },
+    ],
+  ])('refuses an import with %s, before claiming anything', async (_case, body) => {
+    const claimImport = vi.fn<(command: ClaimImportCommand) => Promise<ImportRunClaim>>(() =>
+      Promise.resolve({ outcome: 'claimed', runId: RUN }),
+    );
+
+    const response = await post(app({ importRows: applied(), claimImport }), body);
+
+    expect(response.status).toBe(422);
+    expect(claimImport).not.toHaveBeenCalled();
+  });
+
+  it('records the key, where the rows came from, the file and the counts', async () => {
+    const completeImport = storing();
+    const importRows = applied({
+      outcomes: [
+        { index: 0, outcome: 'created', productId: 'p-1' },
+        { index: 1, outcome: 'updated', productId: 'p-2', reindexed: true, archived: false },
+        { index: 2, outcome: 'duplicate-sku', sku: 'X' },
+      ],
+    });
+
+    await post(app({ importRows, completeImport }), {
+      rows: [ROW, { ...ROW, sku: 'B' }, { ...ROW, sku: 'C' }],
+      source: { entryPoint: 'file', filename: 'listino.csv' },
+    });
+
+    expect(auditOf(completeImport)).toEqual({
+      idempotencyKey: KEY,
+      entryPoint: 'file',
+      filename: 'listino.csv',
+      counts: { created: 1, updated: 1, unchanged: 0, duplicateSku: 1, archived: 0 },
+    });
+  });
+
+  it('writes one for an import that stopped part-way after rows had applied', async () => {
+    const completeImport = storing();
+    const importRows = applied({
+      outcomes: [
+        { index: 0, outcome: 'unchanged', productId: 'p-1', reindexed: false, archived: false },
+      ],
+      stoppedAt: { batch: 2, fromIndex: 1, toIndex: 1, cause: new Error('down') },
+    });
+
+    await post(app({ importRows, completeImport }), { rows: [ROW] });
+
+    expect(auditOf(completeImport)).toMatchObject({ counts: { unchanged: 1 } });
+  });
+
+  it('writes none for an import that failed in its first batch', async () => {
+    const completeImport = storing();
+    const importRows = applied({
+      stoppedAt: { batch: 1, fromIndex: 0, toIndex: 0, cause: new Error('down') },
+    });
+
+    await post(app({ importRows, completeImport }), { rows: [ROW] });
+
+    expect(completeImport).toHaveBeenCalledTimes(1);
+    expect(auditOf(completeImport)).toBeNull();
+  });
+
+  it('writes none for an import that refused every row as a duplicate', async () => {
+    const completeImport = storing();
+    const importRows = applied({
+      outcomes: [
+        { index: 0, outcome: 'duplicate-sku', sku: 'X' },
+        { index: 1, outcome: 'duplicate-sku', sku: 'X' },
+      ],
+    });
+
+    await post(app({ importRows, completeImport }), { rows: [ROW, ROW] });
+
+    expect(auditOf(completeImport)).toBeNull();
   });
 });
 

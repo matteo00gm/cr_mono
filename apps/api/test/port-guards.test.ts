@@ -55,7 +55,12 @@ describe('unconfiguredProducts', () => {
     claimImport: () =>
       unconfiguredProducts.claimImport({ tenantId: TENANT, idempotencyKey: 'k', requestHash: 'h' }),
     completeImport: () =>
-      unconfiguredProducts.completeImport({ tenantId: TENANT, runId: 'r', result: null }),
+      unconfiguredProducts.completeImport({
+        audit: null,
+        tenantId: TENANT,
+        runId: 'r',
+        result: null,
+      }),
   };
 
   it.each(Object.keys(calls) as (keyof ProductsPort)[])(

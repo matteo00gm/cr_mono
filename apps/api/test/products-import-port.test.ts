@@ -1,5 +1,6 @@
-import { contentHashOf, nextEmbeddingStatus } from '@catalogorosso/core';
+import { contentHashOf, nextEmbeddingStatus, type AuditEntry } from '@catalogorosso/core';
 import type {
+  DbTransaction,
   ImportRunClaim,
   ImportRunRequest,
   ProductInsert,
@@ -196,9 +197,103 @@ describe('the import attempt (P1-26)', () => {
     db.withTenant.mockImplementation((_tenant, run) => run(tx));
     const result = { counts: { created: 1 } };
 
-    await createProductsPort().completeImport({ tenantId: TENANT, runId: 'run-1', result });
+    await createProductsPort().completeImport({
+      audit: null,
+      tenantId: TENANT,
+      runId: 'run-1',
+      result,
+    });
 
     expect(db.withTenant.mock.calls.map(([tenant]) => tenant)).toEqual([TENANT]);
     expect(db.completeImportRun).toHaveBeenCalledWith(tx, { runId: 'run-1', result });
+  });
+});
+
+describe('the audit entry (P1-28)', () => {
+  const ENTRY = {
+    idempotencyKey: 'k-1',
+    entryPoint: 'file' as const,
+    filename: 'listino.csv',
+    counts: { created: 2, updated: 1, unchanged: 0, duplicateSku: 0, archived: 0 },
+  };
+
+  /** An audit writer that records what it was given, and a completion that says when it ran. */
+  const recording = () => {
+    const order: string[] = [];
+    const recorded: { tx: unknown; entry: AuditEntry }[] = [];
+
+    db.completeImportRun.mockImplementation(() => {
+      order.push('stored');
+      return Promise.resolve();
+    });
+
+    const record = (tx: DbTransaction, entry: AuditEntry): Promise<void> => {
+      order.push('audited');
+      recorded.push({ tx, entry });
+      return Promise.resolve();
+    };
+
+    return { order, recorded, record };
+  };
+
+  it('writes one entry in the transaction that stores the result, after storing it', async () => {
+    const tx = { opened: 'for the completion' };
+    db.withTenant.mockImplementation((_tenant, run) => run(tx));
+    const { order, recorded, record } = recording();
+
+    await createProductsPort({ audit: record }).completeImport({
+      tenantId: TENANT,
+      runId: 'run-1',
+      result: {},
+      audit: ENTRY,
+    });
+
+    expect(order).toEqual(['stored', 'audited']);
+    expect(db.withTenant).toHaveBeenCalledTimes(1);
+    expect(recorded).toEqual([
+      {
+        tx,
+        entry: {
+          action: 'catalog.imported',
+          target: 'k-1',
+          metadata: {
+            created: 2,
+            updated: 1,
+            unchanged: 0,
+            duplicateSku: 0,
+            archived: 0,
+            entryPoint: 'file',
+            filename: 'listino.csv',
+          },
+        },
+      },
+    ]);
+  });
+
+  it('leaves the file name out when there was none', async () => {
+    const { recorded, record } = recording();
+
+    await createProductsPort({ audit: record }).completeImport({
+      tenantId: TENANT,
+      runId: 'run-1',
+      result: {},
+      audit: { ...ENTRY, entryPoint: 'paste', filename: undefined },
+    });
+
+    expect(recorded[0]?.entry.metadata).not.toHaveProperty('filename');
+  });
+
+  it('writes nothing when the route says nothing reached the catalogue', async () => {
+    const { order, recorded, record } = recording();
+
+    await createProductsPort({ audit: record }).completeImport({
+      tenantId: TENANT,
+      runId: 'run-1',
+      result: {},
+      audit: null,
+    });
+
+    expect(order).toEqual(['stored']);
+    expect(recorded).toEqual([]);
   });
 });

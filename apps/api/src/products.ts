@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { Product } from '@catalogorosso/api-client';
 import {
+  audit,
   completenessOf,
   contentHashOf,
   EMBEDDING_STATES,
@@ -207,11 +208,36 @@ export interface ClaimImportCommand {
   readonly requestHash: string;
 }
 
+/** Where an import's rows came from (P1-28), as the dashboard's three entry points name it. */
+export const IMPORT_ENTRY_POINTS = ['form', 'paste', 'file'] as const;
+
+export type ImportEntryPoint = (typeof IMPORT_ENTRY_POINTS)[number];
+
+/** What an import's audit entry records (P1-28). */
+export interface ImportAudit {
+  readonly idempotencyKey: string;
+  readonly entryPoint: ImportEntryPoint;
+  readonly filename: string | undefined;
+  readonly counts: ImportCounts;
+}
+
 export interface CompleteImportCommand {
   readonly tenantId: string;
   readonly runId: string;
   /** The response body, exactly as this attempt answered it. */
   readonly result: unknown;
+  /** The audit entry to write with it, or `null` when nothing reached the catalogue. */
+  readonly audit: ImportAudit | null;
+}
+
+export interface ProductsPortOptions {
+  /**
+   * The audit writer (P0-53), injected for the reason `createMembersPort` gives:
+   * a test that mocks `@catalogorosso/db` gets a second copy of core's request
+   * context, where the real writer throws for a reason unrelated to the code.
+   * Injected, the entry an import writes is something a test can assert.
+   */
+  readonly audit?: typeof audit;
 }
 
 export interface ProductsPort {
@@ -278,7 +304,9 @@ export const unconfiguredProducts: ProductsPort = {
 
 /* -------------------------------------------------------------------------- */
 
-export const createProductsPort = (): ProductsPort => ({
+export const createProductsPort = ({
+  audit: record = audit,
+}: ProductsPortOptions = {}): ProductsPort => ({
   create: (command) =>
     /*
      * One transaction for the whole write, which is what `insertProduct`
@@ -364,8 +392,29 @@ export const createProductsPort = (): ProductsPort => ({
    */
   claimImport: (command) => withTenant(command.tenantId, (tx) => claimImportRun(tx, command)),
 
-  completeImport: ({ tenantId, runId, result }) =>
-    withTenant(tenantId, (tx) => completeImportRun(tx, { runId, result })),
+  completeImport: ({ tenantId, runId, result, audit: entry }) =>
+    withTenant(tenantId, async (tx) => {
+      await completeImportRun(tx, { runId, result });
+
+      /*
+       * **The audit entry commits with the stored result** (P1-28), after every
+       * batch has run — so the entry and the answer a retry replays cannot
+       * disagree about what the import did. The final batch's transaction, the
+       * row's suggestion, would miss an import that stopped part-way, which has
+       * no successful final batch and still changed rows.
+       */
+      if (entry === null) return;
+
+      await record(tx, {
+        action: 'catalog.imported',
+        target: entry.idempotencyKey,
+        metadata: {
+          ...entry.counts,
+          entryPoint: entry.entryPoint,
+          ...(entry.filename === undefined ? {} : { filename: entry.filename }),
+        },
+      });
+    }),
 
   importRows: async ({ tenantId, rows }) => {
     /*
