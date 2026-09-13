@@ -3922,6 +3922,12 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 
 **Files.** `packages/core/src/parse-number.ts`, tests. **~90 lines.**
 
+**As built — in the dashboard, beside `price.ts`, not in `packages/core`** *(deviation)*. Only the browser parses what a person typed; the API receives JSON numbers, so a server-side copy would be a second parser with no caller. `parsePriceToCents` (P1-01) now delegates to the general `parseLocaleNumber`, and its own tests pass unchanged.
+
+- **The rules, in order:** both separators present — the last is decimal, the other groups thousands; one separator **repeated** — it can only group thousands, so `1.234.567` is read and every later group must be three digits *(addition: this was refused as ambiguous before)*; one separator once, followed by exactly three digits — **ambiguous, refused**; otherwise it is the decimal separator. More decimals than the field holds are refused, never rounded.
+- **It fixed two live defects in the product form** *(addition)*. Bottles and vintage went through `Number()`, which reads `1.000` as **1** — a thousand-bottle cellar would save as one bottle with no error. They now go through `parseWholeNumber`, which refuses it and says to write 1000 or 1. And the gradazione was sent as typed, so `13,5` reached a `numeric(4,2)` column the API expects as `13.50`; `parseAlcohol` accepts what labels print — `13,5`, `13.5 %`, `14% vol` — and refuses anything above 99,99.
+- The help text under the gradazione field now shows `13,5` rather than `14.50`, since both are accepted and the comma is what the seller's keyboard produces.
+
 ---
 
 ### P1-21 · Test: file parser hazard table

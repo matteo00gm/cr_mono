@@ -3,6 +3,7 @@ import type { JSX } from 'preact';
 import { useState } from 'preact/hooks';
 
 import { CompletenessIndicator } from './CompletenessIndicator.js';
+import { parseAlcohol, parseWholeNumber, type AlcoholError, type NumberError } from './number.js';
 import { formatCents, parsePriceToCents, PRICE_MESSAGES } from './price.js';
 
 /**
@@ -110,11 +111,45 @@ const text = (value: string): string | undefined => {
   return trimmed === '' ? undefined : trimmed;
 };
 
-const wholeNumber = (value: string): number | undefined => {
-  const trimmed = value.trim();
-  if (trimmed === '') return undefined;
-  const parsed = Number(trimmed);
-  return Number.isInteger(parsed) ? parsed : Number.NaN;
+/**
+ * A count or a year, or nothing when the field is empty.
+ *
+ * **Not `Number()`**, which this used to be: it reads `1.000` bottles as one
+ * and a thousand-bottle cellar would save as a single bottle, with no error to
+ * say so (P1-20).
+ */
+const wholeNumber = (value: string): { value?: number; error?: NumberError } => {
+  if (value.trim() === '') return {};
+  const parsed = parseWholeNumber(value);
+  return parsed.ok ? { value: parsed.value } : { error: parsed.reason };
+};
+
+const VINTAGE_MESSAGES: Record<NumberError, string> = {
+  empty: 'Scrivi un anno, ad esempio 2019.',
+  'not-a-number': 'Scrivi un anno, ad esempio 2019.',
+  negative: 'Scrivi un anno, ad esempio 2019.',
+  'too-precise': 'Scrivi un anno, ad esempio 2019.',
+  ambiguous: 'Scrivi l’anno senza punti, ad esempio 2019.',
+};
+
+const STOCK_QTY_MESSAGES: Record<NumberError, string> = {
+  empty: 'Scrivi un numero intero di bottiglie.',
+  'not-a-number': 'Scrivi un numero intero di bottiglie.',
+  negative: 'Le bottiglie non possono essere negative.',
+  'too-precise': 'Scrivi un numero intero di bottiglie.',
+  /*
+   * The case `Number()` got wrong. Say what to write, not what the rule is.
+   */
+  ambiguous: 'Non è chiaro se sia mille o uno: scrivi 1000 oppure 1.',
+};
+
+const ALCOHOL_MESSAGES: Record<AlcoholError, string> = {
+  empty: 'Scrivi la gradazione, ad esempio 13,5.',
+  'not-a-number': 'Scrivi la gradazione, ad esempio 13,5.',
+  negative: 'La gradazione non può essere negativa.',
+  'too-precise': 'Al massimo due decimali, ad esempio 13,5.',
+  ambiguous: 'Al massimo due decimali, ad esempio 13,5.',
+  'out-of-range': 'La gradazione va da 0 a 99,99.',
 };
 
 export type BuildResult =
@@ -136,10 +171,18 @@ export const buildPayload = (values: ProductFormValues): BuildResult => {
   if (!price.ok) errors.price = PRICE_MESSAGES[price.reason];
 
   const vintage = wholeNumber(values.vintage);
-  if (Number.isNaN(vintage)) errors.vintage = 'Scrivi un anno, ad esempio 2019.';
+  if (vintage.error !== undefined) errors.vintage = VINTAGE_MESSAGES[vintage.error];
 
   const stockQty = wholeNumber(values.stockQty);
-  if (Number.isNaN(stockQty)) errors.stockQty = 'Scrivi un numero intero di bottiglie.';
+  if (stockQty.error !== undefined) errors.stockQty = STOCK_QTY_MESSAGES[stockQty.error];
+
+  /*
+   * Sent as the API's `numeric` string. Passing the typed text through, as
+   * this did before, sent `13,5` to a column that reads `13.50` (P1-20).
+   */
+  const alcohol =
+    text(values.alcoholPct) === undefined ? undefined : parseAlcohol(values.alcoholPct);
+  if (alcohol !== undefined && !alcohol.ok) errors.alcoholPct = ALCOHOL_MESSAGES[alcohol.reason];
 
   const candidate = {
     sku: values.sku.trim(),
@@ -152,7 +195,7 @@ export const buildPayload = (values: ProductFormValues): BuildResult => {
       ? {}
       : { externalVariantId: text(values.externalVariantId) }),
     ...(text(values.producer) === undefined ? {} : { producer: text(values.producer) }),
-    ...(vintage === undefined || Number.isNaN(vintage) ? {} : { vintage }),
+    ...(vintage.value === undefined ? {} : { vintage: vintage.value }),
     ...(list(values.grapeVarieties) === undefined
       ? {}
       : { grapeVarieties: list(values.grapeVarieties) }),
@@ -161,8 +204,8 @@ export const buildPayload = (values: ProductFormValues): BuildResult => {
     ...(list(values.styleTags) === undefined ? {} : { styleTags: list(values.styleTags) }),
     ...(text(values.tastingNotes) === undefined ? {} : { tastingNotes: text(values.tastingNotes) }),
     ...(list(values.foodPairings) === undefined ? {} : { foodPairings: list(values.foodPairings) }),
-    ...(text(values.alcoholPct) === undefined ? {} : { alcoholPct: text(values.alcoholPct) }),
-    ...(stockQty === undefined || Number.isNaN(stockQty) ? {} : { stockQty }),
+    ...(alcohol?.ok === true ? { alcoholPct: alcohol.value } : {}),
+    ...(stockQty.value === undefined ? {} : { stockQty: stockQty.value }),
     ...(text(values.productUrl) === undefined ? {} : { productUrl: text(values.productUrl) }),
     ...(text(values.imageUrl) === undefined ? {} : { imageUrl: text(values.imageUrl) }),
   };
@@ -396,7 +439,7 @@ export const ProductForm = ({ initial, onSubmit, submitLabel }: ProductFormProps
             'Separati da virgola. Più sei preciso, migliori sono i consigli: ' +
             '“brasato al Barolo” aiuta molto più di “carne”.',
         })}
-        {field('alcoholPct', 'Gradazione', { help: 'Ad esempio 14.50' })}
+        {field('alcoholPct', 'Gradazione', { help: 'Ad esempio 13,5' })}
       </fieldset>
 
       <fieldset>
