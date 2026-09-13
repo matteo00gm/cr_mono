@@ -3959,6 +3959,17 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 
 **Files.** `draft-rows.ts`, grid integration, tests. **~130 lines.**
 
+**As built.**
+
+- **Validated by the form's own `buildPayload`**, not a second validator for bulk rows. A price refused here is refused in the form's words, a row accepted here is the payload the API takes, and `productRequest` has the last word in both — the row's "shared schema", held to literally.
+- **Availability words map to the enum, and an unknown word is a cell error, never a default.** *Disponibile*, *esaurito*, *prevendita*, *sì*, *no* and their English equivalents are read, reduced the way headers are; an empty cell is in stock, as in the form. "In arrivo" guessed as in stock would be a wine recommended to visitors who cannot buy it, so it is refused and the cell becomes a list to pick from.
+- **An empty currency is filled with EUR, the way the form fills it** — the column rule P1-19 relies on.
+- **Six editable columns**: the four without which no wine can be saved (name, SKU, type, price) and the two that change weekly (availability, bottles). An error in any other field is named, with its field, in an *Altri problemi* column rather than dropped; those fields are edited in the form after import.
+- **At most three messages rendered per row**, errors counted past that as "+N altri", in template order. A row failing six ways would otherwise push its values off screen.
+- **The summary is a polite live region** — "12 righe · 10 valide · 2 da correggere" — because fixing a cell changes it, and a screen-reader user would otherwise hear nothing to say the row is now valid.
+- **Rows carry a position, not a file line number.** Blank lines are skipped (P1-21) and a positional paste has no header, so "line 14 of your file" would be a claim the grid cannot back.
+- **Not yet mounted.** `useDrafts(rawRows)` and `DraftGrid` are what P1-23's import screen composes: a paste or a file becomes raw rows, raw rows become drafts, and the summary gates the write.
+
 ---
 
 ### P1-23 · Import summary screen
