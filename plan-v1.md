@@ -661,7 +661,7 @@ The explicit `e.tenant_id = current_setting(...)` is **redundant with RLS on pur
 
 ### 4.5 Generation
 
-**The provider is a port, not a dependency.** `packages/rag` exposes one interface:
+**The provider is a port, not a dependency.** `packages/rag` exposes one interface *(as built: the port is in `packages/core` (P1-41) and the adapters in `packages/llm` (P1-42))*:
 
 ```ts
 interface LlmProvider {
@@ -4552,6 +4552,17 @@ Nothing vendor-shaped in the types. `AbortSignal` so a disconnected visitor stop
 **Tests.** Mocked stream produces the expected chunk sequence; malformed tool JSON yields `schema_invalid` rather than throwing; abort stops consumption.
 
 **Files.** `providers/bedrock-nova.ts`, tests. **~180 lines.** *Split if heavy: stream adapter / request builder.*
+
+**As built — in a new `packages/llm`, with the tool forced and everything it returns checked before it is believed.**
+
+- **The adapters live in a new `packages/llm`** *(deviation — §4.5 named `packages/rag`; the row named `providers/` with no package)*. `packages/core` may not import a vendor SDK (`no-framework-in-core-or-security`), and the two consumers are the API's chat route (P2-29) and the eval harness (P1-46) — and a package cannot import an app. It is registered as a vitest project with a 90/90 coverage bar, has its own `AGENTS.md`, and **`no-llm-in-browser-bundles`** forbids `apps/dashboard` and `apps/widget` from importing it, verified by planting an import and watching the check fail.
+- **Structured output through one forced tool.** The request offers `emit_pairings`, whose input schema is `pairingJsonSchema()` (P2-24), with `toolChoice: { tool }`; the prompt is `buildPairingPrompt` (P2-23), unmodified. The forced call is the stop condition, so no stop sequences are set; `maxTokens` defaults to 1,024 and temperature to 0.3.
+- **What comes back is checked before it is believed.** Text deltas stream as `text`; the tool's arguments are accumulated, parsed, validated with `parsePairingOutput` and checked with `leaksInstructions`, and only then become `recommendations`. Malformed JSON, no tool call, a schema failure or a leaked instruction all yield `schema_invalid` and no cards. The reply is emitted as text after the tool call only if the model streamed no text of its own, so it is never said twice.
+- **Refusals and errors are chunks.** A `content_filtered` or `guardrail_intervened` stop is `refusal`, even though the stream succeeded. A rejected request, an exception event inside the stream, a stream that breaks mid-way, or a response with no stream is `provider_error`.
+- **The abort signal is handed to `client.send`**, so the request in flight is cancelled, and it is also checked between events. An already-aborted request sends nothing, and an SDK failure caused by aborting reports no error.
+- **History is normalised into the strictly alternating turns Converse requires** *(addition)*: a leading assistant turn is dropped, repeated roles merge into one message, and the delimited prompt joins a trailing user turn.
+- **The model id is required, with no default** *(decision)*. Which Nova and which regional inference profile is P1-47's choice per environment, and a default here would quietly make it.
+- **A cache point follows the system prompt, and `onUsage` reports tokens with cache reads** *(addition — the port has no usage channel, and `usage_events` needs one)*. The row's "assert cache hits in an integration test" is `bedrock-nova.live.test.ts`, **skipped unless `LIVE_BEDROCK=1`**: it costs money and needs credentials, so it runs with P1-47, not in CI. **Open until then:** whether P2-23's system prompt is long enough to meet Nova's minimum cacheable prefix.
 
 ---
 

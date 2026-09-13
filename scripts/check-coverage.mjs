@@ -30,6 +30,9 @@ const THRESHOLDS = {
   'packages/security': { lines: 100, statements: 100, functions: 100, branches: 100 },
   'packages/core': { lines: 90, branches: 90 },
   'packages/db': { lines: 90, branches: 90 },
+  // The model adapters (P1-42): translation between a vendor's stream and our chunks,
+  // every branch of it reachable with a fake client, so it carries a package bar.
+  'packages/llm': { lines: 90, branches: 90 },
   'apps/api': { lines: 85, branches: 85 },
 
   // Small, entirely testable, and on the path of every request either consumer

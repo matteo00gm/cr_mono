@@ -1,0 +1,27 @@
+{
+  "name": "@catalogorosso/llm",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc --build tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1127.0",
+    "@catalogorosso/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0"
+  }
+}
