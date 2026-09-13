@@ -1,3 +1,5 @@
+import { MAX_IMPORT_ROWS } from '@catalogorosso/core/import-limits';
+
 import { parseDelimited, type Table } from './delimited.js';
 import { mapHeaders, matchHeader, type HeaderMap } from './header-map.js';
 import { TEMPLATE_COLUMNS, type RawRow, type TemplateField } from './template.js';
@@ -153,3 +155,17 @@ export const mappingNotice = (pasted: PastedRows): string => {
 
   return `Nessuna intestazione riconosciuta: colonne lette nell’ordine del modello (${order}, …).${extra}`;
 };
+
+const pasteCount = new Intl.NumberFormat('it-IT');
+
+/**
+ * A paste over the row cap, in the sentence the screen shows (P1-27).
+ *
+ * The cap a file meets, and the same rule: the whole paste is refused, never its
+ * first ten thousand rows, which would leave a catalogue that looks complete.
+ * `null` when the paste is within it.
+ */
+export const pasteCapProblem = (pasted: PastedRows): string | null =>
+  pasted.rows.length > MAX_IMPORT_ROWS
+    ? `Hai incollato ${pasteCount.format(pasted.rows.length)} vini, oltre il massimo di ${pasteCount.format(MAX_IMPORT_ROWS)} per importazione. Incollali in più volte.`
+    : null;

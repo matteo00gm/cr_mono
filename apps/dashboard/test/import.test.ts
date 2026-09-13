@@ -1,3 +1,4 @@
+import { MAX_IMPORT_FILE_BYTES, MAX_IMPORT_ROWS } from '@catalogorosso/core/import-limits';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -5,8 +6,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   importProblemMessage,
-  MAX_FILE_BYTES,
-  MAX_ROWS,
   readImportFile,
   type ImportResult,
 } from '../src/features/catalog/import-file.js';
@@ -124,15 +123,18 @@ describe('the caps', () => {
     Array.from({ length: count }, (_, index) => `Vino;SKU-${String(index)};rosso;9,90`).join('\n');
 
   it('takes exactly the row cap', async () => {
-    const result = await readImportFile({ name: 'cap.csv', bytes: text(header + rows(MAX_ROWS)) });
+    const result = await readImportFile({
+      name: 'cap.csv',
+      bytes: text(header + rows(MAX_IMPORT_ROWS)),
+    });
 
-    expect(rowsOf(result)).toHaveLength(MAX_ROWS);
+    expect(rowsOf(result)).toHaveLength(MAX_IMPORT_ROWS);
   });
 
   it('refuses one row more, whole — never the first ten thousand of it', async () => {
     const result = await readImportFile({
       name: 'cap.csv',
-      bytes: text(header + rows(MAX_ROWS + 1)),
+      bytes: text(header + rows(MAX_IMPORT_ROWS + 1)),
     });
 
     expect(result).toMatchObject({ ok: false, problem: { kind: 'too-many-rows', rows: 10_001 } });
@@ -144,7 +146,7 @@ describe('the caps', () => {
   it('refuses a file over the size cap before reading any of it', async () => {
     const result = await readImportFile({
       name: 'enorme.csv',
-      bytes: new Uint8Array(MAX_FILE_BYTES + 1).buffer,
+      bytes: new Uint8Array(MAX_IMPORT_FILE_BYTES + 1).buffer,
     });
 
     expect(result).toMatchObject({ ok: false, problem: { kind: 'too-large' } });

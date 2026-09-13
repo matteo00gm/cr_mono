@@ -134,6 +134,10 @@ export const api = new sst.aws.Function('Api', {
    * route it serves and needs a different CloudFront cache behaviour to survive
    * the edge (P0-17a). A silent default change would surface as "the API
    * returns nothing", far from the line that caused it.
+   *
+   * Either mode caps a request at 6 MB, refused before the handler runs and
+   * with an answer that names no limit. The import's own request cap sits
+   * under it so the refusal a seller reads is ours (P1-27).
    */
   streaming: false,
 
