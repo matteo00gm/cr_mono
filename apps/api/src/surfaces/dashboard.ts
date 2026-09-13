@@ -1,7 +1,10 @@
+import { randomUUID } from 'node:crypto';
+
 import type { MembershipReader } from '@catalogorosso/core';
 import { publicRoute, requires, ROLES, type RouteAccess } from '@catalogorosso/security';
 import {
   acceptInviteResponse,
+  catalogueReindexedResponse,
   contextResponse,
   invitationRevokedResponse,
   inviteResponse,
@@ -11,6 +14,7 @@ import {
   productArchivedResponse,
   productCreatedResponse,
   productListResponse,
+  productReindexedResponse,
   productUpdatedResponse,
   roleChangeResponse,
   rosterResponse,
@@ -584,6 +588,85 @@ export const createDashboardApp = ({
     });
   });
 
+  /**
+   * Re-queue the whole active catalogue (P1-39).
+   *
+   * **Registered before `/products/:id/reindex` and it has to be.** Hono
+   * matches in registration order, and although these two paths differ in
+   * segment count today, the habit is what P0-54 is about: the day somebody
+   * adds `POST /products/:id`, a literal registered after a parameter is a
+   * route that silently stops being reachable while every one of its own tests
+   * still passes.
+   *
+   * **409 while a previous run is still draining**, carrying how many jobs are
+   * left. Two batches in the queue index nothing twice — they double the work
+   * before either finishes, so the honest answer is "the last one is still
+   * going" rather than a second acceptance that makes the wait longer.
+   *
+   * Archived wines are left alone. Re-embedding one would put it back in front
+   * of visitors, which is the thing archiving means to stop.
+   */
+  app.post('/products/reindex-all', requireCapability('catalog:write'), async (c) => {
+    const result = await products.reindexAll({
+      tenantId: c.get('tenantId'),
+
+      /*
+       * Generated here rather than in the port, so the layer that owns
+       * non-determinism is the one that has always owned it — and a test of the
+       * port can supply its own id instead of mocking a global.
+       */
+      batchId: randomUUID(),
+    });
+
+    if (result.outcome === 'in-flight') {
+      throw new ConflictError(
+        `A reindex is already running for this catalogue, with ${String(result.queued)} ` +
+          'wine(s) still queued. Wait for it to finish rather than starting a second one — ' +
+          'two runs do not index anything twice, they only make the wait longer.',
+      );
+    }
+
+    return c.json({ batchId: result.batchId, queued: result.queued }, 202);
+  });
+
+  /**
+   * Re-queue one wine (P1-39).
+   *
+   * **What this fixes is a row and a vector disagreeing, not a stale
+   * embedding.** A wine whose vector already matches its text costs no provider
+   * call — `shouldEmbed` names "a manual reindex of an unchanged product" as
+   * one of the things it exists to stop costing money (P1-34). The job still
+   * runs, and the useful cases are the ones a seller can actually see: a
+   * `FAILED` wine gets another attempt with its error cleared, a wine whose
+   * outbox row was lost gets a new one, and a `PENDING` wine that does in fact
+   * have a good vector is corrected to `INDEXED`.
+   *
+   * **A cross-tenant id answers 404** (§3.5), and does so because the policy
+   * scoped the read to nothing rather than because a branch compared two tenant
+   * ids.
+   *
+   * **An archived wine is refused rather than quietly accepted.** The worker
+   * discards its job by design, so a 202 here would tell a seller something was
+   * happening when nothing was going to.
+   */
+  app.post('/products/:id/reindex', requireCapability('catalog:write'), async (c) => {
+    const result = await products.reindex({
+      tenantId: c.get('tenantId'),
+      productId: c.req.param('id'),
+    });
+
+    if (result.outcome === 'not-found') throw new NotFoundError('No such product.');
+
+    if (result.outcome === 'archived') {
+      throw new ConflictError(
+        'This wine is archived, so it is not indexed and reindexing it would do nothing. ' +
+          'Restore it first if it should be recommended again.',
+      );
+    }
+
+    return c.json({ product: toProductResponse(result.product), queued: true as const }, 202);
+  });
+
   /* ---- the members screen (E8) ---------------------------------------- */
 
   /**
@@ -978,6 +1061,74 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         matchedBy: null,
       },
       response: productListResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/products/reindex-all`),
+    {
+      access: requires('catalog:write'),
+      summary: 'Re-queue the whole catalogue for embedding',
+      description:
+        'Queues an embedding job for every active wine and returns a batch id recorded ' +
+        'on each one. Archived wines are left alone, because re-embedding one would put ' +
+        'it back in front of visitors, which is what archiving means to stop. This is ' +
+        'cheaper than it sounds: a wine whose vector already matches its text costs no ' +
+        'provider call, so the job runs, finds nothing to do and reconciles the row. What ' +
+        'it repairs is every way a row and its vector can disagree - a failed wine gets ' +
+        'another attempt, a wine whose queue entry was lost gets a new one. A second run ' +
+        'while the first is still draining answers 409 and says how many are left: two ' +
+        'batches index nothing twice, they only make the wait longer. The batch id is not ' +
+        'a handle to poll - read each wine embeddingState instead.',
+      example: { batchId: '0f7c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a', queued: 1284 },
+      response: catalogueReindexedResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/products/:id/reindex`),
+    {
+      access: requires('catalog:write'),
+      summary: 'Re-queue one wine for embedding',
+      description:
+        'Queues an embedding job for a single wine and returns the row as it now stands, ' +
+        'so a grid can show the new state without guessing the transition. An INDEXED ' +
+        'wine becomes STALE - still findable under its previous description while a new ' +
+        'one is built - and a FAILED one returns to PENDING with its error cleared. A ' +
+        'wine whose vector is already current costs no provider call by design; what this ' +
+        'repairs is a row and a vector that disagree. An archived wine answers 409 rather ' +
+        'than being quietly accepted, because the worker discards its job and a 202 would ' +
+        'claim something was happening. A product belonging to another winery answers ' +
+        '404, never 403.',
+      example: {
+        product: {
+          id: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+          sku: 'BAR-2019',
+          externalVariantId: '43215678901234',
+          name: 'Barolo Bussia',
+          producer: 'Poderi Colla',
+          vintage: 2019,
+          wineType: 'red',
+          grapeVarieties: ['Nebbiolo'],
+          region: 'Piemonte',
+          denomination: 'Barolo DOCG',
+          styleTags: ['strutturato'],
+          tastingNotes: 'Rosa appassita, catrame e ciliegia sotto spirito.',
+          foodPairings: ['brasato al Barolo'],
+          alcoholPct: '14.50',
+          priceCents: 4500,
+          currency: 'EUR',
+          stockStatus: 'IN_STOCK',
+          stockQty: 24,
+          productUrl: 'https://cantina.example/barolo-bussia',
+          imageUrl: 'https://cantina.example/img/barolo-bussia.jpg',
+          status: 'ACTIVE',
+          embeddingState: 'STALE',
+          completeness: 78,
+          createdAt: '2026-09-08T09:14:00.000Z',
+          updatedAt: '2026-09-08T09:14:00.000Z',
+        },
+        queued: true,
+      },
+      response: productReindexedResponse,
     },
   ],
   [
