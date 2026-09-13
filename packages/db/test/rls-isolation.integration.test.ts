@@ -116,6 +116,15 @@ const INSERTS: Record<string, (tenantId: string, ctx: SeedContext) => SQL> = {
   outbox: (tenantId) =>
     sql`insert into outbox (tenant_id, aggregate_id, event_type)
         values (${tenantId}::uuid, gen_random_uuid(), 'e')`,
+  /*
+   * P1-26, and fresh on every call for the reason `invitations` gives. The key
+   * is unique per tenant, so a fixed one would make the second call — B's
+   * attempted write carrying A's id — fail on the index rather than the policy,
+   * and this file would go on passing with the policy removed.
+   */
+  import_runs: (tenantId) =>
+    sql`insert into import_runs (tenant_id, idempotency_key, request_hash)
+        values (${tenantId}::uuid, gen_random_uuid()::text, 'h')`,
 };
 
 /** `tenants` is scoped by its own id; everything else by `tenant_id`. */
