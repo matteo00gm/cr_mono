@@ -3936,6 +3936,19 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 
 **Files.** `import.spec.ts`, `fixtures/`. **~170 test lines.**
 
+**The composition lands here** *(deviation)*. The row is a test, but there was nothing yet to test end to end: P1-16 to P1-19 each built a stage and no row owned joining them. `import-file.ts`'s `readImportFile({ name, bytes, encoding?, sheet? })` decodes and splits a CSV, or reads a workbook, matches the header, applies the caps, and returns the same `RawRow[]` a paste produces — or a reason. P1-22 validates what it returns.
+
+**As built.**
+
+- **Every refusal happens before a row is shown, and has a sentence.** Empty, header only, too large, too many rows, not CSV or Excel, an `.xls`, a workbook that needs a sheet chosen, a header missing a required column or naming one twice.
+- **Over the row cap, the whole file is refused, never truncated.** Importing the first ten thousand rows of a longer file leaves a catalogue that looks complete and is not, with nothing pointing at the rows that were never read.
+- **The size cap is 10 MB and is checked before decoding.** Ten thousand wines with long tasting notes are a few megabytes of CSV; a file past ten is something else.
+- **A blank line in the middle of a file is skipped.** Every cell is empty, so there is nothing in it to have misread.
+- **Dispatch is on the file's extension**, the choice the seller made, not on sniffed content. `readWorkbook` still checks the bytes, so a CSV renamed `.xlsx` is refused rather than misread.
+- **Detection notices survive a refusal.** "Codifica rilevata" is how a seller explains a header that did not match.
+- **Fixtures are one real file per hazard** — `import-*.csv`, covered by the binary rule, including a Windows-1252 one — **except the two sizes, generated in the test** *(deviation)*: ten thousand identical rows and ten megabytes of zeros are better described by the line that makes them than by a file nobody will open. The cap is tested at exactly 10,000 as well as 10,001.
+- The workbook path is exercised through `wines.xlsx`: without a sheet it asks which, and with *Vini* it is refused for the missing *tipologia* column exactly as a CSV would be.
+
 ---
 
 ### P1-22 · Draft rows + per-cell validation
