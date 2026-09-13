@@ -9,7 +9,8 @@ import {
   readClipboard,
 } from '../src/features/catalog/paste.js';
 import { emptyValues } from '../src/features/catalog/ProductForm.js';
-import { fieldForHeader, TEMPLATE_COLUMNS } from '../src/features/catalog/template.js';
+import { matchHeader } from '../src/features/catalog/header-map.js';
+import { TEMPLATE_COLUMNS } from '../src/features/catalog/template.js';
 
 /**
  * The paste handler (P1-14).
@@ -37,10 +38,10 @@ describe('the template', () => {
   });
 
   it('matches a header regardless of case, surrounding space or separator', () => {
-    expect(fieldForHeader(' SKU ')).toBe('sku');
-    expect(fieldForHeader('Wine Type')).toBe('wineType');
-    expect(fieldForHeader('stock-qty')).toBe('stockQty');
-    expect(fieldForHeader('note interne')).toBeUndefined();
+    expect(matchHeader(' SKU ')).toBe('sku');
+    expect(matchHeader('Wine Type')).toBe('wineType');
+    expect(matchHeader('stock-qty')).toBe('stockQty');
+    expect(matchHeader('note interne')).toBeUndefined();
   });
 });
 
@@ -132,6 +133,7 @@ describe('column mapping', () => {
       rows: [],
       unrecognised: [],
       extraColumns: 0,
+      headers: null,
     });
   });
 });

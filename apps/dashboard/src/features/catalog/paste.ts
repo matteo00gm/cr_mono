@@ -1,5 +1,6 @@
 import { parseDelimited, type Table } from './delimited.js';
-import { fieldForHeader, TEMPLATE_COLUMNS, type RawRow, type TemplateField } from './template.js';
+import { mapHeaders, matchHeader, type HeaderMap } from './header-map.js';
+import { TEMPLATE_COLUMNS, type RawRow, type TemplateField } from './template.js';
 
 /**
  * Clipboard paste into rows (P1-14).
@@ -25,6 +26,12 @@ export interface PastedRows {
   readonly unrecognised: readonly string[];
   /** Cells beyond the template's last column, which were dropped (by position only). */
   readonly extraColumns: number;
+  /**
+   * The header, matched (by header only). Carries the refusals — a missing
+   * required column, two columns meaning one field — for the draft grid to
+   * act on (P1-19, P1-22). `null` when there was no header to match.
+   */
+  readonly headers: HeaderMap | null;
 }
 
 /**
@@ -40,7 +47,7 @@ export const isHeaderRow = (cells: readonly string[]): boolean => {
   const filled = cells.filter((cell) => cell.trim() !== '');
   if (filled.length === 0) return false;
 
-  const matched = filled.filter((cell) => fieldForHeader(cell) !== undefined).length;
+  const matched = filled.filter((cell) => matchHeader(cell) !== undefined).length;
   return matched * 2 >= filled.length;
 };
 
@@ -67,19 +74,18 @@ export const rowsFromTable = (table: Table): PastedRows => {
   const [first, ...rest] = table;
 
   if (first === undefined) {
-    return { mapping: 'by-position', rows: [], unrecognised: [], extraColumns: 0 };
+    return { mapping: 'by-position', rows: [], unrecognised: [], extraColumns: 0, headers: null };
   }
 
   if (isHeaderRow(first)) {
-    const fields = first.map((cell) => fieldForHeader(cell));
+    const headers = mapHeaders(first);
 
     return {
       mapping: 'by-header',
-      rows: rest.map((cells) => toRow(cells, fields)),
-      unrecognised: first.filter(
-        (cell, index) => cell.trim() !== '' && fields[index] === undefined,
-      ),
+      rows: rest.map((cells) => toRow(cells, headers.fields)),
+      unrecognised: headers.unrecognised,
       extraColumns: 0,
+      headers,
     };
   }
 
@@ -91,6 +97,7 @@ export const rowsFromTable = (table: Table): PastedRows => {
     rows: table.map((cells) => toRow(cells, fields)),
     unrecognised: [],
     extraColumns: Math.max(0, widest - fields.length),
+    headers: null,
   };
 };
 
