@@ -53,6 +53,19 @@ const STOCK_WORDS: Readonly<Record<string, StockStatus>> = {
 export const STOCK_WORD_MESSAGE = 'Scrivi disponibile, esaurito oppure prevendita.';
 
 /**
+ * The word written for each availability when the console writes a file
+ * (P1-23, P1-30).
+ *
+ * One per value, each a key `STOCK_WORDS` reads back, so a file the dashboard
+ * wrote imports again without a guess.
+ */
+export const STOCK_WORD_FOR: Readonly<Record<StockStatus, string>> = {
+  IN_STOCK: 'disponibile',
+  OUT_OF_STOCK: 'esaurito',
+  PREORDER: 'prevendita',
+};
+
+/**
  * An availability cell as the enum, or `undefined` for a word not recognised.
  * Empty is in stock, which is what the form defaults to.
  */
