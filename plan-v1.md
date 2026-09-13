@@ -3872,6 +3872,19 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 
 **Files.** `xlsx.ts`, tests, fixture. **~90 lines.**
 
+**`read-excel-file`, not SheetJS** *(deviation)*. The npm `xlsx` package is frozen at 0.18.5, which carries the prototype-pollution (CVE-2023-30533) and ReDoS (CVE-2024-22363) advisories; SheetJS publishes the fixed versions only from its own CDN, and the P0-08 audit blocks on high. A community republish of those versions to npm would put an unofficial publisher in charge of the code that parses files strangers upload. `read-excel-file` is MIT, maintained, and **read-only** — which is all an import needs, since export is CSV (P1-30) — and far smaller than SheetJS's ~500 KB. It arrived with no install scripts and no audit findings.
+
+**As built.**
+
+- **The reader is loaded when a workbook is opened.** `xlsx.ts` imports it only as a type, which the compiler erases, and `loadReader` is the one `import()`.
+- **Its `universal` entry, which runs no Web Workers**, so the path the tests run is the path that ships. A very large workbook therefore parses on the main thread; P1-27's caps bound it.
+- **The bytes are checked before the reader loads.** Not a zip is `not-xlsx`; an OLE container is `xls` — which is **also what an `.xlsx` saved with a password is**, so the message names both and says how to fix each. A zip the reader cannot make sense of is `unreadable`. None of them costs the download, and each is a sentence rather than a parser exception.
+- **Numbers go through fifteen significant digits, Excel's own precision.** A formula stores a price as `0.30000000000000004` and displays 0,30; reading the double literally would refuse a price the seller can see is fine. This removes noise Excel never shows rather than rounding anything a seller typed. Dates become the ISO day.
+- **One sheet is read without asking; several are never guessed between.** The row says "read the first sheet by default; if multiple, ask which" — read as: default when there is nothing to choose. A workbook with "Vini" and "Listino vecchio" imported from whichever came first is a catalogue rewritten from last year's prices.
+- **The acceptance test is equivalence:** `wines.xlsx` and `wines.csv` produce identical tables. The workbook is generated part by part with `zipfile` from a script whose contents are reviewable, including a price stored with floating-point noise.
+- **The bundle check reads the build.** `bundle.test.ts` fails if the entry chunk, or any chunk `index.html` preloads, contains the reader — identified by a path every workbook read opens, whose presence in the library is asserted too, so the check cannot pass by looking for a string that is not there. A source check refuses a non-type static import without needing a build.
+- **Recorded limitation:** nothing in the app imports `xlsx.ts` yet, so there is no lazy chunk to assert the reader *is* in. P1-23's import screen adds that positive half; until then the check was shown to fail by adding a static import and rebuilding.
+
 ---
 
 ### P1-19 · Header matching
