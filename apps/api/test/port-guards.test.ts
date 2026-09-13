@@ -49,6 +49,8 @@ describe('unconfiguredProducts', () => {
     update: () => unconfiguredProducts.update({ tenantId: TENANT, productId: PRODUCT, values: {} }),
     archive: () => unconfiguredProducts.archive({ tenantId: TENANT, productId: PRODUCT }),
     list: () => unconfiguredProducts.list({ tenantId: TENANT }),
+    reindex: () => unconfiguredProducts.reindex({ tenantId: TENANT, productId: PRODUCT }),
+    reindexAll: () => unconfiguredProducts.reindexAll({ tenantId: TENANT, batchId: 'batch-1' }),
   };
 
   it.each(Object.keys(calls) as (keyof ProductsPort)[])(

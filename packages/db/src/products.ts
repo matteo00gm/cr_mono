@@ -1,5 +1,10 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 
+import {
+  writeEmbeddingStatus,
+  type EmbeddingState,
+  type EmbeddingStatusWrite,
+} from './embedding-status.js';
 import { outbox } from './schema/outbox.js';
 import { productEmbeddings } from './schema/product-embeddings.js';
 import { products } from './schema/products.js';
@@ -354,4 +359,227 @@ export const archiveProduct = async (
     .returning({ id: productEmbeddings.id });
 
   return { outcome: 'archived', product, vectorsRemoved: removed.length };
+};
+
+/* -------------------------------------------------------------------------- *
+ *                                  Reindex                                    *
+ * -------------------------------------------------------------------------- */
+
+/**
+ * What a reindex found (P1-39).
+ *
+ * `archived` is its own answer rather than a silent success. The worker skips
+ * an archived wine deliberately — re-embedding one would put it back in front
+ * of visitors, which is what archiving means to stop — so accepting the request
+ * and queueing a job that will be discarded would tell a seller their wine was
+ * being reindexed when nothing of the kind was going to happen.
+ */
+export type ProductReindexOutcome =
+  | { readonly outcome: 'queued'; readonly product: ProductRow }
+  | { readonly outcome: 'not-found' }
+  | { readonly outcome: 'archived'; readonly product: ProductRow };
+
+export interface ReindexRequest {
+  readonly productId: string;
+  /**
+   * The `queued` edge from `packages/core`'s state machine, applied to the row
+   * this statement read.
+   *
+   * A callback for the same reason `updateProduct` takes `hashOf`: the current
+   * state is only known inside the transaction, and the decision about what it
+   * becomes is a domain one. `packages/db` writing its own `SET embedding_state
+   * = 'PENDING'` is precisely the scattered statement P1-38 exists to prevent.
+   */
+  readonly nextStatus: (current: EmbeddingStatusWrite) => EmbeddingStatusWrite;
+  /** Recorded on the outbox row, so a queue full of jobs says where it came from. */
+  readonly reason: string;
+}
+
+/**
+ * Re-queues one wine for embedding (P1-39).
+ *
+ * **It does not clear a hash, which is a departure from the row, and the
+ * departure is the cost control.** P1-39 says both reindex paths "clear
+ * `content_hash` (forcing recompute)". Two things have changed since that was
+ * written. The hash the worker compares against is the one stored *beside the
+ * vector* (P1-37), not `products.content_hash` — so clearing the product's
+ * would force nothing. And `shouldEmbed`'s own docstring names "a manual
+ * reindex of an unchanged product" as one of the things it exists to stop
+ * costing money.
+ *
+ * So a reindex of a wine whose vector is already current calls no provider and
+ * costs nothing, by design. What it *does* fix is every way the row and the
+ * vector can disagree: a `FAILED` wine gets another attempt, a wine whose
+ * outbox row was lost gets a new one, and a wine that is `PENDING` with a
+ * perfectly good vector is corrected to `INDEXED` by the worker's own
+ * reconciliation. Those are the reasons a seller reaches for this button.
+ *
+ * The one case that genuinely needs a recompute — the embedding text or the
+ * model changing — already forces one without help: `EMBEDDING_TEXT_VERSION` is
+ * part of the hash, so every product's hash moves at once.
+ */
+export const reindexProduct = async (
+  tx: DbTransaction,
+  request: ReindexRequest,
+): Promise<ProductReindexOutcome> => {
+  const rows = await tx
+    .select()
+    .from(products)
+    .where(eq(products.id, request.productId))
+    /*
+     * Held for the same reason `updateProduct` holds it: the state read here
+     * decides the state written below, and a concurrent edit between the two
+     * would make this overwrite a transition it never saw.
+     */
+    .for('update')
+    .limit(1);
+
+  const row = rows[0];
+
+  /*
+   * A row this tenant cannot see matches nothing under the policy, so an id
+   * from another winery arrives here as `not-found` — §3.5's 404, reached
+   * without a tenant comparison anybody could get wrong.
+   */
+  if (row === undefined) return { outcome: 'not-found' };
+  if (row.status === 'ARCHIVED') return { outcome: 'archived', product: row };
+
+  const next = request.nextStatus({
+    state: row.embeddingState,
+    error: row.embeddingError,
+    attempts: row.embeddingAttempts,
+  });
+
+  await writeEmbeddingStatus(tx, row.id, next);
+  await enqueueEmbedding(tx, {
+    tenantId: row.tenantId,
+    productId: row.id,
+    reason: request.reason,
+  });
+
+  return {
+    outcome: 'queued',
+    product: {
+      ...row,
+      embeddingState: next.state,
+      embeddingError: next.error,
+      embeddingAttempts: next.attempts,
+    },
+  };
+};
+
+/**
+ * How many embedding jobs this tenant still has waiting (P1-39).
+ *
+ * Scoped by the policy rather than by a predicate, like every other read here.
+ * Counts only the unpublished ones: the outbox keeps published rows as the
+ * history, so `processed_at IS NULL` is the queue.
+ */
+export const countQueuedEmbeddings = async (tx: DbTransaction): Promise<number> => {
+  const rows = await tx
+    .select({ queued: sql<number>`count(*)::int` })
+    .from(outbox)
+    .where(and(isNull(outbox.processedAt), eq(outbox.eventType, EMBEDDING_EVENT)));
+
+  return rows[0]?.queued ?? 0;
+};
+
+export type CatalogueReindexOutcome =
+  | { readonly outcome: 'queued'; readonly batchId: string; readonly queued: number }
+  | { readonly outcome: 'in-flight'; readonly queued: number };
+
+export interface CatalogueReindexRequest {
+  /**
+   * The `queued` edge as a lookup, one entry per state, supplied by the caller
+   * from `packages/core`.
+   *
+   * **A table rather than a callback, because this transition is applied to
+   * every row in one statement.** Reading the catalogue into the application to
+   * run a function over it would be the same decision expressed as N round
+   * trips, and at a few thousand wines that is the difference between a request
+   * and a timeout. Handing the edges down as data keeps `packages/core` the
+   * author of them; the test asserts this map and `nextEmbeddingStatus` agree,
+   * which is what catches a future edit to one that forgets the other.
+   */
+  readonly edges: Readonly<Record<EmbeddingState, EmbeddingState>>;
+  readonly batchId: string;
+  readonly reason: string;
+}
+
+/**
+ * Re-queues the whole active catalogue (P1-39).
+ *
+ * **One statement, not batches, which the row asks for.** Batching exists to
+ * bound the memory of application code that materialises rows; this
+ * materialises none — the `UPDATE` feeds the `INSERT` through a CTE and the
+ * only thing crossing the wire is a count. At this product's ceiling (ten
+ * tenants, a few thousand wines each) it is a single short transaction, and a
+ * catalogue large enough to make it a long one would want chunking by product
+ * id rather than by round trip, which is a different design and belongs with
+ * the scale test that would show it was needed (P7-05).
+ *
+ * **A second run while the first is still draining is refused**, which is the
+ * row's "a second concurrent reindex-all is rejected" — reached through the
+ * condition that actually matters rather than a clock. Two batches in the queue
+ * do not index anything twice; they double the work the poller and the worker
+ * must get through before either finishes, and the seller waits longer for the
+ * answer they were already waiting for. The refusal carries the number still
+ * queued, so the dashboard can say how much is left rather than just "no".
+ *
+ * Note what is *not* guarded: running this again once the queue has drained. It
+ * is close to free, because the worker calls no provider for a wine whose
+ * vector is current (see `reindexProduct`) — so the expensive thing the row
+ * wanted rate-limited is not expensive in this design. A general per-tenant
+ * budget across every write endpoint is P2-04's, and belongs there rather than
+ * special-cased here.
+ */
+export const reindexCatalogue = async (
+  tx: DbTransaction,
+  request: CatalogueReindexRequest,
+): Promise<CatalogueReindexOutcome> => {
+  const inFlight = await countQueuedEmbeddings(tx);
+  if (inFlight > 0) return { outcome: 'in-flight', queued: inFlight };
+
+  /*
+   * The transition table, rendered as a `CASE` over the current value. The cast
+   * is required because a `CASE` of string literals is `text` and the column is
+   * an enum; without it Postgres refuses the assignment rather than coercing,
+   * which is the failure one would want.
+   */
+  const transition = sql.join(
+    [
+      sql`CASE ${products.embeddingState}`,
+      ...Object.entries(request.edges).map(
+        ([from, to]) => sql`WHEN ${from} THEN ${to}::product_embedding_state`,
+      ),
+      sql`END`,
+    ],
+    sql` `,
+  );
+
+  /*
+   * `embedding_attempts` is deliberately untouched: a wine that needed four
+   * tries is worth knowing about after it succeeds, and a reindex is not new
+   * information about that. `updated_at` does not move either — migration 0038
+   * gave `products` a trigger that ignores exactly these columns, so a bulk
+   * reindex no longer sends every wine to the top of "recently edited", a sort
+   * the seller reads as a record of their own work.
+   */
+  const payload = JSON.stringify({ reason: request.reason, batchId: request.batchId });
+
+  const rows = await tx.execute(sql`
+    WITH touched AS (
+      UPDATE ${products}
+         SET embedding_state = ${transition},
+             embedding_error = NULL
+       WHERE ${products.status} = 'ACTIVE'
+      RETURNING ${products.id} AS id, ${products.tenantId} AS tenant_id
+    )
+    INSERT INTO ${outbox} (tenant_id, aggregate_id, event_type, payload)
+    SELECT touched.tenant_id, touched.id, ${EMBEDDING_EVENT}, ${payload}::jsonb
+      FROM touched
+    RETURNING 1
+  `);
+
+  return { outcome: 'queued', batchId: request.batchId, queued: [...rows].length };
 };

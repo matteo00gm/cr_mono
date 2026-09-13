@@ -219,16 +219,23 @@ export {
  */
 export {
   archiveProduct,
+  countQueuedEmbeddings,
   EMBEDDING_EVENT,
   enqueueEmbedding,
   insertProduct,
+  reindexCatalogue,
+  reindexProduct,
   updateProduct,
+  type CatalogueReindexOutcome,
+  type CatalogueReindexRequest,
   type NewProduct,
   type ProductArchiveOutcome,
   type ProductPatch,
+  type ProductReindexOutcome,
   type ProductRow,
   type ProductUpdateOutcome,
   type ProductWriteOutcome,
+  type ReindexRequest,
 } from './products.js';
 
 /**

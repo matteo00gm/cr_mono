@@ -1754,6 +1754,373 @@
             }
           }
         }
+      },
+      "/v1/dashboard/products/:id/reindex": {
+        "post": {
+          "summary": "Re-queue one wine for embedding",
+          "description": "Queues an embedding job for a single wine and returns the row as it now stands, so a grid can show the new state without guessing the transition. An INDEXED wine becomes STALE - still findable under its previous description while a new one is built - and a FAILED one returns to PENDING with its error cleared. A wine whose vector is already current costs no provider call by design; what this repairs is a row and a vector that disagree. An archived wine answers 409 rather than being quietly accepted, because the worker discards its job and a 202 would claim something was happening. A product belonging to another winery answers 404, never 403.\n\nRequires the `catalog:write` capability.",
+          "operationId": "postV1DashboardProducts:idReindex",
+          "x-required-capability": "catalog:write",
+          "responses": {
+            "200": {
+              "description": "Re-queue one wine for embedding",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "product": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "sku": {
+                            "type": "string"
+                          },
+                          "externalVariantId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "producer": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "vintage": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "wineType": {
+                            "type": "string"
+                          },
+                          "grapeVarieties": {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "region": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "denomination": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "styleTags": {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "tastingNotes": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "foodPairings": {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "alcoholPct": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "priceCents": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "stockStatus": {
+                            "type": "string",
+                            "enum": [
+                              "IN_STOCK",
+                              "OUT_OF_STOCK",
+                              "PREORDER"
+                            ]
+                          },
+                          "stockQty": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "productUrl": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "imageUrl": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "ACTIVE",
+                              "ARCHIVED"
+                            ]
+                          },
+                          "embeddingState": {
+                            "type": "string",
+                            "enum": [
+                              "PENDING",
+                              "INDEXED",
+                              "FAILED",
+                              "STALE"
+                            ]
+                          },
+                          "completeness": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 100
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                          },
+                          "updatedAt": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "sku",
+                          "externalVariantId",
+                          "name",
+                          "producer",
+                          "vintage",
+                          "wineType",
+                          "grapeVarieties",
+                          "region",
+                          "denomination",
+                          "styleTags",
+                          "tastingNotes",
+                          "foodPairings",
+                          "alcoholPct",
+                          "priceCents",
+                          "currency",
+                          "stockStatus",
+                          "stockQty",
+                          "productUrl",
+                          "imageUrl",
+                          "status",
+                          "embeddingState",
+                          "completeness",
+                          "createdAt",
+                          "updatedAt"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "queued": {
+                        "type": "boolean",
+                        "const": true
+                      }
+                    },
+                    "required": [
+                      "product",
+                      "queued"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "product": {
+                      "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                      "sku": "BAR-2019",
+                      "externalVariantId": "43215678901234",
+                      "name": "Barolo Bussia",
+                      "producer": "Poderi Colla",
+                      "vintage": 2019,
+                      "wineType": "red",
+                      "grapeVarieties": [
+                        "Nebbiolo"
+                      ],
+                      "region": "Piemonte",
+                      "denomination": "Barolo DOCG",
+                      "styleTags": [
+                        "strutturato"
+                      ],
+                      "tastingNotes": "Rosa appassita, catrame e ciliegia sotto spirito.",
+                      "foodPairings": [
+                        "brasato al Barolo"
+                      ],
+                      "alcoholPct": "14.50",
+                      "priceCents": 4500,
+                      "currency": "EUR",
+                      "stockStatus": "IN_STOCK",
+                      "stockQty": 24,
+                      "productUrl": "https://cantina.example/barolo-bussia",
+                      "imageUrl": "https://cantina.example/img/barolo-bussia.jpg",
+                      "status": "ACTIVE",
+                      "embeddingState": "STALE",
+                      "completeness": 78,
+                      "createdAt": "2026-09-08T09:14:00.000Z",
+                      "updatedAt": "2026-09-08T09:14:00.000Z"
+                    },
+                    "queued": true
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/dashboard/products/reindex-all": {
+        "post": {
+          "summary": "Re-queue the whole catalogue for embedding",
+          "description": "Queues an embedding job for every active wine and returns a batch id recorded on each one. Archived wines are left alone, because re-embedding one would put it back in front of visitors, which is what archiving means to stop. This is cheaper than it sounds: a wine whose vector already matches its text costs no provider call, so the job runs, finds nothing to do and reconciles the row. What it repairs is every way a row and its vector can disagree - a failed wine gets another attempt, a wine whose queue entry was lost gets a new one. A second run while the first is still draining answers 409 and says how many are left: two batches index nothing twice, they only make the wait longer. The batch id is not a handle to poll - read each wine embeddingState instead.\n\nRequires the `catalog:write` capability.",
+          "operationId": "postV1DashboardProductsReindex-all",
+          "x-required-capability": "catalog:write",
+          "responses": {
+            "200": {
+              "description": "Re-queue the whole catalogue for embedding",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "batchId": {
+                        "type": "string"
+                      },
+                      "queued": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "batchId",
+                      "queued"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "batchId": "0f7c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a",
+                    "queued": 1284
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
