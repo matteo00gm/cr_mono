@@ -1,8 +1,9 @@
-import { ApiError, type ApiClient, type Product } from '@catalogorosso/api-client';
+import type { ApiClient, Product } from '@catalogorosso/api-client';
 import type { JSX } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 
 import type { GridColumn, GridRow } from './CatalogGrid.js';
+import { describeFailure } from './request-failure.js';
 
 /**
  * Whether a wine can be recommended yet, and a way to ask again (P1-40).
@@ -115,20 +116,9 @@ export const useIndexPolling = (settling: number, refresh: () => void): void => 
   }, [settling]);
 };
 
-/**
- * What the seller is told when the request itself failed.
- *
- * Italian, and never the server's message: a `DomainError`'s text is the API
- * contract (P0-55) and it is written in English. The request id is what makes a
- * support conversation possible, so it is quoted whenever the server gave one.
- */
-const failureText = (error: unknown): string => {
-  const base = 'Reindicizzazione non avviata. Riprova tra poco.';
-
-  return error instanceof ApiError && error.requestId !== 'unknown'
-    ? `${base} Se il problema continua, indica il codice ${error.requestId}.`
-    : base;
-};
+/** What the seller is told when the request itself failed; see `describeFailure`. */
+const failureText = (error: unknown): string =>
+  describeFailure('Reindicizzazione non avviata. Riprova tra poco.', error);
 
 export interface IndexStatusCellProps {
   readonly row: GridRow<Product>;

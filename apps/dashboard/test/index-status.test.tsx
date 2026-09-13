@@ -13,6 +13,7 @@ import {
   settlingCount,
   useIndexPolling,
 } from '../src/features/catalog/IndexStatus.js';
+import { wine } from './support/wine.js';
 
 /**
  * The index-status column, its Reindex action and the failure banner (P1-40).
@@ -27,35 +28,6 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   Reflect.deleteProperty(document, 'visibilityState');
-});
-
-const wine = (over: Partial<Product> = {}): Product => ({
-  id: 'p1',
-  sku: 'BAR-2019',
-  externalVariantId: null,
-  name: 'Barolo Bussia',
-  producer: null,
-  vintage: 2019,
-  wineType: 'red',
-  grapeVarieties: null,
-  region: null,
-  denomination: null,
-  styleTags: null,
-  tastingNotes: null,
-  foodPairings: null,
-  alcoholPct: null,
-  priceCents: 2500,
-  currency: 'EUR',
-  stockStatus: 'IN_STOCK',
-  stockQty: null,
-  productUrl: null,
-  imageUrl: null,
-  status: 'ACTIVE',
-  embeddingState: 'INDEXED',
-  completeness: 40,
-  createdAt: '2026-09-01T10:00:00.000Z',
-  updatedAt: '2026-09-01T10:00:00.000Z',
-  ...over,
 });
 
 const rowOf = (data: Product, state: GridRow<Product>['state'] = 'saved'): GridRow<Product> => ({
