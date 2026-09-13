@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  activeEmbeddingVersionFilter,
+  CURRENT_EMBEDDING_VERSION,
   EMBEDDING_CHUNK,
+  missingForEmbeddingVersion,
+  readActiveEmbeddingVersion,
   readProductForEmbedding,
+  switchEmbeddingVersion,
   upsertEmbedding,
   writeEmbeddingStatus,
 } from '../src/embeddings.js';
@@ -145,14 +150,37 @@ describe('upsertEmbedding', () => {
       chunkIdx: EMBEDDING_CHUNK,
       contentHash: 'h',
       model: 'amazon.titan-embed-text-v2:0',
+      version: CURRENT_EMBEDDING_VERSION,
     });
+  });
+
+  it('writes the generation it is given, which is what dual-write needs (P1-49)', async () => {
+    const fake = fakeTx();
+
+    await upsertEmbedding(fake.tx, {
+      tenantId: TENANT,
+      productId: PRODUCT,
+      contentHash: 'h2',
+      embedding: [0.1],
+      model: 'next-model',
+      version: 2,
+    });
+
+    expect(fake.recorded.inserted[0]?.values).toMatchObject({ version: 2 });
+  });
+
+  it('writes generation 1 today, the one every stored vector already is', () => {
+    // The column default in migration 0041; moving this without the runbook
+    // would file new vectors under a generation no tenant reads.
+    expect(CURRENT_EMBEDDING_VERSION).toBe(1);
   });
 
   it('targets the unique constraint rather than conflicting blindly', async () => {
     /*
      * A bare conflict target would swallow the next unique index somebody adds
      * and report a silent success — the same argument `insertProduct` makes
-     * about `DO NOTHING`. Three columns, because that is the constraint.
+     * about `DO NOTHING`. Four columns, because that is the constraint — the
+     * version joined it in P1-49.
      */
     const fake = fakeTx();
 
@@ -160,7 +188,7 @@ describe('upsertEmbedding', () => {
 
     const conflict = fake.recorded.inserted[0]?.conflict as { target?: unknown[] };
 
-    expect(conflict.target).toHaveLength(3);
+    expect(conflict.target).toHaveLength(4);
   });
 
   it('replaces the hash and the model alongside the vector', async () => {
@@ -213,4 +241,88 @@ describe('writeEmbeddingStatus', () => {
 
     expect(fake.recorded.updated[0]).not.toHaveProperty('updatedAt');
   });
+});
+
+/** A transaction whose `execute` answers each call with the next result, in order. */
+const executing = (...results: unknown[][]) => {
+  const execute = vi.fn(() => Promise.resolve(results.shift() ?? []));
+  return { execute, tx: { execute } as unknown as DbTransaction };
+};
+
+describe('the active generation (P1-49)', () => {
+  it('reads the pointer as a number', async () => {
+    const fake = executing([{ embedding_version: 2 }]);
+
+    expect(await readActiveEmbeddingVersion(fake.tx, TENANT)).toBe(2);
+  });
+
+  it('refuses rather than defaulting when the tenant is not visible', async () => {
+    await expect(readActiveEmbeddingVersion(executing([]).tx, TENANT)).rejects.toThrow(
+      /not visible/,
+    );
+  });
+
+  it('counts the missing wines, and none when the count comes back empty', async () => {
+    expect(
+      await missingForEmbeddingVersion(executing([{ missing: 3 }]).tx, {
+        tenantId: TENANT,
+        version: 2,
+      }),
+    ).toBe(3);
+    expect(
+      await missingForEmbeddingVersion(executing([]).tx, { tenantId: TENANT, version: 2 }),
+    ).toBe(0);
+  });
+});
+
+describe('switchEmbeddingVersion (P1-49)', () => {
+  it.each([0, -1, 1.5])('refuses %s before touching the database', async (version) => {
+    const fake = executing();
+
+    await expect(switchEmbeddingVersion(fake.tx, { tenantId: TENANT, version })).rejects.toThrow(
+      RangeError,
+    );
+    expect(fake.execute).not.toHaveBeenCalled();
+  });
+
+  it('refuses a cutover with even one wine missing, and writes nothing', async () => {
+    const fake = executing([{ embedding_version: 1 }], [{ missing: 1 }]);
+
+    expect(await switchEmbeddingVersion(fake.tx, { tenantId: TENANT, version: 2 })).toEqual({
+      outcome: 'incomplete',
+      version: 2,
+      missing: 1,
+    });
+    expect(fake.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('moves the pointer when nothing is missing, and says from where', async () => {
+    const fake = executing([{ embedding_version: 1 }], [{ missing: 0 }], []);
+
+    expect(await switchEmbeddingVersion(fake.tx, { tenantId: TENANT, version: 2 })).toEqual({
+      outcome: 'switched',
+      from: 1,
+      to: 2,
+    });
+    expect(fake.execute).toHaveBeenCalledTimes(3);
+  });
+
+  it('refuses when the tenant it was asked to move is not visible', async () => {
+    await expect(
+      switchEmbeddingVersion(executing([]).tx, { tenantId: TENANT, version: 2 }),
+    ).rejects.toThrow(/not visible/);
+  });
+});
+
+describe('activeEmbeddingVersionFilter (P1-49)', () => {
+  it.each(['e', 'product_embeddings'])('accepts the alias %s', (alias) => {
+    expect(() => activeEmbeddingVersionFilter(alias)).not.toThrow();
+  });
+
+  it.each(['e; drop table tenants', 'E', '"e"', ''])(
+    'refuses %j, which is not an alias',
+    (alias) => {
+      expect(() => activeEmbeddingVersionFilter(alias)).toThrow(/not a table alias/);
+    },
+  );
 });

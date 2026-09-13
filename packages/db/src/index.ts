@@ -345,11 +345,17 @@ export {
  * re-embedding, stays in `packages/core/src/rag`.
  */
 export {
+  activeEmbeddingVersionFilter,
+  CURRENT_EMBEDDING_VERSION,
   EMBEDDING_CHUNK,
+  missingForEmbeddingVersion,
+  readActiveEmbeddingVersion,
   readProductForEmbedding,
+  switchEmbeddingVersion,
   upsertEmbedding,
   writeEmbeddingStatus,
   type EmbeddableRow,
+  type EmbeddingVersionSwitch,
   type EmbeddingStatusWrite,
   type StoredEmbedding,
 } from './embeddings.js';

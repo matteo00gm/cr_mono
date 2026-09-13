@@ -1,4 +1,13 @@
-import { customType, integer, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
+import {
+  customType,
+  integer,
+  pgTable,
+  smallint,
+  text,
+  timestamp,
+  unique,
+  uuid,
+} from 'drizzle-orm/pg-core';
 
 import { products } from './products.js';
 import { tenants } from './tenants.js';
@@ -74,14 +83,28 @@ export const productEmbeddings = pgTable(
      */
     model: text('model').notNull(),
 
+    /**
+     * The embedding generation this vector belongs to (P1-49).
+     *
+     * Part of the unique key, so a second model's vector for the same chunk
+     * sits beside the first rather than replacing it — which is what lets each
+     * tenant be switched only once its new set is complete. Retrieval reads the
+     * generation `tenants.embedding_version` names and ignores the rest.
+     */
+    version: smallint('version').notNull().default(1),
+
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
   (table) => [
-    /** One vector per chunk per product. The re-embed key: upsert, not append. */
-    unique('product_embeddings_tenant_product_chunk_unique').on(
+    /**
+     * One vector per chunk per product per generation. The re-embed key: upsert,
+     * not append — and, since P1-49, two generations of one chunk side by side.
+     */
+    unique('product_embeddings_tenant_product_chunk_version_unique').on(
       table.tenantId,
       table.productId,
       table.chunkIdx,
+      table.version,
     ),
   ],
 );

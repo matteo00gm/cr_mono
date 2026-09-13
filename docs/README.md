@@ -4,6 +4,7 @@
 | -------------------------------- | -------------------------------------------------------------------- |
 | [`adr/`](adr/)                   | Architecture Decision Records — the standing decisions, append-only  |
 | [`../plan-v1.md`](../plan-v1.md) | The build plan: task specifications, as-built deviations, open items |
+| [`runbooks/`](runbooks/)         | What to do, step by step, for an operation a person runs by hand     |
 
 ## Which one to write in
 
