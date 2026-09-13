@@ -35,6 +35,7 @@ import {
 } from '@catalogorosso/core';
 import {
   EMBEDDING_STATES,
+  IMPORT_CLAIM_EXPIRES_AFTER_MINUTES,
   isSortField,
   MAX_LIMIT,
   productInsert,
@@ -51,6 +52,7 @@ import { resolveTenant } from '../middleware/tenant.js';
 import { unconfiguredMembers, type MembersPort } from '../members.js';
 import {
   countImportOutcomes,
+  importRequestHash,
   toProductResponse,
   unconfiguredProducts,
   type ProductsPort,
@@ -114,6 +116,15 @@ const readJson = async (c: { req: { json: () => Promise<unknown> } }): Promise<u
  * cap enforced only in the browser is a suggestion to anybody with `curl`.
  */
 export const MAX_IMPORT_ROWS = 10_000;
+
+/**
+ * The header naming one import attempt (P1-26).
+ *
+ * The name the IETF draft and Stripe use, so a client that already sends it on
+ * retries has nothing to learn. Required rather than optional: an optional key
+ * is the key the one client that double-submits forgets to send.
+ */
+export const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
 
 /**
  * The bulk import body. Rows are `unknown` here and checked one by one below,
@@ -475,6 +486,21 @@ export const createDashboardApp = ({
    * to date is the job the role exists for (§2.7).
    */
   app.post('/products/import', requireCapability('catalog:write'), async (c) => {
+    /*
+     * The key is checked first and claimed last. First, so a request without
+     * one is refused before ten thousand rows are parsed. Last, so a request
+     * refused for a broken row uses nothing up: the seller fixes the row and
+     * sends the same key again, and that is still the same attempt.
+     */
+    const idempotencyKey = z.uuid().safeParse(c.req.header(IDEMPOTENCY_KEY_HEADER));
+
+    if (!idempotencyKey.success) {
+      throw new InvalidRequestError(
+        `Send an ${IDEMPOTENCY_KEY_HEADER} header carrying a UUID generated for this import, ` +
+          'and send the same UUID again if you retry it.',
+      );
+    }
+
     const body = importBody.safeParse(await readJson(c));
 
     if (!body.success) {
@@ -507,7 +533,37 @@ export const createDashboardApp = ({
       );
     }
 
-    const result = await products.importRows({ tenantId: c.get('tenantId'), rows });
+    const tenantId = c.get('tenantId');
+    const claim = await products.claimImport({
+      tenantId,
+      idempotencyKey: idempotencyKey.data,
+      requestHash: importRequestHash(rows),
+    });
+
+    /*
+     * **A repeat answers with the first attempt's body, not a fresh run's.**
+     * The import is an upsert, so running it again would report every row
+     * `unchanged`: true of the catalogue, false of the attempt, and the seller
+     * who double-clicked would read "0 nuovi" for the wines they just added.
+     */
+    if (claim.outcome === 'replay') return c.json(claim.result);
+
+    if (claim.outcome === 'different-body') {
+      throw new ConflictError(
+        `This ${IDEMPOTENCY_KEY_HEADER} was already used for an import with different rows. ` +
+          'Generate a new key for each import.',
+      );
+    }
+
+    if (claim.outcome === 'in-progress') {
+      throw new ConflictError(
+        `The import sent with this ${IDEMPOTENCY_KEY_HEADER} has not finished. Retry with the ` +
+          'same key shortly to read its result; an attempt that never finishes is released ' +
+          `after ${String(IMPORT_CLAIM_EXPIRES_AFTER_MINUTES)} minutes.`,
+      );
+    }
+
+    const result = await products.importRows({ tenantId, rows });
 
     if (result.stoppedAt !== null) {
       logger.error(
@@ -516,7 +572,7 @@ export const createDashboardApp = ({
       );
     }
 
-    return c.json({
+    const response = {
       outcomes: result.outcomes,
       counts: countImportOutcomes(result.outcomes),
       stoppedAt:
@@ -527,7 +583,17 @@ export const createDashboardApp = ({
               fromRow: result.stoppedAt.fromIndex + 1,
               toRow: result.stoppedAt.toIndex + 1,
             },
-    });
+    };
+
+    /*
+     * Stored even when the import stopped part-way: how far it got *is* this
+     * attempt's answer. Resuming is a new attempt with a new key, and the rows
+     * already applied come back unchanged (P1-25). The cause stays in the log
+     * above and never reaches the stored body, which a replay would return.
+     */
+    await products.completeImport({ tenantId, runId: claim.runId, result: response });
+
+    return c.json(response);
   });
 
   /**
@@ -1191,9 +1257,14 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'the model reads moved. Nothing is ever archived or cleared: a field a row does ' +
         'not carry keeps its value. Rows are applied in batches of 200, each in its own ' +
         'transaction, so a failure part-way answers with how far the import got - send ' +
-        'the same rows again to resume, since rows already applied come back unchanged. ' +
+        'the same rows again under a new Idempotency-Key to resume, since rows already ' +
+        'applied come back unchanged. ' +
         'A row that does not match the product contract refuses the whole request before ' +
-        'anything is written, and rows sharing a SKU are all refused.',
+        'anything is written, and rows sharing a SKU are all refused. Every import carries an ' +
+        'Idempotency-Key header holding a UUID per attempt: a repeat with the same key and the ' +
+        'same rows answers with the body the first attempt returned and runs nothing, even when ' +
+        'that attempt stopped part-way. The same key with different rows, or while the first ' +
+        'attempt is still running, answers 409.',
       example: {
         outcomes: [
           { index: 0, outcome: 'created', productId: '7c9e6679-7425-40de-944b-e07fc1f90ae7' },

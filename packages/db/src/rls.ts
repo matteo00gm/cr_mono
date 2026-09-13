@@ -135,6 +135,7 @@ const HEADERS: Readonly<Record<string, string>> = {
   '0025_rls': 'Row-level security (P0-37).',
   '0033_invitations_rls': 'Row-level security for invitations (P0-51).',
   '0036_outbox_poller_rls': 'The outbox poller reads across tenants (P1-31).',
+  '0040_import_runs_rls': 'Row-level security for import runs (P1-26).',
 };
 
 /** Every migration file this list generates, in first-appearance order. */
@@ -248,6 +249,7 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
       'from the row it claimed before it writes. The flag therefore buys a read and nothing ' +
       'else — no insert of a job naming another tenant, and no delete of one.',
   },
+  { ...boilerplate('import_runs'), migration: '0040_import_runs_rls' },
 ];
 
 /**
