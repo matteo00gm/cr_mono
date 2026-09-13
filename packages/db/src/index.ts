@@ -237,6 +237,15 @@ export {
   type ProductWriteOutcome,
   type ReindexRequest,
 } from './products.js';
+export {
+  planUpsert,
+  upsertProducts,
+  WRITTEN_FIELDS,
+  type UpsertDecision,
+  type UpsertOutcome,
+  type UpsertRequest,
+  type UpsertRow,
+} from './products-upsert.js';
 
 /**
  * Catalogue reads (P1-06).

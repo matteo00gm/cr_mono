@@ -4008,6 +4008,19 @@ Enqueue an outbox row **only for rows where `changed`**. Return per-row outcomes
 
 **Files.** `packages/core/src/catalog/upsert.ts`, tests. **~130 lines.**
 
+**In `packages/db`, beside `insertProduct` and `updateProduct`, not in `packages/core`** *(deviation)*. Its siblings take the domain rules from their caller — `hashOf`, the embedding transition — and so does `upsertProducts(tx, { tenantId, rows, hashOf, edited, reason })`. The API port supplies both from `packages/core` (P1-25), so the lock, the statements and the outbox rows stay in one transaction here, and what an edit costs stays where it is tested as a decision.
+
+**As built.**
+
+- **"Unchanged" means no written field moved — not an equal hash** *(deviation, and it corrects P1-23)*. The hash covers only what the model reads, so a price edit within its band leaves it equal while the price is different. Counting that as *invariato* would tell a seller that an import of new prices changed nothing. The hash decides one thing: whether a job is queued. A row equal in every field but carrying a stale hash — an embedding-text version bump — is *unchanged* to the seller and still re-queued.
+- **A field a row does not carry is left as it was.** An import never clears a column: a file without a *note di degustazione* column must not blank every tasting note in the catalogue. Clearing is done in the form.
+- **Two rows with one SKU are both refused** (`duplicate-sku`). Applying them in order would let the last one win silently, by a sort the seller cannot see — and Postgres refuses an upsert that touches one row twice anyway.
+- **A SKU matching an archived wine updates its values and leaves it archived**, flagged `archived` on the outcome. Re-listing is a deliberate act (P1-04); an import that put a wine back in front of visitors would undo the seller's decision without asking.
+- **Not an `INSERT … ON CONFLICT DO UPDATE`** as the row sketches. That statement cannot express "leave absent fields alone" without a `COALESCE` per column, and it cannot report *unchanged* at all, because `RETURNING` sees the row after the update. Instead the existing rows are read `FOR UPDATE`, each row is decided by the pure `planUpsert`, new rows go in one `INSERT`, changed rows are updated one at a time, and every job goes in one outbox `INSERT`. At P1-25's batch of two hundred that is at most ~203 statements per transaction.
+- **Embedding state moves along P1-38's `edited` edge**, handed in as a function rather than written here, so an indexed wine becomes `STALE` — still findable — and a failed one returns to `PENDING`.
+- **`WRITTEN_FIELDS` is written out, and a test fails until it equals `productInsert`'s keys**, so a column added to the table is a decision about imports rather than a silent change to what they touch.
+- Tested in two halves: `products-upsert.test.ts` covers the decisions without a database, and `products-upsert.integration.test.ts` covers the statements — create, update and re-queue, a price-only update queuing nothing, an unchanged row moving neither `updated_at` nor the queue, absent fields kept, duplicate SKUs refused, an archived wine staying archived, the same SKU in another winery, and a rollback leaving nothing behind.
+
 ---
 
 ### P1-25 · Bulk upsert endpoint
