@@ -331,7 +331,11 @@ Progress is persisted and resumable; each step is independently E2E tested.
 
 `external_variant_id` is required because the Shopify cart adapter cannot add to cart without it (§1.6) — the form explains where to find it rather than letting a seller discover the problem when a visitor clicks *Aggiungi al carrello*.
 
+*As built (P1-19):* an import requires **name, SKU, type and price** — the fields the form has no default for. `stock_status` defaults to in stock and `currency` to EUR, exactly as the form fills them, and `external_variant_id` does not block an import: the API contract accepts a wine without one, and refusing a whole file over a Shopify field would stop every seller who does not use Shopify from importing at all.
+
 **Validation is shared, not duplicated.** The form validates against the very same `drizzle-zod` schema the API enforces, imported from `packages/db`. One definition, checked in the browser and again on the server. This is the concrete payoff of deriving contracts from the table schema.
+
+*As built (P1-01, P1-22):* the browser validates against `productRequest` in `packages/api-client`, because importing `packages/db` would put the ORM and the whole schema in the bundle; `apps/api/test/product-contracts.test.ts` pins the two field for field. Pasted and imported rows go through the same `buildPayload` as the form, so there is still one definition — reached from the browser through a contract test rather than an import.
 
 **A completeness indicator per product.** Sparse products retrieve badly: a row with only a name and a price will lose to a well-described one on every query. The form shows a per-product completeness score and names the specific missing fields that would most improve retrieval, with help text explaining *why* (*"food pairings: the more specific, the better the recommendations"*). This puts the quality problem in front of the only person who can fix it, and it is why the LLM enrichment in §4.2 could be deferred — a nudge to the human is cheaper and produces better data than a model guessing.
 
@@ -346,7 +350,7 @@ Progress is persisted and resumable; each step is independently E2E tested.
 
 - Table with server-side pagination, sort, and full-text **search** across name, producer, sku, grape and region.
 - Filters: availability, wine type, price band, `embedding_state`, completeness.
-- Per-row **index status** (`PENDING`/`INDEXED`/`FAILED`/`STALE`) with the failure reason and a **Reindex** action; a bulk "reindex all" for embedding-model changes.
+- Per-row **index status** (`PENDING`/`INDEXED`/`FAILED`/`STALE`) with the failure reason and a **Reindex** action; a bulk "reindex all" for embedding-model changes. *(As built, P1-40 and P1-10b: the states, the per-row action and the catalogue-wide one ship; the failure reason waits for P1-50 to make it readable, because the stored value is a provider's error name.)*
 - **Availability** is displayed and editable, and drives retrieval filtering.
 - **Export to CSV** in exactly the template's field order — useful for the seller's own records, and it makes the template layout self-documenting.
 
@@ -367,7 +371,7 @@ file (CSV/XLSX)┘        (all client-side)                             ─→ o
 **3. CSV / XLSX file upload — parsed in the browser.** This is the important design choice: the file is read and parsed **client-side**, then handed to the very same draft-rows pipeline as a paste. Consequences:
 
 - **No upload endpoint at all.** No multipart handling, no S3 staging, no server-side temp files. The server only ever receives validated JSON rows through the existing bulk-upsert route.
-- **The parser dependency stays out of the critical bundle.** SheetJS is ~500 KB; it is dynamically imported only when the import screen opens, so it never touches first load — and it is in the dashboard, never the widget.
+- **The parser dependency stays out of the critical bundle.** SheetJS is ~500 KB; it is dynamically imported only when the import screen opens, so it never touches first load — and it is in the dashboard, never the widget. *(As built, P1-18: the reader is `read-excel-file`, not SheetJS, whose npm release is frozen at a version the dependency audit blocks. It is still loaded on first use, and `bundle.test.ts` fails the build that puts it in the entry chunk.)*
 - **One review UI, one validation path.** File import inherits the grid's per-cell errors and the summary screen for free rather than needing its own preview screen.
 
 Because I argued against file upload earlier, the bug surface it reintroduces must be handled explicitly rather than discovered in support tickets. All of these get table-driven tests:
@@ -378,7 +382,7 @@ Because I argued against file upload earlier, the bug surface it reintroduces mu
 | UTF-8 **BOM** at file start | Stripped before parsing |
 | Windows-1252 / Latin-1 encoding (Italian Excel default) | Detect and decode; mojibake in `à è ò ì` is visible in the preview before saving |
 | Italian decimal comma — `12,50` not `12.50` | Locale-tolerant number parse, accepting both; ambiguous values flagged, never guessed |
-| Quoted fields containing the delimiter — `"Barbaresco, Riserva"` | Proper RFC-4180 quote handling, not `split(',')` |
+| Quoted fields containing the delimiter — `"Barbaresco, Riserva"` | Proper RFC-4180 quote handling, not `split(',')` — one reader shared by paste and CSV (P1-14, P1-16) |
 | Header names that don't match the template | Matched case- and accent-insensitively after trimming; **unrecognised and missing columns are listed by name** rather than silently mapped by position. A downloadable template makes this rare |
 | Enormous files | Row cap (10,000) and file-size cap, with a clear message; upsert sent in batches |
 
@@ -1231,12 +1235,12 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P1-15 | Test: paste parser table | trailing rows, quoted cells, 5,000-row paste | P1-14 |
 | P1-16 | Client CSV parser | **delimiter sniff `, ; \t`**, BOM strip, RFC-4180 quotes | P1-14 |
 | P1-17 | Encoding detection | UTF-8 vs Windows-1252; `à è ò ì` visible in preview | P1-16 |
-| P1-18 | XLSX via dynamic import | SheetJS lazy-loaded on the import screen only | P1-16 |
+| P1-18 | XLSX via dynamic import | reader lazy-loaded on first use — `read-excel-file`, not SheetJS (see P1-18) | P1-16 |
 | P1-19 | Header matching | case/accent-insensitive; report unrecognised **and** missing by name | P1-16 |
 | P1-20 | Locale-tolerant number parse | `12,50` and `12.50`; ambiguous flagged, never guessed | P1-16 |
 | P1-21 | Test: file parser table | every hazard row in §2.2a | P1-16–20 |
 | P1-22 | Draft rows + per-cell validation | shared schema, errors in place | P1-14 |
-| P1-23 | Import summary screen | nuovi / aggiornati / invariati / non validi, confirm to apply | P1-22 |
+| P1-23 | Import summary screen | nuovi / aggiornati / invariati / non validi, confirm to apply | P1-22,24 |
 | P1-24 | `upsertProducts()` core fn | match on `(tenant_id, sku)`, batched | P1-02 |
 | P1-25 | Bulk upsert endpoint | batches, partial-success reporting | P1-24 |
 | P1-26 | Import idempotency key + test | replay applies once | P1-25 |
