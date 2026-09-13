@@ -12,7 +12,7 @@ complete only because raw `fetch` to our own API is forbidden outside
 | `GET /v1/dashboard/me` | apps/dashboard/src/session.ts:150 |
 | `GET /v1/dashboard/products` | apps/dashboard/src/features/catalog/CatalogScreen.tsx:134<br>apps/dashboard/src/features/catalog/catalogue-export.ts:70 |
 | `PATCH /v1/dashboard/products/:id` | apps/dashboard/src/features/catalog/InlineEdit.tsx:221 |
-| `POST /v1/dashboard/products/:id/reindex` | apps/dashboard/src/features/catalog/IndexStatus.tsx:167 |
+| `POST /v1/dashboard/products/:id/reindex` | apps/dashboard/src/features/catalog/IndexStatus.tsx:197 |
 | `POST /v1/dashboard/products/import` | apps/dashboard/src/features/catalog/ImportSummary.tsx:215 |
 | `POST /v1/dashboard/products/import/preview` | apps/dashboard/src/features/catalog/ImportSummary.tsx:190 |
 | `POST /v1/dashboard/products/reindex-all` | apps/dashboard/src/features/catalog/CatalogScreen.tsx:257 |

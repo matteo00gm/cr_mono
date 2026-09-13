@@ -967,6 +967,21 @@
                                 "STALE"
                               ]
                             },
+                            "embeddingFailure": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "input-rejected",
+                                    "service-unavailable",
+                                    "unknown"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "completeness": {
                               "type": "integer",
                               "minimum": 0,
@@ -1006,6 +1021,7 @@
                             "imageUrl",
                             "status",
                             "embeddingState",
+                            "embeddingFailure",
                             "completeness",
                             "createdAt",
                             "updatedAt"
@@ -1072,6 +1088,7 @@
                         "imageUrl": "https://cantina.example/img/barolo-bussia.jpg",
                         "status": "ACTIVE",
                         "embeddingState": "INDEXED",
+                        "embeddingFailure": null,
                         "createdAt": "2026-09-08T09:14:00.000Z",
                         "updatedAt": "2026-09-08T09:14:00.000Z"
                       }
@@ -1281,6 +1298,21 @@
                           "STALE"
                         ]
                       },
+                      "embeddingFailure": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "input-rejected",
+                              "service-unavailable",
+                              "unknown"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "completeness": {
                         "type": "integer",
                         "minimum": 0,
@@ -1320,6 +1352,7 @@
                       "imageUrl",
                       "status",
                       "embeddingState",
+                      "embeddingFailure",
                       "completeness",
                       "createdAt",
                       "updatedAt"
@@ -1357,6 +1390,7 @@
                     "imageUrl": "https://cantina.example/img/barolo-bussia.jpg",
                     "status": "ACTIVE",
                     "embeddingState": "PENDING",
+                    "embeddingFailure": null,
                     "createdAt": "2026-09-08T09:14:00.000Z",
                     "updatedAt": "2026-09-08T09:14:00.000Z"
                   }
@@ -1642,6 +1676,21 @@
                           "STALE"
                         ]
                       },
+                      "embeddingFailure": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "input-rejected",
+                              "service-unavailable",
+                              "unknown"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "completeness": {
                         "type": "integer",
                         "minimum": 0,
@@ -1681,6 +1730,7 @@
                       "imageUrl",
                       "status",
                       "embeddingState",
+                      "embeddingFailure",
                       "completeness",
                       "createdAt",
                       "updatedAt"
@@ -1718,6 +1768,7 @@
                     "imageUrl": "https://cantina.example/img/barolo-bussia.jpg",
                     "status": "ACTIVE",
                     "embeddingState": "INDEXED",
+                    "embeddingFailure": null,
                     "createdAt": "2026-09-08T09:14:00.000Z",
                     "updatedAt": "2026-09-08T11:02:00.000Z"
                   }
@@ -1928,6 +1979,21 @@
                               "STALE"
                             ]
                           },
+                          "embeddingFailure": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "input-rejected",
+                                  "service-unavailable",
+                                  "unknown"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "completeness": {
                             "type": "integer",
                             "minimum": 0,
@@ -1967,6 +2033,7 @@
                           "imageUrl",
                           "status",
                           "embeddingState",
+                          "embeddingFailure",
                           "completeness",
                           "createdAt",
                           "updatedAt"
@@ -2014,6 +2081,7 @@
                       "imageUrl": "https://cantina.example/img/barolo-bussia.jpg",
                       "status": "ACTIVE",
                       "embeddingState": "STALE",
+                      "embeddingFailure": null,
                       "completeness": 78,
                       "createdAt": "2026-09-08T09:14:00.000Z",
                       "updatedAt": "2026-09-08T09:14:00.000Z"

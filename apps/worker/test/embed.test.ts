@@ -33,7 +33,7 @@ const ROW = {
   tenantId: TENANT,
   status: 'ACTIVE',
   embeddingState: 'PENDING' as 'PENDING' | 'INDEXED' | 'FAILED' | 'STALE',
-  embeddingError: null,
+  embeddingError: null as string | null,
   embeddingAttempts: 0,
   embeddedHash: null as string | null,
   name: 'Barolo Bussia',
@@ -69,7 +69,11 @@ interface Written {
  * `rows: []` stands for a product that is not visible in this tenant — which is
  * what a message naming the wrong tenant produces once RLS has had its say.
  */
-const fakeDb = (options: { row?: typeof ROW | undefined; failWrite?: boolean } = { row: ROW }) => {
+const fakeDb = (
+  options: { row?: typeof ROW | undefined; failWrite?: boolean; failVector?: boolean } = {
+    row: ROW,
+  },
+) => {
   const written: Written = { statuses: [], vectors: [] };
   const row = options.row;
 
@@ -107,6 +111,13 @@ const fakeDb = (options: { row?: typeof ROW | undefined; failWrite?: boolean } =
     insert: () => ({
       values: (values: { contentHash: string; model: string }) => ({
         onConflictDoUpdate: () => {
+          if (options.failVector === true) {
+            // A database refusal named like a provider error, which must not read as one.
+            return Promise.reject(
+              Object.assign(new Error('connection lost'), { name: 'ValidationException' }),
+            );
+          }
+
           written.vectors.push({ contentHash: values.contentHash, model: values.model });
           return Promise.resolve(undefined);
         },
@@ -283,7 +294,7 @@ describe('what it declines to embed', () => {
 });
 
 describe('failure', () => {
-  it('records the reason and rethrows, so SQS retries', async () => {
+  it('records a transient failure and rethrows it, so SQS retries', async () => {
     /*
      * **Both halves, and they pull in opposite directions.** The write is what
      * P1-50's triage reads; the throw is what makes SQS redeliver. Only the
@@ -300,31 +311,8 @@ describe('failure', () => {
     ).rejects.toThrow('rate exceeded');
 
     expect(fake.written.statuses).toEqual([
-      { state: 'FAILED', error: 'ThrottlingException', attempts: 1 },
+      { state: 'FAILED', error: 'service-unavailable', attempts: 1 },
     ]);
-  });
-
-  it('records the provider error name, never its message', async () => {
-    /*
-     * **P0-56 applied to a column.** `embedding_error` is shown to the seller
-     * by P1-40, and a provider's message is free text that has carried
-     * endpoints and credentials. The name is a closed set, and the more useful
-     * half for triage besides.
-     */
-    const embed = vi.fn(() =>
-      Promise.reject(
-        Object.assign(new Error('https://user:secret@bedrock.example refused'), {
-          name: 'ValidationException',
-        }),
-      ),
-    );
-    const fake = fakeDb();
-
-    await expect(
-      embedProduct(message(), { provider: provider(embed), database: fake.database }),
-    ).rejects.toThrow();
-
-    expect(fake.written.statuses[0]?.error).toBe('ValidationException');
   });
 
   it('still rethrows the original error when recording the failure also fails', async () => {
@@ -369,7 +357,9 @@ describe('its defaults', () => {
     ).rejects.toThrow(/no vector/);
 
     expect(fake.written.vectors).toEqual([]);
-    expect(fake.written.statuses).toEqual([{ state: 'FAILED', error: 'Error', attempts: 1 }]);
+    expect(fake.written.statuses).toEqual([
+      { state: 'FAILED', error: 'service-unavailable', attempts: 1 },
+    ]);
   });
 
   it('builds its own provider and logger when none are supplied', async () => {
@@ -487,5 +477,183 @@ describe('the batch', () => {
     });
 
     expect(peak).toBe(1);
+  });
+});
+
+describe('what a failure means (P1-50)', () => {
+  const refused = (name: string) =>
+    vi.fn(() =>
+      Promise.reject(
+        Object.assign(new Error('https://user:secret@bedrock.example refused'), { name }),
+      ),
+    );
+
+  it('fails fast on a text the provider refused: one call, recorded, acknowledged', async () => {
+    const embed = refused('ValidationException');
+    const fake = fakeDb();
+
+    const result = await embedProduct(message(), {
+      provider: provider(embed),
+      database: fake.database,
+    });
+
+    expect(result).toEqual({
+      outcome: 'failed',
+      productId: PRODUCT,
+      reason: 'input-rejected',
+      providerError: 'ValidationException',
+    });
+    expect(embed).toHaveBeenCalledTimes(1);
+    expect(fake.written.statuses).toEqual([
+      { state: 'FAILED', error: 'input-rejected', attempts: 1 },
+    ]);
+  });
+
+  it('stores a reason code, never the provider’s message or its error name', async () => {
+    // P0-56 applied to a column the seller's grid reads.
+    const fake = fakeDb();
+
+    await embedProduct(message(), {
+      provider: provider(refused('ValidationException')),
+      database: fake.database,
+    });
+
+    expect(JSON.stringify(fake.written.statuses)).not.toMatch(/secret|bedrock|Exception/);
+  });
+
+  it('retries an unrecognised provider error once, then records it as permanent', async () => {
+    const first = fakeDb();
+    await expect(
+      embedProduct(
+        message(),
+        { provider: provider(refused('ModelErrorException')), database: first.database },
+        1,
+      ),
+    ).rejects.toThrow();
+    expect(first.written.statuses[0]?.error).toBe('unknown');
+
+    const second = fakeDb();
+    expect(
+      await embedProduct(
+        message(),
+        { provider: provider(refused('ModelErrorException')), database: second.database },
+        2,
+      ),
+    ).toMatchObject({ outcome: 'failed', reason: 'unknown' });
+  });
+
+  it('never fails a wine permanently for something that went wrong around the provider', async () => {
+    const fake = fakeDb({ row: ROW, failVector: true });
+
+    await expect(
+      embedProduct(message(), { provider: provider(), database: fake.database }, 5),
+    ).rejects.toThrow('connection lost');
+    expect(fake.written.statuses).toEqual([
+      { state: 'FAILED', error: 'service-unavailable', attempts: 1 },
+    ]);
+  });
+
+  it('keeps retrying an operator problem, which belongs behind the DLQ alarm', async () => {
+    const fake = fakeDb();
+
+    await expect(
+      embedProduct(
+        message(),
+        { provider: provider(refused('AccessDeniedException')), database: fake.database },
+        3,
+      ),
+    ).rejects.toThrow();
+    expect(fake.written.statuses[0]?.error).toBe('service-unavailable');
+  });
+
+  it('indexes a failed wine once its text is fixed, clearing the reason', async () => {
+    // The loop closes without new code: an edit re-queues it (P1-38), and success clears the error.
+    const fake = fakeDb({
+      row: {
+        ...ROW,
+        embeddingState: 'FAILED',
+        embeddingError: 'input-rejected',
+        embeddingAttempts: 1,
+      },
+    });
+
+    expect(
+      await embedProduct(message({ reason: 'edited' }), {
+        provider: provider(),
+        database: fake.database,
+      }),
+    ).toEqual({ outcome: 'indexed', productId: PRODUCT });
+    expect(fake.written.statuses).toEqual([{ state: 'INDEXED', error: null, attempts: 1 }]);
+  });
+});
+
+describe('the batch, after P1-50', () => {
+  const record = (messageId: string, receiveCount?: string) => ({
+    messageId,
+    body: JSON.stringify(message()),
+    ...(receiveCount === undefined
+      ? {}
+      : { attributes: { ApproximateReceiveCount: receiveCount } }),
+  });
+
+  const refusedBy = (name: string) =>
+    provider(vi.fn(() => Promise.reject(Object.assign(new Error('no'), { name }))));
+
+  it('acknowledges a refused text rather than sending it towards the DLQ', async () => {
+    const lines: string[] = [];
+
+    const result = await handler({ Records: [record('m0', '1')] }, undefined, {
+      provider: refusedBy('ValidationException'),
+      database: fakeDb().database,
+      log: (line) => lines.push(line),
+    });
+
+    expect(result.batchItemFailures).toEqual([]);
+    expect(JSON.parse(lines[0] ?? '{}')).toMatchObject({
+      event: 'embedding.processed',
+      outcome: 'failed',
+      reason: 'input-rejected',
+      providerError: 'ValidationException',
+    });
+  });
+
+  it('reads the delivery count SQS reports, so an unknown error gets exactly one more try', async () => {
+    const options = {
+      provider: refusedBy('ModelErrorException'),
+      database: fakeDb().database,
+      log: () => undefined,
+    };
+
+    expect(
+      (await handler({ Records: [record('m0', '1')] }, undefined, options)).batchItemFailures,
+    ).toEqual([{ itemIdentifier: 'm0' }]);
+    expect(
+      (await handler({ Records: [record('m0', '2')] }, undefined, options)).batchItemFailures,
+    ).toEqual([]);
+  });
+
+  it('treats a record with no count, or a nonsense one, as a first delivery', async () => {
+    const result = await handler({ Records: [record('m0'), record('m1', 'abc')] }, undefined, {
+      provider: refusedBy('ModelErrorException'),
+      database: fakeDb().database,
+      log: () => undefined,
+    });
+
+    expect(result.batchItemFailures).toEqual([{ itemIdentifier: 'm0' }, { itemIdentifier: 'm1' }]);
+  });
+
+  it('logs the provider’s own error name for an operator when a failure is retried', async () => {
+    const lines: string[] = [];
+
+    await handler({ Records: [record('m0', '1')] }, undefined, {
+      provider: refusedBy('ThrottlingException'),
+      database: fakeDb().database,
+      log: (line) => lines.push(line),
+    });
+
+    expect(JSON.parse(lines[0] ?? '{}')).toMatchObject({
+      event: 'embedding.failed',
+      reason: 'ThrottlingException',
+    });
   });
 });

@@ -1,9 +1,13 @@
 import {
+  classifyEmbeddingFailure,
   contentHashOf,
+  EmbeddingProviderError,
   embeddingText,
   nextEmbeddingStatus,
   shouldEmbed,
   type EmbeddableProduct,
+  type EmbeddingFailure,
+  type EmbeddingFailureReason,
   type EmbeddingProvider,
 } from '@catalogorosso/core';
 import {
@@ -35,7 +39,13 @@ export type EmbedOutcome =
   | { readonly outcome: 'indexed'; readonly productId: string }
   | { readonly outcome: 'unchanged'; readonly productId: string }
   | { readonly outcome: 'gone'; readonly productId: string }
-  | { readonly outcome: 'archived'; readonly productId: string };
+  | { readonly outcome: 'archived'; readonly productId: string }
+  | {
+      readonly outcome: 'failed';
+      readonly productId: string;
+      readonly reason: EmbeddingFailureReason;
+      readonly providerError: string | undefined;
+    };
 
 export interface EmbedDependencies {
   readonly provider: EmbeddingProvider;
@@ -67,6 +77,15 @@ const embeddable = (row: EmbeddableRow): EmbeddableProduct => ({
 });
 
 /**
+ * The error that actually happened: the provider's own, when the call was wrapped.
+ *
+ * The wrapper exists for the classifier alone. SQS, the handler's log line and
+ * anybody reading a stack trace should see what failed, not the envelope.
+ */
+const originalError = (error: unknown): unknown =>
+  error instanceof Error && error.name === 'EmbeddingProviderError' ? error.cause : error;
+
+/**
  * Embeds one product, or explains why it did not.
  *
  * **The tenant comes from the message and is used to *open* the transaction,
@@ -79,15 +98,17 @@ const embeddable = (row: EmbeddableRow): EmbeddableProduct => ({
  * `WITH CHECK` is tenant-only (P1-31), so it cannot name a tenant its writer
  * was not in.
  *
- * **On failure the state is written and the error rethrown.** Both halves
- * matter and they pull in opposite directions: the write is what P1-50's
- * triage reads, and the throw is what makes SQS redeliver. Doing only the
- * first loses the retry; doing only the second leaves a wine stuck at
- * `PENDING` with no reason recorded anywhere.
+ * **On failure the state is always written, and the error rethrown only when
+ * another delivery could succeed** (P1-50). The write is what the seller's grid
+ * reads; the throw is what makes SQS redeliver. A text the provider refused is
+ * acknowledged instead, because repeating it cannot help, and an unrecognised
+ * provider error gets one more delivery before it is treated the same way.
+ * `deliveries` is SQS's own receive count for the message.
  */
 export const embedProduct = async (
   message: EmbeddingMessage,
   deps: EmbedDependencies,
+  deliveries = 1,
 ): Promise<EmbedOutcome> => {
   const run = async (): Promise<EmbedOutcome> =>
     withTenant(
@@ -149,7 +170,17 @@ export const embedProduct = async (
           return { outcome: 'unchanged', productId: row.id };
         }
 
-        const [vector] = await deps.provider.embed([embeddingText(product)]);
+        /*
+         * Wrapped so the classifier can tell the provider refusing a text from
+         * anything else going wrong around it (P1-50). Only the first can be
+         * the seller's to fix; a database connection dropped mid-run is not,
+         * and must never mark a wine permanently failed.
+         */
+        const [vector] = await deps.provider
+          .embed([embeddingText(product)])
+          .catch((error: unknown) => {
+            throw new EmbeddingProviderError(error);
+          });
 
         if (vector === undefined) {
           // `assertBatchAligned` in the provider makes this unreachable; it is
@@ -187,8 +218,26 @@ export const embedProduct = async (
   try {
     return await run();
   } catch (error) {
-    await recordFailure(message, error, deps);
-    throw error;
+    /*
+     * **Classified before anything else is decided** (P1-50). A permanent
+     * failure is recorded and the message acknowledged: repeating a refused
+     * text cannot succeed, and it would park a wine the seller can fix in a DLQ
+     * meant for problems an operator must. A transient one is recorded and
+     * rethrown, so SQS delivers it again and, past its limit, sets it aside
+     * behind the alarm.
+     */
+    const failure = classifyEmbeddingFailure(error, deliveries);
+
+    await recordFailure(message, failure, deps);
+
+    if (failure.retry) throw originalError(error);
+
+    return {
+      outcome: 'failed',
+      productId: message.productId,
+      reason: failure.reason,
+      providerError: failure.providerError,
+    };
   }
 };
 
@@ -206,16 +255,17 @@ export const embedProduct = async (
  */
 const recordFailure = async (
   message: EmbeddingMessage,
-  error: unknown,
+  failure: EmbeddingFailure,
   deps: EmbedDependencies,
 ): Promise<void> => {
   /*
-   * The provider's error *name*, not its message — P0-56 applied to a column
-   * this time. A provider message is free text that has carried endpoints and
-   * credentials, and `embedding_error` is displayed to the seller by P1-40.
-   * The name is a closed set and is the more useful half for triage anyway.
+   * A reason *code* from a closed set, never the provider's message or even its
+   * error name (P1-50). The message is free text that has carried endpoints and
+   * credentials (P0-56), and the name tells a winery nothing. The code is what
+   * the API publishes and the dashboard words; the provider's name goes to the
+   * operator's log line instead.
    */
-  const reason = (error as { name?: string } | undefined)?.name ?? 'UnknownError';
+  const reason = failure.reason;
 
   try {
     await withTenant(
@@ -255,6 +305,8 @@ const recordFailure = async (
 export interface SqsRecord {
   readonly messageId: string;
   readonly body: string;
+  /** SQS's own metadata. `ApproximateReceiveCount` is how many times this message has been delivered. */
+  readonly attributes?: { readonly ApproximateReceiveCount?: string | undefined } | undefined;
 }
 
 export interface SqsEvent {
@@ -276,6 +328,23 @@ const parseMessage = (body: string): EmbeddingMessage | undefined => {
         reason: typeof parsed.reason === 'string' ? parsed.reason : 'unknown',
       }
     : undefined;
+};
+
+/**
+ * How many times SQS has delivered this record, counting this one.
+ *
+ * A missing or unreadable count is a first delivery: that errs towards one more
+ * retry of an unrecognised error, never towards giving up on a wine early.
+ */
+const deliveriesOf = (record: SqsRecord): number => {
+  const count = Number(record.attributes?.ApproximateReceiveCount);
+  return Number.isInteger(count) && count >= 1 ? count : 1;
+};
+
+/** The error name an operator needs: the provider's own, when the provider raised it. */
+const errorName = (error: unknown): string => {
+  const cause = originalError(error);
+  return (cause as { name?: string } | undefined)?.name ?? 'UnknownError';
 };
 
 export interface HandlerOptions {
@@ -330,17 +399,20 @@ export const handler = async (
         continue;
       }
 
-      const result = await embedProduct(message, {
-        provider,
-        database: options.database,
-        log,
-      });
+      const result = await embedProduct(
+        message,
+        { provider, database: options.database, log },
+        deliveriesOf(record),
+      );
 
       log(
         JSON.stringify({
           event: 'embedding.processed',
           outcome: result.outcome,
           productId: result.productId,
+          ...(result.outcome === 'failed'
+            ? { reason: result.reason, providerError: result.providerError }
+            : {}),
           model: TITAN_PROVENANCE,
         }),
       );
@@ -350,7 +422,7 @@ export const handler = async (
         JSON.stringify({
           event: 'embedding.failed',
           messageId: record.messageId,
-          reason: (error as { name?: string } | undefined)?.name ?? 'UnknownError',
+          reason: errorName(error),
         }),
       );
     }

@@ -5,6 +5,7 @@ import {
   audit,
   completenessOf,
   contentHashOf,
+  embeddingFailureOf,
   EMBEDDING_STATES,
   nextEmbeddingStatus,
   type EmbeddingState,
@@ -90,6 +91,12 @@ export const toProductResponse = (row: ProductRow): Product => ({
   imageUrl: row.imageUrl,
   status: row.status,
   embeddingState: row.embeddingState,
+  /*
+   * The stored reason as a published code (P1-50). A wine failed before P1-50
+   * stores a provider error name there, which reads as `unknown` rather than
+   * leaking a string the contract never promised.
+   */
+  embeddingFailure: embeddingFailureOf({ state: row.embeddingState, error: row.embeddingError }),
   /*
    * Computed here rather than stored, and sent rather than left to the client.
    * The catalogue filters by completeness band in SQL (P1-09), so a client

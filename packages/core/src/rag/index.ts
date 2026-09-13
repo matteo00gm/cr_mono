@@ -45,3 +45,4 @@ export {
   type EmbeddingState,
   type EmbeddingStatus,
 } from './embedding-state.js';
+export * from './embedding-failure.js';
