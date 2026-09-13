@@ -242,3 +242,86 @@ body {
   padding: var(--cr-gap);
   color: var(--cr-ink-soft);
 }
+
+/* Read by assistive technology, invisible on screen. `clip-path` rather than
+   `display: none`, which would hide it from screen readers too. */
+.cr-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Index status (P1-40).
+   Same rule as completeness: colour never carries the state alone. The label
+   is always words, and the dot is decoration a seller can ignore. */
+.cr-index {
+  --cr-index-colour: var(--cr-ink-soft);
+
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cr-index--indexed {
+  --cr-index-colour: #15803d;
+}
+
+.cr-index--pending {
+  --cr-index-colour: #b45309;
+}
+
+.cr-index--failed {
+  --cr-index-colour: var(--cr-wine);
+}
+
+.cr-index__state {
+  color: var(--cr-index-colour);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cr-index__state::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-inline-end: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.cr-index__action {
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border: 1px solid var(--cr-line);
+  border-radius: var(--cr-radius);
+  background: var(--cr-paper);
+  color: var(--cr-ink);
+  cursor: pointer;
+}
+
+.cr-index__action:disabled {
+  color: var(--cr-ink-soft);
+  cursor: progress;
+}
+
+.cr-banner {
+  margin-bottom: var(--cr-gap);
+  padding: 12px var(--cr-gap);
+  border-radius: var(--cr-radius);
+}
+
+/* A border as well as a tint, for the same reason as the grid's error rows. */
+.cr-banner--danger {
+  border: 1px solid var(--cr-wine);
+  border-inline-start-width: 4px;
+  background: #fff8f8;
+}
