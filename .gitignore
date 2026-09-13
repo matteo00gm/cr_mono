@@ -41,9 +41,11 @@ reports/
 # script was interrupted.
 .tsconfig.infra-pure.json
 
-# Written and removed by `apps/api/test/tenant-from-input.test.ts`, which lints a
-# fixture at a real path so the P0-48 rule is tested the way it runs. The
-# cleanup is a `finally`, which a killed test process never reaches — so an
-# interrupted run leaves this behind, where `pnpm lint` then fails on the `any`
-# in it for a reason nobody could trace back to a test.
-apps/api/src/handler-fixture.ts
+# Written and removed by `apps/api/test/tenant-from-input.test.ts`, which lints
+# fixtures at real paths so the P0-48 rule is tested the way it runs — the
+# configuration keys on the directory, so it has to be a directory we ship. The
+# cleanup is a `finally`, which a killed test process never reaches, and the
+# suite sweeps strays on the way in and out. This is the third net: an
+# interrupted run leaves one in `src/`, where `pnpm lint` fails on the `any`
+# inside it for a reason nobody would trace back to a test.
+*.fixture.ts
