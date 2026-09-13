@@ -3,7 +3,7 @@ import type { JSX } from 'preact';
 import { useState } from 'preact/hooks';
 
 import { CompletenessIndicator } from './CompletenessIndicator.js';
-import { formatCents, parsePriceToCents, type PriceError } from './price.js';
+import { formatCents, parsePriceToCents, PRICE_MESSAGES } from './price.js';
 
 /**
  * The canonical product editor (P1-01).
@@ -94,20 +94,6 @@ export const valuesFrom = (product: Partial<ProductRequest>): ProductFormValues 
 
 /** Field name to message, in Italian — this console has one language. */
 export type FieldErrors = Partial<Record<keyof ProductFormValues, string>>;
-
-const PRICE_MESSAGES: Record<PriceError, string> = {
-  empty: 'Indica un prezzo.',
-  'not-a-number': 'Scrivi solo cifre, ad esempio 12,50.',
-  negative: 'Il prezzo non può essere negativo.',
-  'too-precise': 'Al massimo due decimali.',
-  /*
-   * The ambiguous case, and the message has to *say what to write* rather than
-   * report a rule. "1.234 può voler dire due cose" is a fact about parsing;
-   * telling somebody to type `1234` or `1.234,00` is an instruction they can
-   * follow without knowing why.
-   */
-  ambiguous: 'Non è chiaro se sia un separatore di migliaia: scrivi 1234 oppure 1.234,00.',
-};
 
 /** Comma-separated free text into an array, or nothing when it is empty. */
 const list = (value: string): string[] | undefined => {

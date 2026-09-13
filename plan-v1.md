@@ -3714,6 +3714,21 @@ Two implementations of one definition is the arrangement `completeness.ts` opens
 
 **Files.** grid + hook, tests. **~120 lines.**
 
+**The row's premise is true of stock and not quite of price** *(correction)*. It says these fields "do not affect `content_hash`". P1-33 later put a price *band* into the embedding text, so that "qualcosa sotto i venti euro" can be answered at all. A price edit **inside** its band costs nothing, which is the ordinary weekly edit; one that **crosses** a band re-embeds, deliberately, because the wine has moved into a different answer. The invariant comment says exactly that, and three tests pin it: `packages/core/test/inline-edit.test.ts` runs every inline field through the real `contentHashOf`, `apps/api/test/products-port.integration.test.ts` does the same through the real port and database, and P1-03's existing test covers "unchanged hash, no outbox row".
+
+**The field list lives in `@catalogorosso/core/inline-edit`, not in the grid** *(addition)*. The core test refuses any field it has not been told how to vary, so widening inline edit cannot land without somebody deciding, in that file, whether the new field reaches the model. The subpath imports nothing; `browser-subpaths.test.ts` now checks that for every declared subpath, because the boundary rule only catches the barrel.
+
+**As built.**
+
+- **One `PATCH` per wine after 800 ms of no typing, or at once on blur.** Leaving the page within the pause still saves.
+- **Only fields that changed and are valid are sent.** The body is built by walking `INLINE_EDIT_FIELDS`, so nothing else can reach it. An invalid cell keeps its text and its message and is never sent; a valid cell beside it still saves.
+- **Never two saves for one wine at once.** Each carries absolute values, and two in flight can land in either order, leaving the older price standing. A later edit waits for the first answer, then goes.
+- **The rollback** puts the saved value back in the cell, with "Modifica non salvata" and the request id. Text typed *while* a save was in flight is not discarded by that save's answer.
+- **Clearing bottles saves `null`, not 0.** Empty means "not counted"; zero would tell a visitor the wine is sold out.
+- **A draft row renders the same columns as text**, since it has no server id to patch (P1-14, P1-22).
+- The price messages moved from the form to `price.ts`, so the form and the grid refuse a price in the same words.
+- A **Bottiglie** column joins the screen; it was not shown before.
+
 ---
 
 ### P1-12 · Completeness score function

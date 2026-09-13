@@ -1,6 +1,6 @@
 import { ApiError, type ApiClient, type Product } from '@catalogorosso/api-client';
 import type { JSX } from 'preact';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 
 import { CatalogGrid, type GridColumn, type GridRow } from './CatalogGrid.js';
 import { CompletenessIndicator } from './CompletenessIndicator.js';
@@ -10,7 +10,7 @@ import {
   settlingCount,
   useIndexPolling,
 } from './IndexStatus.js';
-import { formatCents } from './price.js';
+import { inlineEditColumns, useInlineEdit, type InlineEditor } from './InlineEdit.js';
 import { describeFailure } from './request-failure.js';
 
 /**
@@ -37,12 +37,6 @@ export const PAGE_SIZE = 50;
  */
 export const REFRESH_LIMIT = 100;
 
-const STOCK_LABEL: Readonly<Record<Product['stockStatus'], string>> = {
-  IN_STOCK: 'Disponibile',
-  OUT_OF_STOCK: 'Esaurito',
-  PREORDER: 'In prevendita',
-};
-
 /**
  * The rows on screen, with any the server sent back replaced by id.
  *
@@ -60,41 +54,39 @@ export const mergeProducts = (
   return current.map((product) => byId.get(product.id) ?? product);
 };
 
-/** The screen's columns. Exported so a later row can swap a cell for an editor. */
+/**
+ * The screen's columns. Price, availability and bottles are editors (P1-11);
+ * everything else is read here and edited in the form.
+ */
 export const catalogueColumns = (
   client: ApiClient,
   onReindexed: (product: Product) => void,
-): readonly GridColumn<Product>[] => [
-  { key: 'name', header: 'Nome', cell: (row) => row.data.name },
-  { key: 'producer', header: 'Produttore', cell: (row) => row.data.producer ?? '—' },
-  {
-    key: 'vintage',
-    header: 'Annata',
-    width: '5rem',
-    numeric: true,
-    cell: (row) => row.data.vintage ?? '—',
-  },
-  {
-    key: 'priceCents',
-    header: 'Prezzo',
-    width: '8rem',
-    numeric: true,
-    cell: (row) => `${formatCents(row.data.priceCents)} ${row.data.currency}`,
-  },
-  {
-    key: 'stockStatus',
-    header: 'Disponibilità',
-    width: '8rem',
-    cell: (row) => STOCK_LABEL[row.data.stockStatus],
-  },
-  {
-    key: 'completeness',
-    header: 'Completezza',
-    width: '9rem',
-    cell: (row) => <CompletenessIndicator product={row.data} variant="compact" />,
-  },
-  indexStatusColumn(client, onReindexed),
-];
+  editor: InlineEditor,
+): readonly GridColumn<Product>[] => {
+  const inline = inlineEditColumns(editor);
+
+  return [
+    { key: 'name', header: 'Nome', cell: (row) => row.data.name },
+    { key: 'producer', header: 'Produttore', cell: (row) => row.data.producer ?? '—' },
+    {
+      key: 'vintage',
+      header: 'Annata',
+      width: '5rem',
+      numeric: true,
+      cell: (row) => row.data.vintage ?? '—',
+    },
+    inline.priceCents,
+    inline.stockStatus,
+    inline.stockQty,
+    {
+      key: 'completeness',
+      header: 'Completezza',
+      width: '9rem',
+      cell: (row) => <CompletenessIndicator product={row.data} variant="compact" />,
+    },
+    indexStatusColumn(client, onReindexed),
+  ];
+};
 
 type LoadState =
   | { readonly status: 'loading' }
@@ -190,17 +182,22 @@ export const CatalogScreen = ({ client }: { readonly client: ApiClient }): JSX.E
     setProducts((current) => mergeProducts(current, [product]));
   }, []);
 
-  const columns = useMemo(() => catalogueColumns(client, replace), [client, replace]);
+  const editor = useInlineEdit({ client, onSaved: replace });
 
-  const rows = useMemo(
-    () =>
-      products.map((product): GridRow<Product> => ({
-        id: product.id,
-        data: product,
-        state: 'saved',
-      })),
-    [products],
-  );
+  /*
+   * Rebuilt every render, deliberately: the editor's cells read typed text
+   * and messages from this render's state, and memoised columns would show
+   * a seller the text from before their last keystroke.
+   */
+  const columns = catalogueColumns(client, replace, editor);
+
+  const rows = products.map((product): GridRow<Product> => ({
+    id: product.id,
+    data: product,
+    state: 'saved',
+    // An inline edit's message sits under the cell it belongs to.
+    errors: editor.errorsOf(product.id),
+  }));
 
   const loadMore = async (): Promise<void> => {
     if (nextCursor === null) return;

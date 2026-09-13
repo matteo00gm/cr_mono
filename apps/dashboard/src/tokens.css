@@ -364,3 +364,37 @@ body {
 .cr-catalog__more {
   margin-top: var(--cr-gap);
 }
+
+/* Inline edit (P1-11). The input fills its cell so the grid's column widths,
+   not the browser's default input size, decide the layout. */
+.cr-inline {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cr-inline__input {
+  width: 100%;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--cr-line);
+  border-radius: var(--cr-radius);
+  background: var(--cr-paper);
+  color: var(--cr-ink);
+  font: inherit;
+}
+
+.cr-inline__input--numeric {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.cr-inline__input[aria-invalid='true'] {
+  border-color: var(--cr-wine);
+}
+
+.cr-inline__unit {
+  color: var(--cr-ink-soft);
+  font-size: 0.75rem;
+}
