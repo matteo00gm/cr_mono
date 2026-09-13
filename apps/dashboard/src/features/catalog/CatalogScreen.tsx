@@ -12,6 +12,8 @@ import {
 } from './IndexStatus.js';
 import { inlineEditColumns, useInlineEdit, type InlineEditor } from './InlineEdit.js';
 import { describeFailure } from './request-failure.js';
+import { catalogueCsv, fetchCatalogue } from './catalogue-export.js';
+import { saveTextFile } from './save-file.js';
 
 /**
  * The catalogue screen (P1-10b).
@@ -99,7 +101,14 @@ const queuedNotice = (queued: number): string => {
   return `${String(queued)} vini in coda per la reindicizzazione.`;
 };
 
-export const CatalogScreen = ({ client }: { readonly client: ApiClient }): JSX.Element => {
+export const CatalogScreen = ({
+  client,
+  saveFile = saveTextFile,
+}: {
+  readonly client: ApiClient;
+  /** How the export reaches the seller. Injected so a test can read the file (P1-30). */
+  readonly saveFile?: ((text: string, filename: string) => void) | undefined;
+}): JSX.Element => {
   const [products, setProducts] = useState<readonly Product[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [matchedBy, setMatchedBy] = useState<'exact' | 'similar' | null>(null);
@@ -110,6 +119,7 @@ export const CatalogScreen = ({ client }: { readonly client: ApiClient }): JSX.E
   const [notice, setNotice] = useState<string | undefined>(undefined);
   const [loadingMore, setLoadingMore] = useState(false);
   const [reindexing, setReindexing] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   /*
    * **Which answer is still wanted.** Every search, and unmounting, moves this
@@ -218,6 +228,26 @@ export const CatalogScreen = ({ client }: { readonly client: ApiClient }): JSX.E
     }
   };
 
+  const exportAll = async (): Promise<void> => {
+    /*
+     * **Every active wine, not the rows on screen** (P1-30). Not guarded by the
+     * list's generation either: the file describes the catalogue as it stands,
+     * and a seller who searched while it was being built still wants it.
+     */
+    setExporting(true);
+    setNotice(undefined);
+
+    try {
+      saveFile(catalogueCsv(await fetchCatalogue(client)), 'catalogo.csv');
+    } catch (error) {
+      setNotice(
+        describeFailure('Esportazione del catalogo non riuscita. Riprova tra poco.', error),
+      );
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const reindexAll = async (): Promise<void> => {
     const mine = generation.current;
     setReindexing(true);
@@ -319,6 +349,16 @@ export const CatalogScreen = ({ client }: { readonly client: ApiClient }): JSX.E
           }}
         >
           {reindexing ? 'Avvio in corso…' : 'Reindicizza tutto il catalogo'}
+        </button>
+        <button
+          type="button"
+          class="cr-catalog__export"
+          disabled={exporting}
+          onClick={() => {
+            void exportAll();
+          }}
+        >
+          {exporting ? 'Esportazione in corso…' : 'Esporta CSV'}
         </button>
       </header>
 

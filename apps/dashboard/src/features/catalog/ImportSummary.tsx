@@ -9,9 +9,9 @@ import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 
 import { writeDelimited } from './delimited.js';
-import { importBodyProblem, type DraftRow } from './draft-rows.js';
-import type { ProductFormValues } from './ProductForm.js';
+import { importBodyProblem, STOCK_WORD_FOR, type DraftRow } from './draft-rows.js';
 import { describeFailure } from './request-failure.js';
+import { saveTextFile } from './save-file.js';
 import { TEMPLATE_COLUMNS } from './template.js';
 
 /**
@@ -47,13 +47,6 @@ const NO_COUNTS: ImportPreviewResponse['counts'] = {
   archived: 0,
 };
 
-/** The availability words the importer reads back (P1-22), one per value. */
-const STOCK_WORD: Readonly<Record<ProductFormValues['stockStatus'], string>> = {
-  IN_STOCK: 'disponibile',
-  OUT_OF_STOCK: 'esaurito',
-  PREORDER: 'prevendita',
-};
-
 /**
  * The rows still to fix, as a file the seller can open, correct and import again.
  *
@@ -68,7 +61,7 @@ export const invalidRowsCsv = (drafts: readonly DraftRow[]): string => {
     .filter((row) => row.payload === undefined)
     .map((row) => [
       ...TEMPLATE_COLUMNS.map(({ field }) =>
-        field === 'stockStatus' ? STOCK_WORD[row.values.stockStatus] : row.values[field],
+        field === 'stockStatus' ? STOCK_WORD_FOR[row.values.stockStatus] : row.values[field],
       ),
       Object.values(row.errors).join(' · '),
     ]);
@@ -124,16 +117,6 @@ const resultText = (answer: ProductsImportedResponse, sent: readonly DraftRow[])
   );
 };
 
-/** Hands the seller a file, through the browser's own download. */
-const download = (text: string, filename: string): void => {
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
-};
-
 export interface ImportSummaryProps {
   readonly client: ApiClient;
   readonly drafts: readonly DraftRow[];
@@ -163,7 +146,7 @@ export const ImportSummary = ({
   source,
   onImported,
   newKey = () => crypto.randomUUID(),
-  saveFile = download,
+  saveFile = saveTextFile,
 }: ImportSummaryProps): JSX.Element => {
   const valid = useMemo(() => drafts.filter((row) => row.payload !== undefined), [drafts]);
   const invalid = useMemo(() => drafts.filter((row) => row.payload === undefined), [drafts]);

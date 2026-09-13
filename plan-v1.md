@@ -4155,6 +4155,15 @@ Tests: `packages/db/test/import-runs.test.ts` and `schema/import-runs.test.ts` (
 
 **Files.** export route, tests. **~90 lines.**
 
+**As built — assembled in the dashboard from the paginated list, not streamed by a server route** *(deviation)*.
+
+- **Why not the route.** The API function answers in buffered mode (`streaming: false`, `infra/api.ts`), and a Lambda caps a buffered response at 6 MB. Measured: ten thousand fully described wines are 3.1 MB of this CSV without tasting notes, 5.1 MB with 200-character notes and 7.0 MB with 400-character ones — so a route would fail for exactly the catalogues that most need an export. Streaming means `RESPONSE_STREAM`, which changes the response envelope for every route on the function and needs its own CloudFront behaviour; that is P2-29's to introduce, on its own function. The list route already serves every active wine to the same session in pages of 100, under any ceiling: `fetchCatalogue` follows the pages and `catalogueCsv` writes the file. Ten thousand wines are a hundred requests — slow for a button, fine for an export a seller makes now and then.
+- **The row's format, unchanged:** template field order and headers, a UTF-8 byte-order mark, `,`, a cell quoted when it holds a comma, a quote or a line break (`writeDelimited`, from P1-23), and prices with `.` and always exactly two decimals, so no price is ever the ambiguous `1.234` P1-20 refuses. Availability is written as the Italian word (`STOCK_WORD_FOR`, now shared with P1-23's invalid-rows file); lists are joined with `, `, as the form joins them.
+- **The round trip is the test.** A catalogue carrying every field — quotes, commas, a semicolon and a line break in its notes, prices from 0.05 to 10,000.00, every availability — is written, read back through `readImportFile` (P1-16's delimiter detection, P1-17's byte-order mark, P1-19's headers, P1-20's numbers) and turned into drafts (P1-22). Every draft is valid, and every payload equals the stored wine on each field P1-24 compares, null and absent alike, which is exactly what `planUpsert` calls *invariato*. The dashboard cannot run the planner, so that field list is restated in the test beside the server's `WRITTEN_FIELDS`.
+- **A known limit, not a new one:** a list item that itself contains a comma — a pairing written "carne, formaggi" — comes back as two items, because lists are comma-separated in the form and the template alike.
+- **Active wines only**, as the list route serves them; an archived wine is not one a seller edits in a spreadsheet.
+- **An "Esporta CSV" button** on the catalogue screen, its failure worded in Italian with the request id; `saveTextFile` is now the one download helper for both files the console writes.
+
 ---
 
 ### P1-31 · Outbox poller → SQS
