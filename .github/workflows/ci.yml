@@ -252,6 +252,19 @@ jobs:
           fi
           echo "reserved concurrency is set."
 
+      # The cap above is only safe if hitting it is visible (P1-48). A throttled
+      # invocation is refused before the handler runs, so it logs nothing of
+      # ours, and without the alarm reaching the cap reads as random failures.
+      # infra/api.ts cannot be loaded outside a deploy, so this is asserted the
+      # same way as the cap.
+      - name: Assert the API alarms when it hits its concurrency cap
+        run: |
+          if ! grep -qE "metricName: *'Throttles'" infra/api.ts || ! grep -qE "FunctionName: *api\.name" infra/api.ts; then
+            echo "::error::infra/api.ts must alarm on the API function's Throttles metric — see P1-48; a throttled request is refused before our code runs, so without the alarm hitting the concurrency cap looks like random user-facing failures"
+            exit 1
+          fi
+          echo "the API alarms on throttles."
+
       # The worker's concurrency model, which P1-32 exists to get right and
       # which no test can see: `infra/queue.ts` constructs SST resources at
       # import time, so nothing outside a deploy can load it.
