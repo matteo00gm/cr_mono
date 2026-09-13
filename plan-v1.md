@@ -3789,6 +3789,18 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 
 **Files.** `apps/dashboard/src/features/catalog/paste.ts`. **~110 lines.**
 
+**As built.**
+
+- **One RFC-4180 reader, `delimited.ts`, for a paste and — from P1-16 — a CSV file**, differing only in the delimiter. Both arrive with the same hazards, and `split('\t')` gets each of them wrong in a way that still produces plausible rows: a tasting note with a line break becomes two wines.
+- **A quote opens a quoted cell only at the start of the cell**, so `12" bottiglia` survives. **A closing quote has to end its cell**; when it does not — `"Riserva" Speciale` — the opening quote began a word, and both quotes are kept. **An unclosed quote makes the whole paste literal** rather than swallowing every later row into one cell: a spreadsheet never writes one, so it means text from somewhere else, where `"` is a character.
+- **A first row is a header when at least half its filled cells name a template field.** A header with a column of the seller's own is still a header; a data row almost never has half its cells equal to "sku" or "price".
+- **The screen is told which rule was used**, and `mappingNotice` says it: "abbinate per intestazione", naming columns it ignored, or "lette nell'ordine del modello", counting columns it dropped. A mis-detection shifts every column of every row, and a silent guess leaves the seller to work that out from a grid of prices in the name column.
+- **The template is keyed by the form's fields, and its header is `price`, not §2.2's `price_cents`** *(deviation)*. The cell holds euros as a seller writes them, and a header saying cents invites somebody to type 1250. Keying by form field is what lets a draft row validate through `buildPayload` with the form's own messages (P1-22).
+- **A clipboard carrying only `text/html` is refused** with a sentence saying to copy from the spreadsheet. Every spreadsheet puts plain TSV beside its HTML; HTML alone means a web page, and parsing it would be a second parser with its own hazards.
+- **A duplicate header: the first column wins**, rather than the last overwriting it silently. P1-19 reports it by name.
+- **Header matching is minimal here** — case, surrounding space, and space or dash for underscore. Accents, Italian synonyms and refusing a missing required column are P1-19's.
+- **Not yet wired to a screen.** `readClipboard` and `parsePaste` are what P1-22's draft grid calls from its `onPaste`; there is no draft grid to call them from until then.
+
 ---
 
 ### P1-15 · Test: paste parser table
