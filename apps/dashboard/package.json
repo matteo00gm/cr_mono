@@ -14,6 +14,7 @@
     "@catalogorosso/security": "workspace:*",
     "better-auth": "^1.7.2",
     "preact": "^10.29.8",
+    "read-excel-file": "9.3.10",
     "wouter-preact": "^3.10.0"
   },
   "devDependencies": {
