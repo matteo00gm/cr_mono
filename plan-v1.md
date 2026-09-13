@@ -3809,6 +3809,12 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 
 **Files.** `paste.spec.ts`. **~140 test lines.**
 
+**As built.** `apps/dashboard/test/paste-table.test.ts`, with the clipboard fixtures in `test/fixtures/clipboard.ts`. Every hazard the row lists is a case asserting the exact rows produced, because each of them yields plausible wrong rows rather than an error when handled naively. Three more joined the table: rows separated by a lone `\r` (old Mac exports), a CRLF *inside* a quoted cell kept as written, and a quote in the middle of a cell.
+
+**The clipboard fixtures are reconstructed, not captured** *(deviation, and an open item)*. The row asks for strings copied out of Excel and Sheets and checked in verbatim, and that remains the better fixture: a reconstruction encodes what we believe each application writes, and the hazards that matter are the ones nobody believed. They are written with escapes rather than raw control characters, so `.gitattributes`' `eol=lf` cannot quietly turn a CRLF fixture into an LF one and leave the CRLF case passing on a string that no longer contains one.
+
+**Five thousand rows are asserted to parse in under a second** — generous, because CI runners are shared and a timing assertion that fails on a busy one teaches people to ignore it. The failure it exists for is quadratic work, which would take seconds.
+
 ---
 
 ### P1-16 · Client CSV parser
@@ -6510,6 +6516,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | `AUTH_SECRET` rotation has no runbook | before launch | Rotating signs every seller out and voids outstanding reset links. Needs an ADR in the P0-59 set, not code. See **B2**. |
 | No expiry sweep for sessions or verifications | P1 | Both columns are indexed and nothing scans them. Storage hygiene, not security — expiry is enforced on read. See **C3**. |
 | Renovate security rule covers `packages/core` | **closed** | `matchFileNames` now lists `packages/core/**` beside `packages/security/**`, so `better-auth` updates arrive labelled `security-critical` for a human. See **D7**. |
+| Clipboard fixtures are reconstructed, not captured | P1-15 | `apps/dashboard/test/fixtures/clipboard.ts` encodes what Excel for Windows, Google Sheets and Numbers are believed to write. Replace each with a real capture (copy a range, dump `clipboardData.getData('text/plain')` with escapes) when somebody has the applications to hand. The parser should not need to change; if it does, that is the finding. |
 | Plan not yet split into `docs/architecture/` | P0-59 deferred | The ADR half of P0-59 shipped; the split did not. Six thousand lines reorganised with no test, invalidating every `plan-v1.md` reference in commit messages, As-Built entries and open items, and conflicting with every open PR. Worth doing when the PR queue is empty — not as a rider on the ADR system. |
 | Dependency build-script prompt | **closed** | Not a `pnpm add` artefact at all — a plain fresh `install` writes it, so CI regenerated it every run. Now *answered* (`allowBuilds: … false`), which drops `strictDepBuilds` and restores the install-time notification suppression had cost. See **E5**. |
 | Sending domain authenticated | **closed (2026-09-07)** | `app.catalogorosso.com` verified in Resend (eu-west-1); DKIM and SPF published, DMARC inherited at `p=none` with reporting. Remaining step is moving to `p=quarantine` after a week of reports — an operator decision. See **E6**. |
