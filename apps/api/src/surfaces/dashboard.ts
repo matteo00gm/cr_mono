@@ -16,6 +16,7 @@ import {
   productListResponse,
   productReindexedResponse,
   productUpdatedResponse,
+  productsImportedResponse,
   roleChangeResponse,
   rosterResponse,
   surfaceResponse,
@@ -39,14 +40,21 @@ import {
   productInsert,
   productUpdate,
   STOCK_STATUSES,
+  type ProductInsert,
 } from '@catalogorosso/db';
 
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
 import { requireCapability, routeKey } from '../middleware/capability.js';
+import { logger } from '../middleware/logger.js';
 import { resolveTenant } from '../middleware/tenant.js';
 import { unconfiguredMembers, type MembersPort } from '../members.js';
-import { toProductResponse, unconfiguredProducts, type ProductsPort } from '../products.js';
+import {
+  countImportOutcomes,
+  toProductResponse,
+  unconfiguredProducts,
+  type ProductsPort,
+} from '../products.js';
 import { AUTH_ROUTE_PREFIX, DASHBOARD_PREFIX } from '../routes.js';
 
 /**
@@ -97,6 +105,22 @@ const readJson = async (c: { req: { json: () => Promise<unknown> } }): Promise<u
     return null;
   }
 };
+
+/**
+ * The most rows one import may carry (§2.2a, P1-25).
+ *
+ * The same number the dashboard refuses a file over (P1-21). P1-27 makes the
+ * two one shared constant; until then this is the server's half, because a
+ * cap enforced only in the browser is a suggestion to anybody with `curl`.
+ */
+export const MAX_IMPORT_ROWS = 10_000;
+
+/**
+ * The bulk import body. Rows are `unknown` here and checked one by one below,
+ * so a refusal can say *which* rows broke the contract rather than that the
+ * body did.
+ */
+const importBody = z.object({ rows: z.array(z.unknown()).min(1).max(MAX_IMPORT_ROWS) }).strict();
 
 /**
  * 320 is the practical maximum length of an address (64 local + @ + 255
@@ -431,6 +455,79 @@ export const createDashboardApp = ({
      * `toProductResponse`.
      */
     return c.json(toProductResponse(result.product), 201);
+  });
+
+  /**
+   * Import many wines at once (P1-25).
+   *
+   * **The whole request is refused if any row breaks the contract**, before
+   * anything is written. The dashboard validates every row against the same
+   * contract before sending (P1-22), so a row that fails here is a client that
+   * skipped that step — and applying the rest would leave a seller with a
+   * catalogue that is partly the file they chose and partly not.
+   *
+   * **A failure part-way through is reported, not thrown.** Batches commit one
+   * at a time, so the answer says how far the import got; the cause is logged
+   * and never sent, because a driver error can carry a connection string or
+   * another tenant's value (P0-55).
+   *
+   * `EDITOR`s may import: `catalog:write` is theirs, and keeping a catalogue up
+   * to date is the job the role exists for (§2.7).
+   */
+  app.post('/products/import', requireCapability('catalog:write'), async (c) => {
+    const body = importBody.safeParse(await readJson(c));
+
+    if (!body.success) {
+      throw new InvalidRequestError(
+        `Send a JSON body of the form { "rows": [...] } carrying between 1 and ${String(MAX_IMPORT_ROWS)} products.`,
+      );
+    }
+
+    const rows: ProductInsert[] = [];
+    const invalid: number[] = [];
+
+    body.data.rows.forEach((row, index) => {
+      /*
+       * `productInsert` strips what it does not know, `tenantId` included, so
+       * a row carrying one parses with the field discarded (P0-42, P0-48): the
+       * tenant below comes from the membership and nowhere else.
+       */
+      const parsed = productInsert.safeParse(row);
+      if (parsed.success) rows.push(parsed.data);
+      else invalid.push(index + 1);
+    });
+
+    if (invalid.length > 0) {
+      const named = invalid.slice(0, 5).join(', ');
+      const more = invalid.length > 5 ? ` and ${String(invalid.length - 5)} more` : '';
+
+      throw new InvalidRequestError(
+        `Row ${named}${more} did not match the product contract, so nothing was imported. ` +
+          'Validate every row before sending an import.',
+      );
+    }
+
+    const result = await products.importRows({ tenantId: c.get('tenantId'), rows });
+
+    if (result.stoppedAt !== null) {
+      logger.error(
+        { err: result.stoppedAt.cause },
+        `a product import stopped at batch ${String(result.stoppedAt.batch)} (P1-25)`,
+      );
+    }
+
+    return c.json({
+      outcomes: result.outcomes,
+      counts: countImportOutcomes(result.outcomes),
+      stoppedAt:
+        result.stoppedAt === null
+          ? null
+          : {
+              batch: result.stoppedAt.batch,
+              fromRow: result.stoppedAt.fromIndex + 1,
+              toRow: result.stoppedAt.toIndex + 1,
+            },
+    });
   });
 
   /**
@@ -1081,6 +1178,30 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'a handle to poll - read each wine embeddingState instead.',
       example: { batchId: '0f7c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a', queued: 1284 },
       response: catalogueReindexedResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/products/import`),
+    {
+      access: requires('catalog:write'),
+      summary: 'Import wines in bulk, matched by SKU',
+      description:
+        'Creates the wines whose SKU is new to this catalogue, updates the ones that ' +
+        'changed and leaves the rest untouched, queuing an embedding only where the text ' +
+        'the model reads moved. Nothing is ever archived or cleared: a field a row does ' +
+        'not carry keeps its value. Rows are applied in batches of 200, each in its own ' +
+        'transaction, so a failure part-way answers with how far the import got - send ' +
+        'the same rows again to resume, since rows already applied come back unchanged. ' +
+        'A row that does not match the product contract refuses the whole request before ' +
+        'anything is written, and rows sharing a SKU are all refused.',
+      example: {
+        outcomes: [
+          { index: 0, outcome: 'created', productId: '7c9e6679-7425-40de-944b-e07fc1f90ae7' },
+        ],
+        counts: { created: 1, updated: 0, unchanged: 0, duplicateSku: 0, archived: 0 },
+        stoppedAt: null,
+      },
+      response: productsImportedResponse,
     },
   ],
   [

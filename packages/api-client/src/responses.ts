@@ -371,6 +371,66 @@ export const catalogueReindexedResponse = z.object({
 });
 
 /**
+ * One row of an import, as it came out (P1-24, P1-25).
+ *
+ * `index` is the row's position in the request, from 0, so a screen can put
+ * each outcome back beside the line it came from. *Unchanged* means no field a
+ * seller would see moved; `reindexed` says separately whether an embedding was
+ * queued, and `archived` that the SKU matched a wine that stays archived.
+ */
+const importIndex = z.number().int().nonnegative();
+
+export const importOutcomeSchema = z.discriminatedUnion('outcome', [
+  z.object({ index: importIndex, outcome: z.literal('created'), productId: z.string() }),
+  z.object({
+    index: importIndex,
+    outcome: z.literal('updated'),
+    productId: z.string(),
+    reindexed: z.boolean(),
+    archived: z.boolean(),
+  }),
+  z.object({
+    index: importIndex,
+    outcome: z.literal('unchanged'),
+    productId: z.string(),
+    reindexed: z.boolean(),
+    archived: z.boolean(),
+  }),
+  z.object({ index: importIndex, outcome: z.literal('duplicate-sku'), sku: z.string() }),
+]);
+
+const count = z.number().int().nonnegative();
+
+/**
+ * The answer to an import (P1-25).
+ *
+ * **`stoppedAt` is not an error, and it is not in the error envelope.** Batches
+ * commit one at a time, so an import that fails part-way has applied every row
+ * before `fromRow`; answering with a 500 would hide that. Rows are numbered from
+ * 1 there, as a seller counts lines, while `index` in each outcome is from 0.
+ */
+export const productsImportedResponse = z.object({
+  outcomes: z.array(importOutcomeSchema),
+  counts: z.object({
+    created: count,
+    updated: count,
+    unchanged: count,
+    duplicateSku: count,
+    archived: count,
+  }),
+  stoppedAt: z
+    .object({
+      batch: z.number().int().positive(),
+      fromRow: z.number().int().positive(),
+      toRow: z.number().int().positive(),
+    })
+    .nullable(),
+});
+
+export type ImportOutcome = z.infer<typeof importOutcomeSchema>;
+export type ProductsImportedResponse = z.infer<typeof productsImportedResponse>;
+
+/**
  * Every dashboard response, keyed by `METHOD path`.
  *
  * The client's `request()` is typed off this, so calling an endpoint returns
@@ -393,6 +453,7 @@ export const DASHBOARD_RESPONSES = {
   'GET /v1/dashboard/products': productListResponse,
   'POST /v1/dashboard/products/reindex-all': catalogueReindexedResponse,
   'POST /v1/dashboard/products/:id/reindex': productReindexedResponse,
+  'POST /v1/dashboard/products/import': productsImportedResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

@@ -4031,6 +4031,15 @@ Enqueue an outbox row **only for rows where `changed`**. Return per-row outcomes
 
 **Files.** `apps/api/src/routes/products-import.ts`, tests. **~120 lines.**
 
+**As built — in the dashboard surface and the products port, where every other product route and write lives**, not a new `routes/` file. The route is `POST /v1/dashboard/products/import` behind `catalog:write`, so `EDITOR`s may import.
+
+- **Batches of 200, one transaction each, applied in order.** Batches in parallel would take row locks in an order nobody chose, and a failure could no longer be described as "everything before this applied".
+- **A failure part-way is reported, not thrown.** The answer carries `stoppedAt: { batch, fromRow, toRow }` beside the outcomes of every row that applied; the cause goes to the log and never to the caller (P0-55). **Resuming is importing the same rows again**: what already applied comes back *unchanged* and costs nothing (P1-24). The row's `failedBatch?` is this field.
+- **A row that breaks the contract refuses the whole request, before anything is written** *(decision)*. The dashboard validates every row against the same contract first (P1-22), so a row failing here is a client that skipped that step; applying the rest would leave a catalogue that is partly the chosen file and partly not. The refusal names up to five row numbers.
+- **Duplicate SKUs are found across the whole import before batching** *(addition)*. `upsertProducts` refuses duplicates within one call, but a SKU in batch one and again in batch three would otherwise reach it as two calls, and the second would overwrite the first.
+- **Rows are capped at 10,000 in the body schema** — the server's half of §2.2a's cap, since a cap only in the browser is a suggestion. P1-27 turns it and the dashboard's into one shared constant.
+- **The answer counts what P1-23 shows** — created, updated, unchanged, duplicate SKU, and archived matches — computed on the server so the summary and the outcomes cannot disagree.
+
 ---
 
 ### P1-26 · Import idempotency
