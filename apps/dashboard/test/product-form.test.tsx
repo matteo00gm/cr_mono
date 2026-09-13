@@ -36,6 +36,59 @@ const filled = (overrides: Partial<ProductFormValues> = {}): ProductFormValues =
 });
 
 describe('buildPayload', () => {
+  describe('numbers as sellers type them (P1-20)', () => {
+    it('refuses 1.000 bottles rather than saving one', () => {
+      /*
+       * The defect this replaced: `Number('1.000')` is 1, so a cellar of a
+       * thousand bottles saved as a single one, with no error.
+       */
+      const result = buildPayload(filled({ stockQty: '1.000' }));
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors.stockQty).toMatch(/mille o uno/);
+    });
+
+    it('reads a grouped count it can be sure of', () => {
+      const result = buildPayload(filled({ stockQty: '1.200.000' }));
+
+      expect(result).toMatchObject({ ok: true, payload: { stockQty: 1_200_000 } });
+    });
+
+    it('sends a gradazione as the numeric string the API stores', () => {
+      expect(buildPayload(filled({ alcoholPct: '13,5 %' }))).toMatchObject({
+        ok: true,
+        payload: { alcoholPct: '13.50' },
+      });
+    });
+
+    it('refuses a gradazione out of range', () => {
+      const result = buildPayload(filled({ alcoholPct: '140' }));
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors.alcoholPct).toMatch(/da 0 a 99,99/);
+    });
+
+    it('refuses a vintage written with a dot', () => {
+      const result = buildPayload(filled({ vintage: '2.019' }));
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.errors.vintage).toMatch(/senza punti/);
+    });
+
+    it('leaves empty numeric fields out rather than refusing them', () => {
+      const result = buildPayload(filled({ vintage: ' ', stockQty: '', alcoholPct: '' }));
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.payload).not.toHaveProperty('vintage');
+      expect(result.payload).not.toHaveProperty('stockQty');
+      expect(result.payload).not.toHaveProperty('alcoholPct');
+    });
+  });
+
   it('produces the payload the API accepts', () => {
     const result = buildPayload(
       filled({
