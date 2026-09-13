@@ -214,6 +214,62 @@ describe('createProductsPort', () => {
     expect(updated.outcome === 'updated' && updated.reindexed).toBe(true);
   });
 
+  it('reindexes one wine through the port, along the queued edge (P1-39)', async () => {
+    /*
+     * The port is where the `queued` transition is wired in from
+     * `packages/core`; `packages/db`'s own tests pass a transition of their
+     * own. So this is the only place the real edge is checked end to end.
+     */
+    const created = await create();
+
+    if (created.outcome !== 'created') throw new Error('expected a product');
+
+    await harness?.adminDb.execute(
+      sql`update products set embedding_state = 'INDEXED' where id = ${created.product.id}::uuid`,
+    );
+
+    const result = await products.reindex({ tenantId, productId: created.product.id });
+
+    expect(result.outcome).toBe('queued');
+    if (result.outcome !== 'queued') return;
+
+    // An indexed wine goes STALE: still findable while its new vector is built.
+    expect(result.product.embeddingState).toBe('STALE');
+
+    const rows = await harness?.adminDb.execute(
+      sql`select payload from outbox where aggregate_id = ${created.product.id}::uuid order by created_at desc limit 1`,
+    );
+    const latest = [...(rows ?? [])][0] as { payload: { reason: string } } | undefined;
+
+    expect(latest?.payload.reason).toBe('manual-reindex');
+  });
+
+  it('answers not-found for another tenant’s wine rather than re-queuing it', async () => {
+    const created = await create();
+
+    if (created.outcome !== 'created') throw new Error('expected a product');
+
+    expect(
+      await products.reindex({ tenantId: otherTenantId, productId: created.product.id }),
+    ).toEqual({ outcome: 'not-found' });
+  });
+
+  it('reindexes the catalogue through the port, and refuses a second run while it drains', async () => {
+    await create(tenantId, 'BAR-2019');
+    await create(tenantId, 'ETN-2020');
+
+    // The creates queued jobs of their own; mark them published so only these runs count.
+    await harness?.adminDb.execute(
+      sql`update outbox set processed_at = now() where tenant_id = ${tenantId}::uuid`,
+    );
+
+    const first = await products.reindexAll({ tenantId, batchId: randomUUID() });
+    expect(first).toMatchObject({ outcome: 'queued', queued: 2 });
+
+    const second = await products.reindexAll({ tenantId, batchId: randomUUID() });
+    expect(second).toEqual({ outcome: 'in-flight', queued: 2 });
+  });
+
   it('returns not-found for another tenant’s product rather than touching it', async () => {
     /*
      * **§3.5's rule, reached through the port.** The route turns this into a
