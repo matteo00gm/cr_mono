@@ -3899,6 +3899,15 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 
 **Files.** `header-map.ts`, tests. **~110 lines.**
 
+**As built.**
+
+- **Normalisation strips accents, punctuation and symbols, lowercases, and treats underscores as spaces** — `Quantità` and `quantita`, `Prezzo (€)` and `prezzo`, `stock_qty` and `stock qty` are each one name. Both sides of every comparison go through it.
+- **The synonym table is Italian first, then the English a shop export carries, and short on purpose.** A word that could mean two fields is left out — `costo` is not the selling price, `stato` could be anything — because matching it is the guess this row exists not to make. A test fails if any name, after normalisation, points at two fields: the lookup is a `Map`, where a second entry would silently replace the first.
+- **A duplicate blocks the import as well as a missing required column** *(addition)*. Two columns that both read as *prezzo* leave no way to know which the seller meant. Unrecognised columns do not block; they are ignored and listed.
+- **Required columns are the fields the form has no default for: name, SKU, type, price** *(deviation from §2.2's list)*. Currency and availability are filled the way the form fills them, EUR and in stock. External variant id is not required: the API contract accepts a wine without one, and P1-01 explains in the form why a seller wants it. A test ties the rule to `emptyValues()`, so the two cannot drift.
+- **Problems come back as sentences, blocking ones first**, naming the field in Italian and quoting the seller's own headers.
+- **It replaces P1-14's minimal matcher.** Paste detects a header with it — so a paste whose first row is `Nome · Prezzo · Quantità` now reads as the header it is — and carries the resulting map, so P1-22's draft grid refuses a paste on the same terms as a file.
+
 ---
 
 ### P1-20 · Locale-tolerant number parse

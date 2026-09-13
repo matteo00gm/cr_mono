@@ -52,21 +52,3 @@ export const TEMPLATE_COLUMNS: readonly TemplateColumn[] = [
 
 /** A row as a paste or a file delivers it: text per template field, nothing parsed yet. */
 export type RawRow = Partial<Record<TemplateField, string>>;
-
-/**
- * A header cell, reduced to what identifies it.
- *
- * Deliberately minimal here: case, surrounding space, and space or dash in
- * place of underscore. Accents, punctuation and Italian synonyms are P1-19's,
- * which replaces this with matching that reports what it could not place.
- */
-export const normaliseHeader = (cell: string): string =>
-  cell
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_-]+/g, '_');
-
-const BY_HEADER = new Map(TEMPLATE_COLUMNS.map((column) => [column.header, column.field]));
-
-export const fieldForHeader = (cell: string): TemplateField | undefined =>
-  BY_HEADER.get(normaliseHeader(cell));
