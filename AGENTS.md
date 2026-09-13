@@ -12,7 +12,7 @@ pnpm test:integration  # real Postgres via Testcontainers, needs Docker
 pnpm lint              # per-package eslint
 pnpm typecheck         # per-package tsc --noEmit
 pnpm boundaries        # architectural rules that lint cannot express
-pnpm build             # required before the integration suite: it imports dist
+pnpm build             # every test script runs this first; turbo caches it (~1s)
 sst dev --stage <you>  # local code against real AWS events
 ```
 
@@ -118,6 +118,14 @@ exactly as long as the driver was uninstalled.
 **Verifying an install fix in a tree that already has `node_modules` proves
 nothing.** CI starts from a fresh checkout; reproduce there or in a fresh
 worktree.
+
+**The suites import `dist`, so every test script builds first.** They resolve
+`@catalogorosso/*` by package name, which points at built output — and `dist`
+survives a branch switch. Without the build step a stale one produces failures
+that look like real bugs and are not: a Zod enum receiving `undefined` because
+an export does not exist yet, or a generator failing on a missing symbol. Both
+happened; both cost a debugging cycle. A warm `turbo run build` is about a
+second, which is the whole price of never seeing them again.
 
 ## Where the reasoning lives
 
