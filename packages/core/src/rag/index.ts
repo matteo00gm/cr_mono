@@ -46,3 +46,20 @@ export {
   type EmbeddingStatus,
 } from './embedding-state.js';
 export * from './embedding-failure.js';
+
+/**
+ * The generation seam (P1-41).
+ *
+ * The interface every model adapter implements, landed before any of them so no
+ * vendor's streaming format becomes the domain's.
+ */
+export {
+  PAIRING_ERROR_CODES,
+  type CandidateProduct,
+  type LlmProvider,
+  type PairingChunk,
+  type PairingErrorCode,
+  type PairingRequest,
+  type Recommendation,
+  type Turn,
+} from './llm-provider.js';

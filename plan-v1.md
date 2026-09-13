@@ -4532,6 +4532,17 @@ Nothing vendor-shaped in the types. `AbortSignal` so a disconnected visitor stop
 
 **Files.** `packages/core/src/rag/llm-provider.ts`, tests. **~80 lines.**
 
+**As built — the row's interface, with the types it left unnamed filled in from what already exists.**
+
+- **`streamPairing(request, signal)`, with the signal required.** §4.5's sketch took no signal; the row's version wins, because a visitor who closes the widget must stop the generation, and an optional signal is the one nobody passes.
+- **`CandidateProduct` is the embeddable fields plus `id`** *(decision)*. It is no new shape: what retrieval hands the model is what the embedding text was built from (P1-33), and P2-23's prompt assembly decides which of those fields reach the prompt.
+- **`Turn` has no `system` role** *(decision)*. Instructions are the adapter's to place, at the front of the stable prefix that caching depends on. A system message arriving through history would be visitor-controlled text wearing an instruction's authority.
+- **`Recommendation` is `{ productId, reason, confidence }`**, the shape P2-24's structured-output schema validates. The schema itself lands with the first adapter that needs it (P1-42), so every adapter derives its vendor format from one Zod source.
+- **The error codes are a runtime list as well as a type**, `PAIRING_ERROR_CODES`, so P2-27 and the eval harness can count them without restating them.
+- **"No vendor types leak" is two checks.** A source test holds `llm-provider.ts` to importing only core's own types, and `expectTypeOf` assertions pin the signal parameter, the error codes, the recommendation keys and the history roles — enforced by `tsc`, which typechecks test files.
+- **"A fake provider implements it" is an inline provider in the test, with no vendor library** *(deviation — a reusable fake was planned for `packages/testing`)*. `packages/testing` cannot depend on `@catalogorosso/core`: `security` dev-depends on `testing` and `core` depends on `security`, so the build graph would be a cycle. The reusable fake lands with P1-46's harness, in a package that can depend on core, which is where its first consumer is.
+- **Where the adapters live is P1-42's decision.** `packages/core` cannot import vendor SDKs (the `no-framework-in-core-or-security` rule), and §4.5's `packages/rag` does not exist.
+
 ---
 
 ### P1-42 · Bedrock Nova adapter
