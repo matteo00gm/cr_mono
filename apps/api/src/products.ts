@@ -15,6 +15,7 @@ import {
   completeImportRun,
   insertProduct,
   listProducts,
+  previewUpsert,
   reindexCatalogue,
   reindexProduct,
   updateProduct,
@@ -23,6 +24,7 @@ import {
   type CatalogueReindexOutcome,
   type ImportRunClaim,
   type ListQuery,
+  type PreviewOutcome,
   type ProductArchiveOutcome,
   type ProductInsert,
   type ProductPage,
@@ -157,6 +159,12 @@ export interface ImportProductsCommand {
 }
 
 /** Where an import stopped, by batch and by row index, and why — for the log, not the caller. */
+export interface PreviewImportCommand {
+  readonly tenantId: string;
+  /** Already validated against `productInsert`, in the order they will be sent. */
+  readonly rows: readonly ProductInsert[];
+}
+
 export interface ImportStop {
   readonly batch: number;
   readonly fromIndex: number;
@@ -180,7 +188,9 @@ export interface ImportCounts {
 }
 
 /** The summary P1-23's screen shows: *nuovi, aggiornati, invariati*. */
-export const countImportOutcomes = (outcomes: readonly UpsertOutcome[]): ImportCounts => ({
+export const countImportOutcomes = (
+  outcomes: readonly (UpsertOutcome | PreviewOutcome)[],
+): ImportCounts => ({
   created: outcomes.filter((outcome) => outcome.outcome === 'created').length,
   updated: outcomes.filter((outcome) => outcome.outcome === 'updated').length,
   unchanged: outcomes.filter((outcome) => outcome.outcome === 'unchanged').length,
@@ -250,6 +260,7 @@ export interface ProductsPort {
   importRows(command: ImportProductsCommand): Promise<ImportProductsResult>;
   claimImport(command: ClaimImportCommand): Promise<ImportRunClaim>;
   completeImport(command: CompleteImportCommand): Promise<void>;
+  previewRows(command: PreviewImportCommand): Promise<readonly PreviewOutcome[]>;
 }
 
 /**
@@ -300,9 +311,37 @@ export const unconfiguredProducts: ProductsPort = {
   importRows: () => Promise.reject(new ProductsPortNotConfiguredError()),
   claimImport: () => Promise.reject(new ProductsPortNotConfiguredError()),
   completeImport: () => Promise.reject(new ProductsPortNotConfiguredError()),
+  previewRows: () => Promise.reject(new ProductsPortNotConfiguredError()),
 };
 
 /* -------------------------------------------------------------------------- */
+
+/**
+ * An import's rows, less the SKUs that appear more than once (P1-25).
+ *
+ * **Across the whole import, before any batching.** `upsertProducts` refuses a
+ * duplicate within the rows it is handed, but a SKU in batch one and again in
+ * batch three would reach it as two calls, and the second would quietly
+ * overwrite the first. Shared with the preview (P1-23), so the summary refuses
+ * exactly the rows the import will.
+ */
+const partitionDuplicates = (rows: readonly ProductInsert[]) => {
+  const occurrences = new Map<string, number>();
+  for (const values of rows) {
+    occurrences.set(values.sku, (occurrences.get(values.sku) ?? 0) + 1);
+  }
+
+  const duplicates: { index: number; outcome: 'duplicate-sku'; sku: string }[] = [];
+  const pending = rows.flatMap((values, index) => {
+    if ((occurrences.get(values.sku) ?? 0) > 1) {
+      duplicates.push({ index, outcome: 'duplicate-sku', sku: values.sku });
+      return [];
+    }
+    return [{ index, values }];
+  });
+
+  return { duplicates, pending };
+};
 
 export const createProductsPort = ({
   audit: record = audit,
@@ -416,26 +455,27 @@ export const createProductsPort = ({
       });
     }),
 
-  importRows: async ({ tenantId, rows }) => {
+  previewRows: async ({ tenantId, rows }) => {
     /*
-     * **Duplicate SKUs are found across the whole import, before batching.**
-     * `upsertProducts` refuses duplicates within the rows it is given, but a
-     * SKU in batch one and again in batch three would reach it as two separate
-     * calls — and the second would quietly overwrite the first.
+     * One read for the whole import, unlike the write's batches: nothing is
+     * locked and nothing commits, so there is no transaction worth keeping
+     * short. Duplicates are found as the import finds them.
      */
-    const occurrences = new Map<string, number>();
-    for (const values of rows) {
-      occurrences.set(values.sku, (occurrences.get(values.sku) ?? 0) + 1);
-    }
+    const { duplicates, pending } = partitionDuplicates(rows);
 
-    const outcomes: UpsertOutcome[] = [];
-    const pending = rows.flatMap((values, index) => {
-      if ((occurrences.get(values.sku) ?? 0) > 1) {
-        outcomes.push({ index, outcome: 'duplicate-sku', sku: values.sku });
-        return [];
-      }
-      return [{ index, values }];
-    });
+    const planned =
+      pending.length === 0
+        ? []
+        : await withTenant(tenantId, (tx) =>
+            previewUpsert(tx, { rows: pending, hashOf: (merged) => contentHashOf(merged) }),
+          );
+
+    return [...duplicates, ...planned].sort((a, b) => a.index - b.index);
+  },
+
+  importRows: async ({ tenantId, rows }) => {
+    const { duplicates, pending } = partitionDuplicates(rows);
+    const outcomes: UpsertOutcome[] = [...duplicates];
 
     const inOrder = (): UpsertOutcome[] => [...outcomes].sort((a, b) => a.index - b.index);
 

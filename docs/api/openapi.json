@@ -2314,6 +2314,233 @@
           }
         }
       },
+      "/v1/dashboard/products/import/preview": {
+        "post": {
+          "summary": "Preview what an import would do, writing nothing",
+          "description": "Classifies each row exactly as the import would - created, updated, unchanged, or refused for sharing a SKU with another row - so a screen can show what confirming will change before anything does. Nothing is written, locked, queued or audited, and no Idempotency-Key is needed. The import body limits apply: at most 10,000 rows and 5 MB, every row valid against the product contract. A preview is not a promise: a wine edited between the preview and the import can change its outcome, which is why the import answers with its own.\n\nRequires the `catalog:write` capability.",
+          "operationId": "postV1DashboardProductsImportPreview",
+          "x-required-capability": "catalog:write",
+          "responses": {
+            "200": {
+              "description": "Preview what an import would do, writing nothing",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "outcomes": {
+                        "type": "array",
+                        "items": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "index": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "outcome": {
+                                  "type": "string",
+                                  "const": "created"
+                                }
+                              },
+                              "required": [
+                                "index",
+                                "outcome"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "index": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "outcome": {
+                                  "type": "string",
+                                  "const": "updated"
+                                },
+                                "productId": {
+                                  "type": "string"
+                                },
+                                "reindexed": {
+                                  "type": "boolean"
+                                },
+                                "archived": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "index",
+                                "outcome",
+                                "productId",
+                                "reindexed",
+                                "archived"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "index": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "outcome": {
+                                  "type": "string",
+                                  "const": "unchanged"
+                                },
+                                "productId": {
+                                  "type": "string"
+                                },
+                                "reindexed": {
+                                  "type": "boolean"
+                                },
+                                "archived": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "index",
+                                "outcome",
+                                "productId",
+                                "reindexed",
+                                "archived"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "index": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "outcome": {
+                                  "type": "string",
+                                  "const": "duplicate-sku"
+                                },
+                                "sku": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "index",
+                                "outcome",
+                                "sku"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "counts": {
+                        "type": "object",
+                        "properties": {
+                          "created": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "updated": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "unchanged": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "duplicateSku": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "archived": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "created",
+                          "updated",
+                          "unchanged",
+                          "duplicateSku",
+                          "archived"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "outcomes",
+                      "counts"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "outcomes": [
+                      {
+                        "index": 0,
+                        "outcome": "created"
+                      },
+                      {
+                        "index": 1,
+                        "outcome": "unchanged",
+                        "productId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                        "reindexed": false,
+                        "archived": false
+                      }
+                    ],
+                    "counts": {
+                      "created": 1,
+                      "updated": 0,
+                      "unchanged": 1,
+                      "duplicateSku": 0,
+                      "archived": 0
+                    }
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/products/reindex-all": {
         "post": {
           "summary": "Re-queue the whole catalogue for embedding",

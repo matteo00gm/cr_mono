@@ -13,4 +13,6 @@ complete only because raw `fetch` to our own API is forbidden outside
 | `GET /v1/dashboard/products` | apps/dashboard/src/features/catalog/CatalogScreen.tsx:124 |
 | `PATCH /v1/dashboard/products/:id` | apps/dashboard/src/features/catalog/InlineEdit.tsx:221 |
 | `POST /v1/dashboard/products/:id/reindex` | apps/dashboard/src/features/catalog/IndexStatus.tsx:167 |
+| `POST /v1/dashboard/products/import` | apps/dashboard/src/features/catalog/ImportSummary.tsx:232 |
+| `POST /v1/dashboard/products/import/preview` | apps/dashboard/src/features/catalog/ImportSummary.tsx:207 |
 | `POST /v1/dashboard/products/reindex-all` | apps/dashboard/src/features/catalog/CatalogScreen.tsx:227 |

@@ -52,6 +52,7 @@ describe('unconfiguredProducts', () => {
     reindex: () => unconfiguredProducts.reindex({ tenantId: TENANT, productId: PRODUCT }),
     reindexAll: () => unconfiguredProducts.reindexAll({ tenantId: TENANT, batchId: 'batch-1' }),
     importRows: () => unconfiguredProducts.importRows({ tenantId: TENANT, rows: [] }),
+    previewRows: () => unconfiguredProducts.previewRows({ tenantId: TENANT, rows: [] }),
     claimImport: () =>
       unconfiguredProducts.claimImport({ tenantId: TENANT, idempotencyKey: 'k', requestHash: 'h' }),
     completeImport: () =>

@@ -104,3 +104,26 @@ export const parseDelimited = (text: string, delimiter: string): string[][] => {
 
   return rows;
 };
+
+/**
+ * A table written back as delimited text (P1-23, and P1-30's export).
+ *
+ * The inverse of `parseDelimited`, held to it by a round-trip test: a cell is
+ * quoted when it holds the delimiter, a quote or a line break, and a quote
+ * inside is doubled. Rows end in CRLF, the line ending every spreadsheet writes.
+ */
+export const writeDelimited = (table: Table, delimiter: string): string =>
+  table
+    .map((cells) =>
+      cells
+        .map((cell) =>
+          cell.includes(delimiter) ||
+          cell.includes('"') ||
+          cell.includes('\n') ||
+          cell.includes('\r')
+            ? `"${cell.replaceAll('"', '""')}"`
+            : cell,
+        )
+        .join(delimiter),
+    )
+    .join('\r\n');

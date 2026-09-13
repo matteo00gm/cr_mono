@@ -6,6 +6,7 @@ import {
   acceptInviteResponse,
   catalogueReindexedResponse,
   contextResponse,
+  importPreviewResponse,
   invitationRevokedResponse,
   inviteResponse,
   meResponse,
@@ -121,6 +122,73 @@ const parseJson = (raw: string): unknown => {
 };
 
 /**
+ * An import's body, measured, parsed and shaped, or a refusal (P1-25, P1-27).
+ *
+ * **Measured in bytes before it is parsed.** In production the platform
+ * refuses anything over 6 MB before this runs; the cap sits under that so the
+ * refusal a caller reads is this one, which names the limit. Bytes rather than
+ * characters: an accented letter is two of them, and a catalogue of Italian
+ * tasting notes is full of them.
+ *
+ * Shared by the import and its preview (P1-23), so the summary screen is
+ * refused for exactly what the import would be.
+ */
+const readImportBody = async <T>(
+  c: { req: { text: () => Promise<string> } },
+  schema: z.ZodType<T>,
+  shape: string,
+): Promise<T> => {
+  const raw = await c.req.text();
+
+  if (new TextEncoder().encode(raw).byteLength > MAX_IMPORT_BODY_BYTES) {
+    throw new InvalidRequestError(
+      `An import body may be at most ${String(MAX_IMPORT_BODY_BYTES / 1024 / 1024)} MB. ` +
+        'Split the rows into several imports, each with its own Idempotency-Key.',
+    );
+  }
+
+  const body = schema.safeParse(parseJson(raw));
+
+  if (!body.success) {
+    throw new InvalidRequestError(
+      `Send a JSON body of the form ${shape} carrying between 1 and ${String(MAX_IMPORT_ROWS)} products.`,
+    );
+  }
+
+  return body.data;
+};
+
+/**
+ * Every row checked against the product contract, or the whole request refused (P1-25).
+ *
+ * `productInsert` strips what it does not know, `tenantId` included, so a row
+ * carrying one parses with the field discarded (P0-42, P0-48): the tenant comes
+ * from the membership and nowhere else.
+ */
+const contractRows = (candidates: readonly unknown[]): ProductInsert[] => {
+  const rows: ProductInsert[] = [];
+  const invalid: number[] = [];
+
+  candidates.forEach((row, index) => {
+    const parsed = productInsert.safeParse(row);
+    if (parsed.success) rows.push(parsed.data);
+    else invalid.push(index + 1);
+  });
+
+  if (invalid.length > 0) {
+    const named = invalid.slice(0, 5).join(', ');
+    const more = invalid.length > 5 ? ` and ${String(invalid.length - 5)} more` : '';
+
+    throw new InvalidRequestError(
+      `Row ${named}${more} did not match the product contract, so nothing was imported. ` +
+        'Validate every row before sending an import.',
+    );
+  }
+
+  return rows;
+};
+
+/**
  * The header naming one import attempt (P1-26).
  *
  * The name the IETF draft and Stripe use, so a client that already sends it on
@@ -152,6 +220,15 @@ const importSource = z
 const importBody = z
   .object({ rows: z.array(z.unknown()).min(1).max(MAX_IMPORT_ROWS), source: importSource })
   .strict();
+
+/** The preview's body: the rows alone, since nothing is claimed or audited (P1-23). */
+const importPreviewBody = z
+  .object({ rows: z.array(z.unknown()).min(1).max(MAX_IMPORT_ROWS) })
+  .strict();
+
+const IMPORT_SHAPE =
+  '{ "rows": [...], "source": { "entryPoint": "form" | "paste" | "file", "filename"?: "..." } }';
+const PREVIEW_SHAPE = '{ "rows": [...] }';
 
 /**
  * 320 is the practical maximum length of an address (64 local + @ + 255
@@ -505,6 +582,28 @@ export const createDashboardApp = ({
    * `EDITOR`s may import: `catalog:write` is theirs, and keeping a catalogue up
    * to date is the job the role exists for (§2.7).
    */
+  /**
+   * What an import would do, before it does anything (P1-23).
+   *
+   * **The confirm gate's other half.** The summary screen's nuovi, aggiornati
+   * and invariati come from here, because the client cannot compute them: it
+   * does not have the stored rows. Same body refusals, same duplicate rule, same
+   * `planUpsert` as the import, so the two disagree only when the catalogue
+   * changed between them. No key and no audit entry: it changes nothing.
+   *
+   * `catalog:write`, not `catalog:read`: it exists only as the first step of an
+   * import, and a role that cannot import has nothing to confirm.
+   */
+  app.post('/products/import/preview', requireCapability('catalog:write'), async (c) => {
+    const body = await readImportBody(c, importPreviewBody, PREVIEW_SHAPE);
+    const outcomes = await products.previewRows({
+      tenantId: c.get('tenantId'),
+      rows: contractRows(body.rows),
+    });
+
+    return c.json({ outcomes, counts: countImportOutcomes(outcomes) });
+  });
+
   app.post('/products/import', requireCapability('catalog:write'), async (c) => {
     /*
      * The key is checked first and claimed last. First, so a request without
@@ -521,53 +620,8 @@ export const createDashboardApp = ({
       );
     }
 
-    /*
-     * **Measured in bytes before it is parsed** (P1-27). In production the
-     * platform refuses anything over 6 MB before this runs; the cap sits under
-     * that so the refusal a caller reads is this one, which names the limit.
-     * Bytes rather than characters: an accented letter is two of them, and a
-     * catalogue of Italian tasting notes is full of them.
-     */
-    const raw = await c.req.text();
-
-    if (new TextEncoder().encode(raw).byteLength > MAX_IMPORT_BODY_BYTES) {
-      throw new InvalidRequestError(
-        `An import body may be at most ${String(MAX_IMPORT_BODY_BYTES / 1024 / 1024)} MB. ` +
-          'Split the rows into several imports, each with its own Idempotency-Key.',
-      );
-    }
-
-    const body = importBody.safeParse(parseJson(raw));
-
-    if (!body.success) {
-      throw new InvalidRequestError(
-        `Send a JSON body of the form { "rows": [...], "source": { "entryPoint": "form" | "paste" | "file", "filename"?: "..." } } carrying between 1 and ${String(MAX_IMPORT_ROWS)} products.`,
-      );
-    }
-
-    const rows: ProductInsert[] = [];
-    const invalid: number[] = [];
-
-    body.data.rows.forEach((row, index) => {
-      /*
-       * `productInsert` strips what it does not know, `tenantId` included, so
-       * a row carrying one parses with the field discarded (P0-42, P0-48): the
-       * tenant below comes from the membership and nowhere else.
-       */
-      const parsed = productInsert.safeParse(row);
-      if (parsed.success) rows.push(parsed.data);
-      else invalid.push(index + 1);
-    });
-
-    if (invalid.length > 0) {
-      const named = invalid.slice(0, 5).join(', ');
-      const more = invalid.length > 5 ? ` and ${String(invalid.length - 5)} more` : '';
-
-      throw new InvalidRequestError(
-        `Row ${named}${more} did not match the product contract, so nothing was imported. ` +
-          'Validate every row before sending an import.',
-      );
-    }
+    const body = await readImportBody(c, importBody, IMPORT_SHAPE);
+    const rows = contractRows(body.rows);
 
     const tenantId = c.get('tenantId');
     const claim = await products.claimImport({
@@ -644,8 +698,8 @@ export const createDashboardApp = ({
       audit: reachedCatalogue
         ? {
             idempotencyKey: idempotencyKey.data,
-            entryPoint: body.data.source.entryPoint,
-            filename: body.data.source.filename,
+            entryPoint: body.source.entryPoint,
+            filename: body.source.filename,
             counts,
           }
         : null,
@@ -1334,6 +1388,35 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         stoppedAt: null,
       },
       response: productsImportedResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/products/import/preview`),
+    {
+      access: requires('catalog:write'),
+      summary: 'Preview what an import would do, writing nothing',
+      description:
+        'Classifies each row exactly as the import would - created, updated, unchanged, or ' +
+        'refused for sharing a SKU with another row - so a screen can show what confirming ' +
+        'will change before anything does. Nothing is written, locked, queued or audited, and ' +
+        'no Idempotency-Key is needed. The import body limits apply: at most 10,000 rows and ' +
+        '5 MB, every row valid against the product contract. A preview is not a promise: a ' +
+        'wine edited between the preview and the import can change its outcome, which is why ' +
+        'the import answers with its own.',
+      example: {
+        outcomes: [
+          { index: 0, outcome: 'created' },
+          {
+            index: 1,
+            outcome: 'unchanged',
+            productId: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+            reindexed: false,
+            archived: false,
+          },
+        ],
+        counts: { created: 1, updated: 0, unchanged: 1, duplicateSku: 0, archived: 0 },
+      },
+      response: importPreviewResponse,
     },
   ],
   [

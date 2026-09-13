@@ -182,6 +182,20 @@ export const planUpsert = (
   });
 };
 
+/**
+ * An update decision as the outcome it reports, for the write and the preview alike.
+ *
+ * One function, so the summary screen's "aggiornati" and the import's cannot
+ * be computed two ways (P1-23).
+ */
+const updateOutcome = (decision: Extract<UpsertDecision, { kind: 'update' }>) => ({
+  index: decision.index,
+  outcome: decision.changed ? ('updated' as const) : ('unchanged' as const),
+  productId: decision.current.id,
+  reindexed: decision.reindexed,
+  archived: decision.current.status === 'ARCHIVED',
+});
+
 export interface UpsertRequest {
   readonly tenantId: string;
   readonly rows: readonly UpsertRow[];
@@ -297,12 +311,62 @@ export const upsertProducts = async (
       return { index: decision.index, outcome: 'created', productId };
     }
 
-    return {
-      index: decision.index,
-      outcome: decision.changed ? 'updated' : 'unchanged',
-      productId: decision.current.id,
-      reindexed: decision.reindexed,
-      archived: decision.current.status === 'ARCHIVED',
-    };
+    return updateOutcome(decision);
+  });
+};
+
+/** What a preview says a row would do. A created wine carries no id, because none was created. */
+export type PreviewOutcome =
+  | { readonly index: number; readonly outcome: 'created' }
+  | {
+      readonly index: number;
+      readonly outcome: 'updated' | 'unchanged';
+      readonly productId: string;
+      readonly reindexed: boolean;
+      readonly archived: boolean;
+    }
+  | { readonly index: number; readonly outcome: 'duplicate-sku'; readonly sku: string };
+
+export interface PreviewRequest {
+  readonly rows: readonly UpsertRow[];
+  /** The same hash `upsertProducts` is given, so re-embedding is predicted by the rule that decides it. */
+  readonly hashOf: (merged: ProductInsert) => string;
+}
+
+/**
+ * What an import would do, decided as `upsertProducts` decides it and written nowhere (P1-23).
+ *
+ * **The same `planUpsert`, never a second classification.** The summary screen
+ * promises to show what confirming will do; a preview computed by other rules
+ * would be a promise the import breaks, in front of the seller, on the one
+ * screen meant to prevent surprises.
+ *
+ * **No `FOR UPDATE`.** A preview holds nothing, so a form save between it and
+ * the confirmation can change an outcome — which is why the import answers with
+ * its own rather than trusting this one.
+ */
+export const previewUpsert = async (
+  tx: DbTransaction,
+  request: PreviewRequest,
+): Promise<PreviewOutcome[]> => {
+  const skus = [...new Set(request.rows.map((row) => row.values.sku))];
+
+  const found =
+    skus.length === 0 ? [] : await tx.select().from(products).where(inArray(products.sku, skus));
+
+  const decisions = planUpsert(
+    request.rows,
+    new Map(found.map((row) => [row.sku, row])),
+    request.hashOf,
+  );
+
+  return decisions.map((decision): PreviewOutcome => {
+    if (decision.kind === 'duplicate') {
+      return { index: decision.index, outcome: 'duplicate-sku', sku: decision.sku };
+    }
+
+    if (decision.kind === 'create') return { index: decision.index, outcome: 'created' };
+
+    return updateOutcome(decision);
   });
 };
