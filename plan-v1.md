@@ -3988,6 +3988,8 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 
 **Files.** `ImportSummary.tsx`, preview route, tests. **~150 lines.**
 
+**Note from P1-26.** The import route now requires an `Idempotency-Key` header holding a UUID (422 without one). Generate it once when the summary is confirmed and reuse it for every resend of that confirmation — a double-click and a retry after a dropped connection must carry the *same* key, or the guard does nothing. "Riprova" after an import that stopped part-way is a new attempt: new key. A 409 whose message says the attempt has not finished is answered by retrying the same key shortly, not by generating a new one.
+
 ---
 
 ### P1-24 · `upsertProducts()` core function
@@ -4034,7 +4036,7 @@ Enqueue an outbox row **only for rows where `changed`**. Return per-row outcomes
 **As built — in the dashboard surface and the products port, where every other product route and write lives**, not a new `routes/` file. The route is `POST /v1/dashboard/products/import` behind `catalog:write`, so `EDITOR`s may import.
 
 - **Batches of 200, one transaction each, applied in order.** Batches in parallel would take row locks in an order nobody chose, and a failure could no longer be described as "everything before this applied".
-- **A failure part-way is reported, not thrown.** The answer carries `stoppedAt: { batch, fromRow, toRow }` beside the outcomes of every row that applied; the cause goes to the log and never to the caller (P0-55). **Resuming is importing the same rows again**: what already applied comes back *unchanged* and costs nothing (P1-24). The row's `failedBatch?` is this field.
+- **A failure part-way is reported, not thrown.** The answer carries `stoppedAt: { batch, fromRow, toRow }` beside the outcomes of every row that applied; the cause goes to the log and never to the caller (P0-55). **Resuming is importing the same rows again**: what already applied comes back *unchanged* and costs nothing (P1-24). Since P1-26 a resume is a new attempt and carries a new `Idempotency-Key`; the stopped attempt's key keeps answering with its report. The row's `failedBatch?` is this field.
 - **A row that breaks the contract refuses the whole request, before anything is written** *(decision)*. The dashboard validates every row against the same contract first (P1-22), so a row failing here is a client that skipped that step; applying the rest would leave a catalogue that is partly the chosen file and partly not. The refusal names up to five row numbers.
 - **Duplicate SKUs are found across the whole import before batching** *(addition)*. `upsertProducts` refuses duplicates within one call, but a SKU in batch one and again in batch three would otherwise reach it as two calls, and the second would overwrite the first.
 - **Rows are capped at 10,000 in the body schema** — the server's half of §2.2a's cap, since a cap only in the browser is a suggestion. P1-27 turns it and the dashboard's into one shared constant.
@@ -4051,6 +4053,20 @@ Enqueue an outbox row **only for rows where `changed`**. Return per-row outcomes
 **Tests.** Same key twice applies once and returns identical results; same key with different body is a 409.
 
 **Files.** migration, route change, tests. **~100 lines.**
+
+**As built — the row's design, plus the three states it did not name: still running, abandoned, and racing.**
+
+- **`import_runs`, unique on `(tenant_id, idempotency_key)`**, under the boilerplate tenant policy (migrations `0039_import_runs` and the generated `0040_import_runs_rls`). Per tenant, not global: a key is the client's choice, and a global constraint would let one winery's key refuse another's import and tell it the key exists.
+- **The key is required and must be a UUID** *(decision)*. A missing or malformed `Idempotency-Key` is a 422 before any row is parsed. An optional key is the key the client that double-submits forgets to send.
+- **The hash is SHA-256 of the rows as parsed, not of the raw body** *(decision)*. `productInsert` rebuilds each row in contract order and drops unknown fields, so a retry listing the same fields in another order is the same import; hashing bytes would answer it 409.
+- **The key is claimed after validation.** A request refused for a broken row uses nothing up, so the corrected retry can carry the same key.
+- **Claim, import, complete — three transactions** *(addition)*. The claim has to commit before the import starts, or a repeat arriving mid-import could not see it. One `INSERT … ON CONFLICT DO UPDATE … WHERE` decides the claim, so two racing requests cannot both win; the integration test holds the first claim open and observes the second waiting on its lock before letting it commit. The loser reads the winning row: same hash with a stored result replays it; same hash with no result yet is **409, still running** *(addition — the row named only the different-body 409)*; a different hash is 409 whether or not the first attempt finished. Blocking the repeat until the first finishes was rejected: a 10,000-row import can outlast the request, and a held connection per retry is how a double-click becomes a pile-up.
+- **Every attempt that returns stores its answer, including one that stopped part-way.** How far it got *is* that attempt's result, and replaying it is correct; resuming is a new key (P1-25). The stored body never carries the stop's cause, which stays in the log (P0-55).
+- **An abandoned claim expires after 15 minutes, the longest a Lambda can run** *(addition)*. A claim with no result older than that belongs to an invocation that no longer exists, and is taken over — for the same body only. There is no release-on-error: nothing that returns leaves a claim open, and a release would run on the connection that just failed to store the result.
+- **A replay is JSON-equal to the first answer, not byte-identical.** The result is `jsonb`, which does not keep key order. The row's "identical results" holds as JSON equality.
+- **The key's header name and the 15-minute constant live in the API and `packages/db`.** P1-23 is the first client; it moves the header name somewhere the dashboard can import rather than retyping it.
+
+Tests: `packages/db/test/import-runs.test.ts` and `schema/import-runs.test.ts` (unit), `import-runs.integration.test.ts` (replay, both 409s, the race, takeover at 16 minutes and not at 14, a completed run never taken over, two wineries sharing a key); `apps/api/test/products-import.test.ts` (the route's P1-26 block), `products-import-port.test.ts`, and `products-port.integration.test.ts` (replay and cross-tenant keys through the real port).
 
 ---
 

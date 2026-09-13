@@ -52,6 +52,10 @@ describe('unconfiguredProducts', () => {
     reindex: () => unconfiguredProducts.reindex({ tenantId: TENANT, productId: PRODUCT }),
     reindexAll: () => unconfiguredProducts.reindexAll({ tenantId: TENANT, batchId: 'batch-1' }),
     importRows: () => unconfiguredProducts.importRows({ tenantId: TENANT, rows: [] }),
+    claimImport: () =>
+      unconfiguredProducts.claimImport({ tenantId: TENANT, idempotencyKey: 'k', requestHash: 'h' }),
+    completeImport: () =>
+      unconfiguredProducts.completeImport({ tenantId: TENANT, runId: 'r', result: null }),
   };
 
   it.each(Object.keys(calls) as (keyof ProductsPort)[])(

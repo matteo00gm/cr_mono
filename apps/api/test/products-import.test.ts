@@ -1,9 +1,15 @@
+import { randomUUID } from 'node:crypto';
+
 import { productsImportedResponse } from '@catalogorosso/api-client';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app.js';
+import type { ImportRunClaim } from '@catalogorosso/db';
+
 import {
   countImportOutcomes,
+  type ClaimImportCommand,
+  type CompleteImportCommand,
   type ImportProductsResult,
   type ProductsPort,
 } from '../src/products.js';
@@ -32,17 +38,34 @@ const ROW = {
   stockStatus: 'IN_STOCK',
 };
 
+/** Built at runtime: a key-shaped literal is what the secret scan stops (P0-56). */
+const KEY = randomUUID();
+const RUN = 'run-1';
+
+/**
+ * A port that claims every key and stores whatever it is handed, unless a test
+ * says otherwise: the P1-25 cases read as they did before the key existed, and
+ * the P1-26 cases override exactly the half they are about.
+ */
 const app = (products: Partial<ProductsPort>) =>
   createApp({
     auth: signedIn(),
     readMemberships: oneMembership(TENANT, 'EDITOR'),
-    products: productsPort(products),
+    products: productsPort({
+      claimImport: () => Promise.resolve({ outcome: 'claimed', runId: RUN }),
+      completeImport: () => Promise.resolve(),
+      ...products,
+    }),
   });
 
-const post = (built: ReturnType<typeof createApp>, body: unknown) =>
+const post = (
+  built: ReturnType<typeof createApp>,
+  body: unknown,
+  headers: Record<string, string> = { 'idempotency-key': KEY },
+) =>
   built.request(IMPORT, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...headers },
     body: typeof body === 'string' ? body : JSON.stringify(body),
   });
 
@@ -173,6 +196,134 @@ describe('an import that stops part-way', () => {
     // P0-55: a driver error can carry a connection string. It goes to the log, not here.
     expect(text).not.toContain('hunter2');
     expect(text).not.toContain('ECONNREFUSED');
+  });
+});
+
+describe('the idempotency key (P1-26)', () => {
+  const claiming = (claim: ImportRunClaim) =>
+    vi.fn<(command: ClaimImportCommand) => Promise<ImportRunClaim>>(() => Promise.resolve(claim));
+
+  const storing = () =>
+    vi.fn<(command: CompleteImportCommand) => Promise<void>>(() => Promise.resolve());
+
+  it.each([
+    ['no key', {}],
+    ['a key that is not a UUID', { 'idempotency-key': 'retry-1' }],
+  ])(
+    'refuses an import with %s, before reading a row or claiming anything',
+    async (_case, headers) => {
+      const importRows = applied();
+      const claimImport = claiming({ outcome: 'claimed', runId: RUN });
+
+      const response = await post(app({ importRows, claimImport }), { rows: [ROW] }, headers);
+
+      expect(response.status).toBe(422);
+      expect(await messageOf(response)).toContain('Idempotency-Key');
+      expect(claimImport).not.toHaveBeenCalled();
+      expect(importRows).not.toHaveBeenCalled();
+    },
+  );
+
+  it('claims the key for the membership tenant, then stores exactly the body it answers with', async () => {
+    const claimImport = claiming({ outcome: 'claimed', runId: RUN });
+    const completeImport = storing();
+    const importRows = applied({ outcomes: [{ index: 0, outcome: 'created', productId: 'p-1' }] });
+
+    const response = await post(app({ importRows, claimImport, completeImport }), {
+      rows: [ROW],
+    });
+
+    expect(response.status).toBe(200);
+    const body: unknown = await response.json();
+    const [claimed] = claimImport.mock.calls[0] ?? [];
+    expect(claimed).toMatchObject({ tenantId: TENANT, idempotencyKey: KEY });
+    expect(claimed?.requestHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(completeImport).toHaveBeenCalledWith({ tenantId: TENANT, runId: RUN, result: body });
+  });
+
+  it('fingerprints the rows as parsed, so the same wines in another field order are the same import', async () => {
+    const claimImport = claiming({ outcome: 'claimed', runId: RUN });
+    const built = app({ importRows: applied(), claimImport });
+    const reordered = Object.fromEntries(Object.entries(ROW).reverse());
+
+    await post(built, { rows: [ROW] });
+    await post(built, { rows: [{ ...reordered, colour: 'rosso' }] });
+    await post(built, { rows: [{ ...ROW, priceCents: 4600 }] });
+
+    expect(claimImport).toHaveBeenCalledTimes(3);
+    const [first, sameWines, repriced] = claimImport.mock.calls.map(
+      ([command]) => command.requestHash,
+    );
+    expect(sameWines).toBe(first);
+    expect(repriced).not.toBe(first);
+  });
+
+  it('answers a repeat with the stored body, importing nothing and storing nothing', async () => {
+    const stored = {
+      outcomes: [{ index: 0, outcome: 'created', productId: 'p-1' }],
+      counts: { created: 1, updated: 0, unchanged: 0, duplicateSku: 0, archived: 0 },
+      stoppedAt: null,
+    };
+    const importRows = applied();
+    const completeImport = storing();
+
+    const response = await post(
+      app({
+        importRows,
+        completeImport,
+        claimImport: claiming({ outcome: 'replay', result: stored }),
+      }),
+      { rows: [ROW] },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(stored);
+    expect(importRows).not.toHaveBeenCalled();
+    expect(completeImport).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['different-body', 'already used for an import with different rows'],
+    ['in-progress', 'released after 15 minutes'],
+  ] as const)('refuses a %s repeat with 409, importing nothing', async (outcome, says) => {
+    const importRows = applied();
+
+    const response = await post(app({ importRows, claimImport: claiming({ outcome }) }), {
+      rows: [ROW],
+    });
+
+    expect(response.status).toBe(409);
+    expect(await messageOf(response)).toContain(says);
+    expect(importRows).not.toHaveBeenCalled();
+  });
+
+  it('uses no key up on an import refused for a broken row, so the fixed retry can carry it', async () => {
+    const claimImport = claiming({ outcome: 'claimed', runId: RUN });
+
+    const response = await post(app({ importRows: applied(), claimImport }), {
+      rows: [{ ...ROW, sku: '' }],
+    });
+
+    expect(response.status).toBe(422);
+    expect(claimImport).not.toHaveBeenCalled();
+  });
+
+  it('stores an import that stopped part-way, without the cause, since how far it got is the answer', async () => {
+    const completeImport = storing();
+    const importRows = applied({
+      stoppedAt: {
+        batch: 1,
+        fromIndex: 0,
+        toIndex: 0,
+        cause: new Error('connect ECONNREFUSED postgres://app_rw:hunter2@db.internal/app'),
+      },
+    });
+
+    await post(app({ importRows, completeImport }), { rows: [ROW] });
+
+    const stored = completeImport.mock.calls[0]?.[0].result;
+    expect(stored).toMatchObject({ stoppedAt: { batch: 1, fromRow: 1, toRow: 1 } });
+    expect(JSON.stringify(stored)).not.toContain('hunter2');
   });
 });
 

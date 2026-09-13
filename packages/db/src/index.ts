@@ -248,6 +248,21 @@ export {
 } from './products-upsert.js';
 
 /**
+ * Import attempts, keyed so a repeat applies once (P1-26).
+ *
+ * Two statements rather than one function wrapping the import, because the
+ * claim has to commit before the import starts: a repeat arriving while it runs
+ * can only see a committed claim. The API sequences them.
+ */
+export {
+  claimImportRun,
+  completeImportRun,
+  IMPORT_CLAIM_EXPIRES_AFTER_MINUTES,
+  type ImportRunClaim,
+  type ImportRunRequest,
+} from './import-runs.js';
+
+/**
  * Catalogue reads (P1-06).
  *
  * Keyset pagination rather than `OFFSET`, and the sortable columns are an

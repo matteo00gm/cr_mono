@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { Product } from '@catalogorosso/api-client';
 import {
   completenessOf,
@@ -8,6 +10,8 @@ import {
 } from '@catalogorosso/core';
 import {
   archiveProduct,
+  claimImportRun,
+  completeImportRun,
   insertProduct,
   listProducts,
   reindexCatalogue,
@@ -16,6 +20,7 @@ import {
   upsertProducts,
   withTenant,
   type CatalogueReindexOutcome,
+  type ImportRunClaim,
   type ListQuery,
   type ProductArchiveOutcome,
   type ProductInsert,
@@ -182,6 +187,33 @@ export const countImportOutcomes = (outcomes: readonly UpsertOutcome[]): ImportC
   archived: outcomes.filter((outcome) => 'archived' in outcome && outcome.archived).length,
 });
 
+/**
+ * The fingerprint that tells a retry from a different import (P1-26).
+ *
+ * Taken over the rows **as parsed**, not the bytes that arrived: `productInsert`
+ * rebuilds each row in the contract's field order and drops what it does not
+ * know, so a retry whose JSON lists the same fields in another order is still
+ * the same import. Hashing the raw body would refuse that retry as a different
+ * one, answering 409 to the one client behaviour the key exists to allow.
+ */
+export const importRequestHash = (rows: readonly ProductInsert[]): string =>
+  createHash('sha256').update(JSON.stringify(rows), 'utf8').digest('hex');
+
+export interface ClaimImportCommand {
+  readonly tenantId: string;
+  /** The client's UUID for this attempt, from the `Idempotency-Key` header. */
+  readonly idempotencyKey: string;
+  /** `importRequestHash` of the validated rows. */
+  readonly requestHash: string;
+}
+
+export interface CompleteImportCommand {
+  readonly tenantId: string;
+  readonly runId: string;
+  /** The response body, exactly as this attempt answered it. */
+  readonly result: unknown;
+}
+
 export interface ProductsPort {
   create(command: CreateProductCommand): Promise<ProductWriteOutcome>;
   update(command: UpdateProductCommand): Promise<ProductUpdateOutcome>;
@@ -190,6 +222,8 @@ export interface ProductsPort {
   reindex(command: ReindexProductCommand): Promise<ProductReindexOutcome>;
   reindexAll(command: ReindexCatalogueCommand): Promise<CatalogueReindexOutcome>;
   importRows(command: ImportProductsCommand): Promise<ImportProductsResult>;
+  claimImport(command: ClaimImportCommand): Promise<ImportRunClaim>;
+  completeImport(command: CompleteImportCommand): Promise<void>;
 }
 
 /**
@@ -238,6 +272,8 @@ export const unconfiguredProducts: ProductsPort = {
   reindex: () => Promise.reject(new ProductsPortNotConfiguredError()),
   reindexAll: () => Promise.reject(new ProductsPortNotConfiguredError()),
   importRows: () => Promise.reject(new ProductsPortNotConfiguredError()),
+  claimImport: () => Promise.reject(new ProductsPortNotConfiguredError()),
+  completeImport: () => Promise.reject(new ProductsPortNotConfiguredError()),
 };
 
 /* -------------------------------------------------------------------------- */
@@ -321,6 +357,16 @@ export const createProductsPort = (): ProductsPort => ({
       }),
     ),
 
+  /*
+   * The claim and the completion each get their own transaction, with the
+   * import's batches between them. A claim made inside the import's own
+   * transaction would be invisible to the very repeat it exists to stop.
+   */
+  claimImport: (command) => withTenant(command.tenantId, (tx) => claimImportRun(tx, command)),
+
+  completeImport: ({ tenantId, runId, result }) =>
+    withTenant(tenantId, (tx) => completeImportRun(tx, { runId, result })),
+
   importRows: async ({ tenantId, rows }) => {
     /*
      * **Duplicate SKUs are found across the whole import, before batching.**
@@ -371,7 +417,8 @@ export const createProductsPort = (): ProductsPort => ({
          * a thrown error would answer 500 for an import that mostly worked —
          * leaving the seller no way to know which rows are in. Importing the
          * same file again is the resume: rows already in come back unchanged
-         * and cost nothing (P1-24).
+         * and cost nothing (P1-24). It is a new attempt, so it
+         * carries a new key; the old one answers with this report (P1-26).
          */
         return {
           outcomes: inOrder(),

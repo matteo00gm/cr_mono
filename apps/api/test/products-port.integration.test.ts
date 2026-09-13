@@ -359,6 +359,44 @@ describe('createProductsPort', () => {
     }, 120_000);
   });
 
+  describe('import attempts (P1-26)', () => {
+    it('answers a repeated attempt with the stored result, and refuses the key for other rows', async () => {
+      const attempt = { tenantId, idempotencyKey: randomUUID(), requestHash: 'rows-as-sent' };
+
+      const first = await products.claimImport(attempt);
+      if (first.outcome !== 'claimed') throw new Error(`expected a claim, got ${first.outcome}`);
+
+      const result = await products.importRows({ tenantId, rows: [VALUES] });
+      const body = {
+        outcomes: result.outcomes,
+        counts: countImportOutcomes(result.outcomes),
+        stoppedAt: null,
+      };
+      await products.completeImport({ tenantId, runId: first.runId, result: body });
+
+      expect(await products.claimImport(attempt)).toEqual({ outcome: 'replay', result: body });
+      expect(await products.claimImport({ ...attempt, requestHash: 'other-rows' })).toEqual({
+        outcome: 'different-body',
+      });
+    });
+
+    it('never lets one winery’s key answer for another', async () => {
+      const idempotencyKey = randomUUID();
+
+      const ours = await products.claimImport({ tenantId, idempotencyKey, requestHash: 'h' });
+      if (ours.outcome !== 'claimed') throw new Error('expected a claim');
+      await products.completeImport({ tenantId, runId: ours.runId, result: { ours: true } });
+
+      const theirs = await products.claimImport({
+        tenantId: otherTenantId,
+        idempotencyKey,
+        requestHash: 'h',
+      });
+
+      expect(theirs.outcome).toBe('claimed');
+    });
+  });
+
   it('returns not-found for another tenant’s product rather than touching it', async () => {
     /*
      * **§3.5's rule, reached through the port.** The route turns this into a

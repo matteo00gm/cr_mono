@@ -1,5 +1,11 @@
 import { contentHashOf, nextEmbeddingStatus } from '@catalogorosso/core';
-import type { ProductInsert, UpsertOutcome, UpsertRequest } from '@catalogorosso/db';
+import type {
+  ImportRunClaim,
+  ImportRunRequest,
+  ProductInsert,
+  UpsertOutcome,
+  UpsertRequest,
+} from '@catalogorosso/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createProductsPort, IMPORT_BATCH_SIZE } from '../src/products.js';
@@ -18,12 +24,17 @@ const db = vi.hoisted(() => ({
   withTenant:
     vi.fn<(tenantId: string, run: (tx: unknown) => Promise<unknown>) => Promise<unknown>>(),
   upsertProducts: vi.fn<(tx: unknown, request: UpsertRequest) => Promise<UpsertOutcome[]>>(),
+  claimImportRun: vi.fn<(tx: unknown, request: ImportRunRequest) => Promise<ImportRunClaim>>(),
+  completeImportRun:
+    vi.fn<(tx: unknown, run: { runId: string; result: unknown }) => Promise<void>>(),
 }));
 
 vi.mock('@catalogorosso/db', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   withTenant: db.withTenant,
   upsertProducts: db.upsertProducts,
+  claimImportRun: db.claimImportRun,
+  completeImportRun: db.completeImportRun,
 }));
 
 const TENANT = '11111111-1111-1111-1111-111111111111';
@@ -57,6 +68,8 @@ const sentBatches = (): UpsertRequest[] =>
 beforeEach(() => {
   db.withTenant.mockReset().mockImplementation((_tenant, run) => run({}));
   db.upsertProducts.mockReset().mockImplementation((_tx, request) => created(request));
+  db.claimImportRun.mockReset().mockResolvedValue({ outcome: 'claimed', runId: 'run-1' });
+  db.completeImportRun.mockReset().mockResolvedValue(undefined);
 });
 
 describe('importRows', () => {
@@ -155,5 +168,37 @@ describe('importRows', () => {
       ],
       stoppedAt: null,
     });
+  });
+});
+
+describe('the import attempt (P1-26)', () => {
+  it('claims in a transaction for the tenant, passing the key and the hash through', async () => {
+    const tx = { opened: 'for the claim' };
+    db.withTenant.mockImplementation((_tenant, run) => run(tx));
+
+    const claim = await createProductsPort().claimImport({
+      tenantId: TENANT,
+      idempotencyKey: 'k-1',
+      requestHash: 'h-1',
+    });
+
+    expect(claim).toEqual({ outcome: 'claimed', runId: 'run-1' });
+    expect(db.withTenant.mock.calls.map(([tenant]) => tenant)).toEqual([TENANT]);
+    expect(db.claimImportRun).toHaveBeenCalledWith(tx, {
+      tenantId: TENANT,
+      idempotencyKey: 'k-1',
+      requestHash: 'h-1',
+    });
+  });
+
+  it('stores the answer in a transaction of its own for the tenant', async () => {
+    const tx = { opened: 'for the completion' };
+    db.withTenant.mockImplementation((_tenant, run) => run(tx));
+    const result = { counts: { created: 1 } };
+
+    await createProductsPort().completeImport({ tenantId: TENANT, runId: 'run-1', result });
+
+    expect(db.withTenant.mock.calls.map(([tenant]) => tenant)).toEqual([TENANT]);
+    expect(db.completeImportRun).toHaveBeenCalledWith(tx, { runId: 'run-1', result });
   });
 });

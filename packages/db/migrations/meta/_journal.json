@@ -274,6 +274,20 @@
       "when": 1788654188573,
       "tag": "0038_products_edit_timestamp",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1788654188574,
+      "tag": "0039_import_runs",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1788654188575,
+      "tag": "0040_import_runs_rls",
+      "breakpoints": true
     }
   ]
 }

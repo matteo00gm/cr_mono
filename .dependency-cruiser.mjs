@@ -172,6 +172,10 @@ export default {
           // transaction and opens nothing, so every SKU it reads is scoped by the
           // policy on `products` like any other product write.
           '|^packages/db/src/products(-read|-upsert)?[.]ts$' +
+          // src/import-runs.ts is exempt from P1-26 on the same terms: it claims
+          // and completes an import attempt inside the caller's withTenant
+          // transaction, and import_runs carries the boilerplate tenant policy.
+          '|^packages/db/src/import-runs[.]ts$' +
           // src/embeddings.ts is exempt from P1-37 on the same terms as
           // products.ts: it writes statements and takes the transaction from
           // its caller, opening nothing. Its tables are tenant-scoped and under
