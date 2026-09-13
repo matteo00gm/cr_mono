@@ -13,6 +13,7 @@ import {
   reindexCatalogue,
   reindexProduct,
   updateProduct,
+  upsertProducts,
   withTenant,
   type CatalogueReindexOutcome,
   type ListQuery,
@@ -24,6 +25,7 @@ import {
   type ProductUpdate,
   type ProductUpdateOutcome,
   type ProductWriteOutcome,
+  type UpsertOutcome,
 } from '@catalogorosso/db';
 
 /**
@@ -130,6 +132,56 @@ export interface ReindexCatalogueCommand {
   readonly batchId: string;
 }
 
+/**
+ * Rows per transaction in a bulk import (P1-25).
+ *
+ * **One transaction over ten thousand rows holds its locks for the whole
+ * import**, so a seller saving a price in the form waits for somebody else's
+ * spreadsheet — and a timeout near the end rolls back everything before it.
+ * One transaction per row is the opposite failure: ten thousand commits for an
+ * import that could be fifty. Two hundred keeps each transaction short and lets
+ * a failure say exactly which stretch of the file did not apply.
+ */
+export const IMPORT_BATCH_SIZE = 200;
+
+export interface ImportProductsCommand {
+  readonly tenantId: string;
+  /** Already validated against `productInsert`, in the order the seller's file had them. */
+  readonly rows: readonly ProductInsert[];
+}
+
+/** Where an import stopped, by batch and by row index, and why — for the log, not the caller. */
+export interface ImportStop {
+  readonly batch: number;
+  readonly fromIndex: number;
+  readonly toIndex: number;
+  readonly cause: unknown;
+}
+
+export interface ImportProductsResult {
+  /** One per row that was applied or refused, in row order. Rows after a stop have none. */
+  readonly outcomes: readonly UpsertOutcome[];
+  readonly stoppedAt: ImportStop | null;
+}
+
+export interface ImportCounts {
+  readonly created: number;
+  readonly updated: number;
+  readonly unchanged: number;
+  readonly duplicateSku: number;
+  /** Matched an archived wine: updated or unchanged, and still archived. */
+  readonly archived: number;
+}
+
+/** The summary P1-23's screen shows: *nuovi, aggiornati, invariati*. */
+export const countImportOutcomes = (outcomes: readonly UpsertOutcome[]): ImportCounts => ({
+  created: outcomes.filter((outcome) => outcome.outcome === 'created').length,
+  updated: outcomes.filter((outcome) => outcome.outcome === 'updated').length,
+  unchanged: outcomes.filter((outcome) => outcome.outcome === 'unchanged').length,
+  duplicateSku: outcomes.filter((outcome) => outcome.outcome === 'duplicate-sku').length,
+  archived: outcomes.filter((outcome) => 'archived' in outcome && outcome.archived).length,
+});
+
 export interface ProductsPort {
   create(command: CreateProductCommand): Promise<ProductWriteOutcome>;
   update(command: UpdateProductCommand): Promise<ProductUpdateOutcome>;
@@ -137,6 +189,7 @@ export interface ProductsPort {
   list(command: ListProductsCommand): Promise<ProductPage>;
   reindex(command: ReindexProductCommand): Promise<ProductReindexOutcome>;
   reindexAll(command: ReindexCatalogueCommand): Promise<CatalogueReindexOutcome>;
+  importRows(command: ImportProductsCommand): Promise<ImportProductsResult>;
 }
 
 /**
@@ -184,6 +237,7 @@ export const unconfiguredProducts: ProductsPort = {
   list: () => Promise.reject(new ProductsPortNotConfiguredError()),
   reindex: () => Promise.reject(new ProductsPortNotConfiguredError()),
   reindexAll: () => Promise.reject(new ProductsPortNotConfiguredError()),
+  importRows: () => Promise.reject(new ProductsPortNotConfiguredError()),
 };
 
 /* -------------------------------------------------------------------------- */
@@ -266,4 +320,71 @@ export const createProductsPort = (): ProductsPort => ({
         reason: 'manual-reindex-all',
       }),
     ),
+
+  importRows: async ({ tenantId, rows }) => {
+    /*
+     * **Duplicate SKUs are found across the whole import, before batching.**
+     * `upsertProducts` refuses duplicates within the rows it is given, but a
+     * SKU in batch one and again in batch three would reach it as two separate
+     * calls — and the second would quietly overwrite the first.
+     */
+    const occurrences = new Map<string, number>();
+    for (const values of rows) {
+      occurrences.set(values.sku, (occurrences.get(values.sku) ?? 0) + 1);
+    }
+
+    const outcomes: UpsertOutcome[] = [];
+    const pending = rows.flatMap((values, index) => {
+      if ((occurrences.get(values.sku) ?? 0) > 1) {
+        outcomes.push({ index, outcome: 'duplicate-sku', sku: values.sku });
+        return [];
+      }
+      return [{ index, values }];
+    });
+
+    const inOrder = (): UpsertOutcome[] => [...outcomes].sort((a, b) => a.index - b.index);
+
+    for (let start = 0; start < pending.length; start += IMPORT_BATCH_SIZE) {
+      const batch = pending.slice(start, start + IMPORT_BATCH_SIZE);
+
+      try {
+        /*
+         * One transaction per batch, sequentially and on purpose: batches in
+         * parallel would take row locks in an order nobody chose, and a
+         * failure could no longer be described as "everything before this
+         * applied".
+         */
+
+        const applied = await withTenant(tenantId, (tx) =>
+          upsertProducts(tx, {
+            tenantId,
+            rows: batch,
+            hashOf: (merged) => contentHashOf(merged),
+            edited: (current) => nextEmbeddingStatus({ status: current, event: 'edited' }),
+            reason: 'import',
+          }),
+        );
+        outcomes.push(...applied);
+      } catch (cause) {
+        /*
+         * **Reported, not thrown.** Every batch before this one committed, and
+         * a thrown error would answer 500 for an import that mostly worked —
+         * leaving the seller no way to know which rows are in. Importing the
+         * same file again is the resume: rows already in come back unchanged
+         * and cost nothing (P1-24).
+         */
+        return {
+          outcomes: inOrder(),
+          stoppedAt: {
+            batch: start / IMPORT_BATCH_SIZE + 1,
+            fromIndex: Math.min(...batch.map((row) => row.index)),
+            toIndex: Math.max(...batch.map((row) => row.index)),
+            cause,
+          },
+        };
+      }
+    }
+
+    return { outcomes: inOrder(), stoppedAt: null };
+  },
 });

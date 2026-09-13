@@ -5,7 +5,12 @@ import { startTestDatabase, type TestDatabase } from '@catalogorosso/testing';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { createProductsPort, type ProductsPort } from '../src/products.js';
+import {
+  countImportOutcomes,
+  createProductsPort,
+  IMPORT_BATCH_SIZE,
+  type ProductsPort,
+} from '../src/products.js';
 import { createWebhooksPort, type WebhooksPort } from '../src/webhooks.js';
 
 /**
@@ -268,6 +273,90 @@ describe('createProductsPort', () => {
 
     const second = await products.reindexAll({ tenantId, batchId: randomUUID() });
     expect(second).toEqual({ outcome: 'in-flight', queued: 2 });
+  });
+
+  describe('importRows (P1-25)', () => {
+    const numbered = (
+      count: number,
+      over: (index: number) => Record<string, unknown> = () => ({}),
+    ) =>
+      Array.from({ length: count }, (_, index) => ({
+        ...VALUES,
+        sku: `SKU-${String(index)}`,
+        name: `Vino ${String(index)}`,
+        ...over(index),
+      }));
+
+    const countWhere = async (query: ReturnType<typeof sql>): Promise<number> => {
+      const rows = await harness?.adminDb.execute(query);
+      return ([...(rows ?? [])][0] as { n: number }).n;
+    };
+
+    it('applies a thousand rows, one embedding job each', async () => {
+      const result = await products.importRows({ tenantId, rows: numbered(1000) });
+
+      expect(result.stoppedAt).toBeNull();
+      expect(countImportOutcomes(result.outcomes)).toMatchObject({ created: 1000, updated: 0 });
+      expect(
+        await countWhere(
+          sql`select count(*)::int as n from outbox where tenant_id = ${tenantId}::uuid`,
+        ),
+      ).toBe(1000);
+    }, 120_000);
+
+    it('stops at the batch that failed, with every batch before it applied', async () => {
+      /*
+       * A price past `integer`'s range: the contract accepts any whole number,
+       * the column does not, so Postgres refuses the third batch's insert. The
+       * first two committed on their own and must still be there.
+       */
+      expect(IMPORT_BATCH_SIZE).toBe(200);
+      const rows = numbered(600, (index) => (index === 450 ? { priceCents: 3_000_000_000 } : {}));
+
+      const result = await products.importRows({ tenantId, rows });
+
+      expect(result.stoppedAt).toMatchObject({ batch: 3, fromIndex: 400, toIndex: 599 });
+      expect(result.outcomes).toHaveLength(400);
+      expect(
+        await countWhere(
+          sql`select count(*)::int as n from products where tenant_id = ${tenantId}::uuid`,
+        ),
+      ).toBe(400);
+    }, 120_000);
+
+    it('refuses a SKU repeated in different batches, rather than letting the later row win', async () => {
+      const rows = numbered(450, (index) => (index === 5 || index === 350 ? { sku: 'DUP' } : {}));
+
+      const result = await products.importRows({ tenantId, rows });
+
+      expect(
+        result.outcomes
+          .filter((outcome) => outcome.outcome === 'duplicate-sku')
+          .map((outcome) => outcome.index),
+      ).toEqual([5, 350]);
+      expect(result.outcomes.map((outcome) => outcome.index)).toEqual(
+        rows.map((_, index) => index),
+      );
+      expect(
+        await countWhere(
+          sql`select count(*)::int as n from products where tenant_id = ${tenantId}::uuid and sku = 'DUP'`,
+        ),
+      ).toBe(0);
+    }, 120_000);
+
+    it('comes back unchanged when the same rows are imported again, which is how to resume', async () => {
+      const rows = numbered(250);
+      await products.importRows({ tenantId, rows });
+
+      const again = await products.importRows({ tenantId, rows });
+
+      expect(countImportOutcomes(again.outcomes)).toMatchObject({ unchanged: 250, created: 0 });
+      expect(
+        await countWhere(
+          sql`select count(*)::int as n from outbox where tenant_id = ${tenantId}::uuid`,
+        ),
+      ).toBe(250);
+    }, 120_000);
   });
 
   it('returns not-found for another tenant’s product rather than touching it', async () => {

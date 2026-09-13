@@ -51,6 +51,7 @@ describe('unconfiguredProducts', () => {
     list: () => unconfiguredProducts.list({ tenantId: TENANT }),
     reindex: () => unconfiguredProducts.reindex({ tenantId: TENANT, productId: PRODUCT }),
     reindexAll: () => unconfiguredProducts.reindexAll({ tenantId: TENANT, batchId: 'batch-1' }),
+    importRows: () => unconfiguredProducts.importRows({ tenantId: TENANT, rows: [] }),
   };
 
   it.each(Object.keys(calls) as (keyof ProductsPort)[])(
