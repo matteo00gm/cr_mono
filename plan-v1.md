@@ -4128,6 +4128,13 @@ Tests: `packages/db/test/import-runs.test.ts` and `schema/import-runs.test.ts` (
 
 **Files.** `import-semantics.spec.ts`. **~60 test lines.**
 
+**As built — through the whole application rather than one layer, in `apps/api/test/import-semantics.integration.test.ts`** *(deviation in the file name only: the integration suite runs `*.integration.test.ts`)*.
+
+- **The real route, the real products port and real Postgres**, driven the way the dashboard sends an import: an EDITOR's session, an `Idempotency-Key`, a `source`. The property belongs to the whole path — a route that filtered rows, a port that dropped a batch, or a statement that archived absent SKUs would each break it — so a test of any one layer would miss the other two.
+- **Ten wines seeded by one import, then three of them (one repriced) and two new ones in a second.** Twelve wines exist, all ten originals are `ACTIVE` — the seven the second import never mentioned included — nothing is archived, and the second answer counts two created, one updated and two unchanged. The test carries the name the row gave it.
+- **It is also the only end-to-end run of P1-28's audit entry** *(addition)*: each import through the real application writes a real `audit_log` row inside the request context the app itself sets up. The route tests use a fake port, and the port's integration test sets the context by hand.
+- **Checked by breaking it.** A sync mode added to `upsertProducts` — archive every product, then re-activate the SKUs the import carried — rebuilt into the package the API loads, made the test fail; restored, it passes.
+
 ---
 
 ### P1-30 · CSV export
