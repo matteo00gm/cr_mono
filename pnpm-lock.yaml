@@ -219,6 +219,19 @@ importers:
         specifier: ^26.4.0
         version: 26.4.0
 
+  packages/eval:
+    dependencies:
+      '@catalogorosso/db':
+        specifier: workspace:*
+        version: link:../db
+      zod:
+        specifier: ^4.5.4
+        version: 4.5.4
+    devDependencies:
+      '@types/node':
+        specifier: ^26.4.0
+        version: 26.4.0
+
   packages/llm:
     dependencies:
       '@anthropic-ai/sdk':
