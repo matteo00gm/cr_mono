@@ -6,8 +6,30 @@
  * some wines priced in euros and some in cents.
  */
 
+import { parseLocaleNumber, type NumberError } from './number.js';
+
 /** What a price field can be wrong about. */
-export type PriceError = 'empty' | 'not-a-number' | 'negative' | 'too-precise' | 'ambiguous';
+export type PriceError = NumberError;
+
+/**
+ * What to tell a seller about each way a price can be wrong, in Italian.
+ *
+ * Shared by the form (P1-01) and the grid's inline editor (P1-11), so a price
+ * refused in one place is refused in the same words in the other.
+ */
+export const PRICE_MESSAGES: Readonly<Record<PriceError, string>> = {
+  empty: 'Indica un prezzo.',
+  'not-a-number': 'Scrivi solo cifre, ad esempio 12,50.',
+  negative: 'Il prezzo non può essere negativo.',
+  'too-precise': 'Al massimo due decimali.',
+  /*
+   * The ambiguous case, and the message has to *say what to write* rather than
+   * report a rule. "1.234 può voler dire due cose" is a fact about parsing;
+   * telling somebody to type `1234` or `1.234,00` is an instruction they can
+   * follow without knowing why.
+   */
+  ambiguous: 'Non è chiaro se sia un separatore di migliaia: scrivi 1234 oppure 1.234,00.',
+};
 
 export type PriceResult =
   | { readonly ok: true; readonly cents: number }
@@ -40,43 +62,12 @@ export type PriceResult =
  * rounding turns a typo into a price.
  */
 export const parsePriceToCents = (input: string): PriceResult => {
-  const trimmed = input.trim().replace(/\s|€/g, '');
-  if (trimmed === '') return { ok: false, reason: 'empty' };
-
-  if (!/^-?[\d.,]+$/.test(trimmed)) return { ok: false, reason: 'not-a-number' };
-  if (trimmed.startsWith('-')) return { ok: false, reason: 'negative' };
-
-  const lastComma = trimmed.lastIndexOf(',');
-  const lastDot = trimmed.lastIndexOf('.');
-  const decimalAt = Math.max(lastComma, lastDot);
-
-  if (decimalAt === -1) {
-    const cents = Number(trimmed) * 100;
-    return Number.isSafeInteger(cents)
-      ? { ok: true, cents }
-      : { ok: false, reason: 'not-a-number' };
-  }
-
-  const fraction = trimmed.slice(decimalAt + 1);
-  const bothSeparators = lastComma !== -1 && lastDot !== -1;
-
   /*
-   * Three digits after the *only* separator is the ambiguous case. With both
-   * separators present the earlier one is a thousands mark and the later one is
-   * the decimal point, which settles it.
+   * The rules live in `number.ts` (P1-20), shared with every other numeric
+   * field; what is a price's own is the euro sign and the two decimals.
    */
-  if (fraction.length === 3 && !bothSeparators) return { ok: false, reason: 'ambiguous' };
-  if (fraction.length > 2) return { ok: false, reason: 'too-precise' };
-
-  const whole = trimmed.slice(0, decimalAt).replace(/[.,]/g, '');
-
-  if (whole === '' || !/^\d*$/.test(whole) || !/^\d*$/.test(fraction)) {
-    return { ok: false, reason: 'not-a-number' };
-  }
-
-  const cents = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
-
-  return Number.isSafeInteger(cents) ? { ok: true, cents } : { ok: false, reason: 'not-a-number' };
+  const parsed = parseLocaleNumber(input.replace(/€/g, ''), 2);
+  return parsed.ok ? { ok: true, cents: parsed.units } : { ok: false, reason: parsed.reason };
 };
 
 /**

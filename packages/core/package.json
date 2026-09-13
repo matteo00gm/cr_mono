@@ -16,6 +16,10 @@
     "./completeness": {
       "types": "./dist/completeness.d.ts",
       "default": "./dist/completeness.js"
+    },
+    "./inline-edit": {
+      "types": "./dist/inline-edit.d.ts",
+      "default": "./dist/inline-edit.js"
     }
   },
   "files": [

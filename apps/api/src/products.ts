@@ -1,15 +1,25 @@
 import type { Product } from '@catalogorosso/api-client';
-import { completenessOf, contentHashOf } from '@catalogorosso/core';
+import {
+  completenessOf,
+  contentHashOf,
+  EMBEDDING_STATES,
+  nextEmbeddingStatus,
+  type EmbeddingState,
+} from '@catalogorosso/core';
 import {
   archiveProduct,
   insertProduct,
   listProducts,
+  reindexCatalogue,
+  reindexProduct,
   updateProduct,
   withTenant,
+  type CatalogueReindexOutcome,
   type ListQuery,
   type ProductArchiveOutcome,
   type ProductInsert,
   type ProductPage,
+  type ProductReindexOutcome,
   type ProductRow,
   type ProductUpdate,
   type ProductUpdateOutcome,
@@ -103,12 +113,52 @@ export interface ListProductsCommand extends ListQuery {
   readonly tenantId: string;
 }
 
+export interface ReindexProductCommand {
+  readonly tenantId: string;
+  readonly productId: string;
+}
+
+export interface ReindexCatalogueCommand {
+  readonly tenantId: string;
+  /**
+   * Identifies this run on every outbox row it writes.
+   *
+   * Passed in rather than generated below, because the composition root is
+   * where a non-deterministic value belongs: a test that asserts what landed on
+   * the rows can supply its own instead of reaching for a mock of `randomUUID`.
+   */
+  readonly batchId: string;
+}
+
 export interface ProductsPort {
   create(command: CreateProductCommand): Promise<ProductWriteOutcome>;
   update(command: UpdateProductCommand): Promise<ProductUpdateOutcome>;
   archive(command: ArchiveProductCommand): Promise<ProductArchiveOutcome>;
   list(command: ListProductsCommand): Promise<ProductPage>;
+  reindex(command: ReindexProductCommand): Promise<ProductReindexOutcome>;
+  reindexAll(command: ReindexCatalogueCommand): Promise<CatalogueReindexOutcome>;
 }
+
+/**
+ * The `queued` edge, flattened to a lookup for the bulk statement (P1-39).
+ *
+ * **Derived by asking the state machine, never written out here.** A second
+ * copy of the transition table is exactly the thing P1-38 exists to prevent —
+ * and a copy that is *nearly* right is worse than an obvious one, because it
+ * disagrees only for the state nobody tested. Building it from
+ * `nextEmbeddingStatus` means the two cannot drift; `products-reindex.test.ts`
+ * asserts it anyway, because a future edit could add a state and this would
+ * keep compiling.
+ *
+ * The error and attempt count are placeholders: `queued` is not a `failed`
+ * event, so the function reads neither.
+ */
+export const queuedEdges: Readonly<Record<EmbeddingState, EmbeddingState>> = Object.fromEntries(
+  EMBEDDING_STATES.map((state) => [
+    state,
+    nextEmbeddingStatus({ status: { state, error: null, attempts: 0 }, event: 'queued' }).state,
+  ]),
+) as Record<EmbeddingState, EmbeddingState>;
 
 /**
  * The port with nothing behind it.
@@ -132,6 +182,8 @@ export const unconfiguredProducts: ProductsPort = {
   update: () => Promise.reject(new ProductsPortNotConfiguredError()),
   archive: () => Promise.reject(new ProductsPortNotConfiguredError()),
   list: () => Promise.reject(new ProductsPortNotConfiguredError()),
+  reindex: () => Promise.reject(new ProductsPortNotConfiguredError()),
+  reindexAll: () => Promise.reject(new ProductsPortNotConfiguredError()),
 };
 
 /* -------------------------------------------------------------------------- */
@@ -189,4 +241,29 @@ export const createProductsPort = (): ProductsPort => ({
    * policy that is already doing the work.
    */
   list: ({ tenantId, ...query }) => withTenant(tenantId, (tx) => listProducts(tx, query)),
+
+  reindex: (command) =>
+    withTenant(command.tenantId, (tx) =>
+      reindexProduct(tx, {
+        productId: command.productId,
+
+        /*
+         * The transition travels as a function for the reason `hashOf` does:
+         * only the statement has read the current state, and what that state
+         * becomes is a domain decision. `packages/db` writing its own
+         * `SET embedding_state` is the scattered edge P1-38 exists to stop.
+         */
+        nextStatus: (current) => nextEmbeddingStatus({ status: current, event: 'queued' }),
+        reason: 'manual-reindex',
+      }),
+    ),
+
+  reindexAll: (command) =>
+    withTenant(command.tenantId, (tx) =>
+      reindexCatalogue(tx, {
+        edges: queuedEdges,
+        batchId: command.batchId,
+        reason: 'manual-reindex-all',
+      }),
+    ),
 });
