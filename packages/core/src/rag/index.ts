@@ -80,3 +80,22 @@ export {
   type PairingOutput,
   type PairingParse,
 } from './pairing-schema.js';
+
+/**
+ * Prompt assembly (P2-23, pulled forward into P1).
+ *
+ * The boundary that keeps tenant and visitor text data: instructions only in
+ * the cached system prefix, every untrusted field sanitised, capped and
+ * delimited so it cannot forge a delimiter of its own.
+ */
+export {
+  buildPairingPrompt,
+  FIELD_CAPS,
+  InvalidCandidateIdError,
+  leaksInstructions,
+  MAX_HISTORY_TURNS,
+  pairingSystemPrompt,
+  PROMPT_MARKER,
+  sanitiseUntrusted,
+  type PairingPrompt,
+} from './prompt.js';
