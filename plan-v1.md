@@ -3829,6 +3829,16 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 
 **Files.** `apps/dashboard/src/features/catalog/csv.ts`. **~110 lines.**
 
+**Not `papaparse`** *(deviation)*. The row reaches for it to avoid hand-rolling RFC-4180, but P1-14 already had to: a paste needs quoted cells with line breaks in them exactly as a file does. A library for files would be a second answer to "what is a cell", ~45 KB in the import screen, and a dependency whose auto-detection the row itself says to assert rather than trust. `csv.ts` is the delimiter question and nothing else; `delimited.ts` reads both.
+
+**As built.**
+
+- **The delimiter is sniffed from the header line only, outside quotes.** Data rows are where commas live — "Barbaresco, Riserva", "12,50" — and a header quoted around a semicolon is still a comma header.
+- **A tie goes to the semicolon.** Italian Excel writes it, because the comma is that locale's decimal separator; a header containing both an equal number of times is one no spreadsheet produces, and resolving it towards this product's market is the least surprising wrong answer. A header with none of the three is a single column, read as a comma file.
+- **The BOM is stripped before sniffing and parsing.** Left in, it becomes the first character of the first header: `name` arrives as `\uFEFFname`, matches nothing, and is reported as unrecognised under a name that looks identical to the expected one.
+- **`delimiterNotice` says which one was used**, in words. A wrong guess yields one cell per row, which looks like a file with one very wide column rather than an error.
+- Decoding bytes to text is P1-17's; this takes text.
+
 ---
 
 ### P1-17 · Encoding detection
