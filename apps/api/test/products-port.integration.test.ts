@@ -1,6 +1,6 @@
 import process from 'node:process';
 import { randomUUID } from 'node:crypto';
-import { contentHashOf } from '@catalogorosso/core';
+import { contentHashOf, runWithRequestContext } from '@catalogorosso/core';
 import { startTestDatabase, type TestDatabase } from '@catalogorosso/testing';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -372,7 +372,7 @@ describe('createProductsPort', () => {
         counts: countImportOutcomes(result.outcomes),
         stoppedAt: null,
       };
-      await products.completeImport({ tenantId, runId: first.runId, result: body });
+      await products.completeImport({ audit: null, tenantId, runId: first.runId, result: body });
 
       expect(await products.claimImport(attempt)).toEqual({ outcome: 'replay', result: body });
       expect(await products.claimImport({ ...attempt, requestHash: 'other-rows' })).toEqual({
@@ -385,7 +385,12 @@ describe('createProductsPort', () => {
 
       const ours = await products.claimImport({ tenantId, idempotencyKey, requestHash: 'h' });
       if (ours.outcome !== 'claimed') throw new Error('expected a claim');
-      await products.completeImport({ tenantId, runId: ours.runId, result: { ours: true } });
+      await products.completeImport({
+        audit: null,
+        tenantId,
+        runId: ours.runId,
+        result: { ours: true },
+      });
 
       const theirs = await products.claimImport({
         tenantId: otherTenantId,
@@ -394,6 +399,75 @@ describe('createProductsPort', () => {
       });
 
       expect(theirs.outcome).toBe('claimed');
+    });
+  });
+
+  describe('the import audit entry (P1-28)', () => {
+    const auditRows = async (): Promise<Record<string, unknown>[]> => {
+      const rows = await harness?.adminDb.execute(sql`
+        select target, metadata from audit_log
+        where tenant_id = ${tenantId}::uuid and action = 'catalog.imported'
+      `);
+      return [...(rows ?? [])];
+    };
+
+    /** The route runs inside a request whose tenant is resolved; `audit()` reads it there. */
+    const inRequest = <T>(run: () => Promise<T>): Promise<T> =>
+      runWithRequestContext({ requestId: randomUUID(), tenantId }, run);
+
+    it('writes exactly one row with the counts, beside the stored result', async () => {
+      const idempotencyKey = randomUUID();
+      const claim = await products.claimImport({ tenantId, idempotencyKey, requestHash: 'h' });
+      if (claim.outcome !== 'claimed') throw new Error('expected a claim');
+
+      const result = await products.importRows({
+        tenantId,
+        rows: [
+          { ...VALUES, sku: `AUD-${randomUUID()}` },
+          { ...VALUES, sku: `AUD-${randomUUID()}` },
+        ],
+      });
+      const counts = countImportOutcomes(result.outcomes);
+
+      await inRequest(() =>
+        products.completeImport({
+          tenantId,
+          runId: claim.runId,
+          result: { counts },
+          audit: { idempotencyKey, entryPoint: 'file', filename: 'listino.csv', counts },
+        }),
+      );
+
+      const rows = await auditRows();
+      expect(rows).toHaveLength(1);
+
+      const raw = rows[0]?.metadata;
+      const metadata: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      expect(rows[0]?.target).toBe(idempotencyKey);
+      expect(metadata).toEqual({
+        created: 2,
+        updated: 0,
+        unchanged: 0,
+        duplicateSku: 0,
+        archived: 0,
+        entryPoint: 'file',
+        filename: 'listino.csv',
+      });
+    });
+
+    it('writes none when the completion carries no entry', async () => {
+      const claim = await products.claimImport({
+        tenantId,
+        idempotencyKey: randomUUID(),
+        requestHash: 'h',
+      });
+      if (claim.outcome !== 'claimed') throw new Error('expected a claim');
+
+      await inRequest(() =>
+        products.completeImport({ tenantId, runId: claim.runId, result: {}, audit: null }),
+      );
+
+      expect(await auditRows()).toEqual([]);
     });
   });
 

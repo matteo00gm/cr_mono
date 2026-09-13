@@ -54,6 +54,7 @@ import { resolveTenant } from '../middleware/tenant.js';
 import { unconfiguredMembers, type MembersPort } from '../members.js';
 import {
   countImportOutcomes,
+  IMPORT_ENTRY_POINTS,
   importRequestHash,
   toProductResponse,
   unconfiguredProducts,
@@ -133,7 +134,24 @@ export const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
  * so a refusal can say *which* rows broke the contract rather than that the
  * body did.
  */
-const importBody = z.object({ rows: z.array(z.unknown()).min(1).max(MAX_IMPORT_ROWS) }).strict();
+/**
+ * Where an import's rows came from (P1-28), recorded by its audit entry.
+ *
+ * Required: an entry that cannot say whether 400 prices arrived by paste or by
+ * file answers half the question it exists for. The file name is the seller's
+ * own and optional — a paste and a form have none — and capped at what a file
+ * system allows. Strict, so a client cannot slip a path or anything else in.
+ */
+const importSource = z
+  .object({
+    entryPoint: z.enum(IMPORT_ENTRY_POINTS),
+    filename: z.string().min(1).max(255).optional(),
+  })
+  .strict();
+
+const importBody = z
+  .object({ rows: z.array(z.unknown()).min(1).max(MAX_IMPORT_ROWS), source: importSource })
+  .strict();
 
 /**
  * 320 is the practical maximum length of an address (64 local + @ + 255
@@ -523,7 +541,7 @@ export const createDashboardApp = ({
 
     if (!body.success) {
       throw new InvalidRequestError(
-        `Send a JSON body of the form { "rows": [...] } carrying between 1 and ${String(MAX_IMPORT_ROWS)} products.`,
+        `Send a JSON body of the form { "rows": [...], "source": { "entryPoint": "form" | "paste" | "file", "filename"?: "..." } } carrying between 1 and ${String(MAX_IMPORT_ROWS)} products.`,
       );
     }
 
@@ -590,9 +608,10 @@ export const createDashboardApp = ({
       );
     }
 
+    const counts = countImportOutcomes(result.outcomes);
     const response = {
       outcomes: result.outcomes,
-      counts: countImportOutcomes(result.outcomes),
+      counts,
       stoppedAt:
         result.stoppedAt === null
           ? null
@@ -609,7 +628,28 @@ export const createDashboardApp = ({
      * already applied come back unchanged (P1-25). The cause stays in the log
      * above and never reaches the stored body, which a replay would return.
      */
-    await products.completeImport({ tenantId, runId: claim.runId, result: response });
+    /*
+     * **One audit entry, and only when a row reached the catalogue** (P1-28).
+     * "Who replaced 400 prices?" is the question it answers, so an import that
+     * failed in its first batch, or refused every row as a duplicate, changed
+     * nothing and records nothing. Unchanged rows count as reaching it: the
+     * seller did import them, and "nothing changed" is an answer too.
+     */
+    const reachedCatalogue = counts.created + counts.updated + counts.unchanged > 0;
+
+    await products.completeImport({
+      tenantId,
+      runId: claim.runId,
+      result: response,
+      audit: reachedCatalogue
+        ? {
+            idempotencyKey: idempotencyKey.data,
+            entryPoint: body.data.source.entryPoint,
+            filename: body.data.source.filename,
+            counts,
+          }
+        : null,
+    });
 
     return c.json(response);
   });
@@ -1279,7 +1319,9 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'applied come back unchanged. ' +
         'A row that does not match the product contract refuses the whole request before ' +
         'anything is written, and rows sharing a SKU are all refused. A body over 5 MB is ' +
-        'refused before it is parsed. Every import carries an ' +
+        'refused before it is parsed. The body names where the rows came from - form, paste ' +
+        'or file, with the file name - for the single audit entry written by an import that ' +
+        'reached the catalogue. Every import carries an ' +
         'Idempotency-Key header holding a UUID per attempt: a repeat with the same key and the ' +
         'same rows answers with the body the first attempt returned and runs nothing, even when ' +
         'that attempt stopped part-way. The same key with different rows, or while the first ' +

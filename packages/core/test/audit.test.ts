@@ -146,4 +146,18 @@ describe('metadata', () => {
 
     expect(written).not.toContain('A1b2C3d4');
   });
+
+  it('keeps what an import records, so its entry says what happened (P1-28)', async () => {
+    const written = await metadataOf({
+      created: 3,
+      updated: 1,
+      unchanged: 0,
+      duplicateSku: 0,
+      archived: 0,
+      entryPoint: 'paste',
+    });
+
+    expect(written).not.toContain(REDACTED);
+    expect(written).toContain('paste');
+  });
 });

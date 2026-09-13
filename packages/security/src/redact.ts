@@ -91,6 +91,29 @@ export const SAFE_KEYS: ReadonlySet<string> = new Set([
   'limit',
   'remaining',
   'durationMsTotal',
+
+  /*
+   * What an import did, for its audit entry (P1-28). Five counts and a
+   * three-word enum — the same "work done, never who did it" as the counters
+   * above, and nothing a person can type into.
+   */
+  'created',
+  'updated',
+  'unchanged',
+  'duplicateSku',
+  'archived',
+  'entryPoint',
+
+  /*
+   * The name of the file a seller imported (P1-28) — the one entry here that
+   * is free text chosen by a person, so it can hold a name. Admitted on
+   * purpose: "which file replaced 400 prices?" is the question that audit
+   * entry exists to answer, the API never receives a file's contents, and the
+   * value is still scrubbed of addresses and credentials like every string that
+   * survives. It opens every `filename` in every log line, so revisit it the
+   * day anything else starts logging one.
+   */
+  'filename',
 ]);
 
 /**

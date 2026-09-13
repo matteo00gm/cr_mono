@@ -3997,6 +3997,8 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 
 `importBodyProblem(rows)` in `draft-rows.ts` already answers whether rows fit, in Italian, whichever is chosen.
 
+**Note from P1-28.** The body must also carry `source: { entryPoint, filename? }` — `'file'` with the file's name, `'paste'`, or `'form'` — which the import's audit entry records. A body without it is a 422.
+
 ---
 
 ### P1-24 · `upsertProducts()` core function
@@ -4103,6 +4105,16 @@ Tests: `packages/db/test/import-runs.test.ts` and `schema/import-runs.test.ts` (
 **Tests.** Import writes exactly one audit row with correct counts; a fully-failed import writes none.
 
 **Files.** route change, tests. **~50 lines.**
+
+**As built — in the transaction that stores the import's result rather than the final batch's, and with a redaction decision the row did not anticipate.**
+
+- **One `catalog.imported` entry, written by `audit()` in the same transaction as `completeImportRun`** *(deviation — the row said the final batch's transaction)*. The final batch is the wrong place twice over: an import that stops part-way has no successful final batch, so rows that did apply would go unrecorded, and a batch does not know the counts of the batches after it. The completion transaction runs after every batch and commits with the result P1-26 replays, so the entry and the answer a retry reads cannot disagree. What it cannot guarantee is the entry's existence if the Lambda dies between the last batch and the completion — the rows applied, the claim is abandoned, and nothing is recorded. That is P0-53's tolerable failure, a missing entry, never its forbidden one, an entry for something that did not happen.
+- **Written only when a row reached the catalogue** — created, updated or unchanged. An import that failed in its first batch, or refused every row as a duplicate SKU, changed nothing and writes nothing; that is the row's "a fully-failed import writes none". Unchanged rows count: the seller did import them, and "nothing changed" answers what the import did.
+- **The idempotency key is the entry's `target`**, so it joins to its `import_runs` row. Metadata carries the five counts, the entry point, and the file name when there was one.
+- **The request body now names its source** *(addition)*: `source: { entryPoint: 'form' | 'paste' | 'file', filename? }`, required and strict, with the file name capped at 255 characters. It is not part of P1-26's hash — the same rows sent again under the same key are the same import whatever the label says.
+- **Seven names were added to `SAFE_KEYS`** *(decision — see D8)*. `audit()` redacts metadata through the log allowlist, so without them the entry would have recorded `[redacted]` for every count. `created`, `updated`, `unchanged`, `duplicateSku`, `archived` and `entryPoint` are numbers and a three-word enum, the "work done, never who did it" the allowlist's counters already admit. **`filename` is free text a person chose** and can hold a name. It is admitted because "which file replaced 400 prices?" is what the entry exists to answer, the API never receives a file's contents, and the value is still scrubbed of addresses and credentials — but it opens every `filename` in every log line, so it is the one to revisit if anything else starts logging one.
+- **Found in passing, not fixed here:** the same redaction has always blanked `member.joined`'s `role` and `invitationId`, and that entry's test asserts only its action and target. Filed as its own task.
+- **The audit writer is injected into `createProductsPort`**, as it is into `createMembersPort`, so the port's unit tests can assert the entry; a test that mocks `@catalogorosso/db` otherwise sees a second copy of core's request context.
 
 ---
 
@@ -6829,7 +6841,7 @@ Checked rather than assumed, and the first version of this item was wrong. `bett
 
 The real gap was narrower: a `packages/security/**` rule refused auto-merge and added a `security-critical` label at every update level, while `packages/core` — which P0-45 made the home of the authentication configuration, `better-auth` included — had none. `matchFileNames` now covers both. The label is the point rather than the refusal: these updates arrive marked for a human, instead of merely not being auto-merged.
 
-**D8. `SAFE_KEYS` governs every depth for every caller.** Adding a key to the P0-56 allowlist for one call site opens it everywhere — `message` and `code` are the live examples of names that look harmless and are not. There is a guard test asserting those two stay out. Any addition deserves the same treatment.
+**D8. `SAFE_KEYS` governs every depth for every caller.** Adding a key to the P0-56 allowlist for one call site opens it everywhere — `message` and `code` are the live examples of names that look harmless and are not. There is a guard test asserting those two stay out. Any addition deserves the same treatment. P1-28 added seven names for the import audit entry — five counts, `entryPoint`, and `filename`, the one free-text name on the list — with the reason for each beside it in `redact.ts`.
 
 **D9. P0-33a is closed.** ✅
 
