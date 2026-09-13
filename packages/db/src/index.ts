@@ -239,8 +239,11 @@ export {
 } from './products.js';
 export {
   planUpsert,
+  previewUpsert,
   upsertProducts,
   WRITTEN_FIELDS,
+  type PreviewOutcome,
+  type PreviewRequest,
   type UpsertDecision,
   type UpsertOutcome,
   type UpsertRequest,

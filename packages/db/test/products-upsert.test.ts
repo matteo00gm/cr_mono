@@ -5,6 +5,7 @@ import type { ProductRow } from '../src/products.js';
 import type { EmbeddingStatusWrite } from '../src/embedding-status.js';
 import {
   planUpsert,
+  previewUpsert,
   upsertProducts,
   WRITTEN_FIELDS,
   type UpsertRow,
@@ -365,5 +366,76 @@ describe('upsertProducts', () => {
     const fake = fakeTx([], {});
 
     await expect(run(fake, [row({ sku: 'A' })])).rejects.toThrow(/without an id/);
+  });
+});
+
+describe('previewUpsert (P1-23)', () => {
+  /** A transaction that answers its one read with `found` and throws on any write. */
+  const readOnly = (found: ProductRow[]) => {
+    const where = vi.fn(() => Promise.resolve(found));
+    const refuse = () => {
+      throw new Error('a preview must not write');
+    };
+    const tx = {
+      select: () => ({ from: () => ({ where }) }),
+      insert: refuse,
+      update: refuse,
+      delete: refuse,
+    } as unknown as DbTransaction;
+
+    return { tx, where };
+  };
+
+  it('classifies every kind of row as the import would, writing nothing', async () => {
+    const { tx, where } = readOnly([
+      stored(),
+      stored({ id: 'p-2', sku: 'ETN-2020' }),
+      stored({ id: 'p-3', sku: 'OLD-1', status: 'ARCHIVED' }),
+    ]);
+
+    const outcomes = await previewUpsert(tx, {
+      rows: [
+        row({ sku: 'NEW-1' }, 0),
+        row({ priceCents: 4800 }, 1),
+        row({ sku: 'ETN-2020' }, 2),
+        row({ sku: 'OLD-1' }, 3),
+        row({ sku: 'DUP' }, 4),
+        row({ sku: 'DUP' }, 5),
+        row({ sku: 'ETN-2020', name: 'Etna Rosso' }, 6),
+      ],
+      hashOf,
+    });
+
+    expect(where).toHaveBeenCalledTimes(1);
+    expect(outcomes).toEqual([
+      { index: 0, outcome: 'created' },
+      { index: 1, outcome: 'updated', productId: 'p-1', reindexed: false, archived: false },
+      { index: 2, outcome: 'duplicate-sku', sku: 'ETN-2020' },
+      { index: 3, outcome: 'unchanged', productId: 'p-3', reindexed: false, archived: true },
+      { index: 4, outcome: 'duplicate-sku', sku: 'DUP' },
+      { index: 5, outcome: 'duplicate-sku', sku: 'DUP' },
+      { index: 6, outcome: 'duplicate-sku', sku: 'ETN-2020' },
+    ]);
+  });
+
+  it('predicts a re-embedding by the same hash the import uses', async () => {
+    const { tx } = readOnly([stored()]);
+
+    const [outcome] = await previewUpsert(tx, { rows: [row({ name: 'Barolo Riserva' })], hashOf });
+
+    expect(outcome).toEqual({
+      index: 0,
+      outcome: 'updated',
+      productId: 'p-1',
+      reindexed: true,
+      archived: false,
+    });
+  });
+
+  it('reads nothing for no rows', async () => {
+    const { tx, where } = readOnly([]);
+
+    expect(await previewUpsert(tx, { rows: [], hashOf })).toEqual([]);
+    expect(where).not.toHaveBeenCalled();
   });
 });

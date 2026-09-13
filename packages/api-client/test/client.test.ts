@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { ApiError, createClient, DASHBOARD_RESPONSES } from '../src/index.js';
@@ -88,6 +90,35 @@ describe('the active tenant header', () => {
     await clientWith(fetchMock).request('GET /v1/dashboard');
 
     expect(fetchMock.mock.calls[0]?.[1]).not.toHaveProperty('headers');
+  });
+});
+
+describe('the idempotency key (P1-26, P1-23)', () => {
+  it('is sent as Idempotency-Key when the call carries one', async () => {
+    const fetchMock = fetchDouble(() => Promise.resolve(jsonResponse({ surface: 'dashboard' })));
+    const key = randomUUID();
+
+    await clientWith(fetchMock).request('GET /v1/dashboard', { idempotencyKey: key });
+
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ headers: { 'idempotency-key': key } });
+  });
+
+  it('travels with the tenant and the body rather than replacing them', async () => {
+    const fetchMock = fetchDouble(() => Promise.resolve(jsonResponse({ surface: 'dashboard' })));
+    const key = randomUUID();
+
+    await clientWith(fetchMock, 'tenant-1').request('GET /v1/dashboard', {
+      idempotencyKey: key,
+      body: { rows: [] },
+    });
+
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      headers: {
+        'x-active-tenant': 'tenant-1',
+        'idempotency-key': key,
+        'content-type': 'application/json',
+      },
+    });
   });
 });
 

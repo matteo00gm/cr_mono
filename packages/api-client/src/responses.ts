@@ -431,6 +431,53 @@ export type ImportOutcome = z.infer<typeof importOutcomeSchema>;
 export type ProductsImportedResponse = z.infer<typeof productsImportedResponse>;
 
 /**
+ * One row of an import preview (P1-23): what confirming would do to it.
+ *
+ * The import's outcomes less what only a write can know — a wine that would be
+ * created has no id yet. `updated` and `unchanged` carry the id of the wine
+ * they match, and `archived` that it stays archived.
+ */
+export const importPreviewOutcomeSchema = z.discriminatedUnion('outcome', [
+  z.object({ index: importIndex, outcome: z.literal('created') }),
+  z.object({
+    index: importIndex,
+    outcome: z.literal('updated'),
+    productId: z.string(),
+    reindexed: z.boolean(),
+    archived: z.boolean(),
+  }),
+  z.object({
+    index: importIndex,
+    outcome: z.literal('unchanged'),
+    productId: z.string(),
+    reindexed: z.boolean(),
+    archived: z.boolean(),
+  }),
+  z.object({ index: importIndex, outcome: z.literal('duplicate-sku'), sku: z.string() }),
+]);
+
+/**
+ * The summary screen's numbers (P1-23), before anything is written.
+ *
+ * **A preview, not a promise.** It locks nothing, so a wine edited between the
+ * preview and the import can change its outcome; the import answers with its
+ * own, and that answer is the record.
+ */
+export const importPreviewResponse = z.object({
+  outcomes: z.array(importPreviewOutcomeSchema),
+  counts: z.object({
+    created: count,
+    updated: count,
+    unchanged: count,
+    duplicateSku: count,
+    archived: count,
+  }),
+});
+
+export type ImportPreviewOutcome = z.infer<typeof importPreviewOutcomeSchema>;
+export type ImportPreviewResponse = z.infer<typeof importPreviewResponse>;
+
+/**
  * Every dashboard response, keyed by `METHOD path`.
  *
  * The client's `request()` is typed off this, so calling an endpoint returns
@@ -454,6 +501,7 @@ export const DASHBOARD_RESPONSES = {
   'POST /v1/dashboard/products/reindex-all': catalogueReindexedResponse,
   'POST /v1/dashboard/products/:id/reindex': productReindexedResponse,
   'POST /v1/dashboard/products/import': productsImportedResponse,
+  'POST /v1/dashboard/products/import/preview': importPreviewResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

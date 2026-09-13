@@ -3999,6 +3999,16 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 
 **Note from P1-28.** The body must also carry `source: { entryPoint, filename? }` — `'file'` with the file's name, `'paste'`, or `'form'` — which the import's audit entry records. A body without it is a 422.
 
+**As built — the screen, a read-only preview route beside the import, and a client that can send the key.**
+
+- **`POST /v1/dashboard/products/import/preview` runs the import's own `planUpsert`**, through a new `previewUpsert` in `packages/db` that reads by SKU without `FOR UPDATE` and writes nothing. **"Invariati" means what P1-24 made it mean, not what this row said** *(correction)*: the row decided `unchanged` by `content_hash`, and P1-24 found that wrong — the hash covers only what the model reads, so a new price inside its band leaves it equal. The preview and the import share one outcome mapping and one duplicate-SKU pass, so they disagree only when the catalogue changed between the two; integration tests assert the preview's classification equals the import that follows it, and that another winery's SKU is never matched. The routes share `readImportBody` and `contractRows`, so the preview is refused for exactly what the import would be. No key, no audit entry, `catalog:write`: it exists only as an import's first step.
+- **`ImportSummary.tsx` shows the server's counts** — *Nuovi · Aggiornati · Invariati · Non validi*, and *SKU ripetuti* when there are any — and says which rows match archived wines, which stay archived.
+- **"Importa solo le valide" is the default** *(decision — the row's own recommendation)*. Only rows that validate are previewed and sent; the invalid ones stay listed with their errors and are downloadable as `righe-da-correggere.csv` — template headers, `;`, a byte-order mark and an `errori` column the importer ignores with a notice — so the corrected file imports as it is. `writeDelimited` now sits beside `parseDelimited` for that, held to it by a round-trip test, and is what P1-30's export will use.
+- **One `Idempotency-Key` per attempt, built as P1-26's note asked.** The api-client gained an `idempotencyKey` request option. The key is made at the first confirmation and resent on every retry of it; it is forgotten when the rows change — the same key with other rows would be a 409 — and when an attempt finishes, so resuming a stopped import is a new attempt. A 409 on confirm can therefore only mean "still running", and says so.
+- **A stopped import is reported in the seller's own line numbers**, translated back from the rows the server was sent, because every invalid line left out shifts the numbers after it.
+- **The request cap is checked before anything is sent, and P1-27's decision stays open** *(interim)*. An import over 5 MB is refused on screen with "Dividile in più importazioni", so a seller splits the file by hand. Whether the dashboard should gzip the body instead is still the choice recorded above.
+- **Not yet mounted** *(deviation)*. Like P1-22's `DraftGrid`, `ImportSummary` is a tested component with no route in the shell. The screen that joins the file and paste pickers to drafts and to this summary is its own piece of work, and none of this row's files is it.
+
 ---
 
 ### P1-24 · `upsertProducts()` core function

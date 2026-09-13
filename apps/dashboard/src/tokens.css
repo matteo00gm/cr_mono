@@ -398,3 +398,24 @@ body {
   color: var(--cr-ink-soft);
   font-size: 0.75rem;
 }
+
+/* Import summary (P1-23). The counts are the screen's point, so they get the
+   gap; the notes beside them are quieter, like the catalogue's hints. */
+.cr-import-summary__counts,
+.cr-import-summary__note,
+.cr-import-summary__result {
+  margin: 0 0 var(--cr-gap);
+}
+
+.cr-import-summary__note {
+  color: var(--cr-ink-soft);
+}
+
+.cr-import-summary__invalid {
+  margin-bottom: var(--cr-gap);
+}
+
+.cr-import-summary__invalid ul {
+  margin: var(--cr-gap) 0;
+  padding-inline-start: 1.25rem;
+}

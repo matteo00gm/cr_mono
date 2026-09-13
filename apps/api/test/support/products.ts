@@ -23,6 +23,7 @@ export const productsPort = (overrides: Partial<ProductsPort> = {}): ProductsPor
   reindex: () => Promise.reject(new Error('products.reindex is not stubbed in this test')),
   reindexAll: () => Promise.reject(new Error('products.reindexAll is not stubbed in this test')),
   importRows: () => Promise.reject(new Error('products.importRows is not stubbed in this test')),
+  previewRows: () => Promise.reject(new Error('products.previewRows is not stubbed in this test')),
   claimImport: () => Promise.reject(new Error('products.claimImport is not stubbed in this test')),
   completeImport: () =>
     Promise.reject(new Error('products.completeImport is not stubbed in this test')),

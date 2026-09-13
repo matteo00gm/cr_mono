@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import type { ProductInsert } from '../src/contracts.js';
 import type { EmbeddingStatusWrite } from '../src/embedding-status.js';
-import { upsertProducts, type UpsertRow } from '../src/products-upsert.js';
+import { previewUpsert, upsertProducts, type UpsertRow } from '../src/products-upsert.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 import { startPostgres } from './support/postgres.js';
 import { createTenant, useTenant } from './support/tenant.js';
@@ -206,5 +206,51 @@ describe('upsertProducts', () => {
 
   it('returns nothing for an empty import without touching the database', async () => {
     expect(await importRows([])).toEqual([]);
+  });
+});
+
+describe('previewUpsert (P1-23)', () => {
+  const preview = (rows: readonly Partial<ProductInsert>[], tenant = tenantId) =>
+    inTenant(
+      (tx) =>
+        previewUpsert(tx, {
+          rows: rows.map((values, index): UpsertRow => ({
+            index,
+            values: { ...VALUES, ...values },
+          })),
+          hashOf,
+        }),
+      tenant,
+    );
+
+  it('classifies as the import then does, writing and queuing nothing', async () => {
+    await importRows([{ sku: 'KEEP' }, { sku: 'MOVE' }]);
+    const products = await productCount();
+    const jobs = await jobCount();
+
+    const rows = [{ sku: 'KEEP' }, { sku: 'MOVE', priceCents: 5200 }, { sku: 'NEW' }];
+    const predicted = await preview(rows);
+
+    expect(await productCount()).toBe(products);
+    expect(await jobCount()).toBe(jobs);
+    expect(predicted.map((outcome) => outcome.outcome)).toEqual([
+      'unchanged',
+      'updated',
+      'created',
+    ]);
+
+    const applied = await importRows(rows);
+    expect(applied.map((outcome) => outcome.outcome)).toEqual(
+      predicted.map((outcome) => outcome.outcome),
+    );
+  });
+
+  it('never matches another winery’s wine that shares a SKU', async () => {
+    const other = await createTenant(db, 'preview-other');
+    await importRows([{ sku: 'SHARED' }], other);
+
+    const [outcome] = await preview([{ sku: 'SHARED' }]);
+
+    expect(outcome?.outcome).toBe('created');
   });
 });

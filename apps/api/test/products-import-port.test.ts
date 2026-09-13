@@ -3,6 +3,8 @@ import type {
   DbTransaction,
   ImportRunClaim,
   ImportRunRequest,
+  PreviewOutcome,
+  PreviewRequest,
   ProductInsert,
   UpsertOutcome,
   UpsertRequest,
@@ -22,6 +24,7 @@ import { createProductsPort, IMPORT_BATCH_SIZE } from '../src/products.js';
  */
 
 const db = vi.hoisted(() => ({
+  previewUpsert: vi.fn<(tx: unknown, request: PreviewRequest) => Promise<PreviewOutcome[]>>(),
   withTenant:
     vi.fn<(tenantId: string, run: (tx: unknown) => Promise<unknown>) => Promise<unknown>>(),
   upsertProducts: vi.fn<(tx: unknown, request: UpsertRequest) => Promise<UpsertOutcome[]>>(),
@@ -36,6 +39,7 @@ vi.mock('@catalogorosso/db', async (importOriginal) => ({
   upsertProducts: db.upsertProducts,
   claimImportRun: db.claimImportRun,
   completeImportRun: db.completeImportRun,
+  previewUpsert: db.previewUpsert,
 }));
 
 const TENANT = '11111111-1111-1111-1111-111111111111';
@@ -71,6 +75,13 @@ beforeEach(() => {
   db.upsertProducts.mockReset().mockImplementation((_tx, request) => created(request));
   db.claimImportRun.mockReset().mockResolvedValue({ outcome: 'claimed', runId: 'run-1' });
   db.completeImportRun.mockReset().mockResolvedValue(undefined);
+  db.previewUpsert
+    .mockReset()
+    .mockImplementation((_tx, request) =>
+      Promise.resolve(
+        request.rows.map((row) => ({ index: row.index, outcome: 'created' as const })),
+      ),
+    );
 });
 
 describe('importRows', () => {
@@ -295,5 +306,43 @@ describe('the audit entry (P1-28)', () => {
 
     expect(order).toEqual(['stored']);
     expect(recorded).toEqual([]);
+  });
+});
+
+describe('previewRows (P1-23)', () => {
+  it('reads once for the tenant with the real hash, refusing duplicates first, in row order', async () => {
+    const outcomes = await createProductsPort().previewRows({
+      tenantId: TENANT,
+      rows: rows(450, (index) => (index === 3 || index === 400 ? { sku: 'DUP' } : {})),
+    });
+
+    expect(db.withTenant.mock.calls.map(([tenant]) => tenant)).toEqual([TENANT]);
+    expect(db.upsertProducts).not.toHaveBeenCalled();
+
+    const [request] = db.previewUpsert.mock.calls.map(([, sent]) => sent);
+    const [values] = rows(1);
+    if (request === undefined || values === undefined) throw new Error('expected one preview');
+
+    expect(request.rows).toHaveLength(448);
+    expect(request.hashOf(values)).toBe(contentHashOf(values));
+    expect(outcomes.map((outcome) => outcome.index)).toEqual(rows(450).map((_, index) => index));
+    expect(
+      outcomes
+        .filter((outcome) => outcome.outcome === 'duplicate-sku')
+        .map((outcome) => outcome.index),
+    ).toEqual([3, 400]);
+  });
+
+  it('opens no transaction for a preview that is only duplicates', async () => {
+    const outcomes = await createProductsPort().previewRows({
+      tenantId: TENANT,
+      rows: rows(2, () => ({ sku: 'DUP' })),
+    });
+
+    expect(db.withTenant).not.toHaveBeenCalled();
+    expect(outcomes).toEqual([
+      { index: 0, outcome: 'duplicate-sku', sku: 'DUP' },
+      { index: 1, outcome: 'duplicate-sku', sku: 'DUP' },
+    ]);
   });
 });

@@ -6,6 +6,8 @@ export interface Sent {
   readonly query?: Readonly<Record<string, unknown>>;
   readonly params?: Readonly<Record<string, string>>;
   readonly body?: unknown;
+  /** The import attempt's key (P1-26), when the call carried one. */
+  readonly idempotencyKey?: string;
 }
 
 export type Route = (init: Sent | undefined) => Promise<unknown>;

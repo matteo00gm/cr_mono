@@ -471,6 +471,51 @@ describe('createProductsPort', () => {
     });
   });
 
+  describe('previewRows (P1-23)', () => {
+    const countIn = async (table: 'products' | 'outbox'): Promise<number> => {
+      const rows = await harness?.adminDb.execute(
+        sql`select count(*)::int as n from ${sql.raw(table)} where tenant_id = ${tenantId}::uuid`,
+      );
+      return ([...(rows ?? [])][0] as { n: number }).n;
+    };
+
+    it('classifies as the import then does, and writes nothing on the way', async () => {
+      const kept = `PRE-${randomUUID()}`;
+      const repriced = `PRE-${randomUUID()}`;
+      const fresh = `PRE-${randomUUID()}`;
+      await products.importRows({
+        tenantId,
+        rows: [
+          { ...VALUES, sku: kept },
+          { ...VALUES, sku: repriced },
+        ],
+      });
+
+      const rows = [
+        { ...VALUES, sku: kept },
+        { ...VALUES, sku: repriced, priceCents: 4900 },
+        { ...VALUES, sku: fresh },
+      ];
+      const before = { products: await countIn('products'), outbox: await countIn('outbox') };
+
+      const preview = await products.previewRows({ tenantId, rows });
+
+      expect({ products: await countIn('products'), outbox: await countIn('outbox') }).toEqual(
+        before,
+      );
+      expect(preview.map((outcome) => outcome.outcome)).toEqual([
+        'unchanged',
+        'updated',
+        'created',
+      ]);
+
+      const applied = await products.importRows({ tenantId, rows });
+      expect(applied.outcomes.map((outcome) => outcome.outcome)).toEqual(
+        preview.map((outcome) => outcome.outcome),
+      );
+    });
+  });
+
   it('returns not-found for another tenant’s product rather than touching it', async () => {
     /*
      * **§3.5's rule, reached through the port.** The route turns this into a

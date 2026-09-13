@@ -75,6 +75,13 @@ export type PathParam<E extends string> = E extends `${string}:${infer Name}/${i
 export type RequestOptions<E extends DashboardEndpoint> = {
   readonly query?: Readonly<Record<string, string | number | boolean | undefined>> | undefined;
   readonly body?: unknown;
+  /**
+   * The key naming one import attempt (P1-26), sent as `Idempotency-Key`.
+   *
+   * Chosen by the caller and never invented here: a key made fresh per request
+   * would turn every retry into a new attempt, which is the opposite of its job.
+   */
+  readonly idempotencyKey?: string | undefined;
 } & ([PathParam<E>] extends [never]
   ? { readonly params?: undefined }
   : { readonly params: Readonly<Record<PathParam<E>, string>> });
@@ -167,13 +174,18 @@ export const createClient = (options: ClientOptions) => {
         // `exactOptionalPropertyTypes`, a key present and holding `undefined`
         // is a different thing from an absent key, and `RequestInit` wants the
         // second.
-        ...(options.activeTenantId === undefined && init?.body === undefined
+        ...(options.activeTenantId === undefined &&
+        init?.body === undefined &&
+        init?.idempotencyKey === undefined
           ? {}
           : {
               headers: {
                 ...(options.activeTenantId === undefined
                   ? {}
                   : { 'x-active-tenant': options.activeTenantId }),
+                ...(init?.idempotencyKey === undefined
+                  ? {}
+                  : { 'idempotency-key': init.idempotencyKey }),
                 /*
                  * Only when there is a body. Hono's validator reads the header
                  * to decide how to parse, and a `content-type: application/json`
