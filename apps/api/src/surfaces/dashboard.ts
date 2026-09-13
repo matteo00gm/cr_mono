@@ -30,6 +30,8 @@ import {
   COMPLETENESS_FIELDS,
   ConflictError,
   InvalidRequestError,
+  MAX_IMPORT_BODY_BYTES,
+  MAX_IMPORT_ROWS,
   NotFoundError,
   rangeOfBand,
 } from '@catalogorosso/core';
@@ -108,14 +110,14 @@ const readJson = async (c: { req: { json: () => Promise<unknown> } }): Promise<u
   }
 };
 
-/**
- * The most rows one import may carry (§2.2a, P1-25).
- *
- * The same number the dashboard refuses a file over (P1-21). P1-27 makes the
- * two one shared constant; until then this is the server's half, because a
- * cap enforced only in the browser is a suggestion to anybody with `curl`.
- */
-export const MAX_IMPORT_ROWS = 10_000;
+/** `readJson` for a body already read as text, which the import measures first. */
+const parseJson = (raw: string): unknown => {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+};
 
 /**
  * The header naming one import attempt (P1-26).
@@ -501,7 +503,23 @@ export const createDashboardApp = ({
       );
     }
 
-    const body = importBody.safeParse(await readJson(c));
+    /*
+     * **Measured in bytes before it is parsed** (P1-27). In production the
+     * platform refuses anything over 6 MB before this runs; the cap sits under
+     * that so the refusal a caller reads is this one, which names the limit.
+     * Bytes rather than characters: an accented letter is two of them, and a
+     * catalogue of Italian tasting notes is full of them.
+     */
+    const raw = await c.req.text();
+
+    if (new TextEncoder().encode(raw).byteLength > MAX_IMPORT_BODY_BYTES) {
+      throw new InvalidRequestError(
+        `An import body may be at most ${String(MAX_IMPORT_BODY_BYTES / 1024 / 1024)} MB. ` +
+          'Split the rows into several imports, each with its own Idempotency-Key.',
+      );
+    }
+
+    const body = importBody.safeParse(parseJson(raw));
 
     if (!body.success) {
       throw new InvalidRequestError(
@@ -1260,7 +1278,8 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'the same rows again under a new Idempotency-Key to resume, since rows already ' +
         'applied come back unchanged. ' +
         'A row that does not match the product contract refuses the whole request before ' +
-        'anything is written, and rows sharing a SKU are all refused. Every import carries an ' +
+        'anything is written, and rows sharing a SKU are all refused. A body over 5 MB is ' +
+        'refused before it is parsed. Every import carries an ' +
         'Idempotency-Key header holding a UUID per attempt: a repeat with the same key and the ' +
         'same rows answers with the body the first attempt returned and runs nothing, even when ' +
         'that attempt stopped part-way. The same key with different rows, or while the first ' +

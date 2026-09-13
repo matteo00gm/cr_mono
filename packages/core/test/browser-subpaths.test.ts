@@ -27,7 +27,7 @@ const subpaths = Object.entries(pkg.exports).filter(([subpath]) => subpath !== '
 describe('browser-safe subpaths', () => {
   it('exist, so the check below is not vacuous', () => {
     expect(subpaths.map(([subpath]) => subpath)).toEqual(
-      expect.arrayContaining(['./completeness', './inline-edit']),
+      expect.arrayContaining(['./completeness', './import-limits', './inline-edit']),
     );
   });
 

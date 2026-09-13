@@ -20,6 +20,10 @@
     "./inline-edit": {
       "types": "./dist/inline-edit.d.ts",
       "default": "./dist/inline-edit.js"
+    },
+    "./import-limits": {
+      "types": "./dist/import-limits.d.ts",
+      "default": "./dist/import-limits.js"
     }
   },
   "files": [

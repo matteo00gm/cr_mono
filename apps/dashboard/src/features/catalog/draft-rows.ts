@@ -1,3 +1,5 @@
+import { MAX_IMPORT_BODY_BYTES } from '@catalogorosso/core/import-limits';
+
 import type { ProductRequest } from '@catalogorosso/api-client';
 
 import { COLUMN_LABEL, normaliseHeader } from './header-map.js';
@@ -171,4 +173,23 @@ export const visibleErrors = (row: DraftRow, shown: readonly TemplateField[]): V
   }
 
   return { inCells, elsewhere, more: Math.max(0, ordered.length - MAX_ERRORS_PER_ROW) };
+};
+
+const megabytesOf = (bytes: number): string =>
+  (bytes / 1024 / 1024).toLocaleString('it-IT', { maximumFractionDigits: 1 });
+
+/**
+ * Whether rows fit in one import request, asked before it is sent (P1-27).
+ *
+ * **Measured as the bytes the API will receive, not as rows**: a thousand wines
+ * with long notes can weigh more than ten thousand bare ones, and an accented
+ * letter is two bytes. Asked of the rows about to be sent, so a paste, a file
+ * and a form all meet it in one place. `null` when they fit.
+ */
+export const importBodyProblem = (rows: readonly unknown[]): string | null => {
+  const bytes = new TextEncoder().encode(JSON.stringify({ rows })).byteLength;
+
+  return bytes > MAX_IMPORT_BODY_BYTES
+    ? `Queste righe pesano ${megabytesOf(bytes)} MB, oltre i ${megabytesOf(MAX_IMPORT_BODY_BYTES)} MB che un’importazione può inviare. Dividile in più importazioni.`
+    : null;
 };

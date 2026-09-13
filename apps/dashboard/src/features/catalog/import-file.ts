@@ -1,3 +1,5 @@
+import { MAX_IMPORT_FILE_BYTES, MAX_IMPORT_ROWS } from '@catalogorosso/core/import-limits';
+
 import { delimiterNotice, parseCsv } from './csv.js';
 import type { Table } from './delimited.js';
 import { decodeFile, encodingNotice, type Encoding } from './encoding.js';
@@ -20,19 +22,6 @@ import { chooseSheet, readWorkbook, WORKBOOK_MESSAGES, type WorkbookProblem } fr
  * longer one, a sheet picked without asking — looks complete, and that is the
  * failure worth designing against.
  */
-
-/**
- * §2.2a's row cap. P1-27 holds the server to the same number; this one answers
- * before anything is sent, and before a grid tries to render the rows.
- */
-export const MAX_ROWS = 10_000;
-
-/**
- * The file-size cap. Ten thousand wines with long tasting notes are a few
- * megabytes of CSV; ten is room for that, and refuses a file that could only
- * be something else — a photo, an export of a whole shop.
- */
-export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 export type ImportProblem =
   | { readonly kind: 'empty' }
@@ -124,7 +113,7 @@ export const readImportFile = async (file: ImportFile): Promise<ImportResult> =>
   const refuse = (problem: ImportProblem): ImportResult => ({ ok: false, problem, notices });
 
   if (file.bytes.byteLength === 0) return refuse({ kind: 'empty' });
-  if (file.bytes.byteLength > MAX_FILE_BYTES) {
+  if (file.bytes.byteLength > MAX_IMPORT_FILE_BYTES) {
     return refuse({ kind: 'too-large', bytes: file.bytes.byteLength });
   }
 
@@ -154,7 +143,7 @@ export const readImportFile = async (file: ImportFile): Promise<ImportResult> =>
    * thousand rows of a longer file leaves a catalogue that looks complete and
    * is not, and nothing afterwards points at the rows that were never read.
    */
-  if (data.length > MAX_ROWS) return refuse({ kind: 'too-many-rows', rows: data.length });
+  if (data.length > MAX_IMPORT_ROWS) return refuse({ kind: 'too-many-rows', rows: data.length });
 
   return {
     ok: true,
@@ -175,9 +164,9 @@ export const importProblemMessage = (problem: ImportProblem): string => {
     case 'header-only':
       return 'Il file contiene solo l’intestazione: non ci sono vini da importare.';
     case 'too-large':
-      return `Il file pesa ${megabytes(problem.bytes)} MB, oltre il massimo di ${megabytes(MAX_FILE_BYTES)} MB. Dividilo in più file.`;
+      return `Il file pesa ${megabytes(problem.bytes)} MB, oltre il massimo di ${megabytes(MAX_IMPORT_FILE_BYTES)} MB. Dividilo in più file.`;
     case 'too-many-rows':
-      return `Il file contiene ${thousands.format(problem.rows)} vini, oltre il massimo di ${thousands.format(MAX_ROWS)} per importazione. Dividilo in più file.`;
+      return `Il file contiene ${thousands.format(problem.rows)} vini, oltre il massimo di ${thousands.format(MAX_IMPORT_ROWS)} per importazione. Dividilo in più file.`;
     case 'unsupported':
       return 'Importa un file CSV oppure Excel (.xlsx).';
     case 'workbook':

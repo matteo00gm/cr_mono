@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import { MAX_IMPORT_BODY_BYTES, MAX_IMPORT_ROWS } from '@catalogorosso/core';
+
 import { productsImportedResponse } from '@catalogorosso/api-client';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -13,7 +15,6 @@ import {
   type ImportProductsResult,
   type ProductsPort,
 } from '../src/products.js';
-import { MAX_IMPORT_ROWS } from '../src/surfaces/dashboard.js';
 import { oneMembership, signedIn } from './support/auth.js';
 import { productsPort } from './support/products.js';
 
@@ -139,6 +140,31 @@ describe('what is refused before anything is written', () => {
         ...ROW,
         sku: `S-${String(index)}`,
       })),
+    });
+
+    expect(response.status).toBe(422);
+    expect(importRows).not.toHaveBeenCalled();
+  });
+
+  it('refuses a body over the request cap before parsing it, naming the limit', async () => {
+    // P1-27. Under the platform's 6 MB, so the refusal a caller reads is this one.
+    const importRows = applied();
+
+    const response = await post(app({ importRows }), {
+      rows: [{ ...ROW, tastingNotes: 'x'.repeat(MAX_IMPORT_BODY_BYTES) }],
+    });
+
+    expect(response.status).toBe(422);
+    expect(await messageOf(response)).toContain('at most 5 MB');
+    expect(importRows).not.toHaveBeenCalled();
+  });
+
+  it('counts the body in bytes, so accented notes cannot slip under the cap', async () => {
+    // Each "è" is two bytes: counted as characters, this body would fit.
+    const importRows = applied();
+
+    const response = await post(app({ importRows }), {
+      rows: [{ ...ROW, tastingNotes: 'è'.repeat(MAX_IMPORT_BODY_BYTES / 2) }],
     });
 
     expect(response.status).toBe(422);
