@@ -181,6 +181,39 @@ describe('createProductsPort', () => {
     expect(updated.outcome === 'updated' && updated.reindexed).toBe(false);
   });
 
+  it('does not re-index any inline edit a seller makes inside a price band (P1-11)', async () => {
+    /*
+     * The grid's editable cells, through the real port and the real hash.
+     * `VALUES.priceCents` is 45,00 — the 35 to 60 euro band — so 59,00 stays in
+     * it, and the two stock fields never reach the embedding text at all.
+     */
+    const created = await create();
+
+    if (created.outcome !== 'created') throw new Error('expected a product');
+
+    const updated = await products.update({
+      tenantId,
+      productId: created.product.id,
+      values: { priceCents: 5900, stockStatus: 'OUT_OF_STOCK', stockQty: 0 },
+    });
+
+    expect(updated.outcome === 'updated' && updated.reindexed).toBe(false);
+  });
+
+  it('does re-index a price that leaves its band, on purpose', async () => {
+    const created = await create();
+
+    if (created.outcome !== 'created') throw new Error('expected a product');
+
+    const updated = await products.update({
+      tenantId,
+      productId: created.product.id,
+      values: { priceCents: 1900 },
+    });
+
+    expect(updated.outcome === 'updated' && updated.reindexed).toBe(true);
+  });
+
   it('returns not-found for another tenant’s product rather than touching it', async () => {
     /*
      * **§3.5's rule, reached through the port.** The route turns this into a
