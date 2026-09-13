@@ -221,9 +221,15 @@ importers:
 
   packages/eval:
     dependencies:
+      '@catalogorosso/core':
+        specifier: workspace:*
+        version: link:../core
       '@catalogorosso/db':
         specifier: workspace:*
         version: link:../db
+      '@catalogorosso/llm':
+        specifier: workspace:*
+        version: link:../llm
       zod:
         specifier: ^4.5.4
         version: 4.5.4

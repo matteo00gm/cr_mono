@@ -19,7 +19,9 @@
     "dataset"
   ],
   "dependencies": {
+    "@catalogorosso/core": "workspace:*",
     "@catalogorosso/db": "workspace:*",
+    "@catalogorosso/llm": "workspace:*",
     "zod": "^4.5.4"
   },
   "devDependencies": {
