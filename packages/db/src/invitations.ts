@@ -223,6 +223,18 @@ export const revokeInvitation = async (
   tx: DbTransaction,
   id: string,
 ): Promise<string | undefined> => {
+  /*
+   * An id that is not a uuid matches nothing, and is answered that way without
+   * reaching Postgres. The id arrives from a URL path and the `::uuid` cast
+   * below fails on any other shape, so `/members/invitations/abc` used to
+   * become a 500 — the one answer here that says nothing about the invitation,
+   * and noise on the error-rate alarm besides.
+   *
+   * Shape only, as `withTenant` checks, and for the reason given there: which
+   * uuid versions exist is the database's business, not a pattern's.
+   */
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return undefined;
+
   const rows = await tx.execute(sql`
     UPDATE invitations
     SET revoked_at = now()
