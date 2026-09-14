@@ -3052,7 +3052,7 @@ Zero rows returned means refused. There is no path through this package that per
 
 **Three SST defaults differ from what this row specifies, and all three are now set explicitly** *(correction).* Verified against the pinned v4.17.1 source rather than the docs, as `sst.config.ts` requires: `architecture` defaults to `"x86_64"` (`function.ts:1769`), `runtime` to `"nodejs24.x"` (`:1844`), and `memory` to `"1024 MB"` (`:1888`). Every one of them would have been wrong quietly — x86_64 costs ~20% more per GB-second for identical work, 1024 MB doubles the figure §5.2a's projections are built from, and nodejs24.x would run the application on a runtime nothing in this repo has been tested against. `streaming: false` is written down too, though it is already the default: it resolves to `invokeMode: "BUFFERED"` (`:2744`), and a flip to `RESPONSE_STREAM` changes the response envelope for every route the function serves.
 
-**Reserved concurrency is deliberately *not* set here, and §5.1 and P1-48 disagree about it.** §5.1 says 40; P1-48 says cap at 10 while on `t4g.micro`, because each concurrent Lambda holds a Postgres connection and 40 against that instance is a self-inflicted outage. P1-48 is right and owns the setting. Leaving it unset now is safe only because nothing is deployed — **P1-48 must land before this function takes real traffic.**
+**Reserved concurrency is deliberately *not* set here, and §5.1 and P1-48 disagree about it.** §5.1 says 40; P1-48 says cap at 10 while on `t4g.micro`, because each concurrent Lambda holds a Postgres connection and 40 against that instance is a self-inflicted outage. P1-48 is right and owns the setting. Leaving it unset now is safe only because nothing is deployed — **P1-48 must land before this function takes real traffic.** *(Resolved: the cap was set to 10 when B1 closed, and P1-48 added the alarm on hitting it.)*
 
 **VPC placement and the `database/url` grant are not here either.** They arrive with P0-45, the first task whose code opens a connection. Putting a function in private subnets before it needs to be there buys cold-start latency for nothing.
 
@@ -4689,6 +4689,14 @@ Reject a recommendation whose *product* is defensible but whose *reason* is wron
 **Tests.** Not unit-testable; verify in the deployed stack and cover the exhaustion path in P7-03's load test.
 
 **Files.** `infra/api.ts`, `infra/queue.ts`. **~30 lines.**
+
+**As built — the cap was already in place (B1); this row adds the alarm that makes hitting it visible.**
+
+- **`concurrency: { reserved: 10 }` on the API** landed when B1 closed (2026-09-07), with the comment tying it to the instance class and a CI assertion. **The worker is capped at 5 through the event source mapping's `maximumConcurrency`, not reserved concurrency** *(deviation — the row sets both with `reservedConcurrentExecutions`)*: on an SQS source, reserved concurrency throttles invocations and pushes valid messages into the DLQ (P1-32). `CONNECTIONS` in `infra/queue-config.ts` holds both figures, and `assertConnectionBudget` fails synth if they outgrow the instance.
+- **`ApiThrottles`, a CloudWatch alarm on the API function's `Throttles` metric**: any throttle in five minutes, with missing data not breaching, as for the DLQ alarm. A throttled request is refused before the handler runs and logs nothing of ours, so without the alarm the cap reads as random failures.
+- **No throttle alarm on the worker** *(decision)*. `maximumConcurrency` limits polling rather than throttling, so the worker at its cap shows as a growing queue, and queue age is one of P7-02's alarms.
+- **No alarm action yet** *(decision)*: routing to SNS and the runbook line every alarm needs are P7-02's, as for `EmbeddingDlqDepth`.
+- **Not unit-testable, as the row says.** `infra/api.ts` constructs SST resources at import, so CI asserts that the alarm names the function's `Throttles` metric, the way it asserts the cap; the assertion was checked by removing the alarm and watching it fail. Seeing the alarm in a deployed stack waits for a deploy, which this work does not do.
 
 ---
 

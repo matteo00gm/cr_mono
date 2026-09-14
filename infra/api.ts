@@ -273,12 +273,39 @@ export const api = new sst.aws.Function('Api', {
 });
 
 /**
- * Not set here, deliberately: `concurrency`.
+ * Throttles on the API: the reserved-concurrency cap being hit (P1-48).
  *
- * - **Reserved concurrency** belongs to P1-48, which caps it at 10 rather than
- *   the 40 in §5.1 — each concurrent Lambda holds a Postgres connection, and 40
- *   against a `t4g.micro` is a self-inflicted outage. Leaving it unset now is
- *   safe only because nothing is deployed; P1-48 must land before real traffic.
- * - **VPC placement and the SSM grants** arrived with P0-45, above.
+ * **The cap is only safe if hitting it is visible.** A throttled invocation is
+ * refused before the handler runs, so it writes no log line of ours and raises
+ * no error we could catch; the caller sees a failure, and without this alarm
+ * the only record is a metric nobody is looking at. Ten is sized to the
+ * `t4g.micro`'s connections, so this firing means traffic has outgrown the
+ * instance: raise the instance class and `concurrency.reserved` together, and
+ * `CONNECTIONS.apiConcurrency` in `queue-config.ts` with them.
+ *
+ * Any throttle at all over five minutes, because at this scale one refused
+ * request is already worth knowing about. `treatMissingData: notBreaching` for
+ * the DLQ alarm's reason: a function that is never throttled publishes no
+ * datapoints, and an alarm left in INSUFFICIENT_DATA is one people learn to
+ * ignore. No action yet — routing and the runbook entry are P7-02's.
+ */
+new aws.cloudwatch.MetricAlarm('ApiThrottles', {
+  alarmDescription:
+    'The API is refusing requests at its reserved concurrency (P1-48). Raise the ' +
+    'database instance class and the concurrency together, never the concurrency alone.',
+  namespace: 'AWS/Lambda',
+  metricName: 'Throttles',
+  dimensions: { FunctionName: api.name },
+  statistic: 'Sum',
+  period: 300,
+  evaluationPeriods: 1,
+  threshold: 0,
+  comparisonOperator: 'GreaterThanThreshold',
+  treatMissingData: 'notBreaching',
+});
+
+/**
+ * Everything the function needs is set on it above: reserved concurrency
+ * (P1-48, B1), and VPC placement with its SSM grants (P0-45).
  */
 export const apiUrl = api.url;
