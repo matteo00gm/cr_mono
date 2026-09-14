@@ -3534,6 +3534,8 @@ The first diagnosis was that `pgErrorCode` read the SQLSTATE only from `error.ca
 
 **Files.** `apps/api/test/product-delete.spec.ts`. **~80 test lines.** *Depends on P2-20; land it then, or stub retrieval and tighten later — the spec notes which.*
 
+**Status — deferred to P2-20, taking the row's first option** *(decision)*. There is no retrieval function to call yet, and a stub would be exactly what the row rules out: a query written for the test, asserting that the stub cannot find what the stub was written not to find — a test that passes whatever the real retrieval does. What can be asserted without retrieval already is: P1-04's integration test proves the vectors are deleted in the same transaction as the archive, that the cascade is not doing the work, and that a rolled-back archive deletes nothing. **P2-20 carries this row**: seed and index a product, confirm retrieval returns it, archive it, confirm retrieval does not, through the real function, and assert the vector rows are gone so a regression is diagnosable.
+
 ---
 
 ### P1-06 · Catalog list endpoint
@@ -5022,6 +5024,8 @@ The index is kept — it is cheap at this size and a corpus that outgrows the sc
 ---
 
 ### P2-20 · RRF fusion
+
+> **Carries P1-05.** The assertion that an archived product cannot be retrieved was deferred to this row, because it has to go through this function rather than a query written for the test (P1-05).
 
 **What.** Merge vector and lexical result lists.
 
