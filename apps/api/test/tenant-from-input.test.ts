@@ -127,6 +127,17 @@ const lintFile = async (relativePath: string) => {
 
 const HANDLER = 'apps/api/src/handler.ts';
 
+/*
+ * The first lint pays for starting the type-aware project service, and under
+ * coverage instrumentation that alone can take the whole of LINT_TIMEOUT_MS —
+ * so whichever case ran first timed out for a reason that had nothing to do
+ * with its rule, while CI's faster runner kept passing. Paid once here, with
+ * room of its own, each case's timeout measures only its own lint.
+ */
+beforeAll(async () => {
+  await lintSource('export const warm = 1;', HANDLER);
+}, 120_000);
+
 describe('shapes the rule must reject', () => {
   const forbidden: readonly [string, string][] = [
     ['a header read by literal name', `export const f = (c: any) => c.req.header('x-tenant-id');`],
