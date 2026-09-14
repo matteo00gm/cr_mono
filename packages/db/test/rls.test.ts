@@ -190,4 +190,57 @@ describe('rls migration', () => {
     expect(invitations?.migration).toBe('0033_invitations_rls');
     expect(rlsMigrationSql()).not.toContain('ON invitations');
   });
+
+  describe('the widget scope (P2-07, ADR 0022)', () => {
+    const WIDGET_TABLES = ['widget_keys', 'tenant_domains', 'tenants'] as const;
+    const current = (table: string) => RLS_POLICIES.filter((p) => p.table === table).at(-1);
+
+    it('keeps the widget branches out of WITH CHECK on all three tables', () => {
+      /*
+       * The widget scope must buy a read and nothing else. Its transaction is
+       * read-only as well, but the policy holds the line on its own: a widget
+       * GUC in WITH CHECK would let a write name any tenant the branch admits.
+       */
+      for (const table of WIDGET_TABLES) {
+        expect(current(table)?.migration, table).toBe('0042_widget_key_rls');
+        expect(current(table)?.using, table).toContain('app.widget_');
+        expect(current(table)?.withCheck, table).not.toContain('app.widget_');
+        expect(current(table)?.withCheck, table).toContain("current_setting('app.tenant_id'");
+      }
+    });
+
+    it("ties a domain to the presented key's own tenant, not to any holder of the origin", () => {
+      const domains = current('tenant_domains')?.using ?? '';
+
+      expect(domains).toContain("current_setting('app.widget_origin'");
+      expect(domains).toContain('AND tenant_id IN (SELECT k.tenant_id FROM widget_keys k');
+    });
+
+    it('reaches a tenant row only behind a verified domain that belongs to the key', () => {
+      const tenants = current('tenants')?.using ?? '';
+
+      expect(tenants).toContain("d.status = 'VERIFIED'");
+      expect(tenants).toContain("current_setting('app.widget_origin'");
+      expect(tenants).toContain('FROM widget_keys k');
+    });
+
+    it('replaces the three policies and reverses each to the one it replaced', () => {
+      const up = rlsMigrationSql('0042_widget_key_rls');
+      const down = rlsDownSql('0042_widget_key_rls');
+
+      for (const table of WIDGET_TABLES) {
+        expect(up).toContain(`DROP POLICY IF EXISTS tenant_isolation ON ${table};`);
+        expect(down).toContain(`CREATE POLICY tenant_isolation ON ${table}`);
+      }
+
+      expect(up).not.toContain('ENABLE ROW LEVEL SECURITY');
+      expect(up.match(/CREATE POLICY (\w+)/g)).toEqual([
+        'CREATE POLICY tenant_isolation',
+        'CREATE POLICY tenant_isolation',
+        'CREATE POLICY tenant_isolation',
+      ]);
+      expect(down).not.toContain('app.widget_');
+      expect(down).not.toContain('DISABLE ROW LEVEL SECURITY');
+    });
+  });
 });

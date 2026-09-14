@@ -80,6 +80,23 @@ const INVITATION = "nullif(current_setting('app.invitation_token', true), '')";
  */
 const POLLER = "nullif(current_setting('app.outbox_poller', true), '') = 'on'";
 
+/**
+ * The widget's public key and normalised origin, set by `withWidgetKey` (P2-07)
+ * — the **fifth** context, and ADR 0022.
+ *
+ * Neither value is a secret: a public key sits in a script tag on the seller's
+ * page and a verified origin is where that page lives. What bounds the scope is
+ * how the branches below compose — a key reaches one key row, an origin reaches
+ * only that key's tenant's domain, and the tenant row only behind a verified
+ * domain — and that `withWidgetKey` opens its transaction `READ ONLY`, so
+ * nothing admitted here can be written, whatever a policy says.
+ */
+const WIDGET_KEY = "nullif(current_setting('app.widget_key', true), '')";
+const WIDGET_ORIGIN = "nullif(current_setting('app.widget_origin', true), '')";
+
+/** The tenant that owns the presented key, read under `widget_keys`' own policy. */
+const WIDGET_KEY_TENANT = `SELECT k.tenant_id FROM widget_keys k WHERE k.public_key = ${WIDGET_KEY}`;
+
 export interface RlsPolicy {
   /** Table the policy is attached to. */
   readonly table: string;
@@ -136,6 +153,7 @@ const HEADERS: Readonly<Record<string, string>> = {
   '0033_invitations_rls': 'Row-level security for invitations (P0-51).',
   '0036_outbox_poller_rls': 'The outbox poller reads across tenants (P1-31).',
   '0040_import_runs_rls': 'Row-level security for import runs (P1-26).',
+  '0042_widget_key_rls': 'The widget resolves its tenant from a key and an origin (P2-07).',
 };
 
 /** Every migration file this list generates, in first-appearance order. */
@@ -250,6 +268,49 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
       'else — no insert of a job naming another tenant, and no delete of one.',
   },
   { ...boilerplate('import_runs'), migration: '0040_import_runs_rls' },
+  {
+    table: 'widget_keys',
+    migration: '0042_widget_key_rls',
+    supersedes: true,
+    using: `tenant_id = ${TENANT}
+    OR public_key = ${WIDGET_KEY}`,
+    withCheck: `tenant_id = ${TENANT}`,
+    note:
+      'The widget has to learn its tenant from the public key before any tenant is known, so ' +
+      'the boilerplate returns zero rows on the one path that must work (P2-07, ADR 0022). ' +
+      'The key branch admits exactly the presented key’s row, the key being unique. ' +
+      'WITH CHECK stays tenant-only, and withWidgetKey opens its transaction READ ONLY, ' +
+      'so the branch buys a read of one row and nothing else.',
+  },
+  {
+    table: 'tenant_domains',
+    migration: '0042_widget_key_rls',
+    supersedes: true,
+    using: `tenant_id = ${TENANT}
+    OR (origin = ${WIDGET_ORIGIN}
+      AND tenant_id IN (${WIDGET_KEY_TENANT}))`,
+    withCheck: `tenant_id = ${TENANT}`,
+    note:
+      'The same resolution needs the domain the request came from. The origin alone is not ' +
+      'enough: the branch admits the domain only when it belongs to the presented key’s own ' +
+      'tenant, so an origin verified by one winery is invisible to a key issued to another. ' +
+      'WITH CHECK stays tenant-only, and the widget scope cannot write.',
+  },
+  {
+    table: 'tenants',
+    migration: '0042_widget_key_rls',
+    supersedes: true,
+    using: `id = ${TENANT}
+    OR id IN (SELECT d.tenant_id FROM tenant_domains d
+      WHERE d.origin = ${WIDGET_ORIGIN} AND d.status = 'VERIFIED'
+        AND d.tenant_id IN (${WIDGET_KEY_TENANT}))`,
+    withCheck: `id = ${TENANT}`,
+    note:
+      'The widget needs the tenant’s status, plan and locale once the pair agrees. The row is ' +
+      'reachable only behind a VERIFIED domain whose tenant owns the presented key, so a key on ' +
+      'its own, or a pending claim, never reaches a tenant row. WITH CHECK stays tenant-only, ' +
+      'and the widget scope cannot write.',
+  },
 ];
 
 /**

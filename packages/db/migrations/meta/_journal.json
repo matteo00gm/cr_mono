@@ -295,6 +295,13 @@
       "when": 1788654188576,
       "tag": "0041_embedding_version",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1788654188577,
+      "tag": "0042_widget_key_rls",
+      "breakpoints": true
     }
   ]
 }

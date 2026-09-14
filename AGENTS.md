@@ -48,9 +48,10 @@ patch will not, because the ORM's own documentation shows the forbidden form.
   in the boundary rules: `@catalogorosso/db/auth`, for the Better Auth adapter,
   which runs before a tenant is known (P0-45). Everything else that looks like
   an exception is a second _scope_, not an escape from scoping: `withUser()`
-  (P0-47) and `withInvitation()` (P0-51) each set a different GUC and read
-  under a policy that admits it. A new one of those is a design change — every
-  GUC is another way a row becomes visible.
+  (P0-47), `withInvitation()` (P0-51), `withOutbox()` (P1-31) and the
+  read-only `withWidgetKey()` (P2-07) each set a different GUC and read under a
+  policy that admits it. A new one of those is a design change with its own ADR
+  — every GUC is another way a row becomes visible.
 - Three tables carry **no `tenant_id` and no policy on purpose**, and are
   reached on connections that set nothing: `rate_limit_buckets` (P0-34),
   `processed_webhooks` (P0-33) and `email_suppressions` (P0-64). Their callers
