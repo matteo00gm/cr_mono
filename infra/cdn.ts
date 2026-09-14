@@ -2,6 +2,7 @@
 
 import { api } from './api';
 import { originSecret } from './config';
+import { SPA_REWRITE_CODE, VIEWER_IP_CODE } from './edge-functions';
 import { isProtectedStage } from './stage';
 
 /**
@@ -79,12 +80,15 @@ const allViewerExceptHost = aws.cloudfront.getOriginRequestPolicyOutput({
 });
 
 /**
- * Function bodies are inline rather than read from a file.
+ * Function bodies are imported as strings from `edge-functions.ts`, never read
+ * from a file.
  *
  * Reading would need a path resolved at synth time, and every candidate is a
  * gamble that only fails during a deploy: `$cli.paths.root` is undocumented and
  * absent from the generated typings, and `process.cwd()` assumes SST was
- * invoked from the project root. Two short functions are not worth that.
+ * invoked from the project root. An import has neither problem, and it is what
+ * lets `infra/test/edge-functions.test.ts` run the exact source that deploys —
+ * which nothing could do while the bodies were written inline here.
  */
 const cloudfrontFunction = (name: string, comment: string, code: string) =>
   new aws.cloudfront.Function(name, {
@@ -112,19 +116,7 @@ const cloudfrontFunction = (name: string, comment: string, code: string) =>
 const spaRewrite = cloudfrontFunction(
   'SpaRewrite',
   'Rewrites extensionless paths to /index.html for client-side routing',
-  `function handler(event) {
-  var request = event.request;
-
-  // Anything with a file extension is a real asset — let S3 answer it,
-  // including answering 404 when it genuinely is missing.
-  if (request.uri.indexOf('.') !== -1) {
-    return request;
-  }
-
-  // Everything else is a client-side route: /settings, /products/123.
-  request.uri = '/index.html';
-  return request;
-}`,
+  SPA_REWRITE_CODE,
 );
 
 /**
@@ -145,14 +137,7 @@ const spaRewrite = cloudfrontFunction(
 const viewerIp = cloudfrontFunction(
   'ViewerIp',
   'Overwrites X-Forwarded-For with the address CloudFront observed',
-  `function handler(event) {
-  // Overwrite, never append: this makes the value unforgeable rather than
-  // merely usually-correct, and the origin needs no trusted-proxy list to keep
-  // current. event.viewer.ip is set by CloudFront and cannot be influenced by
-  // the request.
-  event.request.headers['x-forwarded-for'] = { value: event.viewer.ip };
-  return event.request;
-}`,
+  VIEWER_IP_CODE,
 );
 
 /**
