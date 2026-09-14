@@ -33,6 +33,9 @@ const THRESHOLDS = {
   // The model adapters (P1-42): translation between a vendor's stream and our chunks,
   // every branch of it reachable with a fake client, so it carries a package bar.
   'packages/llm': { lines: 90, branches: 90 },
+  // The eval dataset's loader (P1-45): every refusal it makes is a label that would
+  // otherwise mis-score a model, and each is reachable from a unit test.
+  'packages/eval': { lines: 90, branches: 90 },
   'apps/api': { lines: 85, branches: 85 },
 
   // Small, entirely testable, and on the path of every request either consumer

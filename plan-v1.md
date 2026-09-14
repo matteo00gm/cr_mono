@@ -4623,6 +4623,16 @@ Nothing vendor-shaped in the types. `AbortSignal` so a disconnected visitor stop
 
 **Files.** `packages/testing/src/eval/{catalogs,queries}.json`, loader. **~200 lines of data.**
 
+**As built — a test-only `packages/eval`, with the data as JSON beside a loader that refuses a wrong label.**
+
+- **In a new `packages/eval`, not `packages/testing/src/eval`** *(deviation)*. The loader validates every wine against the real `productInsert` contract, and P1-46's harness needs `@catalogorosso/core` and `@catalogorosso/llm` — and `packages/testing` cannot depend on core (the build cycle recorded at P1-41). The package is test-time only: **`no-eval-in-production`** refuses an import from any non-test module, verified by planting one and watching the check fail. It has a vitest project, a 90/90 coverage bar and its own `AGENTS.md`.
+- **Three catalogues of 40 wines**: `broad` (every colour, most regions, €6–€90), `piemonte` (Piedmont only, which a test holds it to), and `sparse` (name, colour and price only — a test asserts no wine carries notes, pairings or grapes, so it keeps testing what a model does with nothing to reason from). **Producers are fictional**; denominations, grapes and regions are real, so invented tasting notes are never attributed to a real winery.
+- **60 queries**: 24 dish pairings, 15 constraints, 5 vague, 10 grape, producer or denomination lookups, and 6 the catalogue genuinely cannot answer; 56 in Italian and 4 in English.
+- **Labels are SKU sets with a rationale** *(deviation — the row says product ids)*. The harness seeds a real database, which assigns the ids; the SKU is what the product contract makes unique within a catalogue. A rationale shorter than 20 characters is refused, so a label cannot be a restated list.
+- **An unanswerable query accepts nothing, and every other query accepts something** *(decision)*, enforced by the loader. An empty set anywhere else would score an honest "nothing fits" as correct for the wrong reason.
+- **The loader refuses, collecting every problem before it throws**: a file of the wrong shape, a wine that breaks `productInsert`, a duplicate catalogue, SKU or query id, a label naming a SKU its catalogue does not stock, and a SKU listed twice. On the committed data, tests also hold every price-limited query's labels under its limit and every colour-named query's labels to that colour — the two label mistakes that are mechanical enough to catch.
+- **Open:** the labels and rationales were written for this row, not by a sommelier. P1-46's reserved human-rated sample is the first independent check of them, and a label that sample overturns is changed with its rationale.
+
 ---
 
 ### P1-46 · Eval harness

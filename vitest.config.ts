@@ -19,6 +19,7 @@ const NODE_PROJECTS = [
   'packages/api-client',
   'packages/core',
   'packages/db',
+  'packages/eval',
   'packages/llm',
   'packages/security',
   'packages/testing',

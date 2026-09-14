@@ -1,0 +1,605 @@
+{
+  "version": 1,
+  "queries": [
+    {
+      "id": "q01",
+      "catalog": "broad",
+      "kind": "dish",
+      "locale": "it",
+      "query": "carne di maiale alla griglia",
+      "acceptable": ["A-PRI-2020", "A-NEA-2021", "A-MON-2021", "A-ETR-2021", "A-BAB-2022"],
+      "rationale": "Fat and protein want tannin or acidity, and grilling adds char a soft, fruity red handles; Barbera brings the acidity, Etna the finesse for pork."
+    },
+    {
+      "id": "q02",
+      "catalog": "broad",
+      "kind": "dish",
+      "locale": "it",
+      "query": "brasato al Barolo",
+      "acceptable": ["A-BAR-2018", "A-AMA-2016", "A-AGL-2018"],
+      "rationale": "Long-braised beef needs a wine at least as intense, with tannin to meet the protein; the braise itself is traditionally made with Barolo."
+    },
+    {
+      "id": "q03",
+      "catalog": "broad",
+      "kind": "dish",
+      "locale": "it",
+      "query": "pesce crudo e ostriche",
+      "acceptable": ["A-TRD-2017", "A-FRC-2018", "A-GRE-2022", "A-GRI-2022"],
+      "rationale": "Raw fish and oysters want acidity, salinity and no tannin; a dry metodo classico or a sapid white matches, anything oaky or tannic clashes."
+    },
+    {
+      "id": "q04",
+      "catalog": "broad",
+      "kind": "dish",
+      "locale": "it",
+      "query": "risotto ai funghi porcini",
+      "acceptable": ["A-PIN-2021", "A-ETR-2021", "A-CHA-2021", "A-ORA-2021"],
+      "rationale": "An earthy, creamy dish suits light earthy reds or a structured white; a tannic red would overwhelm the rice."
+    },
+    {
+      "id": "q05",
+      "catalog": "broad",
+      "kind": "dish",
+      "locale": "it",
+      "query": "pizza margherita",
+      "acceptable": ["A-VAL-2022", "A-BAB-2022", "A-DOL-2022", "A-ROS-2023", "A-MON-2021"],
+      "rationale": "Tomato acidity needs matching acidity and low tannin; light reds and rosato, not structured wines."
+    },
+    {
+      "id": "q06",
+      "catalog": "broad",
+      "kind": "dish",
+      "locale": "it",
+      "query": "tiramisù",
+      "acceptable": ["A-MOS-2023", "A-PAS-2019", "A-REC-2017", "A-VSA-2015"],
+      "rationale": "The wine must be at least as sweet as the dessert; any dry wine fails, whatever its quality."
+    },
+    {
+      "id": "q07",
+      "catalog": "broad",
+      "kind": "dish",
+      "locale": "it",
+      "query": "formaggi erborinati come il gorgonzola",
+      "acceptable": ["A-PAS-2019", "A-AMA-2016"],
+      "rationale": "Salt and pungency of blue cheese want sweetness or rich ripeness; both wines list blue cheese among their pairings."
+    },
+    {
+      "id": "q08",
+      "catalog": "broad",
+      "kind": "dish",
+      "locale": "it",
+      "query": "spaghetti alle vongole",
+      "acceptable": ["A-VER-2023", "A-GRE-2022", "A-GRI-2022", "A-SOA-2022"],
+      "rationale": "Clams and garlic want a sapid, fresh white; reds and oaked whites overpower the sea."
+    },
+    {
+      "id": "q09",
+      "catalog": "broad",
+      "kind": "dish",
+      "locale": "it",
+      "query": "bistecca alla fiorentina",
+      "acceptable": ["A-CHI-2021", "A-BRU-2017", "A-BOL-2020"],
+      "rationale": "Grilled Tuscan beef with tannic Tuscan reds: protein softens tannin, and the region match is the classic answer."
+    },
+    {
+      "id": "q10",
+      "catalog": "broad",
+      "kind": "dish",
+      "locale": "it",
+      "query": "sushi",
+      "acceptable": ["A-TRD-2017", "A-GRI-2022", "A-FRC-2018"],
+      "rationale": "Delicate raw fish and rice want dry, crisp, low-intensity wines; aromatic or sweet whites overwhelm it."
+    },
+    {
+      "id": "q11",
+      "catalog": "broad",
+      "kind": "dish",
+      "locale": "it",
+      "query": "pollo al curry",
+      "acceptable": ["A-GEW-2022", "A-ORA-2021"],
+      "rationale": "Spice wants aromatic intensity and some texture; neutral or tannic reds fight the heat."
+    },
+    {
+      "id": "q12",
+      "catalog": "broad",
+      "kind": "dish",
+      "locale": "it",
+      "query": "agnello al forno",
+      "acceptable": ["A-AGL-2018", "A-PRI-2020", "A-CAN-2021", "A-BOL-2020"],
+      "rationale": "Roast lamb wants a structured red; each of these lists lamb or roasted red meat."
+    },
+    {
+      "id": "q13",
+      "catalog": "broad",
+      "kind": "constraint",
+      "locale": "it",
+      "query": "un rosso sotto i 15 euro",
+      "acceptable": [
+        "A-VAL-2022",
+        "A-NEA-2021",
+        "A-MON-2021",
+        "A-LAM-2023",
+        "A-DOL-2022",
+        "A-BAB-2022"
+      ],
+      "rationale": "Every red priced below 15.00 EUR; the price is a hard constraint, so a better wine at 18.50 is a wrong answer."
+    },
+    {
+      "id": "q14",
+      "catalog": "broad",
+      "kind": "constraint",
+      "locale": "it",
+      "query": "bollicine per festeggiare sotto i 30 euro",
+      "acceptable": ["A-PRO-NV"],
+      "rationale": "Only one sparkling wine is under 30 EUR; the Franciacorta at 34 and the Trento at 42 break the budget."
+    },
+    {
+      "id": "q15",
+      "catalog": "broad",
+      "kind": "constraint",
+      "locale": "it",
+      "query": "un vino dolce per il dessert",
+      "acceptable": ["A-MOS-2023", "A-PAS-2019", "A-REC-2017", "A-VSA-2015"],
+      "rationale": "The four sweet wines in the catalogue; nothing dry qualifies."
+    },
+    {
+      "id": "q16",
+      "catalog": "broad",
+      "kind": "constraint",
+      "locale": "it",
+      "query": "un rosato per l'estate",
+      "acceptable": ["A-ROS-2023", "A-RSL-2023"],
+      "rationale": "The broad catalogue's only two rosati; summer asks for freshness, which both have, and nothing that would separate them."
+    },
+    {
+      "id": "q17",
+      "catalog": "broad",
+      "kind": "constraint",
+      "locale": "it",
+      "query": "un vino biologico",
+      "acceptable": ["A-ORA-2021", "A-GRI-2022", "A-BAB-2022"],
+      "rationale": "The wines whose style tags say biologico; an answer claiming organic for any other invents an attribute."
+    },
+    {
+      "id": "q18",
+      "catalog": "broad",
+      "kind": "vague",
+      "locale": "it",
+      "query": "qualcosa di fresco",
+      "acceptable": [
+        "A-SOA-2022",
+        "A-VER-2023",
+        "A-ROS-2023",
+        "A-RSL-2023",
+        "A-PRO-NV",
+        "A-TRE-2022",
+        "A-ARN-2023",
+        "A-GRI-2022",
+        "A-GRE-2022",
+        "A-CER-2022",
+        "A-LAM-2023",
+        "A-VAL-2022"
+      ],
+      "rationale": "Fresh means acidity and lightness: whites, rosati, sparkling and the light reds served cool."
+    },
+    {
+      "id": "q19",
+      "catalog": "broad",
+      "kind": "vague",
+      "locale": "it",
+      "query": "un vino importante da regalare",
+      "acceptable": [
+        "A-BRU-2017",
+        "A-BAR-2018",
+        "A-BOL-2020",
+        "A-AMA-2016",
+        "A-FRC-2018",
+        "A-TRD-2017",
+        "A-SAG-2019"
+      ],
+      "rationale": "A gift reads as prestige denominations and ageing potential, in the upper price bands."
+    },
+    {
+      "id": "q20",
+      "catalog": "broad",
+      "kind": "lookup",
+      "locale": "it",
+      "query": "un Sangiovese",
+      "acceptable": ["A-CHI-2021", "A-BRU-2017"],
+      "rationale": "The two wines whose grape is Sangiovese."
+    },
+    {
+      "id": "q21",
+      "catalog": "broad",
+      "kind": "lookup",
+      "locale": "it",
+      "query": "vini dell'Etna",
+      "acceptable": ["A-ETR-2021"],
+      "rationale": "The only Etna DOC wine."
+    },
+    {
+      "id": "q22",
+      "catalog": "broad",
+      "kind": "lookup",
+      "locale": "it",
+      "query": "cosa avete della Kellerei Bergwald?",
+      "acceptable": ["A-PIN-2021", "A-GEW-2022", "A-LAG-2021"],
+      "rationale": "Every wine by that producer."
+    },
+    {
+      "id": "q23",
+      "catalog": "broad",
+      "kind": "unanswerable",
+      "locale": "it",
+      "query": "una birra artigianale",
+      "acceptable": [],
+      "rationale": "The shop sells wine; the honest answer says so and recommends nothing."
+    },
+    {
+      "id": "q24",
+      "catalog": "broad",
+      "kind": "dish",
+      "locale": "en",
+      "query": "a white wine for grilled fish",
+      "acceptable": ["A-VER-2023", "A-VERD-2022", "A-TRE-2022", "A-GRI-2022", "A-FIA-2022"],
+      "rationale": "Grilled fish wants a fresh or sapid white; the visitor wrote in English, so the reply should too."
+    },
+    {
+      "id": "q25",
+      "catalog": "broad",
+      "kind": "constraint",
+      "locale": "en",
+      "query": "sparkling wine under 20 euros",
+      "acceptable": ["A-PRO-NV"],
+      "rationale": "The only sparkling wine under 20 EUR."
+    },
+    {
+      "id": "q26",
+      "catalog": "piemonte",
+      "kind": "dish",
+      "locale": "it",
+      "query": "tajarin al tartufo",
+      "acceptable": ["B-BAR-CAN-2019", "B-BRB-RAB-2020", "B-BAR-RIS-2013", "B-CHA-2021"],
+      "rationale": "Truffle wants a mature, perfumed Nebbiolo, or a buttery white that echoes the butter sauce; each lists truffle among its pairings."
+    },
+    {
+      "id": "q27",
+      "catalog": "piemonte",
+      "kind": "dish",
+      "locale": "it",
+      "query": "bollito misto",
+      "acceptable": ["B-BRA-NIZ-2019", "B-FRE-2021"],
+      "rationale": "Boiled meats and their sauces want acidity and some fruit; both list bollito misto."
+    },
+    {
+      "id": "q28",
+      "catalog": "piemonte",
+      "kind": "dish",
+      "locale": "it",
+      "query": "vitello tonnato",
+      "acceptable": ["B-NEB-LAN-2022", "B-GRI-2022", "B-ARN-2023"],
+      "rationale": "A delicate, creamy antipasto wants a light red with gentle tannin or a fresh white."
+    },
+    {
+      "id": "q29",
+      "catalog": "piemonte",
+      "kind": "constraint",
+      "locale": "it",
+      "query": "un Barolo da invecchiamento",
+      "acceptable": ["B-BAR-CAN-2019", "B-BAR-SER-2018", "B-BAR-RIS-2013"],
+      "rationale": "The Barolos tagged for ageing; the Comune di Barolo is described as ready young."
+    },
+    {
+      "id": "q30",
+      "catalog": "piemonte",
+      "kind": "constraint",
+      "locale": "it",
+      "query": "un Barolo sotto i 40 euro",
+      "acceptable": ["B-BAR-COM-2020"],
+      "rationale": "The only Barolo priced under 40 EUR."
+    },
+    {
+      "id": "q31",
+      "catalog": "piemonte",
+      "kind": "dish",
+      "locale": "it",
+      "query": "un bianco minerale per il pesce crudo",
+      "acceptable": ["B-GAV-2023", "B-ERB-2023", "B-NAS-2022"],
+      "rationale": "Raw fish wants tension and salt from a still white: the Gavi is mineral and lists crudo, Erbaluce brings high acidity, Nascetta is sapid. Alta Langa is sparkling, which 'un bianco' does not ask for, and Timorasso's power would bury the fish."
+    },
+    {
+      "id": "q32",
+      "catalog": "piemonte",
+      "kind": "lookup",
+      "locale": "it",
+      "query": "Moscato",
+      "acceptable": ["B-MOS-2023", "B-AST-NV", "B-LOA-2018"],
+      "rationale": "Every wine made from Moscato Bianco."
+    },
+    {
+      "id": "q33",
+      "catalog": "piemonte",
+      "kind": "constraint",
+      "locale": "it",
+      "query": "un rosso leggero da bere fresco",
+      "acceptable": ["B-GRI-2022", "B-PEL-2021", "B-DOL-ALB-2023", "B-BRA-AST-2022"],
+      "rationale": "Light, low-tannin reds that take a chill."
+    },
+    {
+      "id": "q34",
+      "catalog": "piemonte",
+      "kind": "vague",
+      "locale": "it",
+      "query": "un vino aromatico e speziato",
+      "acceptable": ["B-RUC-2022", "B-PEL-2021", "B-NAS-2022"],
+      "rationale": "The wines whose style tags say aromatic or spiced."
+    },
+    {
+      "id": "q35",
+      "catalog": "piemonte",
+      "kind": "lookup",
+      "locale": "it",
+      "query": "un metodo classico piemontese",
+      "acceptable": ["B-ALT-2018", "B-ALT-RIS-2016"],
+      "rationale": "The two Alta Langa, the only metodo classico wines; the Gavi is Charmat."
+    },
+    {
+      "id": "q36",
+      "catalog": "piemonte",
+      "kind": "dish",
+      "locale": "it",
+      "query": "torta al cioccolato",
+      "acceptable": ["B-BRC-2023", "B-CHI-NV"],
+      "rationale": "Chocolate needs sweetness at least equal to the cake; both list chocolate cake."
+    },
+    {
+      "id": "q37",
+      "catalog": "piemonte",
+      "kind": "lookup",
+      "locale": "it",
+      "query": "un Nebbiolo che non sia Barolo o Barbaresco",
+      "acceptable": ["B-NEB-LAN-2022", "B-NEB-ROE-2021", "B-GAT-2019", "B-BOC-2020", "B-ROS-2023"],
+      "rationale": "Nebbiolo from every other denomination, the rosato included."
+    },
+    {
+      "id": "q38",
+      "catalog": "piemonte",
+      "kind": "dish",
+      "locale": "it",
+      "query": "carne cruda all'albese",
+      "acceptable": ["B-NEB-ROE-2021", "B-NEB-LAN-2022"],
+      "rationale": "Raw veal wants a fresh, gentle Nebbiolo; both list it."
+    },
+    {
+      "id": "q39",
+      "catalog": "piemonte",
+      "kind": "dish",
+      "locale": "it",
+      "query": "pizza",
+      "acceptable": ["B-BRA-ALB-2021", "B-BRA-AST-2022", "B-DOL-ALB-2023", "B-MON-BIO-2022"],
+      "rationale": "Tomato acidity wants Barbera acidity or a light Dolcetto."
+    },
+    {
+      "id": "q40",
+      "catalog": "piemonte",
+      "kind": "unanswerable",
+      "locale": "it",
+      "query": "un Nero d'Avola siciliano",
+      "acceptable": [],
+      "rationale": "The catalogue is Piedmont only; the honest answer says it has no Sicilian wine rather than passing off a Piedmontese red."
+    },
+    {
+      "id": "q41",
+      "catalog": "piemonte",
+      "kind": "unanswerable",
+      "locale": "it",
+      "query": "un vino analcolico",
+      "acceptable": [],
+      "rationale": "None is alcohol-free; a low-alcohol Moscato d'Asti is not an alcohol-free wine, and saying so would be false."
+    },
+    {
+      "id": "q42",
+      "catalog": "piemonte",
+      "kind": "constraint",
+      "locale": "it",
+      "query": "una Barbera biologica",
+      "acceptable": ["B-MON-BIO-2022"],
+      "rationale": "The only organic wine with Barbera in it."
+    },
+    {
+      "id": "q43",
+      "catalog": "piemonte",
+      "kind": "dish",
+      "locale": "en",
+      "query": "what goes with blue cheese?",
+      "acceptable": ["B-LOA-2018", "B-RUC-2022"],
+      "rationale": "Blue cheese wants sweetness or aromatic intensity; both list blue cheese."
+    },
+    {
+      "id": "q44",
+      "catalog": "piemonte",
+      "kind": "dish",
+      "locale": "it",
+      "query": "formaggi stagionati",
+      "acceptable": [
+        "B-BAR-SER-2018",
+        "B-BRA-NIZ-2019",
+        "B-TIM-2021",
+        "B-BAR-RIS-2013",
+        "B-BRB-RAB-2020",
+        "B-DOL-OVA-2022"
+      ],
+      "rationale": "Aged cheese wants structure; each lists aged cheese."
+    },
+    {
+      "id": "q45",
+      "catalog": "piemonte",
+      "kind": "vague",
+      "locale": "it",
+      "query": "un vino per l'aperitivo con gli amici",
+      "acceptable": ["B-ALT-2018", "B-GAV-SPU-NV", "B-ERB-2023", "B-ROS-2023"],
+      "rationale": "An aperitivo wants bubbles or a fresh, light wine."
+    },
+    {
+      "id": "q46",
+      "catalog": "piemonte",
+      "kind": "constraint",
+      "locale": "it",
+      "query": "un rosso sotto i 10 euro",
+      "acceptable": ["B-BRA-AST-2022", "B-DOL-ALB-2023", "B-BRA-MON-2023"],
+      "rationale": "Every red below 10.00 EUR."
+    },
+    {
+      "id": "q47",
+      "catalog": "piemonte",
+      "kind": "lookup",
+      "locale": "it",
+      "query": "un Timorasso",
+      "acceptable": ["B-TIM-2021"],
+      "rationale": "The only Timorasso in the Piedmont catalogue; a lookup by grape has exactly one right answer."
+    },
+    {
+      "id": "q48",
+      "catalog": "sparse",
+      "kind": "lookup",
+      "locale": "it",
+      "query": "un Chianti",
+      "acceptable": ["C-004"],
+      "rationale": "Named in the product name, the only information there is."
+    },
+    {
+      "id": "q49",
+      "catalog": "sparse",
+      "kind": "constraint",
+      "locale": "it",
+      "query": "delle bollicine",
+      "acceptable": ["C-005", "C-014", "C-034", "C-026"],
+      "rationale": "Every spumante in the sparse catalogue qualifies; with no notes to go on, the wine type is the whole signal."
+    },
+    {
+      "id": "q50",
+      "catalog": "sparse",
+      "kind": "constraint",
+      "locale": "it",
+      "query": "un vino dolce",
+      "acceptable": ["C-013", "C-025", "C-035", "C-026", "C-008"],
+      "rationale": "The sweet wines, and the amabile Lambrusco."
+    },
+    {
+      "id": "q51",
+      "catalog": "sparse",
+      "kind": "constraint",
+      "locale": "it",
+      "query": "un rosso economico",
+      "acceptable": ["C-001", "C-008", "C-009", "C-017", "C-040"],
+      "rationale": "The reds under 8 EUR."
+    },
+    {
+      "id": "q52",
+      "catalog": "sparse",
+      "kind": "lookup",
+      "locale": "it",
+      "query": "Barolo",
+      "acceptable": ["C-011"],
+      "rationale": "Named in the product name."
+    },
+    {
+      "id": "q53",
+      "catalog": "sparse",
+      "kind": "vague",
+      "locale": "it",
+      "query": "un bianco",
+      "acceptable": [
+        "C-002",
+        "C-007",
+        "C-010",
+        "C-016",
+        "C-018",
+        "C-021",
+        "C-024",
+        "C-028",
+        "C-033",
+        "C-036",
+        "C-038"
+      ],
+      "rationale": "Any white answers the question; with no descriptions the model cannot rank them on style, only on type."
+    },
+    {
+      "id": "q54",
+      "catalog": "sparse",
+      "kind": "dish",
+      "locale": "it",
+      "query": "un vino per il pesce",
+      "acceptable": [
+        "C-002",
+        "C-007",
+        "C-010",
+        "C-016",
+        "C-024",
+        "C-028",
+        "C-033",
+        "C-036",
+        "C-038",
+        "C-005",
+        "C-014",
+        "C-034"
+      ],
+      "rationale": "Whites and dry sparkling wines; a reason may only cite the type and the name, since nothing else is known."
+    },
+    {
+      "id": "q55",
+      "catalog": "sparse",
+      "kind": "constraint",
+      "locale": "it",
+      "query": "un rosato",
+      "acceptable": ["C-003", "C-030"],
+      "rationale": "The sparse catalogue stocks exactly two rosati, and the question names nothing to choose between them."
+    },
+    {
+      "id": "q56",
+      "catalog": "sparse",
+      "kind": "lookup",
+      "locale": "it",
+      "query": "un vino siciliano",
+      "acceptable": ["C-006", "C-036"],
+      "rationale": "Nero d'Avola and Etna Bianco are Sicilian by name, the only evidence available."
+    },
+    {
+      "id": "q57",
+      "catalog": "sparse",
+      "kind": "unanswerable",
+      "locale": "it",
+      "query": "un vino francese",
+      "acceptable": [],
+      "rationale": "International grapes are not French wines; the honest answer has none to offer."
+    },
+    {
+      "id": "q58",
+      "catalog": "sparse",
+      "kind": "unanswerable",
+      "locale": "it",
+      "query": "un whisky torbato",
+      "acceptable": [],
+      "rationale": "Whisky is not wine and the catalogue stocks none; the honest answer is that nothing here fits."
+    },
+    {
+      "id": "q59",
+      "catalog": "sparse",
+      "kind": "dish",
+      "locale": "en",
+      "query": "a red wine for steak",
+      "acceptable": ["C-011", "C-022", "C-019", "C-029", "C-039", "C-015", "C-027", "C-012"],
+      "rationale": "Structured reds by name; the reason may cite only the name and type."
+    },
+    {
+      "id": "q60",
+      "catalog": "sparse",
+      "kind": "unanswerable",
+      "locale": "it",
+      "query": "del sakè giapponese",
+      "acceptable": [],
+      "rationale": "Sake is not something this catalogue stocks; recommending any bottle here would be confabulation."
+    }
+  ]
+}

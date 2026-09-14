@@ -294,6 +294,25 @@ export default {
     },
 
     {
+      // The eval package (P1-45) is test-time only, like packages/testing: it
+      // carries fixture catalogues and, from P1-46, a harness that seeds a
+      // database. A production import of either is a bug, and nothing about it
+      // would fail a build.
+      name: 'no-eval-in-production',
+      severity: 'error',
+      comment:
+        'Production code must not import @catalogorosso/eval. It carries the golden eval ' +
+        'dataset and the harness that scores models against it; test files may import it.',
+      from: {
+        path: '^(apps|packages)/',
+        pathNot: '(^|/)test/|^packages/eval/',
+      },
+      to: {
+        path: '^packages/eval/|(^|/)node_modules/@catalogorosso/eval($|/)|^@catalogorosso/eval($|/)',
+      },
+    },
+
+    {
       // Not in the original three. Cheap to add while the tool is already here,
       // and a cycle is the kind of thing that is trivial to prevent and
       // expensive to unpick once two modules have grown into each other.
