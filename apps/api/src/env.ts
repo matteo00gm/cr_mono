@@ -1,4 +1,5 @@
 import type { Role } from '@catalogorosso/core';
+import type { WidgetResolution } from '@catalogorosso/db';
 import type { WidgetPlan } from '@catalogorosso/security';
 
 /**
@@ -42,9 +43,10 @@ export interface AppEnv {
     role: Role;
 
     /**
-     * The widget's tenant, resolved from `(pk_, Origin)` (P2-07, P2-08) and
-     * never read from the request. Absent on the dashboard, and absent on the
-     * widget until resolution has run — so a handler that needs it checks.
+     * The widget's tenant, resolved from `(pk_, Origin)` by `widgetCors`
+     * (P2-07, P2-08) and never read from the request. Absent on the dashboard,
+     * and absent on the widget until resolution has run — so a handler that
+     * needs it checks.
      */
     widgetTenant: WidgetTenant;
 
@@ -53,9 +55,14 @@ export interface AppEnv {
   };
 }
 
+type Resolved = Extract<WidgetResolution, { found: true }>;
+
 /** What the widget surface knows about the tenant a request resolved to. */
 export interface WidgetTenant {
   readonly tenantId: string;
   /** Null for a tenant with no subscription yet. */
   readonly plan: WidgetPlan | null;
+  /** The tenant's own status; the widget shows it only as enabled or disabled. */
+  readonly status: Resolved['status'];
+  readonly locale: string;
 }
