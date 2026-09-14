@@ -353,9 +353,28 @@ describe('readOpenInvitations (E8)', () => {
 });
 
 describe('revokeInvitation (E8)', () => {
+  /** An id of the shape the table generates, which is what reaches the statement. */
+  const INVITATION = '6f1c2a9e-3b4d-4e5f-8a7b-9c0d1e2f3a4b';
+
+  it('answers an id that is not a uuid as unmatched, without issuing the statement', async () => {
+    /*
+     * The id comes off a URL path and the statement casts it to `uuid`, so any
+     * other shape would fail the cast and surface as a 500 instead of the 404
+     * every other unusable id gets. The integration suite shows the cast
+     * really does throw.
+     */
+    const { tx, execute } = capturing([{ email: 'anna@cantina.example' }]);
+
+    for (const id of ['inv_1', '', 'not-a-uuid', `${INVITATION}'--`, ` ${INVITATION}`]) {
+      expect(await revokeInvitation(tx, id)).toBeUndefined();
+    }
+
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it('stamps rather than deletes, and only an open row', async () => {
     const { tx, statements } = capturing([{ email: 'anna@cantina.example' }]);
-    await revokeInvitation(tx, 'inv_1');
+    await revokeInvitation(tx, INVITATION);
 
     const sql = text(statements[0]);
 
@@ -373,14 +392,17 @@ describe('revokeInvitation (E8)', () => {
   it('returns the address, so the audit row needs no second read', async () => {
     const { tx } = capturing([{ email: 'anna@cantina.example' }]);
 
-    expect(await revokeInvitation(tx, 'inv_1')).toBe('anna@cantina.example');
+    expect(await revokeInvitation(tx, INVITATION)).toBe('anna@cantina.example');
   });
 
   it('returns undefined when nothing matched', async () => {
     // Already accepted, already revoked, or absent. The caller turns all three
     // into one 404 rather than pretending success.
-    const { tx } = capturing([]);
+    const { tx, execute } = capturing([]);
 
-    expect(await revokeInvitation(tx, 'inv_gone')).toBeUndefined();
+    expect(await revokeInvitation(tx, INVITATION)).toBeUndefined();
+    // Reached the statement: an undefined from the shape check would pass the
+    // line above without proving anything about an empty result.
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 });

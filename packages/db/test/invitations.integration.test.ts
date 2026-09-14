@@ -7,6 +7,7 @@ import {
   insertInvitation,
   insertMembershipFromInvitation,
   markInvitationAccepted,
+  revokeInvitation,
 } from '../src/invitations.js';
 import { readUserEmail } from '../src/users.js';
 import { withInvitation } from '../src/with-invitation.js';
@@ -351,6 +352,65 @@ describe('re-inviting', () => {
     );
 
     expect(second).toBeDefined();
+  });
+});
+
+describe('revoking (E8)', () => {
+  /** The open invitation's id, read inside the tenant that owns it. */
+  const openInvitationId = (email: string): Promise<string> =>
+    withTenant(
+      TENANT_A,
+      async (tx) => {
+        const rows = await tx.execute(
+          sql`SELECT id FROM invitations WHERE email = ${email} AND revoked_at IS NULL`,
+        );
+        return ([...rows][0] as { id: string }).id;
+      },
+      db,
+    );
+
+  it('stamps an open invitation once, and returns its address', async () => {
+    const email = 'withdrawn@cantina.example';
+    await invite(email);
+    const id = await openInvitationId(email);
+
+    expect(await withTenant(TENANT_A, (tx) => revokeInvitation(tx, id), db)).toBe(email);
+
+    // A second withdrawal matches nothing: the row is no longer open.
+    expect(await withTenant(TENANT_A, (tx) => revokeInvitation(tx, id), db)).toBeUndefined();
+  });
+
+  it("cannot withdraw another winery's invitation", async () => {
+    const email = 'not-yours@cantina.example';
+    await invite(email);
+    const id = await openInvitationId(email);
+
+    expect(await withTenant(TENANT_B, (tx) => revokeInvitation(tx, id), db)).toBeUndefined();
+
+    // Still open where it belongs.
+    expect(await openInvitationId(email)).toBe(id);
+  });
+
+  it('answers undefined for an id that is not a uuid, where the cast alone throws', async () => {
+    /*
+     * Both halves, because the second is only worth having if the first is
+     * true: Postgres really does refuse the cast, so before the shape check a
+     * path segment like `abc` reached the statement and became a 500.
+     */
+    const refused = await withTenant(
+      TENANT_A,
+      (tx) => tx.execute(sql`SELECT ${'abc'}::uuid`),
+      db,
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(String((refused as { cause?: unknown } | undefined)?.cause ?? refused)).toMatch(
+      /invalid input syntax for type uuid/,
+    );
+
+    expect(await withTenant(TENANT_A, (tx) => revokeInvitation(tx, 'abc'), db)).toBeUndefined();
   });
 });
 
