@@ -1284,7 +1284,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-02 | 🔒 Postgres limiter implementation | one `INSERT … ON CONFLICT DO UPDATE … RETURNING` | P2-01,P0-34 |
 | ✅ P2-03 | 🔒 Limiter test suite | boundaries, parallel-invocation atomicity, rollover, headers | P2-02 |
 | ✅ P2-04 | 🔒 Wire all limit dimensions | session, IP, tenant/min, tenant/month, per-endpoint | P2-02 |
-| P2-05 | ⛔ 🔒 Origin normalization fn | punycode, lowercase, strip path/port, PSL, reject IP/localhost | P0-42 |
+| ✅ P2-05 | ⛔ 🔒 Origin normalization fn | punycode, lowercase, strip path/port, PSL, reject IP/localhost | P0-42 |
 | P2-06 | 🔒 Origin normalization table test | trailing dot, uppercase, port, `null`, absent, lookalikes | P2-05 |
 | P2-07 | ⛔ 🔒 Allowlist accessor (uncached) | single accessor so caching is additive later | P2-05,P0-24 |
 | P2-08 | ⛔ 🔒 Dynamic CORS middleware | exact-set match, echo origin, **`Vary: Origin`**, no credentials | P2-07 |
@@ -4822,6 +4822,18 @@ Explicitly **no wildcard support** (§3.3) — the function has no code path tha
 **Tests.** P2-06.
 
 **Files.** `packages/security/src/origin/normalize.ts`. **~150 lines.** *Split if needed: PSL lookup into its own module.*
+
+**As built (2026-09-15).** `normalizeOrigin(input, { environment })` in `packages/security/src/origin/normalize.ts`, tested in `test/origin-normalize.test.ts` — `.test.ts`, the repository's convention, rather than the `.spec.ts` the row names. The steps are the row's, in its order; what the row left open was settled by probing Node's WHATWG `URL`, and each decision is a test:
+
+- **The Public Suffix List is `tldts` 7.4.11, bundled**, with `allowPrivateDomains` on. Without private domains `shop.myshopify.com` reduces to `myshopify.com`, and one verification would stand for every shop on the platform; with them `myshopify.com` and `github.io` are refused as public suffixes. No split into its own module was needed — the lookup is one call.
+- **A scheme is recognised only by `://`.** `winery.com:8443` also contains a colon, and reading it as a scheme would refuse a legitimate port; `javascript:alert(1)`, given `https://` in front, stops parsing at all and is refused as `invalid_url`.
+- **Credentials are refused, not stripped.** `https://winery.com@evil.io` is a request for `evil.io`; no origin carries a username or a password.
+- **A bare `?` or `#` is `has_path`.** `URL` reports an empty query for a lone `?`, so the raw input is checked for the delimiters as well.
+- **One trailing dot is stripped; two are refused.** `winery.com.` and `winery.com` are one name, and the `tenant_domains` CHECK forbids the dot anyway. A browser does treat `https://winery.com.` as a distinct origin, so a request from it normalises to the verified origin but P2-08's exact echo will not match the page's own origin — the browser refuses the response, which is the safe direction.
+- **Labels are validated to the shape the database accepts** — lowercase letters, digits, inner hyphens, at most 63 characters, 253 for the whole name. `URL` accepts `win_ery.com` and `-winery.com`; the CHECK does not, and a value this function accepted and the database refused would surface as a 500. `*` fails the same check, so there is no path that accepts a wildcard.
+- **IP literals are recognised after `URL` normalises them**, so `0x7f.1` and `2130706433` are caught as the dotted quad they become.
+- **A single label is `public_suffix` only if the list names it** (`com`) and `single_label` otherwise (`winery`), because the list's default rule treats any unknown top-level label as a suffix.
+- **`environment` defaults to `production`.** `development` admits `http:` and `localhost`; nothing else changes, and IP literals stay refused.
 
 ---
 

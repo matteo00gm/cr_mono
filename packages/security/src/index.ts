@@ -6,5 +6,6 @@
  * reason this package exists separately from `core`.
  */
 export * from './capabilities.js';
+export * from './origin/normalize.js';
 export * from './redact.js';
 export * from './rate-limit/index.js';

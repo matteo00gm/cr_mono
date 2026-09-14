@@ -19,5 +19,8 @@
   ],
   "devDependencies": {
     "@catalogorosso/testing": "workspace:*"
+  },
+  "dependencies": {
+    "tldts": "7.4.11"
   }
 }

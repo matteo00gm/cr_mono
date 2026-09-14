@@ -258,6 +258,10 @@ importers:
         version: 26.4.0
 
   packages/security:
+    dependencies:
+      tldts:
+        specifier: 7.4.11
+        version: 7.4.11
     devDependencies:
       '@catalogorosso/testing':
         specifier: workspace:*
