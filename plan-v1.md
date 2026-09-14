@@ -1111,6 +1111,13 @@ Anti-rot checks in CI, each cheap:
 
 ### Where the build actually is — 2026-09-03 (updated)
 
+**P1, as of 2026-09-15: every row is merged except two.**
+
+- **P1-05 is deferred to P2-20, by decision.** There is no retrieval function to assert through yet, and a query written for the test is what the row rules out. P2-20 carries the assertion.
+- **P1-47 is half done.** The runbook, `docs/runbooks/pairing-bake-off.md`, is merged. The bake-off has not been run and no default model is chosen, because it needs things no commit can supply: Gemini and Anthropic keys exported in a shell, Bedrock model access, an agreed spend, a hand-rated sample and the decision itself. **P1 closes when that ADR lands.**
+
+P1-34 and P1-36 have no pull request of their own: they landed inside P1-33 (#99) and P1-35 (#100). **P2-01, P2-02 and P2-03 are merged as well**, pulled forward by **A1**. What follows this paragraph is the record of P0 at `6a3d2b0` and is kept as it was.
+
 **`✅` in the `#` column means merged to `main`.** Verified against the tree at `6a3d2b0`, not from memory: every ✅ row has an artifact on disk, and the database rows have a migration, a hand-written reverse, a unit shape spec and an integration suite.
 
 **Merged:** P0-01 → P0-56, in the order below rather than by row number. The exceptions inside that range are **P0-33a** (added after review, still open — see its row), **P0-17a** (was blocked on the API origin, which P0-54 now provides), and **P0-51, P0-52 and P0-64**, which are held back on an external dependency — see the note two paragraphs down.
@@ -1217,65 +1224,65 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 
 | # | Task | How / notes | Deps |
 |---|---|---|---|
-| P1-01 | Product form component | field groups per §2.2, `drizzle-zod` validation, help text | P0-57 |
-| P1-02 | Product create endpoint | + `outbox` row in the same tx | P0-54,36 |
-| P1-03 | Product update endpoint | | P1-02 |
-| P1-04 | Product delete | soft-delete row, **hard-delete vectors**, tombstone | P1-02 |
+| ✅ P1-01 | Product form component | field groups per §2.2, `drizzle-zod` validation, help text | P0-57 |
+| ✅ P1-02 | Product create endpoint | + `outbox` row in the same tx | P0-54,36 |
+| ✅ P1-03 | Product update endpoint | | P1-02 |
+| ✅ P1-04 | Product delete | soft-delete row, **hard-delete vectors**, tombstone | P1-02 |
 | P1-05 | Test: deleted product unretrievable | asserted through the retrieval path, not just the table | P1-04 |
-| P1-06 | Catalog list endpoint | server-side pagination + sort | P1-02 |
-| P1-07 | Migration + search: `tsvector` | `italian` config, generated column, GIN index | P0-26 |
-| P1-08 | Catalog search endpoint | name, producer, sku, grape, region | P1-07 |
-| P1-09 | Catalog filters | availability, type, price band, `embedding_state`, completeness | P1-06 |
-| P1-10 | Grid component | virtualised table, row selection | P1-06 |
-| P1-10b | Catalogue screen | list, search, more rows, index status, reindex-all; the page P1-10, P1-13 and P1-40 shipped without | P1-10,40 |
-| P1-11 | Inline edit: price / stock only | the three weekly-churn fields | P1-10 |
-| P1-12 | Completeness score fn + test | pure function in `core` | P0-42 |
-| P1-13 | Completeness indicator UI | score + named missing fields + why-it-matters copy | P1-12,01 |
-| P1-14 | Paste handler (TSV) | split on tabs/newlines → draft rows | P1-10 |
-| P1-15 | Test: paste parser table | trailing rows, quoted cells, 5,000-row paste | P1-14 |
-| P1-16 | Client CSV parser | **delimiter sniff `, ; \t`**, BOM strip, RFC-4180 quotes | P1-14 |
-| P1-17 | Encoding detection | UTF-8 vs Windows-1252; `à è ò ì` visible in preview | P1-16 |
-| P1-18 | XLSX via dynamic import | reader lazy-loaded on first use — `read-excel-file`, not SheetJS (see P1-18) | P1-16 |
-| P1-19 | Header matching | case/accent-insensitive; report unrecognised **and** missing by name | P1-16 |
-| P1-20 | Locale-tolerant number parse | `12,50` and `12.50`; ambiguous flagged, never guessed | P1-16 |
-| P1-21 | Test: file parser table | every hazard row in §2.2a | P1-16–20 |
-| P1-22 | Draft rows + per-cell validation | shared schema, errors in place | P1-14 |
-| P1-23 | Import summary screen | nuovi / aggiornati / invariati / non validi, confirm to apply | P1-22,24 |
-| P1-24 | `upsertProducts()` core fn | match on `(tenant_id, sku)`, batched | P1-02 |
-| P1-25 | Bulk upsert endpoint | batches, partial-success reporting | P1-24 |
-| P1-26 | Import idempotency key + test | replay applies once | P1-25 |
-| P1-27 | Row + file size caps | 10,000 rows, clear message | P1-25 |
-| P1-28 | `audit_log` entry per import | counts + actor | P1-25,P0-53 |
-| P1-29 | Test: no import archives absent rows | guards against accidental full-replace | P1-25 |
-| P1-30 | CSV export | exactly template field order | P1-06 |
-| P1-31 | Outbox poller → SQS | `SKIP LOCKED`, batch enqueue | P0-36 |
-| P1-32 | SST: SQS + DLQ + worker Lambda | arm64, 1 GB | P0-11 |
-| P1-33 | Embedding text builder + test | deterministic template ⇒ stable hash | P0-42 |
-| P1-34 | `content_hash` + skip-unchanged | the cost control; test that stock edits embed nothing | P1-33 |
-| P1-35 | `EmbeddingProvider` port | dimension in config, `model` stored per row | P1-33 |
-| P1-36 | Titan V2 adapter | `amazon.titan-embed-text-v2:0`, 1024 dims | P1-35 |
-| P1-37 | Worker: embed + upsert vectors | idempotent per `(product, chunk)` | P1-32,36 |
-| P1-38 | `embedding_state` transitions | PENDING/INDEXED/FAILED/STALE + failure reason | P1-37 |
-| P1-39 | Reindex single + bulk reindex-all | for model or dimension changes | P1-38 |
-| P1-40 | Index-status column in grid | + Reindex action | P1-38,10 |
-| P1-49 | Embedding-version affordance | per-tenant active version + versioned unique key; makes a zero-downtime model migration possible later | P0-27 |
-| P1-50 | Failure classification + DLQ triage | permanent vs transient; seller-readable reason; edit re-queues automatically | P1-38 |
-| P1-41 | `LlmProvider` port | `streamPairing()` interface only | P0-42 |
-| P1-42 | Bedrock Nova adapter | Converse API + `toolConfig` structured output | P1-41 |
-| P1-43 | Gemini adapter | `responseSchema` | P1-41 |
-| P1-44 | Anthropic adapter | `output_config.format` | P1-41 |
-| P1-45 | Golden Italian eval dataset | queries + expected products across synthetic catalogs | P1-43 |
-| P1-46 | Eval harness | recall@8, pairing quality, **schema-failure rate** | P1-45 |
+| ✅ P1-06 | Catalog list endpoint | server-side pagination + sort | P1-02 |
+| ✅ P1-07 | Migration + search: `tsvector` | `italian` config, generated column, GIN index | P0-26 |
+| ✅ P1-08 | Catalog search endpoint | name, producer, sku, grape, region | P1-07 |
+| ✅ P1-09 | Catalog filters | availability, type, price band, `embedding_state`, completeness | P1-06 |
+| ✅ P1-10 | Grid component | virtualised table, row selection | P1-06 |
+| ✅ P1-10b | Catalogue screen | list, search, more rows, index status, reindex-all; the page P1-10, P1-13 and P1-40 shipped without | P1-10,40 |
+| ✅ P1-11 | Inline edit: price / stock only | the three weekly-churn fields | P1-10 |
+| ✅ P1-12 | Completeness score fn + test | pure function in `core` | P0-42 |
+| ✅ P1-13 | Completeness indicator UI | score + named missing fields + why-it-matters copy | P1-12,01 |
+| ✅ P1-14 | Paste handler (TSV) | split on tabs/newlines → draft rows | P1-10 |
+| ✅ P1-15 | Test: paste parser table | trailing rows, quoted cells, 5,000-row paste | P1-14 |
+| ✅ P1-16 | Client CSV parser | **delimiter sniff `, ; \t`**, BOM strip, RFC-4180 quotes | P1-14 |
+| ✅ P1-17 | Encoding detection | UTF-8 vs Windows-1252; `à è ò ì` visible in preview | P1-16 |
+| ✅ P1-18 | XLSX via dynamic import | reader lazy-loaded on first use — `read-excel-file`, not SheetJS (see P1-18) | P1-16 |
+| ✅ P1-19 | Header matching | case/accent-insensitive; report unrecognised **and** missing by name | P1-16 |
+| ✅ P1-20 | Locale-tolerant number parse | `12,50` and `12.50`; ambiguous flagged, never guessed | P1-16 |
+| ✅ P1-21 | Test: file parser table | every hazard row in §2.2a | P1-16–20 |
+| ✅ P1-22 | Draft rows + per-cell validation | shared schema, errors in place | P1-14 |
+| ✅ P1-23 | Import summary screen | nuovi / aggiornati / invariati / non validi, confirm to apply | P1-22,24 |
+| ✅ P1-24 | `upsertProducts()` core fn | match on `(tenant_id, sku)`, batched | P1-02 |
+| ✅ P1-25 | Bulk upsert endpoint | batches, partial-success reporting | P1-24 |
+| ✅ P1-26 | Import idempotency key + test | replay applies once | P1-25 |
+| ✅ P1-27 | Row + file size caps | 10,000 rows, clear message | P1-25 |
+| ✅ P1-28 | `audit_log` entry per import | counts + actor | P1-25,P0-53 |
+| ✅ P1-29 | Test: no import archives absent rows | guards against accidental full-replace | P1-25 |
+| ✅ P1-30 | CSV export | exactly template field order | P1-06 |
+| ✅ P1-31 | Outbox poller → SQS | `SKIP LOCKED`, batch enqueue | P0-36 |
+| ✅ P1-32 | SST: SQS + DLQ + worker Lambda | arm64, 1 GB | P0-11 |
+| ✅ P1-33 | Embedding text builder + test | deterministic template ⇒ stable hash | P0-42 |
+| ✅ P1-34 | `content_hash` + skip-unchanged | the cost control; test that stock edits embed nothing | P1-33 |
+| ✅ P1-35 | `EmbeddingProvider` port | dimension in config, `model` stored per row | P1-33 |
+| ✅ P1-36 | Titan V2 adapter | `amazon.titan-embed-text-v2:0`, 1024 dims | P1-35 |
+| ✅ P1-37 | Worker: embed + upsert vectors | idempotent per `(product, chunk)` | P1-32,36 |
+| ✅ P1-38 | `embedding_state` transitions | PENDING/INDEXED/FAILED/STALE + failure reason | P1-37 |
+| ✅ P1-39 | Reindex single + bulk reindex-all | for model or dimension changes | P1-38 |
+| ✅ P1-40 | Index-status column in grid | + Reindex action | P1-38,10 |
+| ✅ P1-49 | Embedding-version affordance | per-tenant active version + versioned unique key; makes a zero-downtime model migration possible later | P0-27 |
+| ✅ P1-50 | Failure classification + DLQ triage | permanent vs transient; seller-readable reason; edit re-queues automatically | P1-38 |
+| ✅ P1-41 | `LlmProvider` port | `streamPairing()` interface only | P0-42 |
+| ✅ P1-42 | Bedrock Nova adapter | Converse API + `toolConfig` structured output | P1-41 |
+| ✅ P1-43 | Gemini adapter | `responseSchema` | P1-41 |
+| ✅ P1-44 | Anthropic adapter | `output_config.format` | P1-41 |
+| ✅ P1-45 | Golden Italian eval dataset | queries + expected products across synthetic catalogs | P1-43 |
+| ✅ P1-46 | Eval harness | recall@8, pairing quality, **schema-failure rate** | P1-45 |
 | P1-47 | ⛔ Bake-off + model decision | run all candidates, record the table, pick the default | P1-46 |
-| P1-48 | Reserved concurrency = 10 | while on `t4g.micro` (§5.2a) | P0-14 |
+| ✅ P1-48 | Reserved concurrency = 10 | while on `t4g.micro` (§5.2a) | P0-14 |
 
 ### P2 — Widget API and RAG
 
 | # | Task | How / notes | Deps |
 |---|---|---|---|
-| P2-01 | ⛔ 🔒 `RateLimiter` interface | backend-agnostic; semantics defined here | P0-42 |
-| P2-02 | 🔒 Postgres limiter implementation | one `INSERT … ON CONFLICT DO UPDATE … RETURNING` | P2-01,P0-34 |
-| P2-03 | 🔒 Limiter test suite | boundaries, parallel-invocation atomicity, rollover, headers | P2-02 |
+| ✅ P2-01 | ⛔ 🔒 `RateLimiter` interface | backend-agnostic; semantics defined here | P0-42 |
+| ✅ P2-02 | 🔒 Postgres limiter implementation | one `INSERT … ON CONFLICT DO UPDATE … RETURNING` | P2-01,P0-34 |
+| ✅ P2-03 | 🔒 Limiter test suite | boundaries, parallel-invocation atomicity, rollover, headers | P2-02 |
 | P2-04 | 🔒 Wire all limit dimensions | session, IP, tenant/min, tenant/month, per-endpoint | P2-02 |
 | P2-05 | ⛔ 🔒 Origin normalization fn | punycode, lowercase, strip path/port, PSL, reject IP/localhost | P0-42 |
 | P2-06 | 🔒 Origin normalization table test | trailing dot, uppercase, port, `null`, absent, lookalikes | P2-05 |
@@ -3520,7 +3527,7 @@ The first diagnosis was that `pgErrorCode` read the SQLSTATE only from `error.ca
 - **The response says `noLongerRecommended`, not just a status code.** That is the property a seller cares about and a *different* claim from "the row is gone" — the row is not gone. Stating it means the dashboard does not infer it from a 204, which is the sort of inference that goes stale the day the behaviour changes. `vectorsRemoved` is reported because zero is meaningful: the wine had never been indexed, which is not the same as a delete that failed to clean up.
 - **A cross-tenant delete removes nothing, asserted from the other side.** The `where` clause names only the product id, so RLS is what stops one tenant clearing another's index — and there is a test that reads the victim's vector count back afterwards, rather than trusting that the policy applies.
 
-**⚠ P1-05 is still open and is the assertion that matters.** What is asserted here is that the vector rows are gone; what P1-05 asserts is that *retrieval cannot return the product*, through the real retrieval function. Those are not the same statement, which is precisely why that row exists — and it depends on **P2-20**.
+**P1-05 is the assertion that matters, and it is deferred to P2-20** — see its row for why. What is asserted here is that the vector rows are gone; what P1-05 asserts is that *retrieval cannot return the product*, through the real retrieval function. Those are not the same statement, which is precisely why that row exists — and it depends on **P2-20**.
 
 ---
 
