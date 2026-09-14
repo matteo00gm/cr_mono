@@ -4761,7 +4761,7 @@ The window start is **computed in SQL from `now()`**, never passed from the appl
 
 **Why.** Written against the interface so it becomes the Valkey adapter's acceptance test for free — that shared suite is what makes the §5.7 argument ("the swap is 50 lines") actually true.
 
-**How.** Parameterised over implementations. Cases: allow up to the limit; reject at limit+1; `remaining` decrements correctly; window rollover resets; **50 parallel `check` calls against a limit of 10 allow exactly 10** (the atomicity proof — run it via `Promise.all` against real Postgres, not a mock); multi-dimension all-or-nothing (over on dimension 3 leaves dimensions 1–2 unconsumed); `retryAfterSec` matches `resetAt`.
+**How.** Parameterised over implementations. Cases: allow up to the limit; reject at limit+1; `remaining` decrements correctly; window rollover resets; **50 parallel `check` calls against a limit of 10 allow at most 10 in any window, and exactly 10 in the busiest** — counted per window, because a burst that straddles a fixed-window boundary legitimately admits up to twice the limit, and a total count is how this case flaked in CI (review, 2026-09-14) (the atomicity proof — run it via `Promise.all` against real Postgres, not a mock); multi-dimension all-or-nothing (over on dimension 3 leaves dimensions 1–2 unconsumed); `retryAfterSec` matches `resetAt`.
 
 **Files.** `packages/security/test/rate-limit.spec.ts`. **~160 test lines.**
 
@@ -6852,7 +6852,7 @@ It is now backed by the P0-34 `rate_limit_buckets` table through P2-01's interfa
 
 **Four things the implementation gets right on purpose.**
 
-- **One `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`**, never a read then a write. A SELECT followed by an UPDATE lets every concurrent caller read the same count before any of them writes — fifty callers then pass a limit of ten. The integration suite asserts exactly that: fifty parallel checks, ten allowed.
+- **One `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`**, never a read then a write. A SELECT followed by an UPDATE lets every concurrent caller read the same count before any of them writes — fifty callers then pass a limit of ten. The integration suite asserts exactly that: fifty parallel checks, ten allowed — counted per window since the 2026-09-14 review, because a burst that crosses a boundary is two fixed windows and legitimately admits more in total, which made a total count flake in CI without any race behind it.
 - **The window is computed in SQL from `now()`**, never passed from the application. Lambda containers do not share a clock, and a boundary computed per container puts concurrent requests in different windows, each with a full allowance.
 - **All-or-nothing across dimensions, by transaction rollback.** `BucketsExceeded` unwinds every increment the call made, so a caller already blocked on one dimension costs the others nothing. Without it, an attacker held off by their IP limit could still drain the tenant's budget with every rejected request, for free.
 - **A real fault is not an allowance.** Only `BucketsExceeded` becomes a decision; a database that is down propagates. A limiter that fails open under load disappears exactly when it is needed.
