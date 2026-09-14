@@ -26,28 +26,72 @@ import type { DbTransaction } from './with-tenant.js';
 
 export type Connection = Database | DbTransaction;
 
-export interface BucketCheck {
+/** A window of `windowSec` seconds, aligned to the epoch. */
+export interface FixedBucketCheck {
   readonly key: string;
   readonly limit: number;
   readonly windowSec: number;
 }
 
+/** A UTC calendar month (P2-04) — see `MonthlyCheck` in `packages/security`. */
+export interface MonthlyBucketCheck {
+  readonly key: string;
+  readonly limit: number;
+  readonly window: 'month';
+}
+
+export type BucketCheck = FixedBucketCheck | MonthlyBucketCheck;
+
 export interface BucketResult {
   readonly allowed: boolean;
   readonly remaining: number;
   readonly resetAt: Date;
+  /** The limit of the dimension this result describes. */
+  readonly limit: number;
+  /** That dimension's key, so a caller can tell a burst limit from the plan cap. */
+  readonly key: string;
   readonly retryAfterSec?: number | undefined;
 }
 
 /**
+ * Where a check's window starts, and where it ends — both in SQL.
+ *
+ * **The start is computed from `now()`, never passed in.** Lambda containers do
+ * not share a clock, and a window boundary computed in the application would put
+ * two concurrent requests in different windows — each getting a full allowance,
+ * which leaks the limit in exactly the way this table exists to prevent.
+ *
+ * **The month is taken `AT TIME ZONE 'UTC'` in both directions.** Calendar
+ * arithmetic on a `timestamptz` follows the session's time zone, so on a server
+ * set to Europe/Rome `window_start + interval '1 month'` lands an hour off across
+ * a DST change — and the plan cap would reset early. Converting to UTC wall
+ * time, adding the month there and converting back is the version with no zone
+ * in it.
+ *
+ * The end refers to `window_start` because it is read in `RETURNING`, from the
+ * row the upsert produced: the window Postgres actually counted in, rather than
+ * a second call to `now()` that might disagree with it.
+ */
+const bounds = (check: BucketCheck) =>
+  'window' in check
+    ? {
+        start: sql`date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`,
+        end: sql`(date_trunc('month', window_start AT TIME ZONE 'UTC') + interval '1 month') AT TIME ZONE 'UTC'`,
+      }
+    : {
+        start: sql`to_timestamp(floor(extract(epoch from now()) / ${check.windowSec}) * ${check.windowSec})`,
+        end: sql`window_start + make_interval(secs => ${check.windowSec})`,
+      };
+
+/**
  * Checks and consumes across every dimension, all-or-nothing.
  *
- * **Two phases, and the transaction is what makes the rule hold.** The first
- * pass increments every bucket and reads the resulting counts back; if any came
- * out over its limit, the transaction is rolled back by throwing, so nothing is
- * consumed. A caller already blocked on one dimension therefore costs the
- * others nothing — otherwise an attacker held off by their IP limit could still
- * drain the tenant's budget for free with every rejected request.
+ * **Two phases, and the transaction is what makes the rule hold.** The first pass
+ * increments every bucket and reads the resulting counts back; if any came out
+ * over its limit, the transaction is rolled back by throwing, so nothing is
+ * consumed. A caller already blocked on one dimension therefore costs the others
+ * nothing — otherwise an attacker held off by their IP limit could still drain
+ * the tenant's budget for free with every rejected request.
  *
  * The caller supplies the transaction, so a route that already holds one does
  * not open a second — and so this composes with `withTenant` on paths that have
@@ -65,31 +109,23 @@ export const consumeBuckets = async (
   let rejected: BucketResult | undefined;
 
   for (const check of checks) {
+    const { start, end } = bounds(check);
+
     /*
-     * **The window start is computed in SQL from `now()`**, never passed in.
-     * Lambda containers do not share a clock, and a window boundary computed in
-     * the application would put two concurrent requests in different windows —
-     * each getting a full allowance, which leaks the limit in exactly the way
-     * this table exists to prevent.
-     *
      * One statement per key: `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`
      * is a single round trip with no read-then-write race between checking a
      * count and incrementing it.
      */
     const rows = await tx.execute(sql`
       INSERT INTO rate_limit_buckets (bucket_key, window_start, count)
-      VALUES (
-        ${check.key},
-        to_timestamp(floor(extract(epoch from now()) / ${check.windowSec}) * ${check.windowSec}),
-        1
-      )
+      VALUES (${check.key}, ${start}, 1)
       ON CONFLICT (bucket_key, window_start)
         DO UPDATE SET count = rate_limit_buckets.count + 1
-      RETURNING count, extract(epoch from window_start)::double precision AS window_epoch
+      RETURNING count, extract(epoch from ${end})::double precision AS reset_epoch
     `);
 
     const row = [...rows][0] as
-      { count: number | string; window_epoch: number | string } | undefined;
+      { count: number | string; reset_epoch: number | string } | undefined;
     if (row === undefined) {
       throw new Error(`consumeBuckets: no row returned for ${check.key}`);
     }
@@ -110,27 +146,34 @@ export const consumeBuckets = async (
      * types as strings, and `'11' > 10` is false in JavaScript, which would
      * silently stop rejecting.
      */
-    const windowEpoch = Number(row.window_epoch);
+    const resetEpoch = Number(row.reset_epoch);
     const count = Number(row.count);
 
-    if (!Number.isFinite(windowEpoch) || !Number.isFinite(count)) {
+    if (!Number.isFinite(resetEpoch) || !Number.isFinite(count)) {
       throw new Error(
-        `consumeBuckets: ${check.key} returned a non-numeric count or window ` +
-          `(count=${String(row.count)}, window=${String(row.window_epoch)})`,
+        `consumeBuckets: ${check.key} returned a non-numeric count or reset ` +
+          `(count=${String(row.count)}, reset=${String(row.reset_epoch)})`,
       );
     }
 
-    const resetAt = new Date((windowEpoch + check.windowSec) * 1000);
+    const resetAt = new Date(resetEpoch * 1000);
 
     if (count > check.limit) {
       const retryAfterSec = Math.max(1, Math.ceil((resetAt.getTime() - Date.now()) / 1000));
-      rejected ??= { allowed: false, remaining: 0, resetAt, retryAfterSec };
+      rejected ??= {
+        allowed: false,
+        remaining: 0,
+        resetAt,
+        limit: check.limit,
+        key: check.key,
+        retryAfterSec,
+      };
       continue;
     }
 
     const remaining = check.limit - count;
     if (tightest === undefined || remaining < tightest.remaining) {
-      tightest = { allowed: true, remaining, resetAt };
+      tightest = { allowed: true, remaining, resetAt, limit: check.limit, key: check.key };
     }
   }
 
@@ -144,7 +187,7 @@ export const consumeBuckets = async (
 
   // Unreachable with a non-empty `checks`, and kept because the compiler cannot
   // see that: the loop assigns `tightest` on every non-rejected iteration.
-  return tightest ?? { allowed: true, remaining: 0, resetAt: new Date() };
+  return tightest ?? { allowed: true, remaining: 0, resetAt: new Date(), limit: 0, key: '' };
 };
 
 /**

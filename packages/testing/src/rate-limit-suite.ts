@@ -16,16 +16,16 @@ import { describe, expect, it } from 'vitest';
  * agreement by `packages/security`'s own run of this suite: if they drift, its
  * limiter stops satisfying this signature and the compiler says so.
  */
-export interface LimitCheck {
-  readonly key: string;
-  readonly limit: number;
-  readonly windowSec: number;
-}
+export type LimitCheck =
+  | { readonly key: string; readonly limit: number; readonly windowSec: number }
+  | { readonly key: string; readonly limit: number; readonly window: 'month' };
 
 export interface LimitResult {
   readonly allowed: boolean;
   readonly remaining: number;
   readonly resetAt: Date;
+  readonly limit: number;
+  readonly key: string;
   readonly retryAfterSec?: number | undefined;
 }
 
@@ -217,6 +217,73 @@ export const describeRateLimiter = (
 
       // A caller shown 99 would think it had room it does not have.
       expect(result.remaining).toBe(1);
+    });
+
+    it('names the dimension it describes, and that dimension’s limit', async () => {
+      const { limiter, freshKey } = await makeFixture();
+      const [tight, loose] = [freshKey(), freshKey()];
+      const both = (): LimitCheck[] => [
+        { key: loose, limit: 100, windowSec: 60 },
+        { key: tight, limit: 2, windowSec: 60 },
+      ];
+
+      /*
+       * `X-RateLimit-Limit` has to be the number that belongs to the remaining
+       * count beside it (P2-04). An allowance names the tightest dimension and a
+       * refusal names the one that refused — whatever order they were passed in.
+       */
+      expect(await limiter.check(both())).toMatchObject({
+        allowed: true,
+        key: tight,
+        limit: 2,
+        remaining: 1,
+      });
+
+      await limiter.check(one(tight, 2));
+
+      expect(await limiter.check(both())).toMatchObject({ allowed: false, key: tight, limit: 2 });
+    });
+
+    it('gives a retry-after that agrees with the window it names', async () => {
+      const { limiter, freshKey } = await makeFixture();
+      const key = freshKey();
+
+      await limiter.check(one(key, 1));
+      const refused = await limiter.check(one(key, 1));
+
+      /*
+       * P2-03 asks for this and the suite never checked it: a client reading
+       * `Retry-After` and one reading `X-RateLimit-Reset` must be sent to the
+       * same moment. Within a second, because the two are rounded from clocks a
+       * few milliseconds apart.
+       */
+      const untilReset = Math.max(1, Math.ceil((refused.resetAt.getTime() - Date.now()) / 1000));
+      expect(Math.abs((refused.retryAfterSec ?? 0) - untilReset)).toBeLessThanOrEqual(1);
+    });
+
+    it('closes a monthly window at the start of the next UTC month', async () => {
+      const { limiter, freshKey } = await makeFixture();
+
+      const { resetAt } = await limiter.check([{ key: freshKey(), limit: 5, window: 'month' }]);
+
+      expect([
+        resetAt.getUTCDate(),
+        resetAt.getUTCHours(),
+        resetAt.getUTCMinutes(),
+        resetAt.getUTCSeconds(),
+        resetAt.getUTCMilliseconds(),
+      ]).toEqual([1, 0, 0, 0, 0]);
+      expect(resetAt.getTime()).toBeGreaterThan(Date.now());
+      expect(resetAt.getTime() - Date.now()).toBeLessThanOrEqual(31 * 24 * 60 * 60 * 1000);
+    });
+
+    it('counts a monthly window like any other', async () => {
+      const { limiter, freshKey } = await makeFixture();
+      const month: LimitCheck[] = [{ key: freshKey(), limit: 2, window: 'month' }];
+
+      expect((await limiter.check(month)).remaining).toBe(1);
+      expect((await limiter.check(month)).remaining).toBe(0);
+      expect((await limiter.check(month)).allowed).toBe(false);
     });
 
     it('lets exactly the limit through under concurrency', async () => {

@@ -190,6 +190,8 @@ describe('rate limiting (A1)', () => {
             allowed: false,
             remaining: 0,
             resetAt: new Date(),
+            limit: 5,
+            key: checks[0]?.key ?? '',
             retryAfterSec: 30,
           });
         },

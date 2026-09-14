@@ -113,6 +113,51 @@ describe('the statement itself', () => {
     expect(epoch % 60).toBe(0);
   });
 
+  it('starts a monthly window at the UTC month in SQL, and resets at the next one (P2-04)', async () => {
+    const key = `test:${randomUUID()}`;
+
+    const result = await db.transaction((tx) =>
+      consumeBuckets(tx, [{ key, limit: 5, window: 'month' }]),
+    );
+
+    const rows = await db.execute(
+      sql`SELECT
+            extract(epoch from window_start)::double precision AS start_epoch,
+            extract(epoch from date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')::double precision AS month_epoch
+          FROM rate_limit_buckets WHERE bucket_key = ${key}`,
+    );
+    const row = [...rows][0] as { start_epoch: number | string; month_epoch: number | string };
+    const start = new Date(Number(row.start_epoch) * 1000);
+
+    expect(Number(row.start_epoch)).toBe(Number(row.month_epoch));
+    expect([start.getUTCDate(), start.getUTCHours(), start.getUTCMinutes()]).toEqual([1, 0, 0]);
+    expect(result.resetAt).toEqual(
+      new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1)),
+    );
+    expect(result).toMatchObject({ allowed: true, remaining: 4, limit: 5, key });
+  });
+
+  it('keeps the month in UTC whatever time zone the session is set to', async () => {
+    const key = `test:${randomUUID()}`;
+
+    /*
+     * Calendar arithmetic on a `timestamptz` follows the session's zone, so a
+     * naive `window_start + interval '1 month'` on a Europe/Rome session lands
+     * an hour off across a DST change. Pinned here so a server configured in
+     * local time cannot move the plan cap's boundary.
+     */
+    const result = await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL TIME ZONE 'Europe/Rome'`);
+      return consumeBuckets(tx, [{ key, limit: 5, window: 'month' }]);
+    });
+
+    expect([
+      result.resetAt.getUTCDate(),
+      result.resetAt.getUTCHours(),
+      result.resetAt.getUTCMinutes(),
+    ]).toEqual([1, 0, 0]);
+  });
+
   it('rolls back every increment when one dimension refuses', async () => {
     const [tight, loose] = [`test:${randomUUID()}`, `test:${randomUUID()}`];
 

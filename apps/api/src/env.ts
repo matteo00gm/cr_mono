@@ -1,4 +1,5 @@
 import type { Role } from '@catalogorosso/core';
+import type { WidgetPlan } from '@catalogorosso/security';
 
 /**
  * The Hono context variables every handler can read (P0-45).
@@ -17,6 +18,10 @@ import type { Role } from '@catalogorosso/core';
  * They stay separate because they are established by different evidence. A
  * user is who the cookie says; a tenant is what the database says about that
  * user, and never what the request says (§3.5).
+ *
+ * The widget surface has its own pair, for the same reason and with different
+ * evidence: `widgetTenant` is what `(pk_, Origin)` resolved to, and
+ * `widgetSessionId` is what a verified token carried.
  */
 export interface AppEnv {
   Variables: {
@@ -35,5 +40,22 @@ export interface AppEnv {
      * EDITOR on one winery and OWNER on another the higher role on both.
      */
     role: Role;
+
+    /**
+     * The widget's tenant, resolved from `(pk_, Origin)` (P2-07, P2-08) and
+     * never read from the request. Absent on the dashboard, and absent on the
+     * widget until resolution has run — so a handler that needs it checks.
+     */
+    widgetTenant: WidgetTenant;
+
+    /** The session a verified widget token names (P2-13). Absent until then. */
+    widgetSessionId: string;
   };
+}
+
+/** What the widget surface knows about the tenant a request resolved to. */
+export interface WidgetTenant {
+  readonly tenantId: string;
+  /** Null for a tenant with no subscription yet. */
+  readonly plan: WidgetPlan | null;
 }

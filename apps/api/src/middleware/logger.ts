@@ -115,7 +115,7 @@ export const logger: Logger = pino(loggerOptions);
  * value that is not an address at all would be refused by the `inet` column.
  * Both cases resolve to no address rather than a wrong one.
  */
-const clientIp = (header: string | undefined): { ip?: string } => {
+export const clientIp = (header: string | undefined): { ip?: string } => {
   if (header === undefined) return {};
 
   const entries = header.split(',').map((entry) => entry.trim());

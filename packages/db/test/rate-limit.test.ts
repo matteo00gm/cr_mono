@@ -35,16 +35,23 @@ const capturing = (...responses: unknown[][]) => {
   return { statements, execute, tx: { execute } as unknown as DbTransaction };
 };
 
-/** The literal SQL of a statement, with its bound values elided. */
+/**
+ * The literal SQL of a statement, with its bound values elided.
+ *
+ * Recursive, because the window bounds are composed as nested fragments (P2-04):
+ * flattening only the top level would drop exactly the SQL these tests exist to
+ * pin, and every `toContain` below would fail — or, written the other way round,
+ * pass for the wrong reason.
+ */
 const text = (statement: unknown): string =>
   ((statement as { queryChunks?: unknown[] }).queryChunks ?? [])
-    .flatMap((chunk) =>
-      typeof chunk === 'object' &&
-      chunk !== null &&
-      Array.isArray((chunk as { value?: unknown[] }).value)
-        ? ((chunk as { value: unknown[] }).value as string[])
-        : [],
-    )
+    .flatMap((chunk): string[] => {
+      if (typeof chunk !== 'object' || chunk === null) return [];
+      if (Array.isArray((chunk as { value?: unknown[] }).value)) {
+        return (chunk as { value: string[] }).value;
+      }
+      return 'queryChunks' in chunk ? [text(chunk)] : [];
+    })
     .join(' ');
 
 const window60 = (key: string, limit: number) => [{ key, limit, windowSec: 60 }];
@@ -63,9 +70,9 @@ const window60 = (key: string, limit: number) => [{ key, limit, windowSec: 60 }]
  * whatever the driver decodes is what arrives — and it returns some numeric
  * types as strings.
  */
-const row = (count: number, windowEpochSec: number) => ({
+const row = (count: number, windowEpochSec: number, windowSec = 60) => ({
   count: String(count),
-  window_epoch: String(windowEpochSec),
+  reset_epoch: String(windowEpochSec + windowSec),
 });
 
 /** The current window boundary, in epoch seconds, for a 60s window. */
@@ -88,7 +95,8 @@ describe('the statement', () => {
     expect(sql).toContain('INSERT INTO rate_limit_buckets');
     expect(sql).toContain('ON CONFLICT (bucket_key, window_start)');
     expect(sql).toContain('DO UPDATE SET count = rate_limit_buckets.count + 1');
-    expect(sql).toContain('RETURNING count, extract(epoch from window_start)');
+    expect(sql).toContain('RETURNING count, extract(epoch from');
+    expect(sql).toContain('AS reset_epoch');
   });
 
   it('computes the window in SQL, never from the caller', async () => {
@@ -104,6 +112,25 @@ describe('the statement', () => {
     const sql = text(statements[0]);
     expect(sql).toContain('extract(epoch from now())');
     expect(sql).not.toContain('$1::timestamptz');
+  });
+
+  it('computes a monthly window from the UTC calendar, in SQL, in both directions', async () => {
+    const { tx, statements } = capturing([row(1, 0)]);
+    await consumeBuckets(tx, [{ key: 'tenant:t:month', limit: 5, window: 'month' }]);
+
+    const sql = text(statements[0]);
+
+    /*
+     * Both the start and the end are converted to UTC wall time before the
+     * calendar is consulted. Calendar arithmetic on a `timestamptz` follows the
+     * session's time zone, and a server set to local time would otherwise move
+     * the plan cap's reset by an hour twice a year.
+     */
+    expect(sql).toContain("date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'");
+    expect(sql).toContain(
+      "(date_trunc('month', window_start AT TIME ZONE 'UTC') + interval '1 month') AT TIME ZONE 'UTC'",
+    );
+    expect(sql).not.toContain('floor(extract(epoch from now())');
   });
 });
 
@@ -154,6 +181,34 @@ describe('the decision', () => {
 
     // A caller shown 99 would believe it had room it does not have.
     expect(result.remaining).toBe(1);
+  });
+
+  it('names the dimension an allowance describes, and its limit (P2-04)', async () => {
+    const { tx } = capturing([row(1, nowWindow())], [row(1, nowWindow())]);
+
+    const result = await consumeBuckets(tx, [
+      { key: 'loose', limit: 100, windowSec: 60 },
+      { key: 'tight', limit: 2, windowSec: 60 },
+    ]);
+
+    // `X-RateLimit-Limit` has to be the tight dimension's number, or the
+    // remaining count beside it describes a different limit.
+    expect(result).toMatchObject({ key: 'tight', limit: 2, remaining: 1 });
+  });
+
+  it('names the dimension that refused, and its limit (P2-04)', async () => {
+    const { tx } = capturing([row(1, nowWindow())], [row(99, nowWindow())]);
+
+    const error = await consumeBuckets(tx, [
+      { key: 'fine', limit: 10, windowSec: 60 },
+      { key: 'over', limit: 1, windowSec: 60 },
+    ]).catch((e: unknown) => e);
+
+    expect((error as BucketsExceeded).result).toMatchObject({
+      allowed: false,
+      key: 'over',
+      limit: 1,
+    });
   });
 
   it('checks every dimension before refusing, so the refusal names the tightest', async () => {
@@ -265,10 +320,10 @@ describe('what the driver actually returns', () => {
     await expect(consumeBuckets(tx, window60('k', 10))).rejects.toBeInstanceOf(BucketsExceeded);
   });
 
-  it('handles a numeric count and window as well as a string one', async () => {
+  it('handles a numeric count and reset as well as a string one', async () => {
     // Some drivers, and some column types, decode to numbers. Both must work —
     // pinning only one is how this broke in the first place.
-    const { tx } = capturing([{ count: 3, window_epoch: nowWindow() }]);
+    const { tx } = capturing([{ count: 3, reset_epoch: nowWindow() + 60 }]);
 
     const result = await consumeBuckets(tx, window60('k', 5));
     expect(result.allowed).toBe(true);
@@ -281,7 +336,7 @@ describe('what the driver actually returns', () => {
      * comparison false and the limiter allow everything — a limiter that fails
      * open when the database answers unexpectedly is worse than none.
      */
-    const { tx } = capturing([{ count: 'not-a-number', window_epoch: 'also-not' }]);
+    const { tx } = capturing([{ count: 'not-a-number', reset_epoch: 'also-not' }]);
 
     await expect(consumeBuckets(tx, window60('k', 5))).rejects.toThrow(/non-numeric/);
   });
@@ -294,5 +349,14 @@ describe('what the driver actually returns', () => {
     // is the property that survives clock skew across containers.
     const result = await consumeBuckets(tx, window60('k', 5));
     expect(result.resetAt).toEqual(new Date((boundary + 60) * 1000));
+  });
+
+  it("takes a month's reset from the database rather than adding days in JavaScript", async () => {
+    const october = Date.UTC(2026, 9, 1) / 1000;
+    const { tx } = capturing([{ count: '1', reset_epoch: String(october) }]);
+
+    const result = await consumeBuckets(tx, [{ key: 'tenant:t:month', limit: 5, window: 'month' }]);
+
+    expect(result.resetAt).toEqual(new Date(october * 1000));
   });
 });

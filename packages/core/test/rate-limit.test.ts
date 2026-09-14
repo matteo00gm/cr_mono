@@ -17,6 +17,10 @@ import { betterAuthRateLimitStorage } from '../src/rate-limit.js';
  * storage, rather than that the option was passed.
  */
 
+/** An allowance, shaped like every limiter's answer. */
+const allowance = (key: string) =>
+  Promise.resolve({ allowed: true, remaining: 1, resetAt: new Date(), limit: 10, key });
+
 describe('the adapter', () => {
   it('translates a rule into a check and a refusal into a retry-after', async () => {
     const storage = betterAuthRateLimitStorage(memoryRateLimiter());
@@ -37,7 +41,7 @@ describe('the adapter', () => {
     const storage = betterAuthRateLimitStorage({
       check: (checks) => {
         seen.push(...checks.map((c) => c.key));
-        return Promise.resolve({ allowed: true, remaining: 1, resetAt: new Date() });
+        return allowance(checks[0]?.key ?? '');
       },
     });
 
@@ -53,7 +57,7 @@ describe('the adapter', () => {
     const storage = betterAuthRateLimitStorage({
       check: (checks) => {
         seen.push(...checks.map((c) => c.key));
-        return Promise.resolve({ allowed: true, remaining: 1, resetAt: new Date() });
+        return allowance(checks[0]?.key ?? '');
       },
     });
 

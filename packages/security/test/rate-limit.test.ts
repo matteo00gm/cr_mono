@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { describeRateLimiter, tallyWindows } from '@catalogorosso/testing';
 
-import { memoryRateLimiter, windowStartMs } from '../src/rate-limit/index.js';
+import { memoryRateLimiter, monthWindowMs, windowStartMs } from '../src/rate-limit/index.js';
 
 /**
  * The in-memory limiter, and the arithmetic both implementations share (P2-01).
@@ -79,6 +79,49 @@ describe('the memory limiter', () => {
   });
 });
 
+describe('the monthly window (P2-04)', () => {
+  const check = [{ key: 'tenant:t:month', limit: 1, window: 'month' as const }];
+
+  it('rolls over at the start of the next UTC month, and says so', async () => {
+    let now = Date.UTC(2026, 0, 31, 23, 59, 59, 999);
+    const limiter = memoryRateLimiter(() => now);
+
+    const allowed = await limiter.check(check);
+    expect(allowed.resetAt).toEqual(new Date(Date.UTC(2026, 1, 1)));
+    expect((await limiter.check(check)).allowed).toBe(false);
+
+    now = Date.UTC(2026, 1, 1);
+    expect((await limiter.check(check)).allowed).toBe(true);
+  });
+
+  it('turns December into January of the next year', () => {
+    expect(monthWindowMs(Date.UTC(2026, 11, 31, 23))).toEqual({
+      startMs: Date.UTC(2026, 11, 1),
+      endMs: Date.UTC(2027, 0, 1),
+    });
+  });
+
+  it('keeps one count across the boundary a thirty-one-day window would put mid-month', async () => {
+    /*
+     * The reason the month has its own shape. A thirty-one-day window is a
+     * lattice of epoch boundaries, and a thirty-one-day month contains exactly
+     * one of them — so a plan cap written as `windowSec` resets partway through
+     * January and lets a tenant through twice. The calendar window does not.
+     */
+    const span = 31 * 24 * 60 * 60 * 1000;
+    const boundary = Math.ceil(Date.UTC(2026, 0, 1) / span) * span;
+    expect(boundary).toBeGreaterThan(Date.UTC(2026, 0, 1));
+    expect(boundary).toBeLessThan(Date.UTC(2026, 1, 1));
+
+    let now = boundary - 1;
+    const limiter = memoryRateLimiter(() => now);
+    await limiter.check(check);
+
+    now = boundary + 1;
+    expect((await limiter.check(check)).allowed).toBe(false);
+  });
+});
+
 describe('the concurrency case across a window boundary', () => {
   /*
    * The CI failure of 2026-09-14, made deterministic by the clock this
@@ -120,6 +163,8 @@ describe('the concurrency case across a window boundary', () => {
       allowed: true,
       remaining: 0,
       resetAt,
+      limit: LIMIT,
+      key: 'burst',
     }));
 
     expect(tallyWindows(raced)).toEqual([
