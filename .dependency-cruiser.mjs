@@ -253,6 +253,23 @@ export default {
     },
 
     {
+      // P1-42. The model adapters carry vendor SDKs and, for Gemini and
+      // Anthropic, read API keys. A browser bundle that imported one would ship
+      // both to every visitor, and neither is something a bundler warns about.
+      name: 'no-llm-in-browser-bundles',
+      severity: 'error',
+      comment:
+        'apps/dashboard and apps/widget must never import @catalogorosso/llm: it carries ' +
+        'vendor SDKs and reads provider credentials, and a browser bundle ships both.',
+      from: {
+        path: '^apps/(dashboard|widget)/',
+      },
+      to: {
+        path: '^packages/llm/|(^|/)node_modules/@catalogorosso/llm($|/)|^@catalogorosso/llm($|/)',
+      },
+    },
+
+    {
       // The companion to the packages/testing exemption above. Without it, that
       // exemption would let any module reach a raw connection by importing the
       // harness — the rule would be satisfied and the guarantee gone.
