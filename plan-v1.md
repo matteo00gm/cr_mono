@@ -5031,6 +5031,19 @@ Include the rule that produces the §1.5 contract: recommend **only** from the g
 
 **Files.** `packages/core/src/rag/prompt.ts`, tests. **~140 lines.**
 
+**As built — pulled into P1, because every adapter needs a prompt and the bake-off must measure the real one.**
+
+- **Built before P1-42** *(deviation — sequencing)*, after P2-24, whose schema the system prompt embeds. An adapter cannot stream a pairing without a prompt, and a bake-off run on a stand-in prompt would pick a model for a prompt the product does not ship.
+- **`buildPairingPrompt(request)` returns `{ system, history, user }`.** `system` holds the instructions and the schema and is byte-identical for every request — asserted across different questions, locales, wines and histories, and asserted to contain nothing a request supplied. Everything that varies is in `user`: the candidates in `<candidati>`, each a `<candidato id="…">` block of labelled fields, and the question in `<messaggio_visitatore lingua="…">`.
+- **Delimiters cannot be forged because every angle bracket in untrusted text becomes `‹` or `›`** *(decision — the row lists "our own delimiter tokens and anything resembling a closing tag for them")*. Replacing every bracket is complete where a list of tag names would not be, and the cost is a visitor's "< 15 euro" reaching the model as "‹ 15 euro". The test injects a closing and an opening candidate tag into a tasting note and asserts the block count is unchanged.
+- **The named list, in order:** control and invisible characters first, by numeric code point, so none can split a comment marker to hide it — C0 except tab and newline, DEL, C1, the Arabic letter mark, directional marks, overrides and isolates, zero-width characters, the word joiner and the byte-order mark. Then HTML and XML comments, content and all, closed or left open to the end; then code fences and blockquote markers; then angle brackets; then whitespace runs and the cap.
+- **Caps** *(decision — the row names none)*: 600 characters for tasting notes, 200 for every other field, 500 for the question, 1,000 per history turn, and the last 6 turns. A cut is marked with `…`.
+- **Candidate ids must be UUIDs** *(addition)*, or `InvalidCandidateIdError`: an id sits inside a delimiter's attribute, and a malformed one is a bug upstream that could otherwise close it. **A locale that is not `ll` or `ll-CC` falls back to `it`** for the same reason.
+- **Each candidate's exact price is given beside its band** *(addition)*. The embedding carries a band so a price edit costs nothing (P1-33), but "sotto i 15 euro" is a constraint the 10–20 band cannot check. The number comes from the column, never the seller's prose.
+- **The instructions are in English, and the reply follows the `lingua` attribute** *(decision)*. The delimiters and field labels stay Italian because the wines are described in Italian.
+- **The system prompt carries `PROMPT_MARKER`, and `leaksInstructions(text)` spots it or a delimiter tag in model output** — the row's "cheap assertion that `reply` and `reason` contain no system-prompt marker strings", for P2-27 to act on.
+- **The §3.7 prompt-injection suite, run against a real model, is still P2's** — this row's tests hold the assembly; whether a model obeys it is measured once there is a model to ask.
+
 ---
 
 ### P2-24 · Structured output schema
