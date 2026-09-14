@@ -4596,6 +4596,19 @@ Nothing vendor-shaped in the types. `AbortSignal` so a disconnected visitor stop
 
 **Files.** `providers/anthropic.ts`. **~140 lines.**
 
+**As built — the third peer in `packages/llm`, running the same provider suite.**
+
+- **`output_config.format` with the schema passed through the SDK's `jsonSchemaOutputFormat`** *(decision — rather than a projection of our own, as Gemini needed)*. Structured outputs require `additionalProperties: false` and do not enforce lengths, item counts or numeric ranges; the SDK's transform keeps what is enforceable (structure, `required`, `format: uuid`) and moves the rest into descriptions the model still reads. `parsePairingOutput` enforces all of it on the way back, as for every adapter.
+- **The stop reason is read before the content**, as the row requires: `stop_reason: 'refusal'` is a `refusal` chunk even when the text before it parses. `max_tokens` is not a refusal; the truncated JSON is `schema_invalid`. Thinking deltas are never read as the answer.
+- **The JSON is never streamed as text**, for the same reason as Gemini's (P1-43), with the same **open item for P1-47**: time to first token.
+- **`messages.create({ stream: true }, { signal })`, reading raw events** *(decision)*, rather than the `messages.stream()` helper: the port needs abort checked between events and the provider suite counts pulls, and the answer is assembled by `trustedPairing`, not by the SDK's parser.
+- **A cache breakpoint on the system prompt** (`cache_control: ephemeral`). **Open until P1-47:** Haiku 4.5's minimum cacheable prefix is 4,096 tokens, and a shorter prefix silently does not cache — P2-23's prompt is likely below it, so the bake-off's cost figure for Haiku must not assume cache reads.
+- **Usage comes from two events**: `message_start` settles input and cache counts, `message_delta` carries the final output count and overrides any count it repeats. Anthropic already reports cache reads and writes apart from `input_tokens`, which is the port's shape.
+- **The key is passed in**, as for Gemini: `anthropicProvider` throws given neither an `apiKey` nor a `client`, because the SDK would otherwise look for `ANTHROPIC_API_KEY`, a token or a login profile.
+- **`temperature` defaults to 0.3, and `null` omits it** *(addition)*. The bake-off should compare models at one setting, and Haiku 4.5 accepts one — but the SDK marks `temperature` deprecated because models released after Opus 4.6 reject any value but 1.0 with a 400, so trying one of those must not need a code change.
+- **No model id default and no server-side refusal fallbacks** *(decision)*. The candidate named here is Haiku 4.5, which the fallback parameter does not apply to, and fallback behaviour belongs to P2-27.
+- **`anthropic.live.test.ts`**, skipped unless `LIVE_ANTHROPIC=1`, proves structured outputs accept the projected schema.
+
 ---
 
 ### P1-45 · Golden Italian eval dataset
