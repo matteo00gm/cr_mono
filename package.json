@@ -34,7 +34,8 @@
     "openapi": "node scripts/gen-openapi.mjs",
     "openapi:check": "node scripts/gen-openapi.mjs --check",
     "consumers": "node scripts/api-consumers.mjs",
-    "consumers:check": "node scripts/api-consumers.mjs --check"
+    "consumers:check": "node scripts/api-consumers.mjs --check",
+    "eval": "turbo run build --filter=@catalogorosso/eval... && node packages/eval/dist/cli.js"
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [
