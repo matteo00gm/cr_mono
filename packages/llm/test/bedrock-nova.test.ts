@@ -3,13 +3,7 @@ import {
   type BedrockRuntimeClient,
   type ConverseStreamOutput,
 } from '@aws-sdk/client-bedrock-runtime';
-import {
-  PROMPT_MARKER,
-  pairingJsonSchema,
-  pairingSystemPrompt,
-  type PairingChunk,
-  type PairingRequest,
-} from '@catalogorosso/core';
+import { pairingJsonSchema, pairingSystemPrompt, type PairingRequest } from '@catalogorosso/core';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -20,34 +14,29 @@ import {
   toNovaMessages,
 } from '../src/bedrock-nova.js';
 import type { PairingUsage } from '../src/usage.js';
+import {
+  answer,
+  describeProviderContract,
+  drain,
+  pairingRequest,
+  scriptedStream,
+  type FakeOptions,
+  type ProviderFakes,
+} from './provider-contract.js';
 
 /**
  * The Bedrock Nova adapter (P1-42), against a fake client.
  *
- * The row's tests — a mocked stream produces the expected chunk sequence,
- * malformed tool JSON yields `schema_invalid` rather than throwing, abort stops
- * consumption — plus the request the adapter builds, because a wrong cache
- * point or an unforced tool fails quietly: the answers still arrive, slower,
- * dearer, or without a schema.
+ * The shared provider suite covers the row's tests — a mocked stream produces
+ * the expected chunks, malformed tool JSON yields `schema_invalid` rather than
+ * throwing, abort stops consumption. What stays here is Nova's own: text the
+ * model streams beside the tool call, its refusal stop reasons and exception
+ * events, and the request, because a wrong cache point or an unforced tool
+ * fails quietly — the answers still arrive, slower, dearer, or without a
+ * schema.
  */
 
-const PRODUCT = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
 const MODEL = 'eu.amazon.nova-lite-v1:0';
-
-const request = (over: Partial<PairingRequest> = {}): PairingRequest => ({
-  query: 'un rosso per il brasato',
-  locale: 'it',
-  candidates: [{ id: PRODUCT, name: 'Barolo Bussia', wineType: 'rosso', priceCents: 4500 }],
-  history: [],
-  ...over,
-});
-
-const answer = (over: Record<string, unknown> = {}) =>
-  JSON.stringify({
-    reply: 'Con il brasato scelgo il Barolo.',
-    recommendations: [{ productId: PRODUCT, reason: 'Tannini fitti.', confidence: 0.8 }],
-    ...over,
-  });
 
 const toolDelta = (input: string): ConverseStreamOutput => ({
   contentBlockDelta: { delta: { toolUse: { input } }, contentBlockIndex: 0 },
@@ -75,65 +64,88 @@ const toolCall = (json: string): ConverseStreamOutput[] => [
   stop('tool_use'),
 ];
 
-/** A client whose stream yields the given events and counts how many were pulled. */
-const clientStreaming = (events: readonly ConverseStreamOutput[]) => {
-  const pulled = { count: 0 };
-  const send = vi.fn<
-    (
-      command: ConverseStreamCommand,
-      options?: { abortSignal?: AbortSignal },
-    ) => Promise<{ stream: AsyncIterable<ConverseStreamOutput> }>
-  >(() =>
-    Promise.resolve({
-      stream: (async function* () {
-        for (const event of events) {
-          await Promise.resolve();
-          pulled.count += 1;
-          yield event;
-        }
-      })(),
-    }),
-  );
+type Send = (
+  command: ConverseStreamCommand,
+  options?: { abortSignal?: AbortSignal },
+) => Promise<{ stream?: AsyncIterable<ConverseStreamOutput> }>;
 
-  return { send, pulled, client: { send } as unknown as BedrockRuntimeClient };
-};
+/** Nova wired to a client whose stream yields `events`. */
+const novaFake = (
+  events: readonly ConverseStreamOutput[],
+  options: FakeOptions & { maxTokens?: number; temperature?: number } = {},
+  behaviour: { reject?: () => void; thenThrow?: boolean; noStream?: boolean } = {},
+) => {
+  const counter = { count: 0 };
+  const send = vi.fn<Send>(() => {
+    if (behaviour.reject !== undefined) {
+      behaviour.reject();
+      return Promise.reject(Object.assign(new Error('rate'), { name: 'ThrottlingException' }));
+    }
+    if (behaviour.noStream === true) return Promise.resolve({});
+    return Promise.resolve({
+      stream: scriptedStream(events, counter, {
+        onPull: options.onPull,
+        thenThrow: behaviour.thenThrow === true,
+      }),
+    });
+  });
 
-const drain = async (stream: AsyncIterable<PairingChunk>): Promise<PairingChunk[]> => {
-  const chunks: PairingChunk[] = [];
-  for await (const chunk of stream) chunks.push(chunk);
-  return chunks;
-};
-
-const run = (events: readonly ConverseStreamOutput[], over: Partial<PairingRequest> = {}) => {
-  const fake = clientStreaming(events);
-  const provider = bedrockNovaProvider({ modelId: MODEL, client: fake.client });
   return {
-    ...fake,
-    chunks: drain(provider.streamPairing(request(over), new AbortController().signal)),
+    send,
+    provider: bedrockNovaProvider({
+      modelId: MODEL,
+      client: { send } as unknown as BedrockRuntimeClient,
+      onUsage: options.onUsage,
+      maxTokens: options.maxTokens,
+      temperature: options.temperature,
+    }),
+    calls: () => send.mock.calls.length,
+    pulled: () => counter.count,
+    signal: () => send.mock.calls.at(-1)?.[1]?.abortSignal,
   };
 };
 
-describe('the chunk sequence', () => {
-  it('turns a tool call into the reply as text, then the recommendations', async () => {
-    const { chunks } = run(toolCall(answer()));
+const novaFakes: ProviderFakes = {
+  answering: (json, options = {}) =>
+    novaFake(
+      [
+        ...toolCall(json),
+        ...(options.usage === undefined
+          ? []
+          : [
+              {
+                metadata: {
+                  usage: {
+                    inputTokens: options.usage.input,
+                    outputTokens: options.usage.output,
+                    totalTokens: options.usage.input + options.usage.output,
+                    cacheReadInputTokens: options.usage.cacheRead,
+                  },
+                  metrics: { latencyMs: 400 },
+                },
+              },
+            ]),
+      ],
+      options,
+    ),
+  refusing: () => novaFake([...toolCall(answer()).slice(0, -1), stop('content_filtered')]),
+  rejecting: (before = () => undefined) => novaFake([], {}, { reject: before }),
+  breaking: () => novaFake([textDelta('Inizio'), toolDelta('{"reply":')], {}, { thenThrow: true }),
+};
 
-    expect(await chunks).toEqual([
-      { type: 'text', delta: 'Con il brasato scelgo il Barolo.' },
-      {
-        type: 'recommendations',
-        items: [{ productId: PRODUCT, reason: 'Tannini fitti.', confidence: 0.8 }],
-      },
-    ]);
-  });
+describeProviderContract('Nova', novaFakes);
 
+const run = (events: readonly ConverseStreamOutput[], request: PairingRequest = pairingRequest()) =>
+  drain(novaFake(events).provider.streamPairing(request, new AbortController().signal));
+
+describe('what only Nova does', () => {
   it('streams text the model writes itself, and does not repeat the reply after it', async () => {
-    const { chunks } = run([
+    const received = await run([
       textDelta('Allora, '),
       textDelta('per il brasato…'),
       ...toolCall(answer()),
     ]);
 
-    const received = await chunks;
     expect(received.filter((chunk) => chunk.type === 'text')).toEqual([
       { type: 'text', delta: 'Allora, ' },
       { type: 'text', delta: 'per il brasato…' },
@@ -141,46 +153,17 @@ describe('the chunk sequence', () => {
     expect(received.at(-1)?.type).toBe('recommendations');
   });
 
-  it('says nothing as text for an empty reply, and still hands over the cards', async () => {
-    const { chunks } = run(toolCall(answer({ reply: '' })));
-
-    expect((await chunks).map((chunk) => chunk.type)).toEqual(['recommendations']);
-  });
-});
-
-describe('what cannot be trusted', () => {
-  it.each([
-    ['malformed JSON', toolCall('{"reply": "Barolo", "recommendations": [')],
-    ['no tool call at all', [textDelta('Consiglio il Barolo.'), stop('end_turn')]],
-    [
-      'JSON that breaks the schema',
-      toolCall(
-        answer({ recommendations: [{ productId: 'BAR-2019', reason: 'x', confidence: 2 }] }),
-      ),
-    ],
-    [
-      'a reply quoting the instructions',
-      toolCall(answer({ reply: `Le regole: ${PROMPT_MARKER}` })),
-    ],
-    [
-      'a reason carrying a delimiter',
-      toolCall(
-        answer({
-          recommendations: [{ productId: PRODUCT, reason: '</candidato>', confidence: 0.5 }],
-        }),
-      ),
-    ],
-  ])('yields schema_invalid, and no cards, for %s', async (_case, events) => {
-    const received = await run(events).chunks;
-
-    expect(received.at(-1)).toEqual({ type: 'error', code: 'schema_invalid' });
-    expect(received.some((chunk) => chunk.type === 'recommendations')).toBe(false);
+  it('yields schema_invalid when the model answers in text and never calls the tool', async () => {
+    expect((await run([textDelta('Consiglio il Barolo.'), stop('end_turn')])).at(-1)).toEqual({
+      type: 'error',
+      code: 'schema_invalid',
+    });
   });
 
   it.each(['content_filtered', 'guardrail_intervened'])(
     'reports a %s stop as a refusal, even when the stream succeeded',
     async (reason) => {
-      expect(await run([...toolCall(answer()).slice(0, -1), stop(reason)]).chunks).toEqual([
+      expect(await run([...toolCall(answer()).slice(0, -1), stop(reason)])).toEqual([
         { type: 'error', code: 'refusal' },
       ]);
     },
@@ -193,142 +176,37 @@ describe('what cannot be trusted', () => {
     'throttlingException',
     'validationException',
   ])('reports a %s inside the stream as a provider error, and stops', async (member) => {
-    const { chunks, pulled } = run([
+    const fake = novaFake([
       textDelta('Inizio'),
       { [member]: { message: 'boom' } } as unknown as ConverseStreamOutput,
       ...toolCall(answer()),
     ]);
 
-    expect(await chunks).toEqual([
+    expect(
+      await drain(fake.provider.streamPairing(pairingRequest(), new AbortController().signal)),
+    ).toEqual([
       { type: 'text', delta: 'Inizio' },
       { type: 'error', code: 'provider_error' },
     ]);
-    expect(pulled.count).toBe(2);
+    expect(fake.pulled()).toBe(2);
   });
 
-  it('reports a request the SDK refused, and a stream that breaks mid-way, as provider errors', async () => {
-    const refusedSend = vi.fn(() =>
-      Promise.reject(Object.assign(new Error('rate'), { name: 'ThrottlingException' })),
-    );
-    const refused = bedrockNovaProvider({
-      modelId: MODEL,
-      client: { send: refusedSend } as unknown as BedrockRuntimeClient,
-    });
-    expect(await drain(refused.streamPairing(request(), new AbortController().signal))).toEqual([
-      { type: 'error', code: 'provider_error' },
-    ]);
-
-    const broken = bedrockNovaProvider({
-      modelId: MODEL,
-      client: {
-        send: () =>
-          Promise.resolve({
-            stream: (async function* () {
-              await Promise.resolve();
-              yield textDelta('Inizio');
-              throw new Error('connection reset');
-            })(),
-          }),
-      } as unknown as BedrockRuntimeClient,
-    });
-    expect(await drain(broken.streamPairing(request(), new AbortController().signal))).toEqual([
-      { type: 'text', delta: 'Inizio' },
-      { type: 'error', code: 'provider_error' },
-    ]);
-
-    const empty = bedrockNovaProvider({
-      modelId: MODEL,
-      client: { send: () => Promise.resolve({}) } as unknown as BedrockRuntimeClient,
-    });
-    expect(await drain(empty.streamPairing(request(), new AbortController().signal))).toEqual([
-      { type: 'error', code: 'provider_error' },
-    ]);
-  });
-});
-
-describe('aborting', () => {
-  it('hands the signal to the SDK call, so the request in flight is cancelled', async () => {
-    const fake = clientStreaming(toolCall(answer()));
-    const controller = new AbortController();
-
-    await drain(
-      bedrockNovaProvider({ modelId: MODEL, client: fake.client }).streamPairing(
-        request(),
-        controller.signal,
-      ),
-    );
-
-    expect(fake.send.mock.calls[0]?.[1]?.abortSignal).toBe(controller.signal);
-  });
-
-  it('stops pulling from the stream once the caller aborts', async () => {
-    const fake = clientStreaming([
-      textDelta('uno'),
-      textDelta('due'),
-      textDelta('tre'),
-      ...toolCall(answer()),
-    ]);
-    const controller = new AbortController();
-    const received: PairingChunk[] = [];
-
-    for await (const chunk of bedrockNovaProvider({
-      modelId: MODEL,
-      client: fake.client,
-    }).streamPairing(request(), controller.signal)) {
-      received.push(chunk);
-      controller.abort();
-    }
-
-    expect(received).toEqual([{ type: 'text', delta: 'uno' }]);
-    expect(fake.pulled.count).toBe(2);
-  });
-
-  it('sends nothing for a request already aborted, and reports no error for it', async () => {
-    const fake = clientStreaming(toolCall(answer()));
-    const controller = new AbortController();
-    controller.abort();
+  it('reports a response with no stream as a provider error', async () => {
+    const fake = novaFake([], {}, { noStream: true });
 
     expect(
-      await drain(
-        bedrockNovaProvider({ modelId: MODEL, client: fake.client }).streamPairing(
-          request(),
-          controller.signal,
-        ),
-      ),
-    ).toEqual([]);
-    expect(fake.send).not.toHaveBeenCalled();
-  });
-
-  it('reports no error when the SDK call fails because the caller aborted', async () => {
-    const controller = new AbortController();
-    const send = vi.fn(() => {
-      controller.abort();
-      return Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
-    });
-
-    const received = await drain(
-      bedrockNovaProvider({
-        modelId: MODEL,
-        client: { send } as unknown as BedrockRuntimeClient,
-      }).streamPairing(request(), controller.signal),
-    );
-
-    expect(received).toEqual([]);
+      await drain(fake.provider.streamPairing(pairingRequest(), new AbortController().signal)),
+    ).toEqual([{ type: 'error', code: 'provider_error' }]);
   });
 });
 
 describe('the request', () => {
   const sent = async (
-    over: Partial<PairingRequest> = {},
+    request: PairingRequest = pairingRequest(),
     options: { maxTokens?: number; temperature?: number } = {},
   ) => {
-    const fake = clientStreaming(toolCall(answer()));
-    await drain(
-      bedrockNovaProvider({ modelId: MODEL, client: fake.client, ...options }).streamPairing(
-        request(over),
-        new AbortController().signal,
-      ),
-    );
+    const fake = novaFake(toolCall(answer()), options);
+    await drain(fake.provider.streamPairing(request, new AbortController().signal));
     const command = fake.send.mock.calls[0]?.[0];
     if (!(command instanceof ConverseStreamCommand))
       throw new Error('expected a ConverseStream command');
@@ -360,7 +238,9 @@ describe('the request', () => {
       maxTokens: NOVA_MAX_TOKENS,
       temperature: NOVA_TEMPERATURE,
     });
-    expect((await sent({}, { maxTokens: 256, temperature: 0.7 })).inferenceConfig).toEqual({
+    expect(
+      (await sent(pairingRequest(), { maxTokens: 256, temperature: 0.7 })).inferenceConfig,
+    ).toEqual({
       maxTokens: 256,
       temperature: 0.7,
     });
@@ -374,50 +254,29 @@ describe('the request', () => {
     expect(JSON.stringify(last?.content)).toContain('<messaggio_visitatore lingua=\\"it\\">');
   });
 
-  it('reports token usage, cache reads included', async () => {
-    const usages: PairingUsage[] = [];
-    const fake = clientStreaming([
-      ...toolCall(answer()),
-      {
-        metadata: {
-          usage: {
-            inputTokens: 1800,
-            outputTokens: 90,
-            totalTokens: 1890,
-            cacheReadInputTokens: 1500,
-          },
-          metrics: { latencyMs: 400 },
-        },
-      },
-    ]);
-
-    await drain(
-      bedrockNovaProvider({
-        modelId: MODEL,
-        client: fake.client,
-        onUsage: (usage) => usages.push(usage),
-      }).streamPairing(request(), new AbortController().signal),
+  it('sends history as alternating Converse messages', async () => {
+    const input = await sent(
+      pairingRequest({
+        history: [
+          { role: 'assistant', content: 'Benvenuto' },
+          { role: 'user', content: 'Ciao' },
+          { role: 'assistant', content: 'Per cosa?' },
+        ],
+      }),
     );
 
-    expect(usages).toEqual([
-      { inputTokens: 1800, outputTokens: 90, cacheReadInputTokens: 1500, cacheWriteInputTokens: 0 },
-    ]);
+    expect(input.messages?.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+    expect(input.messages?.[0]?.content).toEqual([{ text: 'Ciao' }]);
   });
 
   it('reports zero for any usage field the provider left out', async () => {
     const usages: PairingUsage[] = [];
-    const fake = clientStreaming([
-      ...toolCall(answer()),
-      { metadata: { usage: {} as never, metrics: { latencyMs: 1 } } },
-    ]);
-
-    await drain(
-      bedrockNovaProvider({
-        modelId: MODEL,
-        client: fake.client,
-        onUsage: (usage) => usages.push(usage),
-      }).streamPairing(request(), new AbortController().signal),
+    const fake = novaFake(
+      [...toolCall(answer()), { metadata: { usage: {} as never, metrics: { latencyMs: 1 } } }],
+      { onUsage: (usage) => usages.push(usage) },
     );
+
+    await drain(fake.provider.streamPairing(pairingRequest(), new AbortController().signal));
 
     expect(usages).toEqual([
       { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheWriteInputTokens: 0 },
@@ -425,13 +284,11 @@ describe('the request', () => {
   });
 
   it('names itself after the model unless given an id', () => {
-    expect(bedrockNovaProvider({ modelId: MODEL, client: clientStreaming([]).client }).id).toBe(
-      `bedrock:${MODEL}`,
-    );
-    expect(
-      bedrockNovaProvider({ modelId: MODEL, id: 'nova-lite', client: clientStreaming([]).client })
-        .id,
-    ).toBe('nova-lite');
+    const { send } = novaFake([]);
+    const client = { send } as unknown as BedrockRuntimeClient;
+
+    expect(bedrockNovaProvider({ modelId: MODEL, client }).id).toBe(`bedrock:${MODEL}`);
+    expect(bedrockNovaProvider({ modelId: MODEL, id: 'nova-lite', client }).id).toBe('nova-lite');
   });
 
   it('builds its own client when none is supplied', () => {
@@ -442,26 +299,20 @@ describe('the request', () => {
 });
 
 describe('toNovaMessages', () => {
-  it('drops a leading assistant turn, merges repeated roles, and joins the new text to a trailing user turn', () => {
+  it('carries each turn as text blocks', () => {
     expect(
       toNovaMessages(
         [
-          { role: 'assistant', content: 'Benvenuto' },
           { role: 'user', content: 'Ciao' },
           { role: 'user', content: 'Mi serve un vino' },
-          { role: 'assistant', content: 'Per cosa?' },
-          { role: 'user', content: 'Brasato' },
         ],
         'PROMPT',
       ),
     ).toEqual([
-      { role: 'user', content: [{ text: 'Ciao' }, { text: 'Mi serve un vino' }] },
-      { role: 'assistant', content: [{ text: 'Per cosa?' }] },
-      { role: 'user', content: [{ text: 'Brasato' }, { text: 'PROMPT' }] },
+      {
+        role: 'user',
+        content: [{ text: 'Ciao' }, { text: 'Mi serve un vino' }, { text: 'PROMPT' }],
+      },
     ]);
-  });
-
-  it('starts with the user when there is no history', () => {
-    expect(toNovaMessages([], 'PROMPT')).toEqual([{ role: 'user', content: [{ text: 'PROMPT' }] }]);
   });
 });

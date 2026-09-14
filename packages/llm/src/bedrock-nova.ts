@@ -8,15 +8,14 @@ import {
 } from '@aws-sdk/client-bedrock-runtime';
 import {
   buildPairingPrompt,
-  leaksInstructions,
   pairingJsonSchema,
-  parsePairingOutput,
   type LlmProvider,
   type PairingChunk,
-  type PairingOutput,
   type Turn,
 } from '@catalogorosso/core';
 
+import { PROVIDER_ERROR, trustedPairing } from './pairing.js';
+import { alternatingTurns } from './turns.js';
 import type { PairingUsage } from './usage.js';
 
 /**
@@ -62,36 +61,12 @@ export interface NovaOptions {
   readonly onUsage?: ((usage: PairingUsage) => void) | undefined;
 }
 
-/**
- * Turns into the strictly alternating messages Converse requires.
- *
- * Bedrock refuses a conversation that starts with the assistant or repeats a
- * role, and history arriving from a widget session guarantees neither. So a
- * leading assistant turn is dropped, consecutive turns of one role are merged
- * into one message, and the new user text joins a trailing user message rather
- * than following it.
- */
-export const toNovaMessages = (history: readonly Turn[], user: string): Message[] => {
-  const messages: Message[] = [];
-
-  const push = (role: Turn['role'], text: string): void => {
-    const last = messages.at(-1);
-
-    if (last?.role === role) {
-      last.content = [...(last.content ?? []), { text }];
-      return;
-    }
-
-    if (messages.length === 0 && role === 'assistant') return;
-
-    messages.push({ role, content: [{ text }] });
-  };
-
-  for (const turn of history) push(turn.role, turn.content);
-  push('user', user);
-
-  return messages;
-};
+/** Turns as the strictly alternating messages Converse requires; see `alternatingTurns`. */
+export const toNovaMessages = (history: readonly Turn[], user: string): Message[] =>
+  alternatingTurns(history, user).map(({ role, texts }) => ({
+    role,
+    content: texts.map((text) => ({ text })),
+  }));
 
 /** The Converse request for one pairing. Exported so its shape is testable without a stream. */
 export const novaRequest = (
@@ -129,34 +104,6 @@ const isStreamError = (event: ConverseStreamOutput): boolean =>
   event.serviceUnavailableException !== undefined ||
   event.throttlingException !== undefined ||
   event.validationException !== undefined;
-
-/**
- * The tool's arguments as a pairing, or `undefined` for anything unusable.
- *
- * Unparseable JSON, a schema failure and a leaked instruction all end the same
- * way — no cards — because each means the answer cannot be trusted as given.
- * Empty input is the case where the model never called the tool at all.
- */
-const toPairing = (raw: string): PairingOutput | undefined => {
-  let json: unknown;
-
-  try {
-    json = JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
-
-  const parsed = parsePairingOutput(json);
-  if (!parsed.ok) return undefined;
-
-  const { reply, recommendations } = parsed.value;
-  const leaked =
-    leaksInstructions(reply) || recommendations.some((item) => leaksInstructions(item.reason));
-
-  return leaked ? undefined : parsed.value;
-};
-
-const PROVIDER_ERROR: PairingChunk = { type: 'error', code: 'provider_error' };
 
 export const bedrockNovaProvider = (options: NovaOptions): LlmProvider => {
   const client = options.client ?? new BedrockRuntimeClient(options.config ?? {});
@@ -236,7 +183,8 @@ export const bedrockNovaProvider = (options: NovaOptions): LlmProvider => {
           return;
         }
 
-        const pairing = toPairing(toolInput);
+        // Empty input is the case where the model never called the tool at all.
+        const pairing = trustedPairing(toolInput);
         if (pairing === undefined) {
           yield { type: 'error', code: 'schema_invalid' };
           return;

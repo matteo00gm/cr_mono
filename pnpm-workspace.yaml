@@ -38,7 +38,12 @@ packages:
 # this file and in package.json's `pnpm` field. Neither suppresses the error and
 # neither stops the placeholder rewrite. Listing them would be config that reads
 # as load-bearing while doing nothing.
+#
+# @google/genai (P1-43) is a direct dependency, not a transitive one, and the
+# same answer holds: its install-time scripts are `echo` no-ops left over from
+# its own repository's build, and the published package runs without them.
 allowBuilds:
+  '@google/genai': false
   cpu-features: false
   esbuild: false
   protobufjs: false
