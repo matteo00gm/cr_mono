@@ -4678,6 +4678,15 @@ Reject a recommendation whose *product* is defensible but whose *reason* is wron
 
 **Files.** `docs/decisions/0001-pairing-model.md`, config default. **~80 lines of documentation.**
 
+**Status — ready to run, not run** *(blocked on credentials, spend and the decision itself, which are a person's)*.
+
+- **The instrument exists**: the three adapters (P1-42 to P1-44), the dataset (P1-45) and `pnpm eval` (P1-46). `docs/runbooks/pairing-bake-off.md` is the procedure, including the live adapter tests to run first.
+- **What it needs from a person**: Bedrock model access in `eu-west-1` for the three Nova candidates, a Gemini key and an Anthropic key in the shell that runs it, agreement to the spend, and the choice.
+- **The decision is recorded as the next ADR**, confirming or superseding 0014 *(deviation — the row names `docs/decisions/0001-pairing-model.md`; this repository's decisions live in `docs/adr/`, numbered and checked by `pnpm adr:check`)*.
+- **Two things P1-46 left to this row**: choosing and wiring the judge model, and rating the reserved human sample. Until a judge exists, the human ratings are the pairing-quality column.
+- **The recall columns will describe the lexical stand-in** until P2-20, so this run decides on the generation columns — the schema-failure rate above all — and retrieval is re-measured when real retrieval lands.
+- **Open questions it has to answer**, recorded at P1-42 to P1-44: whether P2-23's system prompt is long enough for Nova's cache and Haiku 4.5's 4,096-token minimum, and what Gemini's and Anthropic's unstreamed replies cost in time to first token.
+
 ---
 
 ### P1-48 · Reserved concurrency = 10
