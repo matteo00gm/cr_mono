@@ -1285,7 +1285,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-03 | 🔒 Limiter test suite | boundaries, parallel-invocation atomicity, rollover, headers | P2-02 |
 | ✅ P2-04 | 🔒 Wire all limit dimensions | session, IP, tenant/min, tenant/month, per-endpoint | P2-02 |
 | ✅ P2-05 | ⛔ 🔒 Origin normalization fn | punycode, lowercase, strip path/port, PSL, reject IP/localhost | P0-42 |
-| P2-06 | 🔒 Origin normalization table test | trailing dot, uppercase, port, `null`, absent, lookalikes | P2-05 |
+| ✅ P2-06 | 🔒 Origin normalization table test | trailing dot, uppercase, port, `null`, absent, lookalikes | P2-05 |
 | P2-07 | ⛔ 🔒 Allowlist accessor (uncached) | single accessor so caching is additive later | P2-05,P0-24 |
 | P2-08 | ⛔ 🔒 Dynamic CORS middleware | exact-set match, echo origin, **`Vary: Origin`**, no credentials | P2-07 |
 | P2-09 | 🔒 CORS test suite | exact headers, preflight, 403-with-no-headers, bypass attempts | P2-08 |
@@ -4844,6 +4844,14 @@ Explicitly **no wildcard support** (§3.3) — the function has no code path tha
 Then the **bypass cases**, asserting they normalize to something that will *not* match `https://winery.com` in P2-08's exact-set comparison: `evil-winery.com`, `winery.com.attacker.io`, `winery.com.` (trailing dot — assert the canonical form is stable either way), `wínery.com` (homoglyph → different punycode), `winery.com%00.evil.io`, and `xn--` prefixed lookalikes.
 
 **Files.** `packages/security/test/origin-normalize.spec.ts`. **~180 test lines.**
+
+**As built (2026-09-15).** In `packages/security/test/origin-normalize.test.ts`, extending P2-05's file rather than beside it. Every case the row names is there, verbatim, and the bypass list goes further than the row: credentials (`winery.com@evil.io`), a fragment or query hiding the real host (`evil.io#@winery.com`, `evil.io?.winery.com`), a port that is not a port (`winery.com:443.evil.io`), a percent-encoded dot (`winery.com%2eevil.io`), a backslash, and near-miss spellings.
+
+- **Each bypass is asserted against the comparison P2-08 will actually make** — exact equality with the verified origin — so a case passes only if the input is refused or normalises to something that is not `https://winery.com`. "Handled" is not an outcome.
+- **The inverse is asserted too.** The only inputs that reach `https://winery.com` are spellings of that one name: case, a trailing slash, the default port, surrounding whitespace, one trailing dot. A normaliser that let an attacker's string collapse onto a verified origin would pass every refusal test and fail this one.
+- **The trailing dot is stable either way**, as the row asks: `winery.com.` normalises to `https://winery.com`, normalising that again changes nothing, and `winery.com..` is refused. P2-05's note says why the browser still fails closed for a page served from the dotted name.
+- **Normalisation is idempotent** over the accepted cases, which is what lets a stored origin be re-normalised on read without drifting.
+- **Mutation:** P2-05's eighteen mutants, rerun against the full table, are all killed.
 
 ---
 
