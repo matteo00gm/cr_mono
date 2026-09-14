@@ -1,7 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createApp } from '../src/app.js';
 import { buildDependencies } from '../src/composition.js';
 import { unconfiguredMembers } from '../src/members.js';
+import { ORIGIN_SECRET_HEADER } from '../src/middleware/origin-secret.js';
 
 /**
  * The composition root (E9).
@@ -29,6 +32,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 const config = {
@@ -88,6 +92,89 @@ describe('buildDependencies', () => {
      * build would take the whole API down for want of an email address.
      */
     expect(() => buildDependencies({ ...config, resendApiKey: undefined })).not.toThrow();
+  });
+
+  it('sends through Resend in production once a key is supplied', async () => {
+    /*
+     * The other half of the test above, and the half nothing covered: with a
+     * key, on `production`, the reset mail has to reach the provider rather
+     * than the log. `send.test.ts` proves `chooseTransport` picks the provider
+     * it is given; this proves the composition root gives it one.
+     *
+     * The key is assembled at runtime, never written out (P0-56).
+     */
+    const apiKey = ['re', randomUUID()].join('_');
+    const fakeFetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(new Response(JSON.stringify({ id: 'resend-message-1' }), { status: 200 })),
+    );
+    vi.stubGlobal('fetch', fakeFetch);
+
+    const deps = buildDependencies({ ...config, stage: 'production', resendApiKey: apiKey });
+
+    await deps.sendResetPassword({
+      to: 'anna@cantina.example',
+      url: 'https://app.example/reset/abc',
+      token: 'abc',
+      userId: 'user_anna',
+    });
+
+    expect(fakeFetch).toHaveBeenCalledTimes(1);
+
+    const [url, init] = fakeFetch.mock.calls[0] ?? [];
+    expect(url).toBe('https://api.resend.com/emails');
+    expect((init?.headers as Record<string, string> | undefined)?.authorization).toBe(
+      `Bearer ${apiKey}`,
+    );
+  });
+});
+
+describe('secrets reach the surfaces that check them (A2, P0-64b)', () => {
+  /*
+   * Each secret is one conditional spread in `buildDependencies`, and removing
+   * either failed nothing: `origin-secret.test.ts` and `webhooks.test.ts` hand
+   * their secret straight to `createApp`, so both guards were proven to work
+   * and neither was proven to be *wired* — E9's shape again. For the origin
+   * secret it is worse than E9, because its absent form is permissive: the
+   * symptom would be an API quietly answering callers who went around
+   * CloudFront.
+   *
+   * Asserted through requests rather than on the returned fields, because the
+   * claim is that the guard runs, not that a property exists.
+   */
+  it('installs the origin guard when a secret is supplied', async () => {
+    const secret = randomUUID();
+    const app = createApp(buildDependencies({ ...config, originSecret: secret }));
+
+    const bypassed = await app.request('/v1/dashboard');
+    const viaEdge = await app.request('/v1/dashboard', {
+      headers: { [ORIGIN_SECRET_HEADER]: secret },
+    });
+
+    expect(bypassed.status).toBe(404);
+    expect(viaEdge.status).toBe(200);
+  });
+
+  it('installs no origin guard without one, which only a local run is allowed', async () => {
+    // `index.ts` refuses to start a deployed stage in this shape; the entry
+    // point's own test asserts that half.
+    const app = createApp(buildDependencies(config));
+
+    expect((await app.request('/v1/dashboard')).status).toBe(200);
+  });
+
+  it('hands the webhook surface its signing secret', async () => {
+    const unsigned = { method: 'POST', body: JSON.stringify({ type: 'email.bounced' }) };
+
+    const without = createApp(buildDependencies(config));
+    const configured = createApp(
+      buildDependencies({ ...config, resendWebhookSecret: randomUUID() }),
+    );
+
+    // Absent is restrictive: the endpoint does not exist yet.
+    expect((await without.request('/v1/webhooks/resend', unsigned)).status).toBe(404);
+
+    // Present, the endpoint exists — and refuses a delivery nobody signed.
+    expect((await configured.request('/v1/webhooks/resend', unsigned)).status).toBe(401);
   });
 });
 

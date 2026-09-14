@@ -69,15 +69,33 @@ export default defineConfig({
       /*
        * `infra/` is not a package and has no `tsconfig` in the build graph —
        * `pnpm typecheck:infra` is local-only because it needs `sst install`
-       * first (E3). So its one file that carries a *decision* rather than a
-       * resource declaration is tested here instead: `static-assets.ts` chooses
-       * which files may be cached for a year, and getting that backwards serves
-       * a stale console to everybody with nothing failing (P0-58).
+       * first (E3). So the parts that carry a *decision* rather than a resource
+       * declaration live in modules that need no SST, and are tested here:
+       * `static-assets.ts` chooses which files may be cached for a year (P0-58),
+       * `queue-config.ts` holds the embedding pipeline's numbers (P1-32), and
+       * `edge-functions.ts` is the source of both CloudFront Functions
+       * (P0-17a). Each is wrong, when it is wrong, with nothing failing.
        *
        * Named explicitly because the helper derives a name from the second path
        * segment, and `infra` has only one.
        */
       project('infra', 'node', 'infra'),
+
+      /*
+       * The CI gate scripts. Plain `.mjs` outside every tsconfig, hence an
+       * include of their own, and tested by running them as CI does — a gate
+       * means its exit status. `check-coverage.mjs` has taken a fixture path
+       * since P0-07 so its refusals could be exercised, and until this project
+       * existed none of them had ever been seen to fire.
+       */
+      {
+        test: {
+          name: 'scripts',
+          root: 'scripts',
+          environment: 'node',
+          include: ['test/**/*.test.mjs'],
+        },
+      },
     ],
     coverage: {
       provider: 'v8',
