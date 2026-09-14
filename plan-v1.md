@@ -5052,6 +5052,16 @@ Caps on every string and on the array — an unbounded `reason` is both a cost a
 
 **Files.** `packages/core/src/rag/pairing-schema.ts`, tests. **~90 lines.**
 
+**As built — pulled into P1, ahead of the adapters that need it.**
+
+- **Built before P1-42** *(deviation — sequencing)*. Every adapter forces structured output with this schema and needs it to tell a valid answer from `schema_invalid`, and P1-47's bake-off has to measure the schema the product will ship with, not a stand-in.
+- **One Zod schema; `pairingJsonSchema()` projects it** to JSON Schema (draft 2020-12, as Zod 4's `z.toJSONSchema` emits it) with the `$schema` dialect key removed. Converting that to each provider's accepted subset is each adapter's job, from this one output — so the row's "JSON Schema matches a snapshot per provider" lands with each adapter, and what is pinned here is the canonical form: every cap, both `required` lists, `additionalProperties: false` at both levels.
+- **`reason` needs at least one character** *(addition)*: a card with an empty reason tells the visitor nothing.
+- **Unknown keys are stripped, not refused** *(decision)*. The JSON Schema forbids them for providers that enforce it, and refusing an otherwise valid answer over an extra key would count toward the schema-failure rate P1-47 disqualifies a model on, for nothing a visitor sees.
+- **`parsePairingOutput` returns issues as `path: message`**, never throws — the adapter's `schema_invalid` and P2-27's repair prompt both read them.
+- **The 240-character `reason` cap carries a comment saying it is a security control** (P2-23's system-prompt exfiltration argument), so a later "allow longer explanations" has to argue with it.
+- A type test holds the schema's recommendation to P1-41's `Recommendation`, so the port and the schema cannot describe two different answers.
+
 ---
 
 ### P2-25 · Output allowlisting ⛔ 🔒

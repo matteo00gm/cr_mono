@@ -63,3 +63,20 @@ export {
   type Recommendation,
   type Turn,
 } from './llm-provider.js';
+
+/**
+ * The structured-output schema (P2-24, pulled forward into P1).
+ *
+ * One Zod source every provider's format is derived from, and the validation
+ * that turns a model's answer into ids P2-25 can check — or into `schema_invalid`.
+ */
+export {
+  MAX_REASON_CHARACTERS,
+  MAX_RECOMMENDATIONS,
+  MAX_REPLY_CHARACTERS,
+  pairingJsonSchema,
+  pairingOutput,
+  parsePairingOutput,
+  type PairingOutput,
+  type PairingParse,
+} from './pairing-schema.js';
