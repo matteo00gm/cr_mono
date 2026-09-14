@@ -67,6 +67,37 @@ const one = (key: string, limit: number, windowSec = 60): LimitCheck[] => [
   { key, limit, windowSec },
 ];
 
+export interface WindowTally {
+  /** When the window closes, which is its identity. */
+  readonly resetAt: number;
+  readonly calls: number;
+  readonly admitted: number;
+}
+
+/**
+ * How many calls each window received and admitted.
+ *
+ * Grouped by `resetAt`, which identifies a window in both implementations: each
+ * derives it from an epoch-aligned start, so every result from one window
+ * carries the same instant and results either side of a boundary do not.
+ * Exported so the grouping itself can be tested against a clock that crosses a
+ * boundary on purpose, rather than trusted.
+ */
+export const tallyWindows = (results: readonly LimitResult[]): readonly WindowTally[] => {
+  const windows = new Map<number, { calls: number; admitted: number }>();
+
+  for (const result of results) {
+    const resetAt = result.resetAt.getTime();
+    const window = windows.get(resetAt) ?? { calls: 0, admitted: 0 };
+
+    window.calls += 1;
+    if (result.allowed) window.admitted += 1;
+    windows.set(resetAt, window);
+  }
+
+  return [...windows].map(([resetAt, window]) => ({ resetAt, ...window }));
+};
+
 /**
  * Runs the suite against one implementation.
  *
@@ -207,8 +238,31 @@ export const describeRateLimiter = (
         Array.from({ length: 50 }, () => limiter.check(one(key, 10))),
       );
 
-      const allowed = results.filter((r: LimitResult) => r.allowed);
-      expect(allowed).toHaveLength(10);
+      /*
+       * **Per window, not in total, and CI is what taught this.** Windows are
+       * fixed and epoch-aligned, so a burst that straddles a boundary is two
+       * bursts. A run on 2026-09-14 admitted thirteen — a few calls in the
+       * closing minute and ten in the new one — which is the fixed-window worst
+       * case `rate-limit.ts` documents, not a race. Counting in total made this
+       * assertion depend on the wall clock, a few runs in a thousand.
+       *
+       * What a read-then-write race breaks is the per-window count, so that is
+       * what is asserted: no window admits more than its limit, and the window
+       * that received the most calls — at least twenty-five of the fifty, since
+       * a burst this short spans two windows at most — admitted exactly ten.
+       */
+      const windows = tallyWindows(results);
+
+      expect(windows.length).toBeLessThanOrEqual(2);
+
+      for (const window of windows) {
+        expect(window.admitted, `window closing at ${String(window.resetAt)}`).toBeLessThanOrEqual(
+          10,
+        );
+      }
+
+      const busiest = windows.reduce((a, b) => (b.calls > a.calls ? b : a));
+      expect(busiest.admitted).toBe(10);
     });
   });
 };

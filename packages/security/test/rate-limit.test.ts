@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeRateLimiter } from '@catalogorosso/testing';
+import { describeRateLimiter, tallyWindows } from '@catalogorosso/testing';
 
 import { memoryRateLimiter, windowStartMs } from '../src/rate-limit/index.js';
 
@@ -76,6 +76,55 @@ describe('the memory limiter', () => {
     // The Postgres implementation throws on it instead, because there a caller
     // reaching the database with nothing to check is a bug worth surfacing.
     expect((await memoryRateLimiter().check([])).allowed).toBe(true);
+  });
+});
+
+describe('the concurrency case across a window boundary', () => {
+  /*
+   * The CI failure of 2026-09-14, made deterministic by the clock this
+   * implementation takes. The conformance suite's concurrency case counted
+   * admitted calls in total, and a burst that straddled a minute boundary
+   * admitted thirteen — the fixed-window worst case, not a race. It now counts
+   * per window with `tallyWindows`, and these two cases are what show the
+   * grouping tells the two situations apart rather than merely tolerating more.
+   */
+  const LIMIT = 10;
+  /** An exact minute, in epoch milliseconds. */
+  const BOUNDARY = 1_789_380_000_000;
+
+  it('splits a burst that straddles a boundary into the two windows it landed in', async () => {
+    let seen = 0;
+    // Three calls in the closing minute, the other forty-seven in the next.
+    const limiter = memoryRateLimiter(() => (seen++ < 3 ? BOUNDARY - 1 : BOUNDARY + 1));
+    const check = [{ key: 'burst', limit: LIMIT, windowSec: 60 }];
+
+    const results = await Promise.all(Array.from({ length: 50 }, () => limiter.check(check)));
+
+    // The total the old assertion counted, and failed on in CI.
+    expect(results.filter((result) => result.allowed)).toHaveLength(13);
+
+    expect(tallyWindows(results).map(({ calls, admitted }) => [calls, admitted])).toEqual([
+      [3, 3],
+      [47, LIMIT],
+    ]);
+  });
+
+  it('still shows a single window that admitted more than its limit', () => {
+    /*
+     * The per-window count is a guard only if it can fail. Eleven admissions
+     * that all name one window are what a read-then-write race produces, and
+     * the tally has to report them as eleven in one place.
+     */
+    const resetAt = new Date(BOUNDARY + 60_000);
+    const raced = Array.from({ length: LIMIT + 1 }, () => ({
+      allowed: true,
+      remaining: 0,
+      resetAt,
+    }));
+
+    expect(tallyWindows(raced)).toEqual([
+      { resetAt: resetAt.getTime(), calls: LIMIT + 1, admitted: LIMIT + 1 },
+    ]);
   });
 });
 
