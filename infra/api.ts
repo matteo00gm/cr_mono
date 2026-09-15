@@ -62,6 +62,23 @@ const emailAllowlist = new sst.Secret('EmailAllowlist', '');
  *   `sst secret set ResendWebhookSecret --stage <stage>`
  */
 const resendWebhookSecret = new sst.Secret('ResendWebhookSecret', '');
+
+/**
+ * The widget session token keyset (P2-11): one or two Ed25519 private JWKs, the
+ * first of which signs.
+ *
+ * **An `sst.Secret`, which SST keeps as an SSM `SecureString`** — where §5.7 puts
+ * the key, through the mechanism every other operator-supplied value here uses.
+ * One value holding both active keys rather than a parameter per `kid`, so a
+ * rotation is a single write and there is never a moment when the new signing
+ * key is set and its predecessor has already gone.
+ *
+ * Empty by default, like the email secrets: nothing reads it until P2-12 mints
+ * tokens, and a secret with no default would block every deploy on it. Generate
+ * it and set it through a pipe, so the key never touches a file or a history:
+ *   `node scripts/widget-token-key.mjs | sst secret set WidgetTokenKeys --stage <stage>`
+ */
+const widgetTokenKeys = new sst.Secret('WidgetTokenKeys', '');
 import { vpc } from './vpc';
 
 /**
@@ -263,6 +280,13 @@ export const api = new sst.aws.Function('Api', {
      * suppression list is indistinguishable from a domain with no bounces.
      */
     RESEND_WEBHOOK_SECRET: resendWebhookSecret.value,
+
+    /**
+     * The widget token keyset (P2-11), read once per container when P2-12's
+     * session route loads its keys — injected like `AUTH_SECRET`, for the same
+     * cold-start reason.
+     */
+    WIDGET_TOKEN_KEYS: widgetTokenKeys.value,
   },
 
   /**

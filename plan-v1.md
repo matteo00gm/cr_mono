@@ -552,7 +552,7 @@ Normalization and validation, all in one pure function in `packages/security` wi
 - **EdDSA (Ed25519)** signed JWT — asymmetric so verification never needs the signing key, and the algorithm is pinned (`alg` allowlist; `none`, and HS/RS confusion, rejected explicitly with a test each).
 - **15-minute TTL.** Claims: `tid`, `sid`, `origin`, `plan`, `jti`, `aud: "widget"`, `iss`, `iat`, `exp`.
 - Verified on **every** call: signature, `exp`/`iat` skew, `aud`, `iss`, `alg`, `origin` match, `jti` not in the revocation table, and **tenant still `ACTIVE`** — read directly from Postgres at launch (§5.7), so a tenant who stops paying loses session-mint and chat access the moment the Stripe webhook lands, not at token expiry and not at a TTL boundary.
-- Signing keys in KMS, rotated quarterly, with an overlapping verification window (JWKS-style key id in the header).
+- Signing keys in an SSM-backed secret, signing in process rather than through KMS (§5.7, P2-11). Rotated quarterly with an overlapping verification window: two active keys, the key id in the header.
 - Refresh by re-minting, subject to the same origin check. No long-lived widget credentials exist.
 
 ### 3.5 Dashboard authentication
@@ -1305,7 +1305,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-08 | ⛔ 🔒 Dynamic CORS middleware | exact-set match, echo origin, **`Vary: Origin`**, no credentials | P2-07 |
 | ✅ P2-09 | 🔒 CORS test suite | exact headers, preflight, 403-with-no-headers, bypass attempts | P2-08 |
 | ✅ P2-10 | `GET /v1/widget/config` | public config only, edge-cache 60 s | P2-08 |
-| P2-11 | 🔒 Ed25519 key in SSM + in-process sign | no KMS asymmetric on the hot path (§5.7) | P0-15 |
+| ✅ P2-11 | 🔒 Ed25519 key in SSM + in-process sign | no KMS asymmetric on the hot path (§5.7) | P0-15 |
 | P2-12 | ⛔ 🔒 `POST /v1/widget/session` | mint token with `origin`/`tid`/`jti`, 15 min | P2-11 |
 | P2-12a | 🔒 Session continuation | re-mint keeping `sid`, **requires the previous token** — never a client-supplied `sid` | P2-12 |
 | P2-13 | ⛔ 🔒 Token verify middleware | sig, exp, aud, iss, alg, origin match, jti, **tenant ACTIVE** | P2-12 |
@@ -1319,8 +1319,8 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P2-20 | RRF fusion + test | | P2-18,19 |
 | P2-21 | Availability + price filters | out-of-stock excluded unless nothing matches | P2-20 |
 | P2-22 | Candidate cap (top 8) | cost + injection surface control | P2-20 |
-| P2-23 | 🔒 Prompt assembly | product content delimited and labelled untrusted | P2-22 |
-| P2-24 | Structured output schema | `{reply, recommendations[]}` + Zod | P1-42 |
+| ✅ P2-23 | 🔒 Prompt assembly | product content delimited and labelled untrusted | P2-22 |
+| ✅ P2-24 | Structured output schema | `{reply, recommendations[]}` + Zod | P1-42 |
 | P2-25 | ⛔ 🔒 Output allowlisting | every `productId` ∈ tenant **∩** retrieved candidate set | P2-24 |
 | P2-26 | 🔒 Test: output allowlisting | injected foreign and hallucinated ids are dropped + logged | P2-25 |
 | P2-27 | Schema-failure retry + fallback | one repair attempt, then text-only with no cards | P2-24 |
@@ -5052,6 +5052,30 @@ Browser-level proof is P3-18 — this suite asserts headers, that one asserts th
 **Tests.** Sign/verify round-trip; a token signed with kid A verifies while A is still in the verification set and fails once removed; the key never appears in log output.
 
 **Files.** `packages/security/src/tokens/keys.ts`, tests. **~100 lines.**
+
+**As built (2026-09-15).** The keys are in `packages/security/src/tokens/keys.ts`, on a new `@catalogorosso/security/tokens` subpath, and the tests are in `packages/security/test/tokens-keys.test.ts`. What the row left open:
+
+- **One secret holding the keyset, not a parameter per `kid`** *(deviation)*. `WidgetTokenKeys` is an `sst.Secret`, which SST stores as an SSM `SecureString`, holding `{ "keys": [<Ed25519 private JWK>, …] }`. A rotation is one write, so there is never a moment when the new signing key is set and its predecessor has already gone.
+- **Injected, not fetched at cold start** *(deviation)*. The API receives it as `WIDGET_TOKEN_KEYS`, as it receives `AUTH_SECRET`; either way it is read once per container. Nothing reads it until P2-12.
+- **No public JWKS parameter** *(deviation)*. The only verifier is this service, which derives the public halves from the same set. A second copy of them would be a second place for a rotation to go half-done.
+- **Rotation.**
+  - At most two keys are active. The first signs, and every key in the set verifies.
+  - A token whose `kid` has left the set is refused.
+  - `alg` is pinned to `EdDSA` and never read from the token.
+  - The clock tolerance is 5 s, and `exp` and `iat` are required.
+- **A bad keyset refuses to load.** It is refused for any of these:
+  - not JSON, no keys, or three keys;
+  - a repeated `kid`;
+  - the wrong key type or curve;
+  - a missing half, or material that does not import;
+  - a private half pasted beside another key's public half.
+
+  That last pair would mint tokens nothing can verify. WebCrypto refuses it at import, and the suite pins that refusal, so a runtime that stopped checking would fail there. Every message names a `kid` or a position, never a value.
+- **The key never reaches a log.** Refusals carry no material, a loaded set cannot be serialised or inspected back into it, and a keyset logged by mistake is redacted by the P0-56 allowlist.
+- **Generated out of band** by `scripts/widget-token-key.mjs`, which writes only to stdout, for piping into `sst secret set`. With `--rotate` it reads the current set on stdin and writes the new key first and the previous signing key second.
+- **The library is `jose` 6.2.12, pinned exactly**, like this package's other dependency.
+- **Not deployed.** No keyset exists on any stage yet.
+- **Mutation:** twelve mutants against the module are all killed. They cover the algorithm allowlist, the clock tolerance, the required claims, the key-count and duplicate-`kid` checks, import refusals, a private key handed to verification, which key signs and which `kid` the header names, the lifetime guard, and an unknown `kid` falling back to the signer.
 
 ---
 
