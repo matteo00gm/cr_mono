@@ -581,6 +581,21 @@ Token buckets behind a **`RateLimiter` interface** — one atomic upsert per che
 - Also rate-limit the *expensive dashboard* paths: bulk paste/upsert, bulk reindex, domain verification retries, invite sends. **Bulk reindex is the one on this list that turned out not to be expensive** — P1-34's hash check means a reindex of an unchanged catalogue makes no provider call at all — so P1-39 guards it against a *second batch queued on top of the first* rather than against a clock. It still belongs in the general budget here; it is no longer the urgent entry.
 - **AWS WAF on the CloudFront distribution** for L3/L4, managed bot-control and reputation rules, and per-path rate rules — a coarse outer layer in front of the fine-grained application limits above. Optional **Turnstile** (or WAF CAPTCHA) challenge on session mint when a tenant's anomaly score spikes — off by default, one flag to enable per tenant.
 
+**The numbers (decided 2026-09-15), sized for §5.0's ten tenants.** Per minute unless marked. The source is `WIDGET_LIMITS` in `packages/security/src/rate-limit/widget.ts`, and the tests hold the relations between them.
+
+| Dimension | Config | Session | Chat | Why |
+|---|---|---|---|---|
+| Per session | — | 6 | 6 | A reply takes 3–8 s. One message every ten seconds is faster than anyone reads a recommendation. |
+| Per address, per tenant | 60 | 10 | 20 | Room for several visitors behind one carrier NAT. Config reaches the API only on an edge cache miss (P2-10). |
+| Per endpoint, per tenant | 120 | 60 | 60 | Chat at 60 a minute and ~5 s a reply is at most 5 concurrent executions, half the API's reserved concurrency of 10 (P1-48). |
+| Per tenant, all endpoints | trial 30 · Cantina 60 · E-commerce 120 | | | One winery of ten cannot take the function from the other nine. |
+| Per address, before resolution, across tenants and endpoints | 120 | | | Above one winery's 90 per address, so a real visitor meets that winery's limits first (P2-04 review fix). |
+| Per month, chat messages | trial 150 · Cantina 1,500 · E-commerce 6,000 | | | P5-01's plan allowances, and the trial's hard cap (Open Decisions). |
+
+**At this scale the limits are about abuse, not load.** A Cantina's 1,500 messages is about 50 a day, and no legitimate pattern comes near a per-minute figure above. Two neighbouring numbers are sized against the same 10-second function:
+- An import spends at most 6 s applying batches (P1-25).
+- An email attempt waits at most 2 s, so three attempts and their backoff still fit in the request (P0-64).
+
 ### 3.7 LLM-layer security
 
 Retrieved product text is **tenant-supplied user content**. Treat it as data:
@@ -3229,6 +3244,7 @@ Four departures from the text above, each because building it made the reason co
   - **Retrying.** The transport now bounds each attempt at `RESEND_TIMEOUT_MS` (2 s) and turns "no answer" into a retryable `EmailSendError` with status 0. The error names only the error class, since a network error's message can carry the host. It also retries 409, Resend's "this key is still being processed".
   - **Never twice.** What makes retrying a request that may already have been sent safe is an `Idempotency-Key`. `sendEmail` makes one per message, outside the retry loop. Resend keeps it for 24 hours and answers a repeat with the first result.
   - **The budget.** Three attempts and the backoff between them fit inside `API_TIMEOUT_SECONDS`, and a test holds them to it.
+  - **Sizing (confirmed 2026-09-15).** Three attempts at 2 s plus 1.5 s of backoff is 7.5 s, which leaves a password-reset or invite request the rest of its 10 s for the work around the send. A longer timeout would trade that room for patience with a provider that is already failing.
 
 **The suppression table is deliberately global.** `email_suppressions` has no `tenant_id`, so it joins `processed_webhooks` and `rate_limit_buckets` as a table with no RLS policy. That is the protection rather than a gap in it: the reputation a suppression defends belongs to the sending domain, so a bounce one winery caused has to stop every winery mailing that address. Unlike the P0-33a ledgers it keeps `UPDATE`/`DELETE` for `app_rw` — a mailbox that was full last month is a customer who cannot reset their password this month, and the alternative to `unsuppressAddress` is somebody doing it by hand in a production console.
 
@@ -4081,6 +4097,7 @@ Enqueue an outbox row **only for rows where `changed`**. Return per-row outcomes
 - **The answer counts what P1-23 shows** — created, updated, unchanged, duplicate SKU, and archived matches — computed on the server so the summary and the outcomes cannot disagree.
 - **Review fix (2026-09-15): an import stops at a time budget instead of being killed.** The P1 review measured 10,000 changed wines at 12.2 s against local Postgres, past the API function's 10 s timeout, and a function killed mid-batch stores no report and leaves its key "still running".
   - **The server.** `importRows` takes a `deadline`. After the first batch, which always runs so every request makes progress, it starts a batch only if one as slow as the slowest so far would finish by the deadline. The route sets that deadline `IMPORT_TIME_BUDGET_MS` (6 s) after the request arrives.
+  - **Sizing (confirmed 2026-09-15).** The largest plan's catalogue is 2,500 wines (P5-01). At the review's measured 1.2 ms a changed row, that is about 3 s of batches locally, so a full catalogue usually fits one request and continues at most once against RDS. The 6 s leaves the rest of the 10 for parsing up to 5 MB, one batch slower than any before it, and storing the result.
   - **The stop.** Running out of time is an ordinary stopped import whose `stoppedAt.reason` is `time-budget` rather than `failed`. It is logged at info, not as an error.
   - **The dashboard** sends the rest by itself: the rows from `fromRow` on, less any refused as a repeated SKU, under a new key. It merges the answers into one numbered against the whole list, and a continuation that fails is retried with its own key (`import-continuation.ts`). Each continuation is its own attempt, so an import sent in three parts writes three audit entries.
   - **Consistency.** `API_TIMEOUT_SECONDS` in `packages/core` restates the timeout, and `apps/api/test/import-time-budget.test.ts` reads `infra/api.ts` to hold the two together.
@@ -4817,11 +4834,14 @@ The window start is **computed in SQL from `now()`**, never passed from the appl
 - **Mounted by P2-10** on `/v1/widget/config`, after P2-08's resolution, with the address secret taken from `AUTH_SECRET` rather than a second SSM parameter.
 - **Review fix (2026-09-15): an address limit now runs before resolution.**
   - **The gap.** Every dimension above is counted against a tenant, so it runs after `(pk_, Origin)` is resolved — and resolution is an uncached read. A script cycling through invented keys cost one query apiece with no cap, because CORS refused each only after paying for it.
-  - **The fix.** `unresolvedLimitCheck` (`ip:<hmac>:unresolved`, 240 a minute, provisional like the rest) is counted first, by `limitUnresolvedWidgetRequest`, mounted ahead of `widgetCors`. Its refusal carries `Vary: Origin` and `Retry-After`, and no CORS headers.
+  - **The fix.** `unresolvedLimitCheck` (`ip:<hmac>:unresolved`, 120 a minute; §3.6 gives the reason) is counted first, by `limitUnresolvedWidgetRequest`, mounted ahead of `widgetCors`. Its refusal carries `Vary: Origin` and `Retry-After`, and no CORS headers.
   - **What it does not do.** The limiter's own upsert is still a write per request, so this bounds the expensive path, not the request rate. The blunt per-address ceiling in front of everything is P4-13's WAF rule.
   - **Open.** P2-12's session route and P2-29's chat route must mount it first too.
 
-**⚠ Open — the numbers.** §3.6 names the dimensions and gives no figures, so `WIDGET_LIMITS` is provisional. Per minute: session 6 to mint, 12 for chat; address 60 config, 12 session, 30 chat; tenant 120 on CANTINA, 600 on ECOMMERCE, 60 with no plan; endpoint 600 config, 120 session, 120 chat. Per month: 1,000, 10,000 and 100 chat messages. The monthly caps are really P5-01's pricing decision, and should be settled there.
+**Decided (2026-09-15) — the numbers.** §3.6 named the dimensions and gave no figures, so these were placeholders until now. They are sized for §5.0's ten tenants, and the table in §3.6 gives the reason for each. The monthly caps are P5-01's allowances, 1,500 and 6,000, and the trial's 150; the placeholders had 1,000, 10,000 and 100, which contradicted P5-01. Three things stay open:
+- **The trial's cap is a total, the limiter's window is a month.** The 150-message trial lasts 14 days, and a trial that crosses a month boundary could send 300. P2-36's quota gate owns the trial total.
+- **Top-ups are not in the limiter.** "+1,000 messages for €15" raises a tenant's allowance, which a fixed table cannot express. Also P2-36.
+- **The plan allowances live in two places.** `WIDGET_LIMITS.messagesPerMonth` restates plan data that P5-01 puts in `packages/core/src/plans.ts`. When that exists, the widget table should read from it rather than repeat it.
 
 ---
 
@@ -5017,7 +5037,7 @@ Browser-level proof is P3-18 — this suite asserts headers, that one asserts th
   - `development` origins, on a local run only.
 
   Without these dependencies, the config route throws a wiring error instead of answering.
-- **The limit numbers are still P2-04's provisional ones** (P5-01).
+- **The limit numbers were decided on 2026-09-15** (§3.6). A CANTINA month is 1,500 messages, so its widget is told `near` from 1,200.
 - **`peek` against real Postgres** is in `packages/testing/test/rate-limit.integration.test.ts`. It was not run locally because Docker wasn't running, so CI's integration job is its first run.
 
 ---
