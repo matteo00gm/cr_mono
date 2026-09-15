@@ -107,6 +107,10 @@ patch will not, because the ORM's own documentation shows the forbidden form.
 - CORS matching is exact-set equality. Never a regular expression, never
   `startsWith`, never `endsWith` — suffix matching is defeated by
   `evil-example.com` (§3.4, P2-08).
+- Every widget route counts the visitor's address before anything else:
+  `limitUnresolvedWidgetRequest`, then `widgetCors`, then `limitWidgetRequest`.
+  Resolving a key is a query, and a route that resolves first hands a script one
+  free query per invented key (P2-04).
 - Every outbound fetch to a user-supplied host goes through `guardedFetch`
   (P4-03a).
 

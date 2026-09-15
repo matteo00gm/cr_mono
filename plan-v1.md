@@ -384,7 +384,7 @@ Because I argued against file upload earlier, the bug surface it reintroduces mu
 | Italian decimal comma — `12,50` not `12.50` | Locale-tolerant number parse, accepting both; ambiguous values flagged, never guessed |
 | Quoted fields containing the delimiter — `"Barbaresco, Riserva"` | Proper RFC-4180 quote handling, not `split(',')` — one reader shared by paste and CSV (P1-14, P1-16) |
 | Header names that don't match the template | Matched case- and accent-insensitively after trimming; **unrecognised and missing columns are listed by name** rather than silently mapped by position. A downloadable template makes this rare |
-| Enormous files | Row cap (10,000), file-size cap (10 MB) and request cap (5 MB, under the Function URL's 6 MB), with a clear message; upsert sent in batches |
+| Enormous files | Row cap (2,500, the largest plan's catalogue), file-size cap (10 MB) and request cap (5 MB, under the Function URL's 6 MB), with a clear message; upsert sent in batches |
 
 ### 2.2b Import semantics — upsert by SKU, summary first
 
@@ -552,7 +552,7 @@ Normalization and validation, all in one pure function in `packages/security` wi
 - **EdDSA (Ed25519)** signed JWT — asymmetric so verification never needs the signing key, and the algorithm is pinned (`alg` allowlist; `none`, and HS/RS confusion, rejected explicitly with a test each).
 - **15-minute TTL.** Claims: `tid`, `sid`, `origin`, `plan`, `jti`, `aud: "widget"`, `iss`, `iat`, `exp`.
 - Verified on **every** call: signature, `exp`/`iat` skew, `aud`, `iss`, `alg`, `origin` match, `jti` not in the revocation table, and **tenant still `ACTIVE`** — read directly from Postgres at launch (§5.7), so a tenant who stops paying loses session-mint and chat access the moment the Stripe webhook lands, not at token expiry and not at a TTL boundary.
-- Signing keys in KMS, rotated quarterly, with an overlapping verification window (JWKS-style key id in the header).
+- Signing keys in an SSM-backed secret, signing in process rather than through KMS (§5.7, P2-11). Rotated quarterly with an overlapping verification window: two active keys, the key id in the header.
 - Refresh by re-minting, subject to the same origin check. No long-lived widget credentials exist.
 
 ### 3.5 Dashboard authentication
@@ -580,6 +580,21 @@ Token buckets behind a **`RateLimiter` interface** — one atomic upsert per che
 - Soft cap at 100% (widget shows `QUOTA_EXCEEDED`, tenant emailed), hard stop above a configurable overage.
 - Also rate-limit the *expensive dashboard* paths: bulk paste/upsert, bulk reindex, domain verification retries, invite sends. **Bulk reindex is the one on this list that turned out not to be expensive** — P1-34's hash check means a reindex of an unchanged catalogue makes no provider call at all — so P1-39 guards it against a *second batch queued on top of the first* rather than against a clock. It still belongs in the general budget here; it is no longer the urgent entry.
 - **AWS WAF on the CloudFront distribution** for L3/L4, managed bot-control and reputation rules, and per-path rate rules — a coarse outer layer in front of the fine-grained application limits above. Optional **Turnstile** (or WAF CAPTCHA) challenge on session mint when a tenant's anomaly score spikes — off by default, one flag to enable per tenant.
+
+**The numbers (decided 2026-09-15), sized for §5.0's ten tenants.** Per minute unless marked. The source is `WIDGET_LIMITS` in `packages/security/src/rate-limit/widget.ts`, and the tests hold the relations between them.
+
+| Dimension | Config | Session | Chat | Why |
+|---|---|---|---|---|
+| Per session | — | 6 | 6 | A reply takes 3–8 s. One message every ten seconds is faster than anyone reads a recommendation. |
+| Per address, per tenant | 60 | 10 | 20 | Room for several visitors behind one carrier NAT. Config reaches the API only on an edge cache miss (P2-10). |
+| Per endpoint, per tenant | 120 | 60 | 60 | Chat at 60 a minute and ~5 s a reply is at most 5 concurrent executions, half the API's reserved concurrency of 10 (P1-48). |
+| Per tenant, all endpoints | trial 30 · Cantina 60 · E-commerce 120 | | | One winery of ten cannot take the function from the other nine. |
+| Per address, before resolution, across tenants and endpoints | 120 | | | Above one winery's 90 per address, so a real visitor meets that winery's limits first (P2-04 review fix). |
+| Per month, chat messages | trial 150 · Cantina 1,500 · E-commerce 6,000 | | | P5-01's plan allowances, and the trial's hard cap (Open Decisions). |
+
+**At this scale the limits are about abuse, not load.** A Cantina's 1,500 messages is about 50 a day, and no legitimate pattern comes near a per-minute figure above. Two neighbouring numbers are sized against the same 10-second function:
+- An import spends at most 6 s applying batches (P1-25).
+- An email attempt waits at most 2 s, so three attempts and their backoff still fit in the request (P0-64).
 
 ### 3.7 LLM-layer security
 
@@ -1251,7 +1266,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P1-24 | `upsertProducts()` core fn | match on `(tenant_id, sku)`, batched | P1-02 |
 | ✅ P1-25 | Bulk upsert endpoint | batches, partial-success reporting | P1-24 |
 | ✅ P1-26 | Import idempotency key + test | replay applies once | P1-25 |
-| ✅ P1-27 | Row + file size caps | 10,000 rows, clear message | P1-25 |
+| ✅ P1-27 | Row + file size caps | 2,500 rows (was 10,000), clear message | P1-25 |
 | ✅ P1-28 | `audit_log` entry per import | counts + actor | P1-25,P0-53 |
 | ✅ P1-29 | Test: no import archives absent rows | guards against accidental full-replace | P1-25 |
 | ✅ P1-30 | CSV export | exactly template field order | P1-06 |
@@ -1290,10 +1305,10 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-08 | ⛔ 🔒 Dynamic CORS middleware | exact-set match, echo origin, **`Vary: Origin`**, no credentials | P2-07 |
 | ✅ P2-09 | 🔒 CORS test suite | exact headers, preflight, 403-with-no-headers, bypass attempts | P2-08 |
 | ✅ P2-10 | `GET /v1/widget/config` | public config only, edge-cache 60 s | P2-08 |
-| P2-11 | 🔒 Ed25519 key in SSM + in-process sign | no KMS asymmetric on the hot path (§5.7) | P0-15 |
-| P2-12 | ⛔ 🔒 `POST /v1/widget/session` | mint token with `origin`/`tid`/`jti`, 15 min | P2-11 |
-| P2-12a | 🔒 Session continuation | re-mint keeping `sid`, **requires the previous token** — never a client-supplied `sid` | P2-12 |
-| P2-13 | ⛔ 🔒 Token verify middleware | sig, exp, aud, iss, alg, origin match, jti, **tenant ACTIVE** | P2-12 |
+| ✅ P2-11 | 🔒 Ed25519 key in SSM + in-process sign | no KMS asymmetric on the hot path (§5.7) | P0-15 |
+| ✅ P2-12 | ⛔ 🔒 `POST /v1/widget/session` | mint token with `origin`/`tid`/`jti`, 15 min | P2-11 |
+| ✅ P2-12a | 🔒 Session continuation | re-mint keeping `sid`, **requires the previous token** — never a client-supplied `sid` | P2-12 |
+| ✅ P2-13 | ⛔ 🔒 Token verify middleware | sig, exp, aud, iss, alg, origin match, jti, **tenant ACTIVE** | P2-12 |
 | P2-37 | RAG diagnostic sandbox | real pipeline + scores, no billing, no analytics; retrieval-only by default | P2-22 |
 | P2-14 | 🔒 Revocation sweep job | EventBridge, prunes expired `jti` | P0-35 |
 | P2-15 | 🔒 Token test suite | replay, cross-origin, absent Origin, alg confusion | P2-13 |
@@ -1304,8 +1319,8 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P2-20 | RRF fusion + test | | P2-18,19 |
 | P2-21 | Availability + price filters | out-of-stock excluded unless nothing matches | P2-20 |
 | P2-22 | Candidate cap (top 8) | cost + injection surface control | P2-20 |
-| P2-23 | 🔒 Prompt assembly | product content delimited and labelled untrusted | P2-22 |
-| P2-24 | Structured output schema | `{reply, recommendations[]}` + Zod | P1-42 |
+| ✅ P2-23 | 🔒 Prompt assembly | product content delimited and labelled untrusted | P2-22 |
+| ✅ P2-24 | Structured output schema | `{reply, recommendations[]}` + Zod | P1-42 |
 | P2-25 | ⛔ 🔒 Output allowlisting | every `productId` ∈ tenant **∩** retrieved candidate set | P2-24 |
 | P2-26 | 🔒 Test: output allowlisting | injected foreign and hallucinated ids are dropped + logged | P2-25 |
 | P2-27 | Schema-failure retry + fallback | one repair attempt, then text-only with no cards | P2-24 |
@@ -3229,6 +3244,7 @@ Four departures from the text above, each because building it made the reason co
   - **Retrying.** The transport now bounds each attempt at `RESEND_TIMEOUT_MS` (2 s) and turns "no answer" into a retryable `EmailSendError` with status 0. The error names only the error class, since a network error's message can carry the host. It also retries 409, Resend's "this key is still being processed".
   - **Never twice.** What makes retrying a request that may already have been sent safe is an `Idempotency-Key`. `sendEmail` makes one per message, outside the retry loop. Resend keeps it for 24 hours and answers a repeat with the first result.
   - **The budget.** Three attempts and the backoff between them fit inside `API_TIMEOUT_SECONDS`, and a test holds them to it.
+  - **Sizing (confirmed 2026-09-15).** Three attempts at 2 s plus 1.5 s of backoff is 7.5 s, which leaves a password-reset or invite request the rest of its 10 s for the work around the send. A longer timeout would trade that room for patience with a provider that is already failing.
 
 **The suppression table is deliberately global.** `email_suppressions` has no `tenant_id`, so it joins `processed_webhooks` and `rate_limit_buckets` as a table with no RLS policy. That is the protection rather than a gap in it: the reputation a suppression defends belongs to the sending domain, so a bounce one winery caused has to stop every winery mailing that address. Unlike the P0-33a ledgers it keeps `UPDATE`/`DELETE` for `app_rw` — a mailbox that was full last month is a customer who cannot reset their password this month, and the alternative to `unsuppressAddress` is somebody doing it by hand in a production console.
 
@@ -3384,7 +3400,7 @@ Two CI checks, mirroring patterns already proven in this plan:
 **Review fix (2026-09-15): a widget route says which refusals it gives.** Every operation listed its surface's error responses, so the widget marker documented a 403 and a 429 it never sends.
 - `RouteDoc` gains an optional `refusals`. Absent, the surface's defaults apply; present, exactly those are documented. A status the surface has no description for fails generation.
 - The widget marker declares none and the widget config declares 403 and 429. `packages/testing/test/openapi.test.ts` asserts both against the published document.
-- **The dashboard is unchanged, deliberately.** Its marker also never sends a 401 or 403, but "every dashboard operation documents a success and both refusals" is this row's own contract test. Narrowing it is a decision about the dashboard reference, not part of a widget fix.
+- **The dashboard marker followed, as its own change.** It never sends a 401 or 403 either, but "every dashboard operation documents a success and both refusals" was this row's contract test, so it was not narrowed inside a widget fix. It now names the marker as its one exception, and the marker declares no refusals; every other dashboard route still documents both.
 
 ---
 
@@ -3964,12 +3980,12 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 **As built.**
 
 - **Every refusal happens before a row is shown, and has a sentence.** Empty, header only, too large, too many rows, not CSV or Excel, an `.xls`, a workbook that needs a sheet chosen, a header missing a required column or naming one twice.
-- **Over the row cap, the whole file is refused, never truncated.** Importing the first ten thousand rows of a longer file leaves a catalogue that looks complete and is not, with nothing pointing at the rows that were never read.
-- **The size cap is 10 MB and is checked before decoding.** Ten thousand wines with long tasting notes are a few megabytes of CSV; a file past ten is something else. Since P1-27 both caps are `MAX_IMPORT_ROWS` and `MAX_IMPORT_FILE_BYTES` from `@catalogorosso/core/import-limits`.
+- **Over the row cap, the whole file is refused, never truncated.** Importing the first rows of a longer file, up to the cap, leaves a catalogue that looks complete and is not, with nothing pointing at the rows that were never read.
+- **The size cap is 10 MB and is checked before decoding.** A full catalogue with long tasting notes is a few megabytes of CSV; a file past ten is something else. Since P1-27 both caps are `MAX_IMPORT_ROWS` and `MAX_IMPORT_FILE_BYTES` from `@catalogorosso/core/import-limits`.
 - **A blank line in the middle of a file is skipped.** Every cell is empty, so there is nothing in it to have misread.
 - **Dispatch is on the file's extension**, the choice the seller made, not on sniffed content. `readWorkbook` still checks the bytes, so a CSV renamed `.xlsx` is refused rather than misread.
 - **Detection notices survive a refusal.** "Codifica rilevata" is how a seller explains a header that did not match.
-- **Fixtures are one real file per hazard** — `import-*.csv`, covered by the binary rule, including a Windows-1252 one — **except the two sizes, generated in the test** *(deviation)*: ten thousand identical rows and ten megabytes of zeros are better described by the line that makes them than by a file nobody will open. The cap is tested at exactly 10,000 as well as 10,001.
+- **Fixtures are one real file per hazard** — `import-*.csv`, covered by the binary rule, including a Windows-1252 one — **except the two sizes, generated in the test** *(deviation)*: a row cap of identical rows and ten megabytes of zeros are better described by the line that makes them than by a file nobody will open. The cap is tested at exactly `MAX_IMPORT_ROWS` as well as one more.
 - The workbook path is exercised through `wines.xlsx`: without a sheet it asks which, and with *Vini* it is refused for the missing *tipologia* column exactly as a CSV would be.
 
 ---
@@ -4009,12 +4025,11 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 
 **Note from P1-26.** The import route now requires an `Idempotency-Key` header holding a UUID (422 without one). Generate it once when the summary is confirmed and reuse it for every resend of that confirmation — a double-click and a retry after a dropped connection must carry the *same* key, or the guard does nothing. "Riprova" after an import that stopped part-way is a new attempt: new key. A 409 whose message says the attempt has not finished is answered by retrying the same key shortly, not by generating a new one.
 
-**Open from P1-27 — a full 10,000-row import does not fit in one request.** The API's Function URL refuses any request over 6 MB before our code runs, and the import route refuses over 5 MB so the message is ours. Measured: ten thousand fully described wines are 5.7 MB of JSON with no tasting notes and 9.5 MB with 400-character ones, so the row cap is not what binds for a real catalogue. Before this screen wires its confirm button, choose one:
-
-- **Gzip the body** — the same 9.5 MB is 0.2 MB compressed, and `CompressionStream` is in every browser the dashboard supports. The API then accepts `Content-Encoding: gzip`, caps the inflated size (a small body can inflate to gigabytes), and needs its binary body path verified through CloudFront and the Function URL before it is trusted. One request stays one import: one key, whole-import duplicate detection, one P1-28 audit row.
-- **Split into requests under 5 MB** — no server change, but duplicate SKUs are no longer found across the whole import, each part needs its own `Idempotency-Key`, and P1-28 would write one audit row per part unless the parts learn a parent id.
-
-`importBodyProblem(rows)` in `draft-rows.ts` already answers whether rows fit, in Italian, whichever is chosen.
+**~~Open from P1-27~~ — resolved (2026-09-15): neither gzip nor split; the row cap became the largest catalogue a plan allows.**
+- **The problem.** The API's Function URL refuses any request over 6 MB before our code runs, and the import route refuses over 5 MB so the message is ours. Measured: ten thousand fully described wines are 5.7 MB of JSON with no tasting notes and 9.5 MB with 400-character ones, so at the old 10,000-row cap the request cap bound first.
+- **The options weighed.** Gzipping the body (0.2 MB compressed, but an inflation cap and a binary body path to verify through CloudFront), or splitting into requests under 5 MB (a key per part, duplicate SKUs no longer found across the import, one audit row per part).
+- **Neither was needed.** The largest plan allows 2,500 SKUs (P5-01), so `MAX_IMPORT_ROWS` is now 2,500, and 2,500 such wines are about 1.4 and 2.4 MB. One request is one import.
+- **What still reaches the cap.** An import whose notes run to kilobytes a wine; `importBodyProblem(rows)` refuses it in Italian and tells the seller to split it.
 
 **Note from P1-28.** The body must also carry `source: { entryPoint, filename? }` — `'file'` with the file's name, `'paste'`, or `'form'` — which the import's audit entry records. A body without it is a 422.
 
@@ -4025,7 +4040,7 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 - **"Importa solo le valide" is the default** *(decision — the row's own recommendation)*. Only rows that validate are previewed and sent; the invalid ones stay listed with their errors and are downloadable as `righe-da-correggere.csv` — template headers, `;`, a byte-order mark and an `errori` column the importer ignores with a notice — so the corrected file imports as it is. `writeDelimited` now sits beside `parseDelimited` for that, held to it by a round-trip test, and is what P1-30's export will use.
 - **One `Idempotency-Key` per attempt, built as P1-26's note asked.** The api-client gained an `idempotencyKey` request option. The key is made at the first confirmation and resent on every retry of it; it is forgotten when the rows change — the same key with other rows would be a 409 — and when an attempt finishes, so resuming a stopped import is a new attempt. A 409 on confirm can therefore only mean "still running", and says so.
 - **A stopped import is reported in the seller's own line numbers**, translated back from the rows the server was sent, because every invalid line left out shifts the numbers after it.
-- **The request cap is checked before anything is sent, and P1-27's decision stays open** *(interim)*. An import over 5 MB is refused on screen with "Dividile in più importazioni", so a seller splits the file by hand. Whether the dashboard should gzip the body instead is still the choice recorded above.
+- **The request cap is checked before anything is sent.** An import over 5 MB is refused on screen with "Dividile in più importazioni". Since the row cap became 2,500 (resolved above), a realistic catalogue no longer reaches it.
 - **Not yet mounted** *(deviation)*. Like P1-22's `DraftGrid`, `ImportSummary` is a tested component with no route in the shell. The screen that joins the file and paste pickers to drafts and to this summary is its own piece of work, and none of this row's files is it.
 
 ---
@@ -4077,14 +4092,15 @@ Enqueue an outbox row **only for rows where `changed`**. Return per-row outcomes
 - **A failure part-way is reported, not thrown.** The answer carries `stoppedAt: { batch, fromRow, toRow }` beside the outcomes of every row that applied; the cause goes to the log and never to the caller (P0-55). **Resuming is importing the same rows again**: what already applied comes back *unchanged* and costs nothing (P1-24). Since P1-26 a resume is a new attempt and carries a new `Idempotency-Key`; the stopped attempt's key keeps answering with its report. The row's `failedBatch?` is this field.
 - **A row that breaks the contract refuses the whole request, before anything is written** *(decision)*. The dashboard validates every row against the same contract first (P1-22), so a row failing here is a client that skipped that step; applying the rest would leave a catalogue that is partly the chosen file and partly not. The refusal names up to five row numbers.
 - **Duplicate SKUs are found across the whole import before batching** *(addition)*. `upsertProducts` refuses duplicates within one call, but a SKU in batch one and again in batch three would otherwise reach it as two calls, and the second would overwrite the first.
-- **Rows are capped at 10,000 in the body schema** — the server's half of §2.2a's cap, since a cap only in the browser is a suggestion. P1-27 turned it and the dashboard's into one shared constant, `MAX_IMPORT_ROWS`.
+- **Rows are capped at `MAX_IMPORT_ROWS` in the body schema** (2,500 since the review fix; it was 10,000) — the server's half of §2.2a's cap, since a cap only in the browser is a suggestion. P1-27 turned it and the dashboard's into one shared constant, `MAX_IMPORT_ROWS`.
 - **The answer counts what P1-23 shows** — created, updated, unchanged, duplicate SKU, and archived matches — computed on the server so the summary and the outcomes cannot disagree.
 - **Review fix (2026-09-15): an import stops at a time budget instead of being killed.** The P1 review measured 10,000 changed wines at 12.2 s against local Postgres, past the API function's 10 s timeout, and a function killed mid-batch stores no report and leaves its key "still running".
   - **The server.** `importRows` takes a `deadline`. After the first batch, which always runs so every request makes progress, it starts a batch only if one as slow as the slowest so far would finish by the deadline. The route sets that deadline `IMPORT_TIME_BUDGET_MS` (6 s) after the request arrives.
+  - **Sizing (confirmed 2026-09-15).** The largest plan's catalogue is 2,500 wines (P5-01). At the review's measured 1.2 ms a changed row, that is about 3 s of batches locally, so a full catalogue usually fits one request and continues at most once against RDS. The 6 s leaves the rest of the 10 for parsing up to 5 MB, one batch slower than any before it, and storing the result.
   - **The stop.** Running out of time is an ordinary stopped import whose `stoppedAt.reason` is `time-budget` rather than `failed`. It is logged at info, not as an error.
   - **The dashboard** sends the rest by itself: the rows from `fromRow` on, less any refused as a repeated SKU, under a new key. It merges the answers into one numbered against the whole list, and a continuation that fails is retried with its own key (`import-continuation.ts`). Each continuation is its own attempt, so an import sent in three parts writes three audit entries.
   - **Consistency.** `API_TIMEOUT_SECONDS` in `packages/core` restates the timeout, and `apps/api/test/import-time-budget.test.ts` reads `infra/api.ts` to hold the two together.
-  - **Still open.** The 5 MB body cap still binds before the row cap for a fully described catalogue (P1-23's open decision); the time budget does not change that.
+  - **The body cap no longer binds.** The row cap is now 2,500, the largest plan's catalogue (P1-27), which is about 2.4 MB even with long tasting notes.
 
 ---
 
@@ -4124,12 +4140,14 @@ Tests: `packages/db/test/import-runs.test.ts` and `schema/import-runs.test.ts` (
 
 **As built — three caps, not two, because measuring the request found the platform's.**
 
-- **The numbers live in `@catalogorosso/core/import-limits`**, a subpath that imports nothing (held to that by `browser-subpaths.test.ts`), and the `core` barrel re-exports them for the API. `MAX_IMPORT_ROWS` is 10,000, `MAX_IMPORT_FILE_BYTES` is 10 MB, and `import-limits.test.ts` pins each by value — a test comparing the dashboard's number with the API's would pass for any number.
-- **"Both call sites" is three on the dashboard.** A file already refused over either cap (P1-21) and now reads the shared constants. **A paste had no cap at all** *(addition)*: `pasteCapProblem(pasted)` refuses one over 10,000 rows, whole, in the same words. And `importBodyProblem(rows)` measures the request before it is sent — the check P1-23 calls.
+- **The numbers live in `@catalogorosso/core/import-limits`**, a subpath that imports nothing (held to that by `browser-subpaths.test.ts`), and the `core` barrel re-exports them for the API. `MAX_IMPORT_ROWS` is 2,500 (10,000 until the review fix below), `MAX_IMPORT_FILE_BYTES` is 10 MB, and `import-limits.test.ts` pins each by value — a test comparing the dashboard's number with the API's would pass for any number.
+- **"Both call sites" is three on the dashboard.** A file already refused over either cap (P1-21) and now reads the shared constants. **A paste had no cap at all** *(addition)*: `pasteCapProblem(pasted)` refuses one over the row cap, whole, in the same words. And `importBodyProblem(rows)` measures the request before it is sent — the check P1-23 calls.
 - **The server's request cap is 5 MB, measured in bytes before parsing** *(addition — the row said "~10 MB" on both sides)*. A Function URL refuses any request over 6 MB before the handler runs, with an answer naming no limit, so a 10 MB server cap could never fire. Five leaves headroom and makes the refusal ours: a 422 that names the limit and says to split the import, each part with its own key. Bytes, not characters: an accented letter is two, and the test for that sends notes that fit as characters and not as bytes.
 - **Checked inside the handler, not with Hono's `bodyLimit`**. The whole request is already in the Lambda's memory, so streaming the count buys nothing, and a second handler on the route would add an entry to the route table P0-49 and the RBAC matrix enumerate.
-- **The file cap stays 10 MB** — a file is not the request. What that leaves open is recorded on P1-23: for a real catalogue the 5 MB request cap binds long before 10,000 rows, and whether the dashboard compresses or splits is that row's decision.
+- **The file cap stays 10 MB** — a file is not the request. At 10,000 rows the 5 MB request cap bound long before the row cap, which P1-23 recorded as open; the review fix below closed it.
 - `infra/api.ts` records the 6 MB ceiling beside the invoke mode, where the next person to change it will look.
+
+**Review fix (2026-09-15): the row cap is 2,500, the largest catalogue a plan allows.** At 10,000 the three import limits disagreed about what an import was. A real 10,000-wine catalogue could not fit the 5 MB request cap, and changed rows took 12.2 s against a 10 s function. The largest plan allows 2,500 SKUs (P5-01), and an import cannot usefully be larger than the catalogue it lands in. At 2,500 a fully described catalogue is about 1.4–2.4 MB and about 3 s of batches, so one request is one import again: one key, whole-import duplicate detection, one audit row. P1-25's time budget stays as the safety net for a slow database, and P1-23's gzip-or-split question closes without either. Per-plan caps (300 for Cantina) belong to the plan enforcement in P5-01 and P2-36, not to this constant.
 
 ---
 
@@ -4817,11 +4835,14 @@ The window start is **computed in SQL from `now()`**, never passed from the appl
 - **Mounted by P2-10** on `/v1/widget/config`, after P2-08's resolution, with the address secret taken from `AUTH_SECRET` rather than a second SSM parameter.
 - **Review fix (2026-09-15): an address limit now runs before resolution.**
   - **The gap.** Every dimension above is counted against a tenant, so it runs after `(pk_, Origin)` is resolved — and resolution is an uncached read. A script cycling through invented keys cost one query apiece with no cap, because CORS refused each only after paying for it.
-  - **The fix.** `unresolvedLimitCheck` (`ip:<hmac>:unresolved`, 240 a minute, provisional like the rest) is counted first, by `limitUnresolvedWidgetRequest`, mounted ahead of `widgetCors`. Its refusal carries `Vary: Origin` and `Retry-After`, and no CORS headers.
+  - **The fix.** `unresolvedLimitCheck` (`ip:<hmac>:unresolved`, 120 a minute; §3.6 gives the reason) is counted first, by `limitUnresolvedWidgetRequest`, mounted ahead of `widgetCors`. Its refusal carries `Vary: Origin` and `Retry-After`, and no CORS headers.
   - **What it does not do.** The limiter's own upsert is still a write per request, so this bounds the expensive path, not the request rate. The blunt per-address ceiling in front of everything is P4-13's WAF rule.
-  - **Open.** P2-12's session route and P2-29's chat route must mount it first too.
+  - **Open.** P2-29's chat route must mount it first too. P2-12's session route does, through `mountGuarded`, and `widget-route-guards.test.ts` walks every widget route to check it.
 
-**⚠ Open — the numbers.** §3.6 names the dimensions and gives no figures, so `WIDGET_LIMITS` is provisional. Per minute: session 6 to mint, 12 for chat; address 60 config, 12 session, 30 chat; tenant 120 on CANTINA, 600 on ECOMMERCE, 60 with no plan; endpoint 600 config, 120 session, 120 chat. Per month: 1,000, 10,000 and 100 chat messages. The monthly caps are really P5-01's pricing decision, and should be settled there.
+**Decided (2026-09-15) — the numbers.** §3.6 named the dimensions and gave no figures, so these were placeholders until now. They are sized for §5.0's ten tenants, and the table in §3.6 gives the reason for each. The monthly caps are P5-01's allowances, 1,500 and 6,000, and the trial's 150; the placeholders had 1,000, 10,000 and 100, which contradicted P5-01. Three things stay open:
+- **The trial's cap is a total, the limiter's window is a month.** The 150-message trial lasts 14 days, and a trial that crosses a month boundary could send 300. P2-36's quota gate owns the trial total.
+- **Top-ups are not in the limiter.** "+1,000 messages for €15" raises a tenant's allowance, which a fixed table cannot express. Also P2-36.
+- **The plan allowances live in two places.** `WIDGET_LIMITS.messagesPerMonth` restates plan data that P5-01 puts in `packages/core/src/plans.ts`. When that exists, the widget table should read from it rather than repeat it.
 
 ---
 
@@ -5017,7 +5038,7 @@ Browser-level proof is P3-18 — this suite asserts headers, that one asserts th
   - `development` origins, on a local run only.
 
   Without these dependencies, the config route throws a wiring error instead of answering.
-- **The limit numbers are still P2-04's provisional ones** (P5-01).
+- **The limit numbers were decided on 2026-09-15** (§3.6). A CANTINA month is 1,500 messages, so its widget is told `near` from 1,200.
 - **`peek` against real Postgres** is in `packages/testing/test/rate-limit.integration.test.ts`. It was not run locally because Docker wasn't running, so CI's integration job is its first run.
 
 ---
@@ -5031,6 +5052,30 @@ Browser-level proof is P3-18 — this suite asserts headers, that one asserts th
 **Tests.** Sign/verify round-trip; a token signed with kid A verifies while A is still in the verification set and fails once removed; the key never appears in log output.
 
 **Files.** `packages/security/src/tokens/keys.ts`, tests. **~100 lines.**
+
+**As built (2026-09-15).** The keys are in `packages/security/src/tokens/keys.ts`, on a new `@catalogorosso/security/tokens` subpath, and the tests are in `packages/security/test/tokens-keys.test.ts`. What the row left open:
+
+- **One secret holding the keyset, not a parameter per `kid`** *(deviation)*. `WidgetTokenKeys` is an `sst.Secret`, which SST stores as an SSM `SecureString`, holding `{ "keys": [<Ed25519 private JWK>, …] }`. A rotation is one write, so there is never a moment when the new signing key is set and its predecessor has already gone.
+- **Injected, not fetched at cold start** *(deviation)*. The API receives it as `WIDGET_TOKEN_KEYS`, as it receives `AUTH_SECRET`; either way it is read once per container. P2-12's session route is the first reader.
+- **No public JWKS parameter** *(deviation)*. The only verifier is this service, which derives the public halves from the same set. A second copy of them would be a second place for a rotation to go half-done.
+- **Rotation.**
+  - At most two keys are active. The first signs, and every key in the set verifies.
+  - A token whose `kid` has left the set is refused.
+  - `alg` is pinned to `EdDSA` and never read from the token.
+  - The clock tolerance is 5 s, and `exp` and `iat` are required.
+- **A bad keyset refuses to load.** It is refused for any of these:
+  - not JSON, no keys, or three keys;
+  - a repeated `kid`;
+  - the wrong key type or curve;
+  - a missing half, or material that does not import;
+  - a private half pasted beside another key's public half.
+
+  That last pair would mint tokens nothing can verify. WebCrypto refuses it at import, and the suite pins that refusal, so a runtime that stopped checking would fail there. Every message names a `kid` or a position, never a value.
+- **The key never reaches a log.** Refusals carry no material, a loaded set cannot be serialised or inspected back into it, and a keyset logged by mistake is redacted by the P0-56 allowlist.
+- **Generated out of band** by `scripts/widget-token-key.mjs`, which writes only to stdout, for piping into `sst secret set`. With `--rotate` it reads the current set on stdin and writes the new key first and the previous signing key second.
+- **The library is `jose` 6.2.12, pinned exactly**, like this package's other dependency.
+- **Not deployed.** No keyset exists on any stage yet.
+- **Mutation:** twelve mutants against the module are all killed. They cover the algorithm allowlist, the clock tolerance, the required claims, the key-count and duplicate-`kid` checks, import refusals, a private key handed to verification, which key signs and which `kid` the header names, the lifetime guard, and an unknown `kid` falling back to the signer.
 
 ---
 
@@ -5047,6 +5092,19 @@ Also supports the §3.2 layer-3 path: if an `Authorization: Bearer sk_live_...` 
 **Tests.** P2-15.
 
 **Files.** `apps/api/src/routes/widget-session.ts`. **~130 lines.**
+
+**As built (2026-09-15).** Minting is in `apps/api/src/widget-session.ts` and the route in `apps/api/src/surfaces/widget.ts`, beside config; there is no `routes/` directory. The tests are in `apps/api/test/widget-session.test.ts`. What the row left open:
+
+- **A switched-off winery gets its own error kind, `unavailable`** *(addition)*. It is a 403 like `forbidden`, with a different `code`. `forbidden` is already the answer for a key and an Origin that do not match, and the widget has to render a lapsed seller as disabled rather than broken (P3-21). The message names no billing state (§1.3). Adding a kind is a typecheck failure until its status is decided, so `STATUS_BY_KIND` says 403.
+- **Status before keys.** The serviceability check is the same `isServiceable` config uses, and it runs before the keyset is loaded, so a switched-off winery is told so even on a stage with no keyset.
+- **`iss` is the constant `catalogorosso`** *(decision)*. §3.4 names the claim and not its value. The obvious value, `AUTH_BASE_URL`, is an operator-set secret that changes the day a custom domain exists, and an issuer that moves invalidates every live token when it moves.
+- **Nothing is read from the request body.** The tenant, plan and status come from P2-07's uncached resolution. The origin is the one P2-08 normalised and verified, which CORS now puts on the context as `widgetOrigin`, so no handler re-derives it from the raw header.
+- **"Rate-limit hard on `ip` and `pk_`"** is `mountGuarded`: the unresolved-address limit first, then P2-04's per-address (10 a minute), per-tenant and per-endpoint limits (§3.6). There is no bucket per key. A key belongs to one tenant, so the tenant limit covers every key it has.
+- **`Cache-Control: no-store`**, on top of the `/v1/*` behaviour caching nothing.
+- **`expiresAt` is an ISO instant**, equal to the token's `exp`, whole seconds.
+- **No keyset** answers the session route with a wiring error (500), and `index.ts` warns `widget_token_keys_absent` once per deployed container, on the webhook secret's terms: absent is restrictive, and generating the keyset is operator work. The composition root loads the keyset once per container and keeps a failed load failing.
+- **The `sk_live_` branch is deferred to P4-10**, as the row allows, so there is no flag to leave on. `Authorization` is read only for P2-12a's continuation token; P4-10 tells a secret key apart by its prefix before that.
+- **Open.** The token is verified by nothing yet: P2-13. The attack table is P2-15's.
 
 ---
 
@@ -5071,11 +5129,22 @@ Every rejection returns an identical generic `401` — the reason goes to `secur
 
 **Files.** `apps/api/src/middleware/widget-auth.ts`. **~130 lines.**
 
+**As built (2026-09-15).** `requireWidgetToken` is in `apps/api/src/middleware/widget-auth.ts`. The checks are `checkWidgetToken` in `apps/api/src/widget-token.ts`, which P2-12a's continuation now calls too, so the mint and the verifier cannot check different things. The token constants moved there from `widget-session.ts`. The tests are in `apps/api/test/widget-auth.test.ts`. What the row left open:
+
+- **Checks 3 and 4 are one comparison against CORS.** P2-08 resolved the tenant from `(pk_, Origin)` against verified domains on this very request, uncached. A token passes only if its `origin` is that normalised origin and its `tid` that tenant.
+  - So a domain removed after minting is refused by CORS before the token is read: a 403, not this middleware's 401 *(deviation; P2-15's table is updated)*.
+  - An absent or unverified `Origin` is refused the same way.
+- **A switched-off tenant is 403 `unavailable`, not 401** *(deviation)*. The widget must render a lapsed seller as disabled (P3-21). A tenant's status is already public through config, so this answers no question a caller could not ask anyway. The check runs first, before a key is loaded, as at the mint.
+- **Every token refusal is one 401** with the mint's continuation message. The reason goes to an `onRejected` hook that cannot fail the request: `absent`, `invalid`, `origin_mismatch`, `tenant_mismatch`, `malformed` or `revoked`. The default logs the reason; P2-16 supplies the `security_events` writer.
+- **The context gains `widgetSessionId`, and nothing from the token besides.** The tenant and plan are already there from CORS, read on this request. The token's `plan` claim could be fifteen minutes stale, so it is never read.
+- **No continuation window.** An expired token is `invalid` here; the window is P2-12a's alone.
+- **Not mounted anywhere yet.** The first route that needs a session is P2-29's chat. It mounts `requireWidgetToken` between `widgetCors` and `limitWidgetRequest`, and extends `mountGuarded`, the AGENTS.md order invariant and `widget-route-guards.test.ts` to match.
+
 ---
 
 ### P2-14 · Revocation and bucket sweep 🔒
 
-**How.** EventBridge-scheduled Lambda, every 15 min: delete `token_revocations` past `expires_at`, delete `rate_limit_buckets` older than the longest window. Batch-delete with `LIMIT` in a loop so a large backlog does not lock the table. Log counts; alarm if a run deletes nothing for 24h (a silently dead sweep grows both tables until they hurt).
+**How.** EventBridge-scheduled Lambda, every 15 min: delete `token_revocations` past `expires_at` **plus P2-12a's 30-minute continuation window** (a row deleted at `expires_at` lets its revoked token continue a session for the rest of the window), delete `rate_limit_buckets` older than the longest window. Batch-delete with `LIMIT` in a loop so a large backlog does not lock the table. Log counts; alarm if a run deletes nothing for 24h (a silently dead sweep grows both tables until they hurt).
 
 **Tests.** Expired rows deleted, unexpired retained; batching terminates.
 
@@ -5085,7 +5154,7 @@ Every rejection returns an identical generic `401` — the reason goes to `secur
 
 ### P2-15 · Token test suite 🔒
 
-**How.** The attack table, each its own named test: token replayed from a **different** verified origin → 401; from an unverified origin → 401; with **no** `Origin` header → 401; after its domain is removed → 401; with `jti` revoked → 401; after the tenant flips to `DISABLED` → 401; expired → 401; `alg: none` → 401; HMAC-signed with the public key as secret → 401; wrong `aud` (a dashboard token used on the widget path) → 401; tampered `tid` claim → 401 (signature fails). Plus: every rejection body is byte-identical, and each writes the correct `security_events` type.
+**How.** The attack table, each its own named test: token replayed from a **different** verified origin → 401; from an unverified origin → 403 from CORS; with **no** `Origin` header → 403 from CORS; after its domain is removed → 403 from CORS *(as built in P2-13: CORS resolves the tenant against verified domains before a token is read)*; with `jti` revoked → 401; after the tenant flips to `DISABLED` → 403 `unavailable` *(P2-13, so the widget renders disabled)*; expired → 401; `alg: none` → 401; HMAC-signed with the public key as secret → 401; wrong `aud` (a dashboard token used on the widget path) → 401; tampered `tid` claim → 401 (signature fails). Plus: every 401 body is byte-identical apart from its request id, and each writes the correct `security_events` type.
 
 **Files.** `apps/api/test/widget-token.spec.ts`. **~200 test lines.**
 
@@ -5421,6 +5490,24 @@ Continuation is rate-limited on the cheap tier and **does not count as a message
 **Tests.** Expired token within the window continues with the same `sid` and a new `jti`; beyond the window a new `sid` is issued; a token for another origin is refused; a revoked `jti` is refused; a `DISABLED` tenant is refused (and the widget must render `disabled`, not `error` — asserted in P3-21); a forged `sid` with no token gets a fresh `sid`, never the claimed one; total lifetime cap is enforced.
 
 **Files.** `apps/api/src/routes/widget-session.ts`, tests. **~110 lines.**
+
+**As built (2026-09-15).** Continuation is in `apps/api/src/widget-session.ts`, beside the mint. The revocation read is `isTokenRevoked` in `packages/db/src/token-revocations.ts`, and the window is a `verify` option on the P2-11 keys. The tests are in `apps/api/test/widget-session.test.ts`. What the row left open:
+
+- **Two kinds of failure, answered differently.**
+  - **A fresh `sid`.** A token that does not verify gets one: not ours, malformed, past the 30-minute window. So does one past the 4-hour lifetime, and any scheme other than `Bearer`.
+  - **A generic 401 (`unauthenticated`), one message for all three.** It goes to a token we signed that is presented for another origin or another tenant, or was revoked. Starting afresh would hide a replay, and those three are the cases the row's tests call refused.
+- **The window is a `verify` option, `expiredWithinSec`** *(addition)*, rather than a decode of the unverified token to read `exp` first. It raises jose's clock tolerance. That tolerance also applies to `nbf`, which these tokens do not carry, and every other verifier leaves the option unset.
+- **`iat_original`** is set on every fresh mint and carried on a continuation. A token without it starts afresh; none was ever deployed.
+- **Revocation.**
+  - It is asked under the tenant this request resolved, after the `tid` and origin checks.
+  - With no revocation check wired, a previous token is ignored. That is restrictive: nothing continues.
+  - A revocation row still counts after its `expires_at`, because the window outlives the token.
+- **Rate limiting.** Continuing is the same route, so it spends the session budget (10 a minute per address) and never the month. There is no per-`sid` bucket on the mint, because the guards run before the token is read.
+- **A switched-off winery** is `unavailable` before any token is looked at.
+- **Open.**
+  - **P2-14's sweep** must keep a revocation until `expires_at` plus the continuation window. Otherwise a revoked token continues its session for what is left of the window.
+  - **P2-16** records the three refusals.
+  - **P3-21** sends the last token when it mints again, and drops it on a 401.
 
 ---
 

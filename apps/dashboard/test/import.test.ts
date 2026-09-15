@@ -131,15 +131,15 @@ describe('the caps', () => {
     expect(rowsOf(result)).toHaveLength(MAX_IMPORT_ROWS);
   });
 
-  it('refuses one row more, whole — never the first ten thousand of it', async () => {
+  it('refuses one row more, whole — never the first rows of it up to the cap', async () => {
     const result = await readImportFile({
       name: 'cap.csv',
       bytes: text(header + rows(MAX_IMPORT_ROWS + 1)),
     });
 
-    expect(result).toMatchObject({ ok: false, problem: { kind: 'too-many-rows', rows: 10_001 } });
+    expect(result).toMatchObject({ ok: false, problem: { kind: 'too-many-rows', rows: 2_501 } });
     expect(!result.ok && importProblemMessage(result.problem)).toBe(
-      'Il file contiene 10.001 vini, oltre il massimo di 10.000 per importazione. Dividilo in più file.',
+      'Il file contiene 2501 vini, oltre il massimo di 2500 per importazione. Dividilo in più file.',
     );
   });
 
