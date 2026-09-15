@@ -127,6 +127,19 @@ describe('an allowed request', () => {
     });
   });
 
+  it('hands the handler the normalised origin it verified, which a session binds (P2-12)', async () => {
+    const app = new Hono<AppEnv>();
+    app.use('*', requestContext());
+    app.onError(errorHandler);
+    app.get('/config', widgetCors({ resolve: resolver().resolve }), (c) =>
+      c.json({ origin: c.get('widgetOrigin') }),
+    );
+
+    const response = await request(app, { origin: ORIGIN_A.toUpperCase(), key: KEY_A });
+
+    expect(await response.json()).toEqual({ origin: ORIGIN_A });
+  });
+
   it('resolves against the normalised origin, and echoes that', async () => {
     const { resolve, calls } = resolver();
     const app = widgetApp({ resolve });

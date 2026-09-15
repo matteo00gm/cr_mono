@@ -123,9 +123,9 @@ describe('the response', () => {
 describe('the quota', () => {
   it.each<[number, 'ok' | 'near' | 'exceeded']>([
     [0, 'ok'],
-    [799, 'ok'],
-    [800, 'near'],
-    [1_000, 'exceeded'],
+    [1_199, 'ok'],
+    [1_200, 'near'],
+    [1_500, 'exceeded'],
   ])('reads %i of a CANTINA month as %s', async (used, state) => {
     const built = app({ readUsage: () => Promise.resolve(used) });
 
@@ -307,7 +307,7 @@ describe('wiring', () => {
     }).toThrow(UndeclaredRouteError);
   });
 
-  it('documents only the refusals each route can give: none for the marker, 403 and 429 for config', () => {
+  it('documents only the refusals each route can give: none for the marker, 403 and 429 for the guarded routes', () => {
     // Review fix: the reference listed 403 and 429 on the marker, which refuses nothing.
     const refusals = Object.fromEntries(
       [...WIDGET_ROUTES].map(([key, doc]) => [key, doc.refusals]),
@@ -316,6 +316,7 @@ describe('wiring', () => {
     expect(refusals).toEqual({
       [`GET ${WIDGET_PREFIX}`]: [],
       [`GET ${WIDGET_PREFIX}/config`]: [403, 429],
+      [`POST ${WIDGET_PREFIX}/session`]: [403, 429],
     });
   });
 });

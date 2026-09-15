@@ -80,10 +80,18 @@ describe('every operation', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('documents a success and both refusals', () => {
+  it('documents a success and both refusals, except on the marker, which refuses nothing', () => {
+    /*
+     * The contract stands for every route a session or a capability guards. The
+     * surface marker is the one exception, named rather than inferred: it answers
+     * every caller the same, and documenting a 401 on it sends a reader looking
+     * for a guard that is not there (review fix).
+     */
     for (const [path, method, op] of operations(doc.dashboard)) {
       const where = `${method.toUpperCase()} ${path}`;
-      expect(Object.keys(op.responses ?? {}), where).toEqual(['200', '401', '403']);
+      const expected = where === 'GET /v1/dashboard' ? ['200'] : ['200', '401', '403'];
+
+      expect(Object.keys(op.responses ?? {}), where).toEqual(expected);
     }
   });
 
@@ -105,8 +113,9 @@ describe('every operation', () => {
   it('documents on the widget only the refusals each route gives (review fix)', () => {
     /*
      * The widget reference is the one sellers' developers read. The marker
-     * refuses nothing, and config refuses for its key and origin (403) or its
-     * rate (429) — never for a session, because this surface has none.
+     * refuses nothing, and config and the session mint refuse for their key and
+     * origin (403) or their rate (429) — never with a 401, because neither
+     * takes a token.
      */
     const refusals = Object.fromEntries(
       operations(doc.widget).map(([path, method, op]) => [
@@ -118,6 +127,7 @@ describe('every operation', () => {
     expect(refusals).toEqual({
       'GET /v1/widget': ['200'],
       'GET /v1/widget/config': ['200', '403', '429'],
+      'POST /v1/widget/session': ['200', '403', '429'],
     });
   });
 
