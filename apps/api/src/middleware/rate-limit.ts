@@ -1,6 +1,7 @@
 import { RateLimitedError } from '@catalogorosso/core';
 import {
   isPlanCap,
+  unresolvedLimitCheck,
   WIDGET_LIMITS,
   widgetLimitChecks,
   type RateLimiter,
@@ -32,6 +33,10 @@ import { clientIp } from './logger.js';
  * winery's widget is — and on chat that dimension is often the month. A 429
  * says what a client needs to back off correctly and nothing more.
  */
+
+/** The caller's address bucket for today: an HMAC, never the address (P2-04). */
+const visitorBucket = (forwardedFor: string | undefined, ipSecret: string, nowMs: number): string =>
+  bucketIp(clientIp(forwardedFor).ip, ipSecret, nowMs);
 
 export class WidgetTenantUnresolvedError extends Error {
   constructor(endpoint: WidgetEndpoint) {
@@ -77,7 +82,7 @@ export const limitWidgetRequest =
           endpoint,
           tenantId: tenant.tenantId,
           plan: tenant.plan,
-          ipBucket: bucketIp(clientIp(c.req.header('x-forwarded-for')).ip, ipSecret, now()),
+          ipBucket: visitorBucket(c.req.header('x-forwarded-for'), ipSecret, now()),
           // Absent until P2-13 verifies a token, whatever the variable's type says.
           sessionId: c.get('widgetSessionId'),
         },
@@ -101,6 +106,47 @@ export const limitWidgetRequest =
         c.header('X-RateLimit-Reset', String(Math.ceil(result.resetAt.getTime() / 1000)));
       }
 
+      throw new RateLimitedError('Too many requests. Try again shortly.');
+    }
+
+    await next();
+  };
+
+export type UnresolvedLimitOptions = Omit<WidgetLimitOptions, 'endpoint'>;
+
+/**
+ * The address limit that runs before the key and origin are resolved (review fix).
+ *
+ * **Mounted first on every widget route, ahead of `widgetCors`.** Resolution is
+ * an uncached read per request, and CORS refuses an invented key only after
+ * paying for it; every limit in `limitWidgetRequest` comes later still, because
+ * each is counted against a tenant. Until this existed, a script cycling through
+ * made-up keys cost one database read apiece with nothing to stop it.
+ *
+ * A refusal here carries no CORS headers, because nothing is known about the
+ * caller yet, so a browser script cannot read it. It does not need to: the limit
+ * sits well above what a real visitor does in a minute. It does carry
+ * `Vary: Origin`, CORS's first rule, because it is still a response on a route
+ * the edge may cache, and one CORS never saw.
+ *
+ * The check is itself a write to `rate_limit_buckets`, so this bounds the
+ * expensive path rather than the request rate; the blunt per-address ceiling in
+ * front of everything is P4-13's WAF rule.
+ */
+export const limitUnresolvedWidgetRequest =
+  ({
+    limiter,
+    ipSecret,
+    limits = WIDGET_LIMITS,
+    now = Date.now,
+  }: UnresolvedLimitOptions): MiddlewareHandler<AppEnv> =>
+  async (c, next) => {
+    const bucket = visitorBucket(c.req.header('x-forwarded-for'), ipSecret, now());
+    const result = await limiter.check([unresolvedLimitCheck(bucket, limits)]);
+
+    if (!result.allowed) {
+      c.header('Vary', 'Origin', { append: true });
+      c.header('Retry-After', String(result.retryAfterSec ?? 1));
       throw new RateLimitedError('Too many requests. Try again shortly.');
     }
 

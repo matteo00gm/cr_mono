@@ -164,8 +164,9 @@ describe('the quota', () => {
 
     await getConfig(built);
 
-    const [checks = []] = counted;
-    expect(counted).toHaveLength(1);
+    // The address alone first (review fix), then the tenant's dimensions in one check.
+    const [, checks = []] = counted;
+    expect(counted).toHaveLength(2);
     expect(checks.map((check) => check.key)).toContain(`endpoint:config:${TENANT}`);
     expect(checks.some((check) => 'window' in check)).toBe(false);
   });
@@ -188,17 +189,44 @@ describe('caching', () => {
   });
 });
 
-describe('the order: CORS, then the limit, then the handler', () => {
-  it('refuses an unverified origin before counting or reading anything', async () => {
-    let checks = 0;
+describe('the order: the address, CORS, the tenant’s limits, then the handler', () => {
+  /** A limiter that records every key it is asked about, and allows them all. */
+  const recordingKeys = () => {
+    const keys: string[] = [];
+    const limiter: RateLimiter = {
+      check: (limits) => {
+        keys.push(...limits.map((check) => check.key));
+        return memoryRateLimiter().check(limits);
+      },
+    };
+    return { keys, limiter };
+  };
+
+  const isAddressOnly = (key: string): boolean => key.endsWith(':unresolved');
+
+  /** Refuses the checks `refuses` picks out, and counts the rest for real. */
+  const refusingWhere = (
+    refuses: (key: string) => boolean,
+    retryAfterSec: number,
+  ): RateLimiter => ({
+    check: (limits) =>
+      limits.some((check) => refuses(check.key))
+        ? Promise.resolve({
+            allowed: false,
+            remaining: 0,
+            resetAt: new Date(Date.now() + retryAfterSec * 1_000),
+            limit: 60,
+            key: limits[0]?.key ?? '',
+            retryAfterSec,
+          })
+        : memoryRateLimiter().check(limits),
+  });
+
+  it('refuses an unverified origin having counted only the address, and read nothing', async () => {
+    const { keys, limiter } = recordingKeys();
     let reads = 0;
     const built = app({
-      limiter: {
-        check: (limits) => {
-          checks += 1;
-          return memoryRateLimiter().check(limits);
-        },
-      },
+      limiter,
       readUsage: () => {
         reads += 1;
         return Promise.resolve(0);
@@ -209,39 +237,46 @@ describe('the order: CORS, then the limit, then the handler', () => {
 
     expect(response.status).toBe(403);
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
-    expect([checks, reads]).toEqual([0, 0]);
+    // Nothing is counted against the tenant a refused request named.
+    expect(keys).toHaveLength(1);
+    expect(keys.every(isAddressOnly)).toBe(true);
+    expect(reads).toBe(0);
   });
 
-  it('answers a preflight from CORS alone', async () => {
-    let checks = 0;
-    const built = app({
-      limiter: {
-        check: (limits) => {
-          checks += 1;
-          return memoryRateLimiter().check(limits);
-        },
-      },
-    });
+  it('answers a preflight from CORS, having counted only the address', async () => {
+    const { keys, limiter } = recordingKeys();
 
-    const response = await getConfig(built, { method: 'OPTIONS' });
+    const response = await getConfig(app({ limiter }), { method: 'OPTIONS' });
 
     expect(response.status).toBe(204);
     expect(response.headers.get('access-control-allow-origin')).toBe(ORIGIN);
-    expect(checks).toBe(0);
+    expect(keys).toHaveLength(1);
+    expect(keys.every(isAddressOnly)).toBe(true);
   });
 
-  it('carries the CORS headers on a 429, so the widget can read its Retry-After', async () => {
-    const refusing: RateLimiter = {
-      check: () =>
-        Promise.resolve({
-          allowed: false,
-          remaining: 0,
-          resetAt: new Date(Date.now() + 30_000),
-          limit: 60,
-          key: 'ip:bucket:tenant:config',
-          retryAfterSec: 30,
-        }),
-    };
+  it('refuses a flood of invented keys from one address without resolving them (review fix)', async () => {
+    let resolutions = 0;
+    const built = app({
+      limiter: refusingWhere(isAddressOnly, 20),
+      resolve: () => {
+        resolutions += 1;
+        return Promise.resolve(UNKNOWN);
+      },
+    });
+
+    // Built at runtime, never written as a literal (P0-56).
+    const invented = ['pk', 'test', randomUUID().replaceAll('-', '')].join('_');
+    const response = await getConfig(built, { key: invented });
+
+    expect(response.status).toBe(429);
+    expect(resolutions).toBe(0);
+    expect(response.headers.get('retry-after')).toBe('20');
+    expect(response.headers.get('vary')).toContain('Origin');
+    expect(response.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('carries the CORS headers on a tenant limit’s 429, so the widget can read its Retry-After', async () => {
+    const refusing = refusingWhere((key) => !isAddressOnly(key), 30);
 
     const response = await getConfig(app({ limiter: refusing }));
 

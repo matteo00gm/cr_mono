@@ -1,4 +1,4 @@
-import type { LimitCheck, MonthlyCheck } from './types.js';
+import type { FixedWindowCheck, LimitCheck, MonthlyCheck } from './types.js';
 
 /**
  * The widget's limit dimensions (P2-04, §3.6).
@@ -27,6 +27,11 @@ export type WidgetPlan = 'CANTINA' | 'ECOMMERCE';
 export type PlanTier = WidgetPlan | 'none';
 
 export interface WidgetLimits {
+  /**
+   * Per visitor address per minute, across every endpoint and every tenant,
+   * counted **before** the key and origin are resolved (review fix).
+   */
+  readonly unresolvedPerMinute: number;
   /** Per visitor session, per endpoint, per minute. `config` carries no session. */
   readonly sessionPerMinute: Readonly<Record<Exclude<WidgetEndpoint, 'config'>, number>>;
   /** Per visitor address, per tenant, per endpoint, per minute. */
@@ -49,6 +54,7 @@ export interface WidgetLimits {
  * paying tier outranks a tenant with no subscription.
  */
 export const WIDGET_LIMITS: WidgetLimits = {
+  unresolvedPerMinute: 240,
   sessionPerMinute: { session: 6, chat: 12 },
   ipPerMinute: { config: 60, session: 12, chat: 30 },
   tenantPerMinute: { CANTINA: 120, ECOMMERCE: 600, none: 60 },
@@ -68,6 +74,28 @@ export interface WidgetRequest {
 }
 
 const MINUTE = 60;
+
+/**
+ * The one check a widget request makes before anything is resolved (review fix).
+ *
+ * **Every other dimension needs the tenant, and the tenant costs a query.**
+ * Resolving `(pk_, Origin)` is a read across three tables on every request,
+ * uncached by design (§5.7), and CORS refuses an invented key only after that
+ * read. Every limit came later still, so a script cycling through made-up keys
+ * spent one query apiece with nothing to stop it. This bucket is the address
+ * alone, across every tenant and endpoint, and it is counted first.
+ *
+ * Its own key, never a tenant's: `ip:<bucket>:unresolved` cannot collide with
+ * `ip:<bucket>:<tenant>:<endpoint>`, which has four segments.
+ */
+export const unresolvedLimitCheck = (
+  ipBucket: string,
+  limits: WidgetLimits = WIDGET_LIMITS,
+): FixedWindowCheck => ({
+  key: `ip:${ipBucket}:unresolved`,
+  limit: limits.unresolvedPerMinute,
+  windowSec: MINUTE,
+});
 
 /** What marks the plan cap's key, so a caller can keep its numbers private. */
 const PLAN_CAP_SUFFIX = ':month';

@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import type { AppEnv, WidgetTenant } from '../src/env.js';
 import { errorHandler } from '../src/middleware/error.js';
 import { requestContext } from '../src/middleware/logger.js';
-import { limitWidgetRequest } from '../src/middleware/rate-limit.js';
+import { limitUnresolvedWidgetRequest, limitWidgetRequest } from '../src/middleware/rate-limit.js';
 
 /**
  * Widget rate limiting through HTTP (P2-04).
@@ -28,6 +28,7 @@ const SECRET = randomUUID();
 
 /** Every dimension roomy, so each test can shrink exactly one. */
 const ROOMY: WidgetLimits = {
+  unresolvedPerMinute: 100,
   sessionPerMinute: { session: 100, chat: 100 },
   ipPerMinute: { config: 100, session: 100, chat: 100 },
   tenantPerMinute: { CANTINA: 100, ECOMMERCE: 100, none: 100 },
@@ -257,6 +258,70 @@ describe('the address bucket', () => {
     expect(ipKeys[0]).toBeDefined();
     expect(ipKeys[1]).toBe(ipKeys[0]);
     expect(ipKeys[2]).not.toBe(ipKeys[0]);
+  });
+});
+
+describe('before the key and origin are resolved (review fix)', () => {
+  /** The address limit, then a stand-in for resolution that counts how often it ran. */
+  const unresolvedApp = (limiter: RateLimiter, unresolvedPerMinute = 100) => {
+    const resolutions = { count: 0 };
+    const app = new Hono<AppEnv>();
+
+    app.use('*', requestContext());
+    app.onError(errorHandler);
+    app.get(
+      '/config',
+      limitUnresolvedWidgetRequest({
+        limiter,
+        ipSecret: SECRET,
+        limits: { ...ROOMY, unresolvedPerMinute },
+      }),
+      (c) => {
+        resolutions.count += 1;
+        return c.json({ ok: true });
+      },
+    );
+
+    return { app, resolutions };
+  };
+
+  const get = (app: Hono<AppEnv>, ip = '203.0.113.7') =>
+    app.request('/config', { headers: { 'x-forwarded-for': ip } });
+
+  it('refuses an address past its limit before anything is resolved', async () => {
+    const { app, resolutions } = unresolvedApp(memoryRateLimiter(), 2);
+
+    expect((await get(app)).status).toBe(200);
+    expect((await get(app)).status).toBe(200);
+    const refused = await get(app);
+
+    expect(refused.status).toBe(429);
+    expect(resolutions.count).toBe(2);
+    expect(Number(refused.headers.get('retry-after'))).toBeGreaterThanOrEqual(1);
+    // CORS never ran, so nothing is allowed — but a route the edge caches still varies on Origin.
+    expect(refused.headers.get('vary')).toContain('Origin');
+    expect(refused.headers.get('access-control-allow-origin')).toBeNull();
+    expect(await refused.json()).toMatchObject({ error: { code: 'rate_limited' } });
+  });
+
+  it('counts each address on its own', async () => {
+    const { app } = unresolvedApp(memoryRateLimiter(), 1);
+
+    expect((await get(app, '203.0.113.7')).status).toBe(200);
+    expect((await get(app, '203.0.113.7')).status).toBe(429);
+    expect((await get(app, '198.51.100.9')).status).toBe(200);
+  });
+
+  it('draws one bucket, keyed on the address HMAC and on no tenant', async () => {
+    const { seen, limiter } = recording();
+    const { app } = unresolvedApp(limiter);
+
+    await get(app, '198.51.100.42');
+
+    const [only] = seen;
+    expect(only).toHaveLength(1);
+    expect(only?.[0]?.key).toMatch(/^ip:[0-9a-f]{32}:unresolved$/);
+    expect(only?.[0]?.key).not.toContain('198.51.100.42');
   });
 });
 

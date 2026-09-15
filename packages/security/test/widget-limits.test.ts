@@ -5,6 +5,7 @@ import {
   planCapCheck,
   QUOTA_NEAR_SHARE,
   quotaStateOf,
+  unresolvedLimitCheck,
   WIDGET_LIMITS,
   widgetLimitChecks,
   type WidgetLimits,
@@ -81,6 +82,7 @@ describe('widgetLimitChecks', () => {
 
   it('takes its numbers from the table it is handed', () => {
     const tiny: WidgetLimits = {
+      unresolvedPerMinute: 15,
       sessionPerMinute: { session: 1, chat: 2 },
       ipPerMinute: { config: 3, session: 4, chat: 5 },
       tenantPerMinute: { CANTINA: 6, ECOMMERCE: 7, none: 8 },
@@ -107,6 +109,37 @@ describe('WIDGET_LIMITS', () => {
       expect(table.ECOMMERCE).toBeGreaterThan(table.CANTINA);
       expect(table.CANTINA).toBeGreaterThan(table.none);
     }
+  });
+
+  it('lets one address use every endpoint of a winery before the address-wide limit binds', () => {
+    // A real visitor hits a winery's own limits first; the unresolved limit is for scripts.
+    const { config, session, chat } = WIDGET_LIMITS.ipPerMinute;
+
+    expect(WIDGET_LIMITS.unresolvedPerMinute).toBeGreaterThan(config + session + chat);
+  });
+});
+
+describe('unresolvedLimitCheck (review fix)', () => {
+  it('is the address alone, per minute, before any tenant is known', () => {
+    expect(unresolvedLimitCheck('bucket')).toEqual({
+      key: 'ip:bucket:unresolved',
+      limit: 240,
+      windowSec: 60,
+    });
+  });
+
+  it('takes its number from the table it is handed', () => {
+    const limits = { ...WIDGET_LIMITS, unresolvedPerMinute: 3 };
+
+    expect(unresolvedLimitCheck('bucket', limits).limit).toBe(3);
+  });
+
+  it('never shares a bucket with an address counted against a tenant', () => {
+    const tenantKeys = (['config', 'session', 'chat'] as const).flatMap((endpoint) =>
+      widgetLimitChecks(request({ endpoint, sessionId: 's' })).map((check) => check.key),
+    );
+
+    expect(tenantKeys).not.toContain(unresolvedLimitCheck('bucket').key);
   });
 });
 

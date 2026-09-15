@@ -12,7 +12,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../env.js';
 import { routeKey } from '../middleware/capability.js';
 import { widgetCors, type RejectedWidgetRequest, type WidgetResolver } from '../middleware/cors.js';
-import { limitWidgetRequest } from '../middleware/rate-limit.js';
+import { limitUnresolvedWidgetRequest, limitWidgetRequest } from '../middleware/rate-limit.js';
 import { WIDGET_PREFIX } from '../routes.js';
 import { widgetConfigFor } from '../widget-config.js';
 import type { RouteDoc } from './dashboard.js';
@@ -101,15 +101,22 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
   /**
    * The widget's public configuration (P2-10).
    *
-   * **The order is the security property.** CORS first, because it is what
-   * resolves the tenant from `(pk_, Origin)` and refuses everything else; the
-   * limit second, because it counts against the tenant CORS resolved; the
-   * handler last, reading only what those two established. A preflight is
-   * answered by CORS and never reaches the limit or the handler.
+   * **The order is the security property.**
+   *
+   * 1. The address limit, because it is the only thing that can run before a
+   *    tenant is known, and resolving one is a query (review fix).
+   * 2. CORS, because it is what resolves the tenant from `(pk_, Origin)` and
+   *    refuses everything else.
+   * 3. The tenant's limits, because they count against the tenant CORS resolved.
+   * 4. The handler, reading only what those established.
+   *
+   * A preflight is counted by the address limit and answered by CORS, and never
+   * reaches the tenant's limits or the handler.
    */
   app.on(
     ['GET', 'OPTIONS'],
     CONFIG_PATH,
+    limitUnresolvedWidgetRequest({ limiter: widget.limiter, ipSecret: widget.ipSecret }),
     widgetCors({
       resolve: widget.resolve,
       onRejected: widget.onRejected,

@@ -14,6 +14,7 @@ export {
   planCapCheck,
   QUOTA_NEAR_SHARE,
   quotaStateOf,
+  unresolvedLimitCheck,
   WIDGET_LIMITS,
   widgetLimitChecks,
   type PlanTier,
