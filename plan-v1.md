@@ -4885,6 +4885,7 @@ Runs **outside** `withTenant` — the tenant is what we are resolving, so RLS ca
 - **The origin must already be normalised (P2-05).** The comparison is exact equality against the stored origin; a raw `Origin` header would miss on case alone.
 - **Tested against real Postgres in `widget-resolution.integration.test.ts`**: every outcome the row lists; what the scope admits (one key, one domain, one tenant, no memberships), that a key alone and a pending domain reach no tenant row, that another tenant's verified origin is invisible to a key it did not issue; that every INSERT, UPDATE and DELETE inside the scope fails as a read-only transaction; that ordinary tenant reads are unchanged; and that nothing is left set on the connection. **Not run locally for this PR** — Docker was not running — so CI's integration job is its first run.
 - `CLAUDE.md` and `AGENTS.md` name every scope, now including `withOutbox()`, which they had missed since P1-31.
+- **The P0-38 isolation suite now walks each table once.** It seeded once per `RLS_POLICIES` entry, and 0042's three superseding entries made the second `widget_keys` insert trip the public key's unique index, which skipped the whole file. CI's first integration run on this PR caught it. From a tenant seat with no widget GUCs set, the superseding policies reduce to the tenant predicate, so the probes' expectations are unchanged.
 
 ---
 

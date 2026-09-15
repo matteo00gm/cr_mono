@@ -130,6 +130,17 @@ const INSERTS: Record<string, (tenantId: string, ctx: SeedContext) => SQL> = {
 /** `tenants` is scoped by its own id; everything else by `tenant_id`. */
 const scopeColumn = (table: string): string => (table === 'tenants' ? 'id' : 'tenant_id');
 
+/**
+ * Each protected table once, in first-appearance order.
+ *
+ * `RLS_POLICIES` lists policy *entries*, and a table appears again whenever a
+ * later migration supersedes its policy (P1-31, P2-07). Seeding per entry
+ * inserts a second row into the same table: `widget_keys`' public key then
+ * trips its unique index, and `beforeAll` takes every test in this file with it.
+ * First appearance is still dependency order.
+ */
+const TABLES = [...new Set(RLS_POLICIES.map((policy) => policy.table))];
+
 let container: StartedPostgreSqlContainer | undefined;
 let client: DbClient | undefined;
 let db: Database;
@@ -164,7 +175,7 @@ beforeAll(async () => {
 
   tenantA = await createTenant(db, 'iso-a');
 
-  // Seeded in RLS_POLICIES order, which is also dependency order: a
+  // Seeded in first-appearance order, which is also dependency order: a
   // conversation exists before the message referencing it, a product before
   // its embedding.
   const conversation = await db.execute(sql`
@@ -188,7 +199,7 @@ beforeAll(async () => {
     userId,
   };
 
-  for (const { table } of RLS_POLICIES) {
+  for (const table of TABLES) {
     if (table === 'tenants') continue;
     await db.execute(insertFor(table, tenantA));
   }
@@ -209,10 +220,10 @@ describe('rls isolation', () => {
     // joins RLS_POLICIES, gets a policy, and is silently never tested here.
     const covered = new Set(Object.keys(INSERTS));
 
-    expect(RLS_POLICIES.map((policy) => policy.table).filter((t) => !covered.has(t))).toEqual([]);
+    expect(TABLES.filter((t) => !covered.has(t))).toEqual([]);
   });
 
-  describe.each(RLS_POLICIES.map((policy) => policy.table))('%s', (table) => {
+  describe.each(TABLES)('%s', (table) => {
     it('shows none of the other tenant rows', async () => {
       await useTenant(db, tenantB);
 
