@@ -3381,6 +3381,11 @@ Two CI checks, mirroring patterns already proven in this plan:
 
 **Files.** `scripts/gen-openapi.mjs`, route metadata in `apps/api/src/surfaces/dashboard.ts`, `docs/api/openapi.json`, CI step. **~140 lines.**
 
+**Review fix (2026-09-15): a widget route says which refusals it gives.** Every operation listed its surface's error responses, so the widget marker documented a 403 and a 429 it never sends.
+- `RouteDoc` gains an optional `refusals`. Absent, the surface's defaults apply; present, exactly those are documented. A status the surface has no description for fails generation.
+- The widget marker declares none and the widget config declares 403 and 429. `packages/testing/test/openapi.test.ts` asserts both against the published document.
+- **The dashboard is unchanged, deliberately.** Its marker also never sends a 401 or 403, but "every dashboard operation documents a success and both refusals" is this row's own contract test. Narrowing it is a decision about the dashboard reference, not part of a widget fix.
+
 ---
 
 ### P0-63 · Generated typed API client
@@ -5385,6 +5390,12 @@ X-Accel-Buffering: no
 **Tests.** Deployed smoke test asserting time-to-first-byte is far below total response time against a stub that streams a token per second — that ratio is the only assertion that actually proves streaming survives the edge. Add the same assertion to P3-18. **Not written here:** there is no streaming endpoint to point it at until P2-29, and nothing is deployed. The behaviour, its policies and the two functions are verified by `typecheck:infra` and by review only — see the open items.
 
 **Files.** `infra/cdn.ts`, `infra/api.ts`, `sst.config.ts`, CI assertion. **~60 lines.**
+
+**Review fix (2026-09-15): behaviour order is checked, not commented.**
+- **Behaviour order.** CloudFront takes the first matching behaviour, so a specific pattern placed after `/v1/*` never applies, and nothing fails. `infra/behaviour-order.ts` wraps the ordered behaviours in `cdn.ts` with `checkedBehaviourOrder`, which refuses to synthesise an order where an earlier pattern matches a path a later one was written for. It is unit-tested against the real order and against P3's widget bundles.
+- **Cache policy.** The widget config policy's arguments are built in `widget-cache.ts` and tested field by field: `minTtl` 0, TTL capped at the API's minute, keyed on `Origin` and `key`, no cookie. Before, only the constants were tested, not where `cdn.ts` put them.
+- **Wiring.** A source-reading test checks `cdn.ts` still uses both. `typecheck:infra` passes locally.
+- **Not deployed.** Nothing here has been checked against AWS.
 
 ---
 

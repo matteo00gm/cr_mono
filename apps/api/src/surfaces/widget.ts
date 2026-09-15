@@ -158,6 +158,7 @@ export const WIDGET_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, Rout
         'or a test - can prove which application answered. Carries no tenant or catalogue data.',
       example: { surface: 'widget' },
       response: widgetSurfaceResponse,
+      refusals: [],
     },
   ],
   [
@@ -186,6 +187,7 @@ export const WIDGET_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, Rout
         quotaState: 'ok',
       },
       response: widgetConfigResponse,
+      refusals: [403, 429],
     },
   ],
 ]);

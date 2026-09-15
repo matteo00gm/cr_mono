@@ -2,12 +2,9 @@
 
 import { api } from './api';
 import { originSecret } from './config';
+import { checkedBehaviourOrder } from './behaviour-order';
 import { SPA_REWRITE_CODE, VIEWER_IP_CODE } from './edge-functions';
-import {
-  WIDGET_CONFIG_CACHE_KEY,
-  WIDGET_CONFIG_MAX_AGE_SEC,
-  WIDGET_CONFIG_PATH,
-} from './widget-cache';
+import { WIDGET_CONFIG_PATH, widgetConfigCachePolicyArgs } from './widget-cache';
 import { isProtectedStage } from './stage';
 
 /**
@@ -176,25 +173,10 @@ const apiBehaviourBase = {
  * what it is. `minTtl` is zero so a response without `Cache-Control` (every
  * refusal) is never held, and the maximum is the API's own `max-age`.
  */
-const widgetConfigCache = new aws.cloudfront.CachePolicy('WidgetConfigCache', {
-  comment: 'GET /v1/widget/config, keyed on Origin and the public key (P2-10)',
-  minTtl: 0,
-  defaultTtl: WIDGET_CONFIG_MAX_AGE_SEC,
-  maxTtl: WIDGET_CONFIG_MAX_AGE_SEC,
-  parametersInCacheKeyAndForwardedToOrigin: {
-    cookiesConfig: { cookieBehavior: 'none' },
-    headersConfig: {
-      headerBehavior: 'whitelist',
-      headers: { items: [...WIDGET_CONFIG_CACHE_KEY.headers] },
-    },
-    queryStringsConfig: {
-      queryStringBehavior: 'whitelist',
-      queryStrings: { items: [...WIDGET_CONFIG_CACHE_KEY.queryStrings] },
-    },
-    enableAcceptEncodingBrotli: true,
-    enableAcceptEncodingGzip: true,
-  },
-});
+const widgetConfigCache = new aws.cloudfront.CachePolicy(
+  'WidgetConfigCache',
+  widgetConfigCachePolicyArgs(),
+);
 
 // Main CloudFront Distribution
 export const distribution = new aws.cloudfront.Distribution('Cdn', {
@@ -266,8 +248,11 @@ export const distribution = new aws.cloudfront.Distribution('Cdn', {
    * widget bundles (`/v1/w.js`, `/v1/widget-*.js`) from S3, and those patterns
    * are more specific than `/v1/*` — appended, they would never match, and the
    * bundles would be served by the API Lambda as JSON 404s.
+   *
+   * `checkedBehaviourOrder` refuses to synthesise an order with an unreachable
+   * behaviour (review fix), so this is no longer held by the comment alone.
    */
-  orderedCacheBehaviors: [
+  orderedCacheBehaviors: checkedBehaviourOrder([
     {
       /*
        * The chat path, and the reason P0-17a exists.
@@ -321,7 +306,7 @@ export const distribution = new aws.cloudfront.Distribution('Cdn', {
       pathPattern: '/v1/*',
       compress: true,
     },
-  ],
+  ]),
 
   /*
    * `customErrorResponses` is deliberately absent (P0-17a).

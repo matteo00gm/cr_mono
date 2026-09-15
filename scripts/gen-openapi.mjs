@@ -175,6 +175,28 @@ const WIDGET_ERRORS = {
   ),
 };
 
+/**
+ * The error responses one route documents (review fix).
+ *
+ * A route that lists `refusals` gets exactly those, taken from its surface's
+ * table; one that does not gets the surface's usual set. A surface marker
+ * refuses nothing, and documenting a 401 or a 429 on it sends a reader looking
+ * for a guard that is not there. A refusal the surface has no description for
+ * fails generation rather than being dropped.
+ */
+const refusalsOf = (endpoint, doc, errors) => {
+  if (doc.refusals === undefined) return errors;
+
+  return Object.fromEntries(
+    doc.refusals.map((status) => {
+      if (errors[status] === undefined) {
+        die(`${endpoint.key}: refuses with ${String(status)}, which its surface does not describe`);
+      }
+      return [status, errors[status]];
+    }),
+  );
+};
+
 const operationFor = (endpoint, doc, errors) => {
   const capability = doc.access.kind === 'capability' ? doc.access.capability : undefined;
 
@@ -208,7 +230,7 @@ const operationFor = (endpoint, doc, errors) => {
           },
         },
       },
-      ...errors,
+      ...refusalsOf(endpoint, doc, errors),
     }),
   };
 };

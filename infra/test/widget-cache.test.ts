@@ -4,6 +4,7 @@ import {
   WIDGET_CONFIG_CACHE_KEY,
   WIDGET_CONFIG_MAX_AGE_SEC,
   WIDGET_CONFIG_PATH,
+  widgetConfigCachePolicyArgs,
 } from '../widget-cache.js';
 
 /**
@@ -33,5 +34,31 @@ describe('the widget config cache', () => {
   it('is the config path exactly, under the widget surface', () => {
     expect(WIDGET_CONFIG_PATH).toBe('/v1/widget/config');
     expect(WIDGET_CONFIG_PATH.includes('*')).toBe(false);
+  });
+});
+
+describe('the cache policy cdn.ts creates (review fix)', () => {
+  const args = widgetConfigCachePolicyArgs();
+
+  it('never holds a response the API did not mark cacheable', () => {
+    // Every refusal has no Cache-Control; a minimum above zero would cache it anyway.
+    expect(args.minTtl).toBe(0);
+  });
+
+  it('holds a response for the minute the API promises, and no longer', () => {
+    expect(args.defaultTtl).toBe(WIDGET_CONFIG_MAX_AGE_SEC);
+    expect(args.maxTtl).toBe(WIDGET_CONFIG_MAX_AGE_SEC);
+  });
+
+  it('keys on exactly the Origin and the public key, and on no cookie', () => {
+    const { cookiesConfig, headersConfig, queryStringsConfig } =
+      args.parametersInCacheKeyAndForwardedToOrigin;
+
+    expect(cookiesConfig).toEqual({ cookieBehavior: 'none' });
+    expect(headersConfig).toEqual({ headerBehavior: 'whitelist', headers: { items: ['Origin'] } });
+    expect(queryStringsConfig).toEqual({
+      queryStringBehavior: 'whitelist',
+      queryStrings: { items: ['key'] },
+    });
   });
 });

@@ -2724,34 +2724,6 @@
                   }
                 }
               }
-            },
-            "403": {
-              "description": "The key and the request's Origin do not belong to one tenant. The same answer whatever the reason, and it carries no CORS headers, so a browser script cannot read it.",
-              "content": {
-                "application/json": {
-                  "example": {
-                    "error": {
-                      "code": "forbidden",
-                      "message": "This widget is not available on this site.",
-                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
-                    }
-                  }
-                }
-              }
-            },
-            "429": {
-              "description": "A rate limit refused the request. `Retry-After` says when to try again.",
-              "content": {
-                "application/json": {
-                  "example": {
-                    "error": {
-                      "code": "rate_limited",
-                      "message": "Too many requests. Try again shortly.",
-                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
-                    }
-                  }
-                }
-              }
             }
           }
         }

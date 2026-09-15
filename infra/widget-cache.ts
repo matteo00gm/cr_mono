@@ -38,3 +38,32 @@ export const WIDGET_CONFIG_CACHE_KEY = {
   headers: ['Origin'],
   queryStrings: ['key'],
 } as const;
+
+/**
+ * The cache policy exactly as `cdn.ts` hands it to CloudFront (review fix).
+ *
+ * Built here rather than inline, so the figures a test reads are the figures
+ * the distribution gets. Before, the test checked the constants above and
+ * `cdn.ts` could have wired them into the wrong fields — a `minTtl` of sixty
+ * holds every refusal for a minute — with that test still green.
+ */
+export const widgetConfigCachePolicyArgs = () => ({
+  comment: 'GET /v1/widget/config, keyed on Origin and the public key (P2-10)',
+  /** Zero, so a response without `Cache-Control` — every refusal — is never held. */
+  minTtl: 0,
+  defaultTtl: WIDGET_CONFIG_MAX_AGE_SEC,
+  maxTtl: WIDGET_CONFIG_MAX_AGE_SEC,
+  parametersInCacheKeyAndForwardedToOrigin: {
+    cookiesConfig: { cookieBehavior: 'none' },
+    headersConfig: {
+      headerBehavior: 'whitelist',
+      headers: { items: [...WIDGET_CONFIG_CACHE_KEY.headers] },
+    },
+    queryStringsConfig: {
+      queryStringBehavior: 'whitelist',
+      queryStrings: { items: [...WIDGET_CONFIG_CACHE_KEY.queryStrings] },
+    },
+    enableAcceptEncodingBrotli: true,
+    enableAcceptEncodingGzip: true,
+  },
+});

@@ -1087,6 +1087,16 @@ export interface RouteDoc {
    * what any answer must look like.
    */
   readonly response: z.ZodType;
+  /**
+   * The error statuses this route answers with, when they are not its
+   * surface's usual set (review fix).
+   *
+   * Absent, the reference lists the surface's defaults; present, exactly these.
+   * A route that refuses nothing, like a surface marker, says so rather than
+   * inheriting a 401 or a 429 it never sends — a documented refusal sends a
+   * reader looking for a guard that is not there.
+   */
+  readonly refusals?: readonly number[];
 }
 
 export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, RouteDoc>([

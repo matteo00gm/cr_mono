@@ -16,6 +16,7 @@ import { WIDGET_PREFIX } from '../src/routes.js';
 import {
   WIDGET_CONFIG_CACHE_CONTROL,
   WIDGET_ROUTE_ACCESS,
+  WIDGET_ROUTES,
   type WidgetDependencies,
 } from '../src/surfaces/widget.js';
 import { fakeAuth, oneMembership } from './support/auth.js';
@@ -304,5 +305,17 @@ describe('wiring', () => {
     expect(() => {
       assertEveryRouteDeclared(built, new Map(), WIDGET_PREFIX);
     }).toThrow(UndeclaredRouteError);
+  });
+
+  it('documents only the refusals each route can give: none for the marker, 403 and 429 for config', () => {
+    // Review fix: the reference listed 403 and 429 on the marker, which refuses nothing.
+    const refusals = Object.fromEntries(
+      [...WIDGET_ROUTES].map(([key, doc]) => [key, doc.refusals]),
+    );
+
+    expect(refusals).toEqual({
+      [`GET ${WIDGET_PREFIX}`]: [],
+      [`GET ${WIDGET_PREFIX}/config`]: [403, 429],
+    });
   });
 });

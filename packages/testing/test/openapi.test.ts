@@ -102,6 +102,25 @@ describe('every operation', () => {
     }
   });
 
+  it('documents on the widget only the refusals each route gives (review fix)', () => {
+    /*
+     * The widget reference is the one sellers' developers read. The marker
+     * refuses nothing, and config refuses for its key and origin (403) or its
+     * rate (429) — never for a session, because this surface has none.
+     */
+    const refusals = Object.fromEntries(
+      operations(doc.widget).map(([path, method, op]) => [
+        `${method.toUpperCase()} ${path}`,
+        Object.keys(op.responses ?? {}),
+      ]),
+    );
+
+    expect(refusals).toEqual({
+      'GET /v1/widget': ['200'],
+      'GET /v1/widget/config': ['200', '403', '429'],
+    });
+  });
+
   it('says who may call it', () => {
     // The part a reader cannot get anywhere else: otherwise the only way to
     // learn a route's required capability is to try it and be refused.
