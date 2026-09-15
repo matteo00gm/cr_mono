@@ -9,7 +9,8 @@
  * drop-in, and there is one test file rather than two that drift.
  */
 
-export interface LimitCheck {
+/** A window of `windowSec` seconds, aligned to the epoch. */
+export interface FixedWindowCheck {
   /**
    * Dimension and subject in one string: `ip:<hash>`, `session:<id>`,
    * `tenant:<id>:min`.
@@ -26,12 +27,42 @@ export interface LimitCheck {
   readonly windowSec: number;
 }
 
+/**
+ * A calendar month in UTC (P2-04) — the plan cap.
+ *
+ * **Its own shape, not a `windowSec` of thirty-one days.** An epoch-aligned
+ * window cannot follow the calendar: its boundaries land mid-month, so a count
+ * that resets on the 17th lets a tenant through up to twice their plan cap, and
+ * nothing looks wrong. The month is still worked out from the clock the
+ * implementation owns — in SQL for Postgres — and never passed in, for the
+ * reason the fixed window gives.
+ */
+export interface MonthlyCheck {
+  readonly key: string;
+  readonly limit: number;
+  readonly window: 'month';
+}
+
+export type LimitCheck = FixedWindowCheck | MonthlyCheck;
+
 export interface LimitResult {
   readonly allowed: boolean;
-  /** How many remain in the tightest window that was checked. */
+  /** How many remain in the window this result describes. */
   readonly remaining: number;
   /** When that window closes. */
   readonly resetAt: Date;
+  /**
+   * The limit of the dimension this result describes: the tightest on an
+   * allowance, the one that refused on a rejection. It is what
+   * `X-RateLimit-Limit` reports, which is meaningless without knowing whose
+   * limit it is.
+   */
+  readonly limit: number;
+  /**
+   * That dimension's key (P2-04). A caller needs it to tell a burst limit from
+   * the plan cap, whose numbers must never reach a visitor (§1.3).
+   */
+  readonly key: string;
   /** Present only on a rejection, for the `Retry-After` header. */
   readonly retryAfterSec?: number | undefined;
 }
@@ -62,3 +93,32 @@ export interface RateLimiter {
  */
 export const windowStartMs = (nowMs: number, windowSec: number): number =>
   nowMs - (nowMs % (windowSec * 1000));
+
+/**
+ * The UTC calendar month containing an instant.
+ *
+ * `Date.UTC` rather than local-time setters, for the reason Postgres computes
+ * its month `AT TIME ZONE 'UTC'`: a month worked out in a server's local zone
+ * would move the plan cap's boundary by an hour twice a year.
+ */
+export const monthWindowMs = (
+  nowMs: number,
+): { readonly startMs: number; readonly endMs: number } => {
+  const now = new Date(nowMs);
+
+  return {
+    startMs: Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+    endMs: Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1),
+  };
+};
+
+/** Where any check's window starts and ends, whichever kind of window it is. */
+export const windowOf = (
+  check: LimitCheck,
+  nowMs: number,
+): { readonly startMs: number; readonly endMs: number } => {
+  if ('window' in check) return monthWindowMs(nowMs);
+
+  const startMs = windowStartMs(nowMs, check.windowSec);
+  return { startMs, endMs: startMs + check.windowSec * 1000 };
+};

@@ -1283,7 +1283,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-01 | ⛔ 🔒 `RateLimiter` interface | backend-agnostic; semantics defined here | P0-42 |
 | ✅ P2-02 | 🔒 Postgres limiter implementation | one `INSERT … ON CONFLICT DO UPDATE … RETURNING` | P2-01,P0-34 |
 | ✅ P2-03 | 🔒 Limiter test suite | boundaries, parallel-invocation atomicity, rollover, headers | P2-02 |
-| P2-04 | 🔒 Wire all limit dimensions | session, IP, tenant/min, tenant/month, per-endpoint | P2-02 |
+| ✅ P2-04 | 🔒 Wire all limit dimensions | session, IP, tenant/min, tenant/month, per-endpoint | P2-02 |
 | P2-05 | ⛔ 🔒 Origin normalization fn | punycode, lowercase, strip path/port, PSL, reject IP/localhost | P0-42 |
 | P2-06 | 🔒 Origin normalization table test | trailing dot, uppercase, port, `null`, absent, lookalikes | P2-05 |
 | P2-07 | ⛔ 🔒 Allowlist accessor (uncached) | single accessor so caching is additive later | P2-05,P0-24 |
@@ -4744,6 +4744,11 @@ export interface RateLimiter {
 
 **Files.** `packages/security/src/rate-limit/types.ts`. **~50 lines.**
 
+**As built — the interface grew twice for P2-04 (2026-09-15).**
+
+- **`LimitCheck` has a calendar-month variant**, `{ key, limit, window: 'month' }`, beside the fixed `windowSec` shape. The plan cap cannot be an epoch-aligned window: a thirty-one-day lattice puts a boundary inside every thirty-one-day month, so a cap written as `windowSec` resets partway through January and admits twice the plan. The month is still computed from the clock the implementation owns — `date_trunc('month', now() AT TIME ZONE 'UTC')` in Postgres — and never passed in. Both directions are taken in UTC, because calendar arithmetic on a `timestamptz` follows the session's time zone.
+- **`LimitResult` names the dimension it describes**, as `key` and `limit`. "Headers reflect the binding limit" needs the binding limit's *number*: an `X-RateLimit-Limit` from one dimension beside a remaining count from another is wrong in a way no client can detect. The key is also how the middleware tells a burst limit from the plan cap, whose numbers must not reach a visitor (§1.3).
+
 ---
 
 ### P2-02 · Postgres limiter implementation 🔒
@@ -4781,6 +4786,19 @@ The window start is **computed in SQL from `now()`**, never passed from the appl
 **Tests.** Each dimension trips independently; headers are present and correct; the monthly dimension uses the `period` key so it survives container restarts.
 
 **Files.** `apps/api/src/middleware/rate-limit.ts`, tests. **~120 lines.**
+
+**As built (2026-09-15).** The dimension list is pure and lives in `packages/security/src/rate-limit/widget.ts`; `apps/api/src/middleware/rate-limit.ts` applies it to HTTP.
+
+- **Keys carry the endpoint wherever the limit differs by endpoint**: `session:<sid>:<endpoint>` and `ip:<hmac>:<tenant>:<endpoint>`, not the row's `session:<sid>` and `ip:<hmac>:<tenant>`. One bucket counted against two limits refuses at whichever limit the latest caller passed, so a burst of chat could lock a visitor out of minting a session.
+- **The month is a calendar window, not a `period` in the key.** `tenant:<tid>:month` with `window: 'month'` (see P2-01's note): the period is the row's `window_start`, computed in SQL, so the key needs no application clock and a container restart changes nothing.
+- **Only chat spends the month.** A message is what a plan sells, and config is fetched on every page view.
+- **The address is an HMAC under a salt derived per UTC day** from a caller-supplied secret, and never stored. A plain hash of an IPv4 address is reversed by enumerating four billion values. The cost is one extra minute of allowance per address at midnight UTC. It lives in `apps/api/src/middleware/ip-bucket.ts`, not beside the dimensions, because `packages/security` is imported by the dashboard's browser bundle and a `node:crypto` import there was reaching it: the build warned, and the package had carried no Node built-in until then.
+- **Headers go on a 429 only, and a refusal by the plan cap sends only `Retry-After`.** `X-RateLimit-Remaining` on every response would publish how busy a winery is, and an `X-RateLimit-Limit` of 1,000 names the plan it pays for (§1.3).
+- **It refuses to run before tenant resolution** — a wiring error and a 500 — because a limiter with no tenant has nothing to count against, and a limit counting against nothing has silently stopped applying.
+- **The conformance suite gained what P2-03 asked for and never checked**: a `retryAfterSec` that agrees with `resetAt`. It also now covers the month and the named dimension, against both implementations, and Postgres is asserted to keep the month in UTC on a session set to Europe/Rome.
+- **Not mounted yet.** No widget route consumes it until P2-10, which mounts it after P2-08's resolution and wires the address secret.
+
+**⚠ Open — the numbers.** §3.6 names the dimensions and gives no figures, so `WIDGET_LIMITS` is provisional. Per minute: session 6 to mint, 12 for chat; address 60 config, 12 session, 30 chat; tenant 120 on CANTINA, 600 on ECOMMERCE, 60 with no plan; endpoint 600 config, 120 session, 120 chat. Per month: 1,000, 10,000 and 100 chat messages. The monthly caps are really P5-01's pricing decision, and should be settled there.
 
 ---
 
