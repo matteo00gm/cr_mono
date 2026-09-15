@@ -3400,7 +3400,7 @@ Two CI checks, mirroring patterns already proven in this plan:
 **Review fix (2026-09-15): a widget route says which refusals it gives.** Every operation listed its surface's error responses, so the widget marker documented a 403 and a 429 it never sends.
 - `RouteDoc` gains an optional `refusals`. Absent, the surface's defaults apply; present, exactly those are documented. A status the surface has no description for fails generation.
 - The widget marker declares none and the widget config declares 403 and 429. `packages/testing/test/openapi.test.ts` asserts both against the published document.
-- **The dashboard is unchanged, deliberately.** Its marker also never sends a 401 or 403, but "every dashboard operation documents a success and both refusals" is this row's own contract test. Narrowing it is a decision about the dashboard reference, not part of a widget fix.
+- **The dashboard marker followed, as its own change.** It never sends a 401 or 403 either, but "every dashboard operation documents a success and both refusals" was this row's contract test, so it was not narrowed inside a widget fix. It now names the marker as its one exception, and the marker declares no refusals; every other dashboard route still documents both.
 
 ---
 

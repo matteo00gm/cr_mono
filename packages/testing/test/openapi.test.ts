@@ -80,10 +80,18 @@ describe('every operation', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('documents a success and both refusals', () => {
+  it('documents a success and both refusals, except on the marker, which refuses nothing', () => {
+    /*
+     * The contract stands for every route a session or a capability guards. The
+     * surface marker is the one exception, named rather than inferred: it answers
+     * every caller the same, and documenting a 401 on it sends a reader looking
+     * for a guard that is not there (review fix).
+     */
     for (const [path, method, op] of operations(doc.dashboard)) {
       const where = `${method.toUpperCase()} ${path}`;
-      expect(Object.keys(op.responses ?? {}), where).toEqual(['200', '401', '403']);
+      const expected = where === 'GET /v1/dashboard' ? ['200'] : ['200', '401', '403'];
+
+      expect(Object.keys(op.responses ?? {}), where).toEqual(expected);
     }
   });
 
