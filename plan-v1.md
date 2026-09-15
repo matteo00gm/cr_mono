@@ -1307,7 +1307,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-10 | `GET /v1/widget/config` | public config only, edge-cache 60 s | P2-08 |
 | ✅ P2-11 | 🔒 Ed25519 key in SSM + in-process sign | no KMS asymmetric on the hot path (§5.7) | P0-15 |
 | ✅ P2-12 | ⛔ 🔒 `POST /v1/widget/session` | mint token with `origin`/`tid`/`jti`, 15 min | P2-11 |
-| P2-12a | 🔒 Session continuation | re-mint keeping `sid`, **requires the previous token** — never a client-supplied `sid` | P2-12 |
+| ✅ P2-12a | 🔒 Session continuation | re-mint keeping `sid`, **requires the previous token** — never a client-supplied `sid` | P2-12 |
 | P2-13 | ⛔ 🔒 Token verify middleware | sig, exp, aud, iss, alg, origin match, jti, **tenant ACTIVE** | P2-12 |
 | P2-37 | RAG diagnostic sandbox | real pipeline + scores, no billing, no analytics; retrieval-only by default | P2-22 |
 | P2-14 | 🔒 Revocation sweep job | EventBridge, prunes expired `jti` | P0-35 |
@@ -5103,7 +5103,7 @@ Also supports the §3.2 layer-3 path: if an `Authorization: Bearer sk_live_...` 
 - **`Cache-Control: no-store`**, on top of the `/v1/*` behaviour caching nothing.
 - **`expiresAt` is an ISO instant**, equal to the token's `exp`, whole seconds.
 - **No keyset** answers the session route with a wiring error (500), and `index.ts` warns `widget_token_keys_absent` once per deployed container, on the webhook secret's terms: absent is restrictive, and generating the keyset is operator work. The composition root loads the keyset once per container and keeps a failed load failing.
-- **The `sk_live_` branch is deferred to P4-10**, as the row allows. The route does not read `Authorization` at all, so there is no flag to leave on.
+- **The `sk_live_` branch is deferred to P4-10**, as the row allows, so there is no flag to leave on. `Authorization` is read only for P2-12a's continuation token; P4-10 tells a secret key apart by its prefix before that.
 - **Open.** The token is verified by nothing yet: P2-13. The attack table is P2-15's.
 
 ---
@@ -5133,7 +5133,7 @@ Every rejection returns an identical generic `401` — the reason goes to `secur
 
 ### P2-14 · Revocation and bucket sweep 🔒
 
-**How.** EventBridge-scheduled Lambda, every 15 min: delete `token_revocations` past `expires_at`, delete `rate_limit_buckets` older than the longest window. Batch-delete with `LIMIT` in a loop so a large backlog does not lock the table. Log counts; alarm if a run deletes nothing for 24h (a silently dead sweep grows both tables until they hurt).
+**How.** EventBridge-scheduled Lambda, every 15 min: delete `token_revocations` past `expires_at` **plus P2-12a's 30-minute continuation window** (a row deleted at `expires_at` lets its revoked token continue a session for the rest of the window), delete `rate_limit_buckets` older than the longest window. Batch-delete with `LIMIT` in a loop so a large backlog does not lock the table. Log counts; alarm if a run deletes nothing for 24h (a silently dead sweep grows both tables until they hurt).
 
 **Tests.** Expired rows deleted, unexpired retained; batching terminates.
 
@@ -5479,6 +5479,24 @@ Continuation is rate-limited on the cheap tier and **does not count as a message
 **Tests.** Expired token within the window continues with the same `sid` and a new `jti`; beyond the window a new `sid` is issued; a token for another origin is refused; a revoked `jti` is refused; a `DISABLED` tenant is refused (and the widget must render `disabled`, not `error` — asserted in P3-21); a forged `sid` with no token gets a fresh `sid`, never the claimed one; total lifetime cap is enforced.
 
 **Files.** `apps/api/src/routes/widget-session.ts`, tests. **~110 lines.**
+
+**As built (2026-09-15).** Continuation is in `apps/api/src/widget-session.ts`, beside the mint. The revocation read is `isTokenRevoked` in `packages/db/src/token-revocations.ts`, and the window is a `verify` option on the P2-11 keys. The tests are in `apps/api/test/widget-session.test.ts`. What the row left open:
+
+- **Two kinds of failure, answered differently.**
+  - **A fresh `sid`.** A token that does not verify gets one: not ours, malformed, past the 30-minute window. So does one past the 4-hour lifetime, and any scheme other than `Bearer`.
+  - **A generic 401 (`unauthenticated`), one message for all three.** It goes to a token we signed that is presented for another origin or another tenant, or was revoked. Starting afresh would hide a replay, and those three are the cases the row's tests call refused.
+- **The window is a `verify` option, `expiredWithinSec`** *(addition)*, rather than a decode of the unverified token to read `exp` first. It raises jose's clock tolerance. That tolerance also applies to `nbf`, which these tokens do not carry, and every other verifier leaves the option unset.
+- **`iat_original`** is set on every fresh mint and carried on a continuation. A token without it starts afresh; none was ever deployed.
+- **Revocation.**
+  - It is asked under the tenant this request resolved, after the `tid` and origin checks.
+  - With no revocation check wired, a previous token is ignored. That is restrictive: nothing continues.
+  - A revocation row still counts after its `expires_at`, because the window outlives the token.
+- **Rate limiting.** Continuing is the same route, so it spends the session budget (10 a minute per address) and never the month. There is no per-`sid` bucket on the mint, because the guards run before the token is read.
+- **A switched-off winery** is `unavailable` before any token is looked at.
+- **Open.**
+  - **P2-14's sweep** must keep a revocation until `expires_at` plus the continuation window. Otherwise a revoked token continues its session for what is left of the window.
+  - **P2-16** records the three refusals.
+  - **P3-21** sends the last token when it mints again, and drops it on a 401.
 
 ---
 

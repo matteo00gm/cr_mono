@@ -40,6 +40,7 @@ const { DASHBOARD_PREFIX, WIDGET_PREFIX } = await import('../apps/api/dist/route
 const { WIDGET_ROUTES } = await import('../apps/api/dist/surfaces/widget.js');
 const { registeredRoutes, routeKey } = await import('../apps/api/dist/middleware/capability.js');
 const { WIDGET_REFUSED } = await import('../apps/api/dist/middleware/cors.js');
+const { WIDGET_TOKEN_REFUSED } = await import('../apps/api/dist/widget-session.js');
 
 /** A stand-in: constructing the real Better Auth would open a connection. */
 const stubAuth = {
@@ -147,8 +148,9 @@ const DASHBOARD_ERRORS = { 401: errorResponse, 403: errorResponse };
 /**
  * The widget's refusals, which are not the dashboard's.
  *
- * There is no session to be missing, so no 401: a widget request is refused for
- * its key and `Origin` (403) or for its rate (429). The 403 is one answer for an
+ * A widget request is refused for its key and `Origin` (403) or its rate (429),
+ * and the session mint also for a previous token that belongs elsewhere or was
+ * revoked (401, P2-12a). The 403 is one answer for an
  * unknown key and a stolen one alike, and the reference says so rather than
  * inviting a reader to look for the difference.
  */
@@ -162,6 +164,12 @@ const widgetError = (description, code, message) => ({
 });
 
 const WIDGET_ERRORS = {
+  401: widgetError(
+    'The token sent to continue a session belongs to another site or another tenant, or was ' +
+      'revoked. The same answer whatever the reason; mint again without it to start a new session.',
+    'unauthenticated',
+    WIDGET_TOKEN_REFUSED,
+  ),
   403: widgetError(
     "The key and the request's Origin do not belong to one tenant. The same answer whatever " +
       'the reason, and it carries no CORS headers, so a browser script cannot read it.',

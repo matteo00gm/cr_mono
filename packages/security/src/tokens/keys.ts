@@ -71,6 +71,15 @@ export interface VerifyOptions {
   readonly issuer: string;
   readonly audience: string;
   readonly now?: Date | undefined;
+  /**
+   * Accept a token whose `exp` passed less than this many seconds ago (P2-12a).
+   *
+   * For continuing a session and nothing else: every other verifier leaves it
+   * unset and gets the five-second skew. It widens exactly one check — the
+   * tolerance jose applies to `exp` also applies to `nbf`, which these tokens do
+   * not carry, and `iat` is not compared with the clock at all.
+   */
+  readonly expiredWithinSec?: number | undefined;
 }
 
 export interface VerifiedToken {
@@ -234,13 +243,20 @@ export const loadWidgetTokenKeys = async (serialized: string): Promise<WidgetTok
         .sign(signer.signing);
     },
 
-    verify: async (token, { issuer, audience, now }) => {
+    verify: async (token, { issuer, audience, now, expiredWithinSec = 0 }) => {
+      if (!Number.isInteger(expiredWithinSec) || expiredWithinSec < 0) {
+        throw new RangeError(
+          `expiredWithinSec must be a whole number of seconds, not ${String(expiredWithinSec)}`,
+        );
+      }
+
       const { payload, protectedHeader } = await jwtVerify(token, keyFor, {
         // An allowlist, never inferred from the token: `none` and HS/RS confusion fail here.
         algorithms: [ALGORITHM],
         issuer,
         audience,
-        clockTolerance: CLOCK_TOLERANCE_SEC,
+        // The skew, or the continuation window when one is asked for — never less than the skew.
+        clockTolerance: Math.max(CLOCK_TOLERANCE_SEC, expiredWithinSec),
         requiredClaims: ['exp', 'iat'],
         ...(now === undefined ? {} : { currentDate: now }),
       });

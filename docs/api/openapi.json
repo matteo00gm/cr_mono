@@ -2825,7 +2825,7 @@
       "/v1/widget/session": {
         "post": {
           "summary": "Mint a widget session token",
-          "description": "Mints a 15-minute EdDSA token bound to the request Origin, the tenant the public key belongs to, and a fresh session id. Nothing in the body is read: the tenant, the session and the origin all come from the request itself. Refused with 403 and no CORS headers unless the key and the Origin belong to one tenant, and with 403 and code 'unavailable' when that tenant's widget is switched off, which the widget renders as disabled. Never cached.\n\nNo capability required. Called before a visitor has any identity, so it takes no token and no session. What gates it is the (pk_, Origin) pair, the tenant being active or trialling - read uncached on every call - and the per-address, per-tenant and per-endpoint limits, because it is the cheapest endpoint on the surface to abuse.",
+          "description": "Mints a 15-minute EdDSA token bound to the request Origin, the tenant the public key belongs to, and a session id. Nothing in the body is read: the tenant, the session and the origin all come from the request itself. To continue a conversation, send its last token as `Authorization: Bearer <token>`: up to 30 minutes after that token expired, and 4 hours after the session's first token, the new token keeps the session id. A token that cannot be verified, or is past either limit, starts a fresh session instead. Refused with 403 and no CORS headers unless the key and the Origin belong to one tenant; with 403 and code 'unavailable' when that tenant's widget is switched off, which the widget renders as disabled; and with 401 when the token sent belongs to another site or tenant, or was revoked. Never cached.\n\nNo capability required. Called before a visitor has any identity, so it requires no token and no session; a previous token only continues one. What gates it is the (pk_, Origin) pair, the tenant being active or trialling - read uncached on every call - and the per-address, per-tenant and per-endpoint limits, because it is the cheapest endpoint on the surface to abuse.",
           "operationId": "postV1WidgetSession",
           "responses": {
             "200": {
@@ -2854,6 +2854,20 @@
                   "example": {
                     "token": "header.payload.signature",
                     "expiresAt": "2026-09-15T10:15:00.000Z"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The token sent to continue a session belongs to another site or another tenant, or was revoked. The same answer whatever the reason; mint again without it to start a new session.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "unauthenticated",
+                      "message": "This session is no longer valid. Start a new one.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
                   }
                 }
               }

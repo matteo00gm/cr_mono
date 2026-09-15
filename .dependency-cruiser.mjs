@@ -186,6 +186,11 @@ export default {
           // and completes an import attempt inside the caller's withTenant
           // transaction, and import_runs carries the boilerplate tenant policy.
           '|^packages/db/src/import-runs[.]ts$' +
+          // src/token-revocations.ts is exempt from P2-12a on outbox.ts's terms:
+          // it writes one statement and opens its transaction through
+          // withTenant, never through a raw connection, and token_revocations
+          // carries the boilerplate tenant policy.
+          '|^packages/db/src/token-revocations[.]ts$' +
           // src/embeddings.ts is exempt from P1-37 on the same terms as
           // products.ts: it writes statements and takes the transaction from
           // its caller, opening nothing. Its tables are tenant-scoped and under

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { resolveTenantByKeyAndOrigin } from '@catalogorosso/db';
+import { isTokenRevoked, resolveTenantByKeyAndOrigin } from '@catalogorosso/db';
 import {
   generateWidgetTokenKey,
   InvalidWidgetTokenKeysError,
@@ -280,6 +280,11 @@ describe('the widget surface (P2-10)', () => {
 describe('the widget session keys (P2-12)', () => {
   it('leaves the session route unconfigured without a keyset', () => {
     expect(buildDependencies(config).widget.tokenKeys).toBeUndefined();
+  });
+
+  it('asks the database whether a continuing token was revoked (P2-12a)', () => {
+    // Absent, every previous token would be ignored and no conversation could continue.
+    expect(buildDependencies(config).widget.isTokenRevoked).toBe(isTokenRevoked);
   });
 
   it('loads the keyset it is given once, however many mints ask at once', async () => {
