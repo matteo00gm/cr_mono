@@ -35,27 +35,27 @@ describe('widgetLimitChecks', () => {
     // A session id on config is ignored: config is fetched before any session exists.
     expect(widgetLimitChecks(request({ sessionId: 'sid-1' }))).toEqual([
       { key: `ip:bucket:${TENANT}:config`, limit: 60, windowSec: 60 },
-      { key: `tenant:${TENANT}:min`, limit: 120, windowSec: 60 },
-      { key: `endpoint:config:${TENANT}`, limit: 600, windowSec: 60 },
+      { key: `tenant:${TENANT}:min`, limit: 60, windowSec: 60 },
+      { key: `endpoint:config:${TENANT}`, limit: 120, windowSec: 60 },
     ]);
   });
 
   it('adds the session to a session mint that continues one, and still no month', () => {
     expect(widgetLimitChecks(request({ endpoint: 'session', sessionId: 'sid-1' }))).toEqual([
       { key: 'session:sid-1:session', limit: 6, windowSec: 60 },
-      { key: `ip:bucket:${TENANT}:session`, limit: 12, windowSec: 60 },
-      { key: `tenant:${TENANT}:min`, limit: 120, windowSec: 60 },
-      { key: `endpoint:session:${TENANT}`, limit: 120, windowSec: 60 },
+      { key: `ip:bucket:${TENANT}:session`, limit: 10, windowSec: 60 },
+      { key: `tenant:${TENANT}:min`, limit: 60, windowSec: 60 },
+      { key: `endpoint:session:${TENANT}`, limit: 60, windowSec: 60 },
     ]);
   });
 
   it('draws chat from all five, with the month as a calendar window', () => {
     expect(widgetLimitChecks(request({ endpoint: 'chat', sessionId: 'sid-1' }))).toEqual([
-      { key: 'session:sid-1:chat', limit: 12, windowSec: 60 },
-      { key: `ip:bucket:${TENANT}:chat`, limit: 30, windowSec: 60 },
-      { key: `tenant:${TENANT}:min`, limit: 120, windowSec: 60 },
-      { key: `endpoint:chat:${TENANT}`, limit: 120, windowSec: 60 },
-      { key: `tenant:${TENANT}:month`, limit: 1_000, window: 'month' },
+      { key: 'session:sid-1:chat', limit: 6, windowSec: 60 },
+      { key: `ip:bucket:${TENANT}:chat`, limit: 20, windowSec: 60 },
+      { key: `tenant:${TENANT}:min`, limit: 60, windowSec: 60 },
+      { key: `endpoint:chat:${TENANT}`, limit: 60, windowSec: 60 },
+      { key: `tenant:${TENANT}:month`, limit: 1_500, window: 'month' },
     ]);
   });
 
@@ -69,15 +69,15 @@ describe('widgetLimitChecks', () => {
   it('counts a tenant with no subscription at the no-subscription tier', () => {
     const checks = widgetLimitChecks(request({ endpoint: 'chat', plan: null }));
 
-    expect(checks.find((check) => check.key === `tenant:${TENANT}:min`)?.limit).toBe(60);
-    expect(checks.find((check) => check.key === `tenant:${TENANT}:month`)?.limit).toBe(100);
+    expect(checks.find((check) => check.key === `tenant:${TENANT}:min`)?.limit).toBe(30);
+    expect(checks.find((check) => check.key === `tenant:${TENANT}:month`)?.limit).toBe(150);
   });
 
   it('counts a tenant at the tier it pays for', () => {
     const checks = widgetLimitChecks(request({ endpoint: 'chat', plan: 'ECOMMERCE' }));
 
-    expect(checks.find((check) => check.key === `tenant:${TENANT}:min`)?.limit).toBe(600);
-    expect(checks.find((check) => check.key === `tenant:${TENANT}:month`)?.limit).toBe(10_000);
+    expect(checks.find((check) => check.key === `tenant:${TENANT}:min`)?.limit).toBe(120);
+    expect(checks.find((check) => check.key === `tenant:${TENANT}:month`)?.limit).toBe(6_000);
   });
 
   it('takes its numbers from the table it is handed', () => {
@@ -117,13 +117,29 @@ describe('WIDGET_LIMITS', () => {
 
     expect(WIDGET_LIMITS.unresolvedPerMinute).toBeGreaterThan(config + session + chat);
   });
+
+  it('gives a session less chat than its address, so visitors sharing one each get a turn', () => {
+    expect(WIDGET_LIMITS.sessionPerMinute.chat).toBeLessThan(WIDGET_LIMITS.ipPerMinute.chat);
+  });
+
+  it('caps a month at the allowances the plans are sold with, and a trial at its hard cap', () => {
+    // P5-01's 1,500 and 6,000 messages, and the 150-message trial (Open Decisions).
+    expect(WIDGET_LIMITS.messagesPerMonth).toEqual({ CANTINA: 1_500, ECOMMERCE: 6_000, none: 150 });
+  });
+
+  it('keeps one winery’s chat to at most half of the API’s ten concurrent executions', () => {
+    // Replies take three to eight seconds; five is the planning figure (§5.1).
+    const concurrentAtFiveSeconds = (WIDGET_LIMITS.endpointPerMinute.chat * 5) / 60;
+
+    expect(concurrentAtFiveSeconds).toBeLessThanOrEqual(10 / 2);
+  });
 });
 
 describe('unresolvedLimitCheck (review fix)', () => {
   it('is the address alone, per minute, before any tenant is known', () => {
     expect(unresolvedLimitCheck('bucket')).toEqual({
       key: 'ip:bucket:unresolved',
-      limit: 240,
+      limit: 120,
       windowSec: 60,
     });
   });
@@ -164,7 +180,7 @@ describe('planCapCheck (P2-10)', () => {
   it('counts a tenant with no plan at the no-subscription tier', () => {
     expect(planCapCheck(TENANT, null)).toEqual({
       key: `tenant:${TENANT}:month`,
-      limit: 100,
+      limit: 150,
       window: 'month',
     });
   });

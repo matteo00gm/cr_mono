@@ -45,21 +45,31 @@ export interface WidgetLimits {
 }
 
 /**
- * The launch numbers.
+ * The launch numbers, sized for this product's ceiling of ten tenants (§5.0).
  *
- * **Provisional, and recorded as open in the plan.** §3.6 names the dimensions
- * and gives no figures, and the monthly caps are really decided by P5-01's
- * pricing. What these do fix is the shape: config, fetched on every page view,
- * gets the most room; a session mint is the rarest thing a visitor needs; and a
- * paying tier outranks a tenant with no subscription.
+ * **Decided 2026-09-15, and §3.6 gives the reason for each.** In short:
+ * - The monthly caps are P5-01's plan allowances, 1,500 and 6,000 messages, and
+ *   the trial's 150-message hard cap for a tenant with no subscription.
+ * - Chat per session is one message every ten seconds: a reply takes three to
+ *   eight, and nobody reads a recommendation faster than that.
+ * - Chat per tenant is 60 a minute. At about five seconds a reply that is at
+ *   most half the API's reserved concurrency of 10 (P1-48), so one winery cannot
+ *   take the function from the other nine.
+ * - Per address there is room for a few visitors behind one carrier NAT, and
+ *   config reaches the API only on an edge cache miss (P2-10).
+ * - The address-wide limit before resolution sits above one winery's
+ *   per-address total, so a real visitor always meets that winery's limits first.
+ *
+ * The shape is what the tests hold — config gets the most room per address, a
+ * paying tier outranks a trial — and changing a number is a plan edit too.
  */
 export const WIDGET_LIMITS: WidgetLimits = {
-  unresolvedPerMinute: 240,
-  sessionPerMinute: { session: 6, chat: 12 },
-  ipPerMinute: { config: 60, session: 12, chat: 30 },
-  tenantPerMinute: { CANTINA: 120, ECOMMERCE: 600, none: 60 },
-  endpointPerMinute: { config: 600, session: 120, chat: 120 },
-  messagesPerMonth: { CANTINA: 1_000, ECOMMERCE: 10_000, none: 100 },
+  unresolvedPerMinute: 120,
+  sessionPerMinute: { session: 6, chat: 6 },
+  ipPerMinute: { config: 60, session: 10, chat: 20 },
+  tenantPerMinute: { CANTINA: 60, ECOMMERCE: 120, none: 30 },
+  endpointPerMinute: { config: 120, session: 60, chat: 60 },
+  messagesPerMonth: { CANTINA: 1_500, ECOMMERCE: 6_000, none: 150 },
 };
 
 export interface WidgetRequest {
