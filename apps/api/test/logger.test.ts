@@ -189,6 +189,18 @@ describe('the client address, for audit rows', () => {
     expect((await contextFor({ 'x-forwarded-for': 'not-an-address' })).ip).toBeUndefined();
   });
 
+  it.each(['cafe', 'deadbeef', '1.2.3', '999.1.1.1', ':::', '1:2'])(
+    'drops %s, which is made of address characters and is not an address',
+    async (value) => {
+      // Review fix: the check used to be the alphabet of an address, which all of these pass.
+      expect((await contextFor({ 'x-forwarded-for': value })).ip).toBeUndefined();
+    },
+  );
+
+  it('keeps an IPv6 address', async () => {
+    expect((await contextFor({ 'x-forwarded-for': '2001:db8::7' })).ip).toBe('2001:db8::7');
+  });
+
   it('leaves it absent when the header is missing', async () => {
     expect((await contextFor({})).ip).toBeUndefined();
   });

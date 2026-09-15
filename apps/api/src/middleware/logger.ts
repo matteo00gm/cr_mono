@@ -1,5 +1,6 @@
 import { getRequestContext, runWithRequestContext, type RequestContext } from '@catalogorosso/core';
 import { randomUUID } from 'node:crypto';
+import { isIP } from 'node:net';
 import process from 'node:process';
 import type { MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
@@ -114,6 +115,12 @@ export const logger: Logger = pino(loggerOptions);
  * are ours (the same problem P0-46 records against the rate limiter), and a
  * value that is not an address at all would be refused by the `inet` column.
  * Both cases resolve to no address rather than a wrong one.
+ *
+ * **Parsed as an address, not matched against an address's alphabet** (review
+ * fix). The check used to admit anything made of hex digits, dots and colons —
+ * `cafe`, `1.2.3`, `:::` — so a header that is not an address still reached
+ * the request context, where `audit_log.ip` refuses it in the middle of an
+ * unrelated write, and the widget limiter, where it names a bucket.
  */
 export const clientIp = (header: string | undefined): { ip?: string } => {
   if (header === undefined) return {};
@@ -121,9 +128,7 @@ export const clientIp = (header: string | undefined): { ip?: string } => {
   const entries = header.split(',').map((entry) => entry.trim());
   const [only] = entries;
 
-  return entries.length === 1 && only !== undefined && /^[0-9a-fA-F.:]+$/.test(only)
-    ? { ip: only }
-    : {};
+  return entries.length === 1 && only !== undefined && isIP(only) !== 0 ? { ip: only } : {};
 };
 
 /**
