@@ -123,9 +123,9 @@ describe('the response', () => {
 describe('the quota', () => {
   it.each<[number, 'ok' | 'near' | 'exceeded']>([
     [0, 'ok'],
-    [799, 'ok'],
-    [800, 'near'],
-    [1_000, 'exceeded'],
+    [1_199, 'ok'],
+    [1_200, 'near'],
+    [1_500, 'exceeded'],
   ])('reads %i of a CANTINA month as %s', async (used, state) => {
     const built = app({ readUsage: () => Promise.resolve(used) });
 
