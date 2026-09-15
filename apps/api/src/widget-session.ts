@@ -5,7 +5,16 @@ import { UnauthenticatedError, UnavailableError } from '@catalogorosso/core';
 import type { WidgetTokenKeys } from '@catalogorosso/security/tokens';
 
 import type { WidgetTenant } from './env.js';
-import { isServiceable } from './widget-config.js';
+import { isServiceable, WIDGET_UNAVAILABLE } from './widget-config.js';
+import {
+  checkWidgetToken,
+  WIDGET_TOKEN_AUDIENCE,
+  WIDGET_TOKEN_ISSUER,
+  WIDGET_TOKEN_REFUSED,
+  WIDGET_TOKEN_TTL_SEC,
+  type TokenRefusal,
+  type TokenRevocationCheck,
+} from './widget-token.js';
 
 /**
  * Minting a widget session (P2-12, §3.2 layer 2, §3.4).
@@ -20,22 +29,6 @@ import { isServiceable } from './widget-config.js';
  * caller", and it is bounded: the session id is read from a token this service
  * signed for this tenant and this origin, never from anything the caller wrote.
  */
-
-/**
- * Who signed the token, checked by every verifier (P2-13).
- *
- * **A constant, not the API's public URL.** §3.4 names the claim and not its
- * value, and the obvious value, `AUTH_BASE_URL`, is an operator-set secret that
- * changes the day a custom domain exists. An issuer that moves invalidates every
- * live token at the moment it moves; one that never moves cannot.
- */
-export const WIDGET_TOKEN_ISSUER = 'catalogorosso';
-
-/** For the widget surface only; a dashboard token presented here fails on it (P2-15). */
-export const WIDGET_TOKEN_AUDIENCE = 'widget';
-
-/** Fifteen minutes (§3.4): short enough that expiry does most of revocation's work. */
-export const WIDGET_TOKEN_TTL_SEC = 15 * 60;
 
 /**
  * How long after its expiry a token may still continue its session (P2-12a).
@@ -53,32 +46,6 @@ export const WIDGET_SESSION_CONTINUATION_SEC = 30 * 60;
  * before, and a stolen token never lapses.
  */
 export const WIDGET_SESSION_MAX_LIFETIME_SEC = 4 * 60 * 60;
-
-/** What a switched-off winery's widget is told, never naming why (§1.3). */
-export const WIDGET_UNAVAILABLE = 'This widget is not available right now.';
-
-/**
- * The one answer for a refused token, whatever the reason (P2-12a).
- *
- * Another site's token, another tenant's and a revoked one read the same, so
- * the answer says nothing about which sessions exist or where they were
- * minted. The reason is for `security_events` (P2-16).
- */
-export const WIDGET_TOKEN_REFUSED = 'This session is no longer valid. Start a new one.';
-
-/** Whether a token's `jti` was revoked — `isTokenRevoked` from `@catalogorosso/db`. */
-export type TokenRevocationCheck = (tenantId: string, jti: string) => Promise<boolean>;
-
-/**
- * The token after `Bearer`, or nothing (P2-12a).
- *
- * Any other scheme, or none, is a visitor with no session to continue rather
- * than a malformed request: the widget sends a token only when it holds one.
- * P4-10's server-to-server `sk_live_` key will arrive on this header too, and
- * is told apart by its prefix before this is read.
- */
-export const bearerTokenOf = (header: string | undefined): string | undefined =>
-  /^Bearer +(\S+) *$/i.exec(header ?? '')?.[1];
 
 export interface MintRequest {
   /** The keyset, loaded once per container (P2-11). Called only for a tenant that may mint. */
@@ -107,17 +74,25 @@ interface ContinuedSession {
 }
 
 /**
+ * The refusals that are a replay rather than a lapse (P2-12a).
+ *
+ * A token we signed, presented from another site or for another tenant, or
+ * revoked. Starting afresh from one of these would hide it; every other refusal
+ * — no usable token at all — is a visitor with nothing to continue.
+ */
+const REPLAYS: ReadonlySet<TokenRefusal> = new Set<TokenRefusal>([
+  'origin_mismatch',
+  'tenant_mismatch',
+  'revoked',
+]);
+
+/**
  * The session a previous token continues, or none (P2-12a).
  *
  * **`sid` is never taken on trust.** It keys a conversation, so a caller able to
- * name one would inherit another visitor's history.
- *
- * Two kinds of failure, answered differently on purpose:
- * - **Nothing to continue.** A token that is not ours or is malformed, or is
- *   past the window or the lifetime cap, gets a fresh conversation rather than
- *   an error, because the visitor did nothing wrong.
- * - **A replay.** A token we signed, presented from another site or for another
- *   tenant, or revoked, is refused. Starting afresh would hide it.
+ * name one would inherit another visitor's history. It comes only out of a
+ * token `checkWidgetToken` accepted, checked exactly as every other call's token
+ * is (P2-13) except that it may have expired within the window.
  */
 const continuedSession = async (
   keys: WidgetTokenKeys,
@@ -134,31 +109,22 @@ const continuedSession = async (
     readonly now: Date;
   },
 ): Promise<ContinuedSession | undefined> => {
-  let claims: Record<string, unknown>;
+  const check = await checkWidgetToken({
+    keys,
+    token: previous,
+    tenant,
+    origin,
+    isRevoked,
+    now,
+    expiredWithinSec: WIDGET_SESSION_CONTINUATION_SEC,
+  });
 
-  try {
-    ({ payload: claims } = await keys.verify(previous, {
-      issuer: WIDGET_TOKEN_ISSUER,
-      audience: WIDGET_TOKEN_AUDIENCE,
-      now,
-      expiredWithinSec: WIDGET_SESSION_CONTINUATION_SEC,
-    }));
-  } catch {
+  if (!check.accepted) {
+    if (REPLAYS.has(check.reason)) throw new UnauthenticatedError(WIDGET_TOKEN_REFUSED);
     return undefined;
   }
 
-  const { tid, origin: boundOrigin, sid, jti, iat_original: startedAtSec } = claims;
-
-  if (tid !== tenant.tenantId || boundOrigin !== origin) {
-    throw new UnauthenticatedError(WIDGET_TOKEN_REFUSED);
-  }
-
-  if (typeof sid !== 'string' || typeof jti !== 'string' || typeof startedAtSec !== 'number') {
-    return undefined;
-  }
-
-  if (await isRevoked(tenant.tenantId, jti)) throw new UnauthenticatedError(WIDGET_TOKEN_REFUSED);
-
+  const { sid, startedAtSec } = check.claims;
   const ageSec = Math.floor(now.getTime() / 1000) - startedAtSec;
 
   return ageSec > WIDGET_SESSION_MAX_LIFETIME_SEC ? undefined : { sid, startedAtSec };
