@@ -11,9 +11,13 @@ export {
 } from './types.js';
 export {
   isPlanCap,
+  planCapCheck,
+  QUOTA_NEAR_SHARE,
+  quotaStateOf,
   WIDGET_LIMITS,
   widgetLimitChecks,
   type PlanTier,
+  type QuotaState,
   type WidgetEndpoint,
   type WidgetLimits,
   type WidgetPlan,

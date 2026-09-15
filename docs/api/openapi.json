@@ -2686,6 +2686,190 @@
       "description": "Public, called from sellers’ own sites. Authenticated by origin-bound tokens rather than cookies; this surface accepts no credentials.",
       "version": "0.0.0"
     },
-    "paths": {}
+    "paths": {
+      "/v1/widget": {
+        "get": {
+          "summary": "Identify the widget surface",
+          "description": "Returns the name of the route surface that handled the request, so a caller - or a test - can prove which application answered. Carries no tenant or catalogue data.\n\nNo capability required. Surface marker. Reports which app answered and nothing else - no tenant, no key, no data. P0-46 uses it to prove the two surfaces are distinct.",
+          "operationId": "getV1Widget",
+          "responses": {
+            "200": {
+              "description": "Identify the widget surface",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "surface": {
+                        "type": "string",
+                        "const": "widget"
+                      }
+                    },
+                    "required": [
+                      "surface"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "surface": "widget"
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The key and the request's Origin do not belong to one tenant. The same answer whatever the reason, and it carries no CORS headers, so a browser script cannot read it.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This widget is not available on this site.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "429": {
+              "description": "A rate limit refused the request. `Retry-After` says when to try again.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "rate_limited",
+                      "message": "Too many requests. Try again shortly.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/widget/config": {
+        "get": {
+          "summary": "The widget's public configuration",
+          "description": "Called by the loader with `?key=<public key>` before anything else loads. Answers whether the widget is enabled, how it looks, and whether this month is nearly spent - as `ok`, `near` or `exceeded`, never as a number. Refused with 403 and no CORS headers unless the key and the request's Origin belong to one tenant. Cached publicly for sixty seconds, varying on Origin.\n\nNo capability required. Public and world-readable by design (§1.2): no token and no session, because the widget fetches it before a visitor has done anything. What gates it is the (pk_, Origin) pair - refused with a bare 403 unless the key and a verified origin agree on one tenant - and the rate limits. It returns nothing a competitor could use: no tenant id, no plan, no counts.",
+          "operationId": "getV1WidgetConfig",
+          "responses": {
+            "200": {
+              "description": "The widget's public configuration",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "ACTIVE",
+                          "DISABLED"
+                        ]
+                      },
+                      "locale": {
+                        "type": "string"
+                      },
+                      "theme": {
+                        "type": "object",
+                        "properties": {
+                          "primaryColor": {
+                            "type": "string"
+                          },
+                          "position": {
+                            "type": "string",
+                            "enum": [
+                              "bottom-right",
+                              "bottom-left"
+                            ]
+                          },
+                          "avatarUrl": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "primaryColor",
+                          "position",
+                          "avatarUrl"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "welcomeMessage": {
+                        "type": "string"
+                      },
+                      "cartUrl": {
+                        "type": "string"
+                      },
+                      "quotaState": {
+                        "type": "string",
+                        "enum": [
+                          "ok",
+                          "near",
+                          "exceeded"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "status",
+                      "locale",
+                      "theme",
+                      "welcomeMessage",
+                      "cartUrl",
+                      "quotaState"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "status": "ACTIVE",
+                    "locale": "it",
+                    "theme": {
+                      "primaryColor": "#7b1e3a",
+                      "position": "bottom-right",
+                      "avatarUrl": null
+                    },
+                    "welcomeMessage": "Ciao! Sono il sommelier di questa cantina. Che vino stai cercando?",
+                    "cartUrl": "/cart",
+                    "quotaState": "ok"
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The key and the request's Origin do not belong to one tenant. The same answer whatever the reason, and it carries no CORS headers, so a browser script cannot read it.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This widget is not available on this site.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "429": {
+              "description": "A rate limit refused the request. `Retry-After` says when to try again.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "rate_limited",
+                      "message": "Too many requests. Try again shortly.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }

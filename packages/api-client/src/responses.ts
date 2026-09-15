@@ -516,3 +516,38 @@ export const DASHBOARD_RESPONSES = {
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;
 export type ResponseOf<E extends DashboardEndpoint> = z.infer<(typeof DASHBOARD_RESPONSES)[E]>;
+
+/* ------------------------------------------------------------------ widget */
+
+/**
+ * The widget API's response shapes (P2-10).
+ *
+ * Here beside the dashboard's for the same reason those are: the server that
+ * produces them and the widget that will consume them compile against one
+ * schema (P0-63), and `scripts/gen-openapi.mjs` publishes that schema as the
+ * public widget reference.
+ */
+export const widgetSurfaceResponse = z.object({ surface: z.literal('widget') });
+
+/**
+ * What the widget is told before it loads anything (§1.2).
+ *
+ * **Strict at every level**, because this response is world-readable and
+ * edge-cached: a field added on the server that the contract does not name — a
+ * tenant id, a plan, a count — fails the route's own test instead of quietly
+ * reaching every visitor of every seller.
+ */
+export const widgetConfigResponse = z.strictObject({
+  status: z.enum(['ACTIVE', 'DISABLED']),
+  locale: z.string(),
+  theme: z.strictObject({
+    primaryColor: z.string(),
+    position: z.enum(['bottom-right', 'bottom-left']),
+    avatarUrl: z.string().nullable(),
+  }),
+  welcomeMessage: z.string(),
+  cartUrl: z.string(),
+  quotaState: z.enum(['ok', 'near', 'exceeded']),
+});
+
+export type WidgetConfigResponse = z.infer<typeof widgetConfigResponse>;

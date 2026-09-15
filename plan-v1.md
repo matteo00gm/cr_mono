@@ -1289,7 +1289,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-07 | ⛔ 🔒 Allowlist accessor (uncached) | single accessor so caching is additive later | P2-05,P0-24 |
 | ✅ P2-08 | ⛔ 🔒 Dynamic CORS middleware | exact-set match, echo origin, **`Vary: Origin`**, no credentials | P2-07 |
 | ✅ P2-09 | 🔒 CORS test suite | exact headers, preflight, 403-with-no-headers, bypass attempts | P2-08 |
-| P2-10 | `GET /v1/widget/config` | public config only, edge-cache 60 s | P2-08 |
+| ✅ P2-10 | `GET /v1/widget/config` | public config only, edge-cache 60 s | P2-08 |
 | P2-11 | 🔒 Ed25519 key in SSM + in-process sign | no KMS asymmetric on the hot path (§5.7) | P0-15 |
 | P2-12 | ⛔ 🔒 `POST /v1/widget/session` | mint token with `origin`/`tid`/`jti`, 15 min | P2-11 |
 | P2-12a | 🔒 Session continuation | re-mint keeping `sid`, **requires the previous token** — never a client-supplied `sid` | P2-12 |
@@ -4796,7 +4796,7 @@ The window start is **computed in SQL from `now()`**, never passed from the appl
 - **Headers go on a 429 only, and a refusal by the plan cap sends only `Retry-After`.** `X-RateLimit-Remaining` on every response would publish how busy a winery is, and an `X-RateLimit-Limit` of 1,000 names the plan it pays for (§1.3).
 - **It refuses to run before tenant resolution** — a wiring error and a 500 — because a limiter with no tenant has nothing to count against, and a limit counting against nothing has silently stopped applying.
 - **The conformance suite gained what P2-03 asked for and never checked**: a `retryAfterSec` that agrees with `resetAt`. It also now covers the month and the named dimension, against both implementations, and Postgres is asserted to keep the month in UTC on a session set to Europe/Rome.
-- **Not mounted yet.** No widget route consumes it until P2-10, which mounts it after P2-08's resolution and wires the address secret.
+- **Mounted by P2-10** on `/v1/widget/config`, after P2-08's resolution, with the address secret taken from `AUTH_SECRET` rather than a second SSM parameter.
 
 **⚠ Open — the numbers.** §3.6 names the dimensions and gives no figures, so `WIDGET_LIMITS` is provisional. Per minute: session 6 to mint, 12 for chat; address 60 config, 12 session, 30 chat; tenant 120 on CANTINA, 600 on ECOMMERCE, 60 with no plan; endpoint 600 config, 120 session, 120 chat. Per month: 1,000, 10,000 and 100 chat messages. The monthly caps are really P5-01's pricing decision, and should be settled there.
 
@@ -4922,7 +4922,7 @@ Mounted **only** on the widget sub-app (P0-54).
 
 **As built (2026-09-15).** `widgetCors({ resolve, onRejected, environment })` in `apps/api/src/middleware/cors.ts`, tested in `apps/api/test/widget-cors.test.ts`. The five rules are the row's, each with a test; what the row left open:
 
-- **Attached per route, not with `use('*')`.** The widget sub-app's marker and its unknown paths keep their answers — a `use('*')` would turn every unknown path into a 403 — and a guard in the route's own handler chain cannot be registered below the route it guards (P0-54). Nothing mounts it yet: P2-10's `/config` is the first route.
+- **Attached per route, not with `use('*')`.** The widget sub-app's marker and its unknown paths keep their answers — a `use('*')` would turn every unknown path into a 403 — and a guard in the route's own handler chain cannot be registered below the route it guards (P0-54). P2-10's `/config` is the first route to mount it.
 - **The key travels in the query string** (`?key=`), as §1.2's loader sends it. A preflight carries no custom header values, so a key in a header could not be resolved before the browser decides.
 - **Two refusal types, one response.** A missing, unparseable or mismatched origin is `UNAUTHORIZED_ORIGIN`, and a mismatch carries the key's tenant; a missing or unknown key is `INVALID_KEY`. Every one is the same 403, the same message and no CORS header — asserted byte for byte between a stolen key and an unknown one.
 - **`logSecurityEvent` is an injected hook, `onRejected`,** and it can never fail a request, whether it throws or rejects. The default logs the refusal's type and nothing else — the origin and key would need names in the P0-56 allowlist. **The `security_events` writer is P2-16's**, so P2-09's "and a `security_events` row" assertion arrives with it.
@@ -4961,6 +4961,41 @@ Browser-level proof is P3-18 — this suite asserts headers, that one asserts th
 **Tests.** Response shape contains no tenant id or plan; correct cache headers; `DISABLED` tenant returns that status; unverified origin 403s.
 
 **Files.** `apps/api/src/routes/widget-config.ts`, tests. **~90 lines.**
+
+**As built (2026-09-15).** The route is in `apps/api/src/surfaces/widget.ts`, the body is built by `apps/api/src/widget-config.ts`, and the tests are in `apps/api/test/widget-config.test.ts`. What the row left open:
+
+- **The order is CORS, then the limit, then the handler**, all in the route's own chain (P0-54).
+  - CORS resolves `(pk_, Origin)` and refuses everything else with a bare 403.
+  - The limit counts against the tenant CORS resolved, on the `config` tier and never against the month.
+  - A preflight is answered by CORS alone.
+  - A 429 carries the CORS headers, so the widget can read `Retry-After`.
+- **`status` is `ACTIVE` or `DISABLED`, never a billing state.** `ACTIVE` and `TRIALING` read as `ACTIVE`. Pending verification, past due, disabled and cancelled all read as `DISABLED` (§1.3). So P3-03 checks `status !== 'ACTIVE'`.
+- **`quotaState` comes from the bucket chat spends.**
+  - `createRateLimiter` gained `peek(check)`, which reads a window's count without consuming it.
+  - The route reads `planCapCheck(tenant, plan)` through it, the same key and window chat's monthly check uses.
+  - `quotaStateOf` calls 80% of the cap `near` and the cap itself `exceeded`.
+  - A local run reads an untouched month.
+  - `peek` is a method on the named caller rather than a new function, so ADR 0020's set of callers is unchanged.
+- **The appearance is a set of defaults.** Nothing stores a seller's colour, position, avatar or welcome message yet, because §2.3's appearance screen isn't built. Every widget gets one theme, a welcome message in the tenant's locale, and `/cart`. **Open:** the storage, and the screen that writes to it.
+- **The response schema is strict.** `widgetConfigResponse` in `@catalogorosso/api-client` rejects any field the contract doesn't name, so a new one fails the route's test before it reaches visitors.
+- **`Cache-Control: public, max-age=60` is set on a 200 only.** `Vary: Origin` comes from CORS.
+  - The edge side is `infra/widget-cache.ts`, plus a `WidgetConfigCache` policy and a `/v1/widget/config` behaviour in `infra/cdn.ts`.
+  - It is keyed on `Origin` and `key`, with the TTL capped at the same minute.
+  - **Not deployed.**
+- **The widget surface now has a route table.**
+  - `WIDGET_ROUTES` documents the marker and the config route; `WIDGET_ROUTE_ACCESS` adds the preflight.
+  - `createApp` now runs the P0-49 boot check on the widget prefix too, proven by planting a route in `widget-boot-check.test.ts`.
+  - `docs/api/openapi.json` now publishes a widget reference, whose errors are 403 and 429 rather than the dashboard's 401 and 403.
+- **The wiring lives in `buildDependencies`**, which now builds the widget's dependencies:
+  - the real accessor;
+  - the Postgres limiter in a deployment, and an in-process one locally;
+  - `peek` as the usage read, which `index.test.ts` checks on a deployed stage;
+  - the address secret, taken from `AUTH_SECRET`;
+  - `development` origins, on a local run only.
+
+  Without these dependencies, the config route throws a wiring error instead of answering.
+- **The limit numbers are still P2-04's provisional ones** (P5-01).
+- **`peek` against real Postgres** is in `packages/testing/test/rate-limit.integration.test.ts`. It was not run locally because Docker wasn't running, so CI's integration job is its first run.
 
 ---
 
@@ -5494,7 +5529,7 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 
 **Why.** §1.2 steps 2–3. A `DISABLED` tenant must cost us nothing: no bundle, no session, no model call.
 
-**How.** On mount, `fetch` P2-10's config with `credentials: 'omit'`. If `status !== 'ACTIVE' && status !== 'TRIALING'`, render the disabled launcher state from §1.3 and **return** — the main bundle is never requested. On network failure render the error state and retry with backoff, capped. Store config in memory only.
+**How.** On mount, `fetch` P2-10's config with `credentials: 'omit'`. If `status !== 'ACTIVE'`, render the disabled launcher state from §1.3 and **return** — the main bundle is never requested. On network failure render the error state and retry with backoff, capped. Store config in memory only.
 
 **Tests.** `DISABLED` config renders the notice and issues no further requests (assert on a fetch spy — the absence of calls is the whole point); `ACTIVE` proceeds; a 403 renders error without a crash.
 

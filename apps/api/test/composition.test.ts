@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { resolveTenantByKeyAndOrigin } from '@catalogorosso/db';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app.js';
@@ -222,5 +223,52 @@ describe('rate limiting (A1)', () => {
     // Permitted only because `index.ts` refuses to start a deployed stage
     // without one. What it buys is a local run and a suite with no database.
     expect(() => buildDependencies(config)).not.toThrow();
+  });
+});
+
+describe('the widget surface (P2-10)', () => {
+  it('resolves with the real accessor, so every pair is checked against the database', () => {
+    expect(buildDependencies(config).widget.resolve).toBe(resolveTenantByKeyAndOrigin);
+  });
+
+  it('admits local origins only on a local run', () => {
+    expect(buildDependencies({ ...config, stage: 'unknown' }).widget.environment).toBe(
+      'development',
+    );
+    expect(buildDependencies(config).widget.environment).toBe('production');
+  });
+
+  it('counts widget requests with the limiter it is given', () => {
+    const limiter = { check: () => Promise.reject(new Error('not called here')) };
+
+    expect(buildDependencies({ ...config, rateLimiter: limiter }).widget.limiter).toBe(limiter);
+  });
+
+  it('falls back to an in-process limiter on a local run', async () => {
+    const { limiter } = buildDependencies(config).widget;
+
+    await expect(
+      limiter.check([{ key: `test:${randomUUID()}`, limit: 1, windowSec: 60 }]),
+    ).resolves.toMatchObject({ allowed: true });
+  });
+
+  it('reads usage through the function it is given', () => {
+    const readUsage = () => Promise.resolve(7);
+
+    expect(buildDependencies({ ...config, readUsage }).widget.readUsage).toBe(readUsage);
+  });
+
+  it('falls back to an untouched month when there is nothing to read', async () => {
+    await expect(
+      buildDependencies(config).widget.readUsage({
+        key: 'tenant:t:month',
+        limit: 100,
+        window: 'month',
+      }),
+    ).resolves.toBe(0);
+  });
+
+  it("buckets addresses under the deployment's own secret", () => {
+    expect(buildDependencies(config).widget.ipSecret).toBe(config.authSecret);
   });
 });
