@@ -336,3 +336,150 @@ describe('development', () => {
     expect((await request(development, { origin: local, key: KEY_A })).status).toBe(200);
   });
 });
+
+/*
+ * ---- P2-09: the exhaustive request-level suite ----------------------------
+ *
+ * Every P2-06 bypass string as a live request against a verified origin, and
+ * two wineries whose keys and origins are swapped. The same strings run through
+ * the real accessor in `widget-cors.integration.test.ts`.
+ */
+
+/** Two wineries; a real key from the wrong site is a mismatch against its owner. */
+const twoWineries = () => {
+  const TENANT_B = '22222222-2222-4222-8222-222222222222';
+  const ORIGIN_B = 'https://cantina-verdi.example';
+  const KEY_B = publicKey();
+
+  const pairs = new Map<string, WidgetResolution>([
+    [`${KEY_A} ${ORIGIN_A}`, FOUND_A],
+    [`${KEY_B} ${ORIGIN_B}`, { ...FOUND_A, tenantId: TENANT_B }],
+  ]);
+  const owners = new Map([
+    [KEY_A, TENANT_A],
+    [KEY_B, TENANT_B],
+  ]);
+
+  const reported: RejectedWidgetRequest[] = [];
+
+  const app = widgetApp({
+    resolve: (key, origin) => {
+      const found = pairs.get(`${key} ${origin}`);
+      if (found !== undefined) return Promise.resolve(found);
+
+      const owner = owners.get(key);
+      const refusal: WidgetResolution =
+        owner === undefined
+          ? { found: false, reason: 'unknown_key' }
+          : { found: false, reason: 'origin_mismatch', tenantId: owner };
+
+      return Promise.resolve(refusal);
+    },
+    onRejected: (event) => {
+      reported.push(event);
+      return Promise.resolve();
+    },
+  });
+
+  return { app, reported, TENANT_B, ORIGIN_B, KEY_B };
+};
+
+describe('every P2-06 bypass as a live request (P2-09)', () => {
+  it.each([
+    'https://evil-cantina-rossi.example',
+    'https://cantina-rossi.example.attacker.io',
+    'https://CANTINA-ROSSI.EXAMPLE.attacker.io',
+    'https://cantína-rossi.example',
+    'https://xn--cantina-rossi.example',
+    'https://cantina-rossi.example%00.evil.io',
+    'https://cantina-rossi.example%2eevil.io',
+    'https://cantina-rossi.example@evil.io',
+    'https://evil.io#@cantina-rossi.example',
+    'https://evil.io?.cantina-rossi.example',
+    'https://cantina-rossi.example:443.evil.io',
+    'https://cantina-rossi.example/.evil.io',
+    'https://*.cantina-rossi.example',
+    'http://cantina-rossi.example',
+    'https://cantina-rossi.example:8443',
+    'https://ccantina-rossi.example',
+    'https://cantina-rossi.examplee',
+    'null',
+    '',
+  ])('refuses %j with a bare 403, and reports it', async (origin) => {
+    const { app, reported } = twoWineries();
+
+    const response = await request(app, { origin, key: KEY_A });
+
+    expect(response.status).toBe(403);
+    expect(corsHeadersOf(response)).toEqual([]);
+    expect(response.headers.get('vary')).toContain('Origin');
+    expect(reported).toHaveLength(1);
+    expect(reported[0]?.type).toBe('UNAUTHORIZED_ORIGIN');
+  });
+});
+
+describe('two wineries (P2-09)', () => {
+  it("refuses one winery's origin with the other's key, and reports it against the key's owner", async () => {
+    const { app, reported, KEY_B, TENANT_B } = twoWineries();
+
+    const response = await request(app, { origin: ORIGIN_A, key: KEY_B });
+
+    expect(response.status).toBe(403);
+    expect(corsHeadersOf(response)).toEqual([]);
+    expect(reported).toEqual([
+      { type: 'UNAUTHORIZED_ORIGIN', tenantId: TENANT_B, origin: ORIGIN_A, publicKey: KEY_B },
+    ]);
+  });
+
+  it('refuses the swap in the other direction too', async () => {
+    const { app, reported, ORIGIN_B } = twoWineries();
+
+    const response = await request(app, { origin: ORIGIN_B, key: KEY_A });
+
+    expect(response.status).toBe(403);
+    expect(reported).toEqual([
+      { type: 'UNAUTHORIZED_ORIGIN', tenantId: TENANT_A, origin: ORIGIN_B, publicKey: KEY_A },
+    ]);
+  });
+
+  it('allows each winery its own pair, and hands on the right tenant', async () => {
+    const { app, KEY_B, ORIGIN_B, TENANT_B } = twoWineries();
+
+    const rossi = await request(app, { origin: ORIGIN_A, key: KEY_A });
+    const verdi = await request(app, { origin: ORIGIN_B, key: KEY_B });
+
+    expect(((await rossi.json()) as { tenant: { tenantId: string } }).tenant.tenantId).toBe(
+      TENANT_A,
+    );
+    expect(((await verdi.json()) as { tenant: { tenantId: string } }).tenant.tenantId).toBe(
+      TENANT_B,
+    );
+    expect(verdi.headers.get('access-control-allow-origin')).toBe(ORIGIN_B);
+  });
+
+  it('refuses a swapped preflight exactly as it refuses the request', async () => {
+    const { app, KEY_B } = twoWineries();
+
+    const response = await request(app, { method: 'OPTIONS', origin: ORIGIN_A, key: KEY_B });
+
+    expect(response.status).toBe(403);
+    expect(corsHeadersOf(response)).toEqual([]);
+  });
+});
+
+describe('a trailing-dot Origin (P2-09)', () => {
+  it('gets an echo that is not its own, so a browser refuses the response', async () => {
+    /*
+     * The one spelling that normalises onto the verified origin without being
+     * it. The browser compares the echo with its own serialised origin and
+     * withholds the response — fail closed, by the browser's own rule.
+     */
+    const { app } = twoWineries();
+    const dotted = `${ORIGIN_A}.`;
+
+    const response = await request(app, { origin: dotted, key: KEY_A });
+
+    expect(response.headers.get('access-control-allow-origin')).toBe(ORIGIN_A);
+    expect(response.headers.get('access-control-allow-origin')).not.toBe(dotted);
+  });
+});

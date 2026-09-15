@@ -1288,7 +1288,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-06 | 🔒 Origin normalization table test | trailing dot, uppercase, port, `null`, absent, lookalikes | P2-05 |
 | ✅ P2-07 | ⛔ 🔒 Allowlist accessor (uncached) | single accessor so caching is additive later | P2-05,P0-24 |
 | ✅ P2-08 | ⛔ 🔒 Dynamic CORS middleware | exact-set match, echo origin, **`Vary: Origin`**, no credentials | P2-07 |
-| P2-09 | 🔒 CORS test suite | exact headers, preflight, 403-with-no-headers, bypass attempts | P2-08 |
+| ✅ P2-09 | 🔒 CORS test suite | exact headers, preflight, 403-with-no-headers, bypass attempts | P2-08 |
 | P2-10 | `GET /v1/widget/config` | public config only, edge-cache 60 s | P2-08 |
 | P2-11 | 🔒 Ed25519 key in SSM + in-process sign | no KMS asymmetric on the hot path (§5.7) | P0-15 |
 | P2-12 | ⛔ 🔒 `POST /v1/widget/session` | mint token with `origin`/`tid`/`jti`, 15 min | P2-11 |
@@ -4939,6 +4939,14 @@ Mounted **only** on the widget sub-app (P0-54).
 Browser-level proof is P3-18 — this suite asserts headers, that one asserts the browser actually enforces them.
 
 **Files.** `apps/api/test/cors.spec.ts`. **~190 test lines.**
+
+**As built (2026-09-15).** Both layers the row asks for, in two files:
+
+- **Request-level, in `apps/api/test/widget-cors.test.ts`**, extending P2-08's suite: every P2-06 bypass string as a live request against a verified origin, each a bare 403 with `Vary: Origin` and a report; both directions of one tenant's origin with another tenant's key, each reported against the key's tenant; and the headers, preflight and removal cases P2-08 already asserts.
+- **Against real Postgres, in `apps/api/test/widget-cors.integration.test.ts`**, with the real accessor and migration 0042's policies behind the middleware: a verified pair and its preflight; one tenant's verified origin with another's key; the bypass strings refused all the way down; a trailing-dot `Origin` whose echo is deliberately not its own; and **a domain removed, or a key revoked past its grace window, refused on the very next request** — the §5.7 "uncached" claim proven at the database rather than assumed of a fake. Not run locally, since Docker was not running; CI's integration job is its first run.
+- **The `security_events` row the row asks for is deferred to P2-16**, which owns the writer. Until then each test asserts the report the middleware hands `onRejected`, which is the value P2-16 will write.
+- **Browser-level proof stays P3-18**, as the row says: these assert headers, and only a browser can assert it enforces them.
+- **Mutation:** P2-08's seventeen mutants, rerun against the extended request-level suite, are all killed.
 
 ---
 
