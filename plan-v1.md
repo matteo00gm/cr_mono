@@ -4413,6 +4413,8 @@ So a reindex of a wine whose vector is current calls no provider, by design. Wha
 
 The same broken harness had "verified" P0-63's request-shaping commit. Re-run honestly, seven of eight fired and one did not — the assertion that no `content-type` is sent without a body was made on a call with no active tenant either, where the `headers` object is never constructed at all, so the branch was not on that path. Fixed there.
 
+**Review fix (2026-09-15): jobs the poller abandoned no longer hold the refusal.** `countQueuedEmbeddings` counted every unpublished `product.embed` row, including rows past `MAX_PUBLISH_ATTEMPTS` that the poller never tries again. So one SQS outage long enough to exhaust the attempts made reindex-all answer 409 for that tenant permanently: the repair tool disabled by the failure it exists to repair. It now counts with the claim's own predicate, `attempts < MAX_PUBLISH_ATTEMPTS`, and abandoned rows stay visible to `countStuckJobs`. The integration suite covers both sides of the boundary.
+
 ---
 
 ### P1-40 · Index status in grid
