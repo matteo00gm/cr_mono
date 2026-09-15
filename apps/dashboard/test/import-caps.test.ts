@@ -30,7 +30,8 @@ describe('a paste', () => {
 
   it('refuses one row more, whole, naming the limit and how to proceed', () => {
     expect(pasteCapProblem(paste(MAX_IMPORT_ROWS + 1))).toBe(
-      'Hai incollato 10.001 vini, oltre il massimo di 10.000 per importazione. Incollali in più volte.',
+      // Italian groups digits only from five, so 2501 and 2500 carry no separator.
+      'Hai incollato 2501 vini, oltre il massimo di 2500 per importazione. Incollali in più volte.',
     );
   });
 });

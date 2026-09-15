@@ -6,8 +6,9 @@ import {
   type MonthlyCheck,
   type RateLimiter,
   type RouteAccess,
+  type WidgetEndpoint,
 } from '@catalogorosso/security';
-import { Hono } from 'hono';
+import { Hono, type Handler } from 'hono';
 
 import type { AppEnv } from '../env.js';
 import { routeKey } from '../middleware/capability.js';
@@ -84,6 +85,52 @@ export const WIDGET_CONFIG_CACHE_CONTROL = 'public, max-age=60';
 
 const CONFIG_PATH = '/config';
 
+/** A guarded widget route: the methods it answers, where, and which limits it counts against. */
+interface GuardedRoute {
+  readonly methods: readonly ('GET' | 'POST' | 'OPTIONS')[];
+  readonly path: string;
+  readonly endpoint: WidgetEndpoint;
+}
+
+/**
+ * Mounts a widget route behind the three guards every one of them needs, in
+ * the only safe order (review fix; the invariant in `AGENTS.md`).
+ *
+ * 1. **The address limit**, because it is the only thing that can run before a
+ *    tenant is known, and resolving one is a query.
+ * 2. **CORS**, because it resolves the tenant from `(pk_, Origin)` and refuses
+ *    everything else.
+ * 3. **The tenant's limits**, because they count against the tenant CORS resolved.
+ *
+ * Then the handler, reading only what those established. A preflight is counted
+ * by the address limit and answered by CORS, and never reaches the tenant's
+ * limits or the handler.
+ *
+ * **The only way a widget route should be mounted.** A route wired by hand can
+ * drop a guard or reorder two, and every one of its own tests still passes;
+ * `widget-route-guards.test.ts` walks the route table and fails for any route
+ * that is not behind all three, which is what holds P2-12 and P2-29 to it.
+ */
+const mountGuarded = (
+  app: Hono<AppEnv>,
+  widget: WidgetDependencies,
+  { methods, path, endpoint }: GuardedRoute,
+  handler: Handler<AppEnv>,
+): void => {
+  app.on(
+    [...methods],
+    path,
+    limitUnresolvedWidgetRequest({ limiter: widget.limiter, ipSecret: widget.ipSecret }),
+    widgetCors({
+      resolve: widget.resolve,
+      onRejected: widget.onRejected,
+      environment: widget.environment,
+    }),
+    limitWidgetRequest({ limiter: widget.limiter, endpoint, ipSecret: widget.ipSecret }),
+    handler,
+  );
+};
+
 export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
@@ -98,31 +145,11 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
     return app;
   }
 
-  /**
-   * The widget's public configuration (P2-10).
-   *
-   * **The order is the security property.**
-   *
-   * 1. The address limit, because it is the only thing that can run before a
-   *    tenant is known, and resolving one is a query (review fix).
-   * 2. CORS, because it is what resolves the tenant from `(pk_, Origin)` and
-   *    refuses everything else.
-   * 3. The tenant's limits, because they count against the tenant CORS resolved.
-   * 4. The handler, reading only what those established.
-   *
-   * A preflight is counted by the address limit and answered by CORS, and never
-   * reaches the tenant's limits or the handler.
-   */
-  app.on(
-    ['GET', 'OPTIONS'],
-    CONFIG_PATH,
-    limitUnresolvedWidgetRequest({ limiter: widget.limiter, ipSecret: widget.ipSecret }),
-    widgetCors({
-      resolve: widget.resolve,
-      onRejected: widget.onRejected,
-      environment: widget.environment,
-    }),
-    limitWidgetRequest({ limiter: widget.limiter, endpoint: 'config', ipSecret: widget.ipSecret }),
+  /** The widget's public configuration (P2-10), behind the guards `mountGuarded` gives every route. */
+  mountGuarded(
+    app,
+    widget,
+    { methods: ['GET', 'OPTIONS'], path: CONFIG_PATH, endpoint: 'config' },
     async (c) => {
       const tenant = c.get('widgetTenant');
       const cap = planCapCheck(tenant.tenantId, tenant.plan);
