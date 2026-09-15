@@ -18,6 +18,14 @@ export interface OutboundEmail {
   readonly html: string;
   /** Never optional. A missing plaintext part is a deliverability own-goal. */
   readonly text: string;
+  /**
+   * The same for every attempt at one message, and different for every message.
+   *
+   * What makes a retry safe (review fix). A request whose answer never arrived
+   * may still have been sent, and without a key a retry would mail the reset
+   * link twice; with one, the provider answers the repeat with the first result.
+   */
+  readonly idempotencyKey: string;
 }
 
 export interface SendResult {
@@ -56,6 +64,20 @@ export class EmailSendError extends Error {
 const RESEND_ENDPOINT = 'https://api.resend.com/emails';
 
 /**
+ * How long one attempt waits for Resend to answer.
+ *
+ * **Without a limit, a connection that hangs is not a failure at all** — it is
+ * a request that waits until the API function's ten-second timeout kills it,
+ * with no retry and no alarm (review fix). Two seconds is many times what the
+ * provider takes on a good day, and three attempts at it, plus the backoff
+ * between them, still end inside the function that is sending.
+ */
+export const RESEND_TIMEOUT_MS = 2_000;
+
+/** The error's class name, which says what went wrong without carrying anything it touched. */
+const nameOf = (error: unknown): string => (error instanceof Error ? error.name : typeof error);
+
+/**
  * `fetch` is injected rather than reached for globally, so the tests here are
  * plain unit tests with no network and no interception — the same reason
  * `ParameterStore` is a port in `config.ts`.
@@ -63,23 +85,44 @@ const RESEND_ENDPOINT = 'https://api.resend.com/emails';
 export const resendTransport = (options: {
   readonly apiKey: string;
   readonly fetch: typeof globalThis.fetch;
+  /** Injected so the timeout test does not wait two real seconds. */
+  readonly timeoutMs?: number | undefined;
 }): EmailTransport => ({
   name: 'resend',
   async send(email) {
-    const response = await options.fetch(RESEND_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${options.apiKey}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: email.from,
-        to: [email.to],
-        subject: email.subject,
-        html: email.html,
-        text: email.text,
-      }),
-    });
+    let response: Response;
+
+    try {
+      response = await options.fetch(RESEND_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${options.apiKey}`,
+          'content-type': 'application/json',
+          // Resend keeps a key for 24 hours and answers a repeat with the first result.
+          'idempotency-key': email.idempotencyKey,
+        },
+        body: JSON.stringify({
+          from: email.from,
+          to: [email.to],
+          subject: email.subject,
+          html: email.html,
+          text: email.text,
+        }),
+        signal: AbortSignal.timeout(options.timeoutMs ?? RESEND_TIMEOUT_MS),
+      });
+    } catch (error: unknown) {
+      /*
+       * **No answer at all** — DNS, a reset connection, or nothing back within
+       * the timeout (review fix). This used to escape as a bare `TypeError`,
+       * which `sendEmail` reads as not retryable, so one network blip abandoned
+       * a password reset on its first attempt. It is the most retryable failure
+       * there is, and the idempotency key is what makes retrying it safe.
+       *
+       * The name only: a network error's message can carry the URL, and the
+       * status is 0 because no status ever arrived.
+       */
+      throw new EmailSendError(`Resend could not be reached (${nameOf(error)})`, 0, true);
+    }
 
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
@@ -88,11 +131,13 @@ export const resendTransport = (options: {
         response.status,
         /*
          * 429 is the free tier's daily and per-second limits, and 5xx is the
-         * provider having a bad minute. Everything else — a malformed address,
-         * an unverified sending domain, a revoked key — is a request that will
-         * be rejected identically on every attempt.
+         * provider having a bad minute. 409 is Resend saying the same key is
+         * still being processed by an earlier attempt, which its documentation
+         * calls safe to retry once that attempt finishes. Everything else — a
+         * malformed address, an unverified sending domain, a revoked key — is a
+         * request that will be rejected identically on every attempt.
          */
-        response.status === 429 || response.status >= 500,
+        response.status === 409 || response.status === 429 || response.status >= 500,
       );
     }
 

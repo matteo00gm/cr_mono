@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { looksLikeAddress, normaliseAddress } from './address.js';
 import { renderTemplate, type Locale, type TemplateName, type TemplateProps } from './templates.js';
 import { EmailSendError, type EmailTransport } from './transport.js';
@@ -8,8 +10,8 @@ import { EmailSendError, type EmailTransport } from './transport.js';
  *
  * One function, so that four things are true of *every* message rather than of
  * the ones whose author remembered: it is checked against the suppression list,
- * it carries a plaintext part, it retries a rate-limit rejection, and a
- * permanent failure raises an alarm. Each of those is easy to get right once
+ * it carries a plaintext part, it retries a rate limit or a network failure
+ * without ever sending twice, and a permanent failure raises an alarm. Each of those is easy to get right once
  * and impossible to keep right in six call sites.
  */
 
@@ -67,6 +69,8 @@ export interface SendEmailDeps {
   readonly sleep?: ((ms: number) => Promise<void>) | undefined;
   /** Injected so backoff jitter is deterministic under test. */
   readonly random?: (() => number) | undefined;
+  /** Where each message's idempotency key comes from. Injected so a test can name it. */
+  readonly newKey?: (() => string) | undefined;
 }
 
 export interface SendEmailOptions<K extends TemplateName> {
@@ -108,6 +112,7 @@ export const createSendEmail = (deps: SendEmailDeps) => {
         setTimeout(resolve, ms);
       }));
   const random = deps.random ?? Math.random;
+  const newKey = deps.newKey ?? randomUUID;
 
   return async <K extends TemplateName>(options: SendEmailOptions<K>): Promise<SendOutcome> => {
     const to = normaliseAddress(options.to);
@@ -127,6 +132,11 @@ export const createSendEmail = (deps: SendEmailDeps) => {
       subject: rendered.subject,
       html: rendered.html,
       text: rendered.text,
+      /*
+       * Once per message, outside the retry loop: every attempt below is the same
+       * message to the provider, which is the whole point of the key.
+       */
+      idempotencyKey: newKey(),
     };
 
     let lastError: unknown;
