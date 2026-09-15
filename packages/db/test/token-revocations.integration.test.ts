@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
+import { isTokenRevoked } from '../src/token-revocations.js';
 import { startPostgres } from './support/postgres.js';
 import { createTenant } from './support/tenant.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
@@ -109,5 +110,30 @@ describe('token_revocations', () => {
     const rows = await db.execute(sql`select 1 from token_revocations where jti = 'jti-tenant'`);
 
     expect([...rows]).toHaveLength(0);
+  });
+});
+
+describe('isTokenRevoked (P2-12a)', () => {
+  it('finds a revoked token, and only that one', async () => {
+    await revoke('jti-found');
+
+    await expect(isTokenRevoked(tenantId, 'jti-found', db)).resolves.toBe(true);
+    await expect(isTokenRevoked(tenantId, 'jti-never-revoked', db)).resolves.toBe(false);
+  });
+
+  it("does not see another tenant's revocation of the same id", async () => {
+    // Asked under the tenant a request resolved: the policy answers for that tenant alone.
+    await revoke('jti-shared');
+    const other = await createTenant(db, 'tok-other');
+
+    await expect(isTokenRevoked(other, 'jti-shared', db)).resolves.toBe(false);
+    await expect(isTokenRevoked(tenantId, 'jti-shared', db)).resolves.toBe(true);
+  });
+
+  it('still counts a revocation past its expiry, until the sweep removes it', async () => {
+    // A session may continue on a token for half an hour after it lapses (P2-12a).
+    await revoke('jti-lapsed', '2020-01-01T00:00:00Z');
+
+    await expect(isTokenRevoked(tenantId, 'jti-lapsed', db)).resolves.toBe(true);
   });
 });

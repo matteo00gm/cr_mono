@@ -138,6 +138,15 @@ export {
 export { resolveTenantByKeyAndOrigin, type WidgetResolution } from './widget-resolution.js';
 
 /**
+ * The widget token revocation read (P2-12a).
+ *
+ * Not a sixth context: it runs under `withTenant`, for the tenant a request
+ * resolved, and `token_revocations` carries the boilerplate policy. The rows
+ * are written when a domain is removed (P4-06).
+ */
+export { isTokenRevoked } from './token-revocations.js';
+
+/**
  * The `invitations` statements (P0-51).
  *
  * Here rather than in an app for the same reason as the audit insert and the
