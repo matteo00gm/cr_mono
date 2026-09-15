@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
+import { MAX_PUBLISH_ATTEMPTS } from '../src/outbox.js';
 import {
   archiveProduct,
   insertProduct,
@@ -297,6 +298,44 @@ describe('reindexCatalogue', () => {
     expect(first.outcome).toBe('queued');
     expect(second).toEqual({ outcome: 'in-flight', queued: 3 });
     expect(await queuedJobs(tenantId)).toHaveLength(3);
+  });
+
+  /** Sets every waiting job's publish attempts, as a poller that kept failing would have. */
+  const failPublishing = (attempts: number) =>
+    inTenant(tenantId, async (tx) => {
+      await tx.execute(sql`update outbox set attempts = ${attempts} where processed_at is null`);
+    });
+
+  it('is not refused for ever by jobs the poller has given up on', async () => {
+    /*
+     * The P1 review's finding. A job past MAX_PUBLISH_ATTEMPTS stays unpublished
+     * by design, so counting it as "still draining" turned one long SQS outage
+     * into a permanent 409 — the tool for repairing the outage, disabled by it.
+     */
+    await seed(tenantId, 3);
+    await failPublishing(MAX_PUBLISH_ATTEMPTS);
+
+    const result = await inTenant(tenantId, (tx) =>
+      reindexCatalogue(tx, {
+        edges: QUEUED_EDGES,
+        batchId: 'after-outage',
+        reason: 'manual-reindex-all',
+      }),
+    );
+
+    expect(result).toEqual({ outcome: 'queued', batchId: 'after-outage', queued: 3 });
+  });
+
+  it('still waits for a job the poller is retrying', async () => {
+    // The other side of the boundary: one attempt left is still the queue.
+    await seed(tenantId, 2);
+    await failPublishing(MAX_PUBLISH_ATTEMPTS - 1);
+
+    const result = await inTenant(tenantId, (tx) =>
+      reindexCatalogue(tx, { edges: QUEUED_EDGES, batchId: 'b', reason: 'manual-reindex-all' }),
+    );
+
+    expect(result).toEqual({ outcome: 'in-flight', queued: 2 });
   });
 
   it('is not blocked by another winery queue, and does not touch its rows', async () => {

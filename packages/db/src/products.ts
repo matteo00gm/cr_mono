@@ -1,10 +1,11 @@
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, lt, sql } from 'drizzle-orm';
 
 import {
   writeEmbeddingStatus,
   type EmbeddingState,
   type EmbeddingStatusWrite,
 } from './embedding-status.js';
+import { MAX_PUBLISH_ATTEMPTS } from './outbox.js';
 import { outbox } from './schema/outbox.js';
 import { productEmbeddings } from './schema/product-embeddings.js';
 import { products } from './schema/products.js';
@@ -472,14 +473,29 @@ export const reindexProduct = async (
  * How many embedding jobs this tenant still has waiting (P1-39).
  *
  * Scoped by the policy rather than by a predicate, like every other read here.
- * Counts only the unpublished ones: the outbox keeps published rows as the
- * history, so `processed_at IS NULL` is the queue.
+ * Counts only the jobs the poller will still publish. The outbox keeps
+ * published rows as the history, so `processed_at IS NULL` is the queue — but a
+ * row past `MAX_PUBLISH_ATTEMPTS` is unpublished for ever by design, so it is
+ * not waiting for anything either.
+ *
+ * **Counting those was a permanent 409.** One SQS outage long enough to exhaust
+ * the attempts left rows that never drain, and reindex-all refused every later
+ * run as "still draining" — the repair tool disabled by the failure it exists
+ * to repair. The predicate is the claim's own (`claimOutboxJobs`), so the two
+ * cannot disagree about what the queue is; abandoned rows stay visible to
+ * `countStuckJobs`, which is where an operator reads them.
  */
 export const countQueuedEmbeddings = async (tx: DbTransaction): Promise<number> => {
   const rows = await tx
     .select({ queued: sql<number>`count(*)::int` })
     .from(outbox)
-    .where(and(isNull(outbox.processedAt), eq(outbox.eventType, EMBEDDING_EVENT)));
+    .where(
+      and(
+        isNull(outbox.processedAt),
+        lt(outbox.attempts, MAX_PUBLISH_ATTEMPTS),
+        eq(outbox.eventType, EMBEDDING_EVENT),
+      ),
+    );
 
   return rows[0]?.queued ?? 0;
 };
