@@ -4810,6 +4810,11 @@ The window start is **computed in SQL from `now()`**, never passed from the appl
 - **It refuses to run before tenant resolution** — a wiring error and a 500 — because a limiter with no tenant has nothing to count against, and a limit counting against nothing has silently stopped applying.
 - **The conformance suite gained what P2-03 asked for and never checked**: a `retryAfterSec` that agrees with `resetAt`. It also now covers the month and the named dimension, against both implementations, and Postgres is asserted to keep the month in UTC on a session set to Europe/Rome.
 - **Mounted by P2-10** on `/v1/widget/config`, after P2-08's resolution, with the address secret taken from `AUTH_SECRET` rather than a second SSM parameter.
+- **Review fix (2026-09-15): an address limit now runs before resolution.**
+  - **The gap.** Every dimension above is counted against a tenant, so it runs after `(pk_, Origin)` is resolved — and resolution is an uncached read. A script cycling through invented keys cost one query apiece with no cap, because CORS refused each only after paying for it.
+  - **The fix.** `unresolvedLimitCheck` (`ip:<hmac>:unresolved`, 240 a minute, provisional like the rest) is counted first, by `limitUnresolvedWidgetRequest`, mounted ahead of `widgetCors`. Its refusal carries `Vary: Origin` and `Retry-After`, and no CORS headers.
+  - **What it does not do.** The limiter's own upsert is still a write per request, so this bounds the expensive path, not the request rate. The blunt per-address ceiling in front of everything is P4-13's WAF rule.
+  - **Open.** P2-12's session route and P2-29's chat route must mount it first too.
 
 **⚠ Open — the numbers.** §3.6 names the dimensions and gives no figures, so `WIDGET_LIMITS` is provisional. Per minute: session 6 to mint, 12 for chat; address 60 config, 12 session, 30 chat; tenant 120 on CANTINA, 600 on ECOMMERCE, 60 with no plan; endpoint 600 config, 120 session, 120 chat. Per month: 1,000, 10,000 and 100 chat messages. The monthly caps are really P5-01's pricing decision, and should be settled there.
 
