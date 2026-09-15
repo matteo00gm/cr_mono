@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { MAX_IMPORT_BODY_BYTES, MAX_IMPORT_ROWS } from '@catalogorosso/core';
+import { IMPORT_TIME_BUDGET_MS, MAX_IMPORT_BODY_BYTES, MAX_IMPORT_ROWS } from '@catalogorosso/core';
 
 import { productsImportedResponse } from '@catalogorosso/api-client';
 import { describe, expect, it, vi } from 'vitest';
@@ -12,9 +12,11 @@ import {
   countImportOutcomes,
   type ClaimImportCommand,
   type CompleteImportCommand,
+  type ImportProductsCommand,
   type ImportProductsResult,
   type ProductsPort,
 } from '../src/products.js';
+import { logger } from '../src/middleware/logger.js';
 import { oneMembership, signedIn } from './support/auth.js';
 import { productsPort } from './support/products.js';
 
@@ -79,7 +81,18 @@ const post = (
   });
 
 const applied = (result: Partial<ImportProductsResult> = {}) =>
-  vi.fn(() => Promise.resolve({ outcomes: [], stoppedAt: null, ...result }));
+  vi.fn<(command: ImportProductsCommand) => Promise<ImportProductsResult>>(() =>
+    Promise.resolve({ outcomes: [], stoppedAt: null, ...result }),
+  );
+
+/**
+ * What the route handed the port, with its deadline taken as given: when it was
+ * set is asserted on its own below, and exact equality still catches a stray field.
+ */
+const commandOf = (importRows: ReturnType<typeof applied>) => {
+  const [command] = importRows.mock.calls[0] ?? [];
+  return { command, deadline: command?.deadline };
+};
 
 const messageOf = async (response: Response): Promise<string> =>
   ((await response.json()) as { error: { message: string } }).error.message;
@@ -106,9 +119,12 @@ describe('importing', () => {
       archived: 1,
     });
     expect(body.stoppedAt).toBeNull();
-    expect(importRows).toHaveBeenCalledWith({
+
+    const { command, deadline } = commandOf(importRows);
+    expect(command).toEqual({
       tenantId: TENANT,
       rows: [ROW, { ...ROW, sku: 'ETN-2020' }],
+      deadline,
     });
   });
 
@@ -120,7 +136,8 @@ describe('importing', () => {
       rows: [{ ...ROW, tenantId: '22222222-2222-2222-2222-222222222222' }],
     });
 
-    expect(importRows).toHaveBeenCalledWith({ tenantId: TENANT, rows: [ROW] });
+    const { command, deadline } = commandOf(importRows);
+    expect(command).toEqual({ tenantId: TENANT, rows: [ROW], deadline });
   });
 });
 
@@ -214,6 +231,7 @@ describe('an import that stops part-way', () => {
         batch: 3,
         fromIndex: 400,
         toIndex: 599,
+        reason: 'failed',
         cause: new Error('connect ECONNREFUSED postgres://app_rw:hunter2@db.internal/app'),
       },
     });
@@ -226,10 +244,42 @@ describe('an import that stops part-way', () => {
       batch: 3,
       fromRow: 401,
       toRow: 600,
+      reason: 'failed',
     });
     // P0-55: a driver error can carry a connection string. It goes to the log, not here.
     expect(text).not.toContain('hunter2');
     expect(text).not.toContain('ECONNREFUSED');
+  });
+
+  it('says an import that ran out of time stopped for time, and does not log it as a failure', async () => {
+    // Review fix: a catalogue too large for one request is the import working, not failing.
+    const error = vi.spyOn(logger, 'error');
+    const importRows = applied({
+      outcomes: [{ index: 0, outcome: 'created', productId: 'p-1' }],
+      stoppedAt: { batch: 2, fromIndex: 1, toIndex: 1, reason: 'time-budget', cause: undefined },
+    });
+
+    const response = await post(app({ importRows }), { rows: [ROW, { ...ROW, sku: 'B' }] });
+
+    expect(productsImportedResponse.parse(await response.json()).stoppedAt).toEqual({
+      batch: 2,
+      fromRow: 2,
+      toRow: 2,
+      reason: 'time-budget',
+    });
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it('gives the import a deadline one time budget after the request arrived', async () => {
+    const importRows = applied();
+    const before = Date.now();
+
+    await post(app({ importRows }), { rows: [ROW] });
+
+    const { deadline = Number.NaN } = commandOf(importRows);
+    expect(deadline).toBeGreaterThanOrEqual(before + IMPORT_TIME_BUDGET_MS);
+    expect(deadline).toBeLessThanOrEqual(Date.now() + IMPORT_TIME_BUDGET_MS);
   });
 });
 
@@ -322,7 +372,7 @@ describe('the idempotency key (P1-26)', () => {
 
   it.each([
     ['different-body', 'already used for an import with different rows'],
-    ['in-progress', 'released after 15 minutes'],
+    ['in-progress', 'released after 30 seconds'],
   ] as const)('refuses a %s repeat with 409, importing nothing', async (outcome, says) => {
     const importRows = applied();
 
@@ -353,6 +403,7 @@ describe('the idempotency key (P1-26)', () => {
         batch: 1,
         fromIndex: 0,
         toIndex: 0,
+        reason: 'failed',
         cause: new Error('connect ECONNREFUSED postgres://app_rw:hunter2@db.internal/app'),
       },
     });
@@ -423,7 +474,7 @@ describe('the audit entry (P1-28)', () => {
       outcomes: [
         { index: 0, outcome: 'unchanged', productId: 'p-1', reindexed: false, archived: false },
       ],
-      stoppedAt: { batch: 2, fromIndex: 1, toIndex: 1, cause: new Error('down') },
+      stoppedAt: { batch: 2, fromIndex: 1, toIndex: 1, reason: 'failed', cause: new Error('down') },
     });
 
     await post(app({ importRows, completeImport }), { rows: [ROW] });
@@ -434,7 +485,7 @@ describe('the audit entry (P1-28)', () => {
   it('writes none for an import that failed in its first batch', async () => {
     const completeImport = storing();
     const importRows = applied({
-      stoppedAt: { batch: 1, fromIndex: 0, toIndex: 0, cause: new Error('down') },
+      stoppedAt: { batch: 1, fromIndex: 0, toIndex: 0, reason: 'failed', cause: new Error('down') },
     });
 
     await post(app({ importRows, completeImport }), { rows: [ROW] });

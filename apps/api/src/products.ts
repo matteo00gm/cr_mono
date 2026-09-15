@@ -163,6 +163,12 @@ export interface ImportProductsCommand {
   readonly tenantId: string;
   /** Already validated against `productInsert`, in the order the seller's file had them. */
   readonly rows: readonly ProductInsert[];
+  /**
+   * When, in epoch milliseconds, the import must have stopped starting batches
+   * (review fix). Required, because the only caller is a request with a timeout
+   * that does not wait for a commit.
+   */
+  readonly deadline: number;
 }
 
 /** Where an import stopped, by batch and by row index, and why — for the log, not the caller. */
@@ -176,6 +182,12 @@ export interface ImportStop {
   readonly batch: number;
   readonly fromIndex: number;
   readonly toIndex: number;
+  /**
+   * `failed`: the batch threw, and `cause` says why. `time-budget`: the batch was
+   * never started, because it would not have finished before the deadline — the
+   * rows are fine, and sending them again is the rest of the import.
+   */
+  readonly reason: 'failed' | 'time-budget';
   readonly cause: unknown;
 }
 
@@ -255,6 +267,8 @@ export interface ProductsPortOptions {
    * Injected, the entry an import writes is something a test can assert.
    */
   readonly audit?: typeof audit;
+  /** The clock an import's time budget reads. Injected so a test can make a batch slow. */
+  readonly now?: () => number;
 }
 
 export interface ProductsPort {
@@ -352,6 +366,7 @@ const partitionDuplicates = (rows: readonly ProductInsert[]) => {
 
 export const createProductsPort = ({
   audit: record = audit,
+  now = Date.now,
 }: ProductsPortOptions = {}): ProductsPort => ({
   create: (command) =>
     /*
@@ -480,14 +495,43 @@ export const createProductsPort = ({
     return [...duplicates, ...planned].sort((a, b) => a.index - b.index);
   },
 
-  importRows: async ({ tenantId, rows }) => {
+  importRows: async ({ tenantId, rows, deadline }) => {
     const { duplicates, pending } = partitionDuplicates(rows);
     const outcomes: UpsertOutcome[] = [...duplicates];
 
     const inOrder = (): UpsertOutcome[] => [...outcomes].sort((a, b) => a.index - b.index);
 
+    /** The longest a batch has taken so far: the best guess at how long the next will. */
+    let slowestBatchMs = 0;
+
     for (let start = 0; start < pending.length; start += IMPORT_BATCH_SIZE) {
       const batch = pending.slice(start, start + IMPORT_BATCH_SIZE);
+
+      const stop = (reason: ImportStop['reason'], cause: unknown): ImportProductsResult => ({
+        outcomes: inOrder(),
+        stoppedAt: {
+          batch: start / IMPORT_BATCH_SIZE + 1,
+          fromIndex: Math.min(...batch.map((row) => row.index)),
+          toIndex: Math.max(...batch.map((row) => row.index)),
+          reason,
+          cause,
+        },
+      });
+
+      /*
+       * **Stopped between batches, never killed inside one** (review fix). The
+       * function's timeout does not wait for a commit: an import cut off there
+       * stores no report, and its key reads as still running. Stopping here is
+       * an ordinary stopped import instead — everything before applied, the
+       * answer stored, and the rest a new attempt the dashboard sends by itself.
+       *
+       * The first batch always runs, so a request makes progress however slow
+       * the database is. After that, a batch starts only if one as slow as the
+       * slowest so far would still finish by the deadline.
+       */
+      if (start > 0 && now() + slowestBatchMs > deadline) return stop('time-budget', undefined);
+
+      const startedAt = now();
 
       try {
         /*
@@ -516,16 +560,10 @@ export const createProductsPort = ({
          * and cost nothing (P1-24). It is a new attempt, so it
          * carries a new key; the old one answers with this report (P1-26).
          */
-        return {
-          outcomes: inOrder(),
-          stoppedAt: {
-            batch: start / IMPORT_BATCH_SIZE + 1,
-            fromIndex: Math.min(...batch.map((row) => row.index)),
-            toIndex: Math.max(...batch.map((row) => row.index)),
-            cause,
-          },
-        };
+        return stop('failed', cause);
       }
+
+      slowestBatchMs = Math.max(slowestBatchMs, now() - startedAt);
     }
 
     return { outcomes: inOrder(), stoppedAt: null };

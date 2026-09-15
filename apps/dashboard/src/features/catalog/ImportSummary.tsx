@@ -10,6 +10,13 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 
 import { writeDelimited } from './delimited.js';
 import { importBodyProblem, STOCK_WORD_FOR, type DraftRow } from './draft-rows.js';
+import {
+  appliedCount,
+  mergeAnswers,
+  remainderOf,
+  wholeImport,
+  type ImportPart,
+} from './import-continuation.js';
 import { describeFailure } from './request-failure.js';
 import { saveTextFile } from './save-file.js';
 import { TEMPLATE_COLUMNS } from './template.js';
@@ -136,9 +143,20 @@ type Preview =
 
 type Attempt =
   | { readonly status: 'idle' }
-  | { readonly status: 'sending' }
+  /** `applied` once an earlier part has answered: rows in so far, while the rest is sent. */
+  | { readonly status: 'sending'; readonly applied?: number }
   | { readonly status: 'done'; readonly answer: ProductsImportedResponse }
   | { readonly status: 'failed'; readonly message: string };
+
+/** Where a confirmed import has got to. */
+interface Progress {
+  /** The rows still to send. */
+  readonly part: ImportPart;
+  /** The key `part` is sent under, again with every retry of it. */
+  readonly key: string;
+  /** What earlier parts answered, as one answer. */
+  readonly merged?: ProductsImportedResponse | undefined;
+}
 
 export const ImportSummary = ({
   client,
@@ -162,13 +180,15 @@ export const ImportSummary = ({
   const [previewTry, setPreviewTry] = useState(0);
 
   /*
-   * **The key belongs to these rows.** Made at the first confirmation and sent
-   * again with every retry of it, so a double-click or a dropped connection
-   * cannot apply the import twice (P1-26). Forgotten when the rows change — the
-   * same key with other rows is refused — and when an attempt finishes, because
-   * resuming a stopped import is a new attempt.
+   * **The key belongs to the rows it is sent with.** Made when a part is first
+   * sent and sent again with every retry of it, so a double-click or a dropped
+   * connection cannot apply the import twice (P1-26). A part that ran out of
+   * time hands the rest to a new part with a new key, which is a new attempt to
+   * the server (review fix). Forgotten when the rows change — the same key with
+   * other rows is refused — and when the import finishes, because resuming a
+   * stopped import is a new attempt over all the rows.
    */
-  const key = useRef<string | undefined>(undefined);
+  const progress = useRef<Progress | undefined>(undefined);
 
   /** Which rows an answer belongs to. An answer for rows edited since is dropped. */
   const generation = useRef(0);
@@ -176,7 +196,7 @@ export const ImportSummary = ({
   useEffect(() => {
     generation.current += 1;
     const mine = generation.current;
-    key.current = undefined;
+    progress.current = undefined;
     setAttempt({ status: 'idle' });
 
     if (payloads.length === 0 || tooLarge !== null) {
@@ -207,29 +227,45 @@ export const ImportSummary = ({
 
   const confirm = async (): Promise<void> => {
     const mine = generation.current;
-    const attemptKey = key.current ?? newKey();
-    key.current = attemptKey;
+    let current: Progress = progress.current ?? { part: wholeImport(payloads), key: newKey() };
+    progress.current = current;
     setAttempt({ status: 'sending' });
 
     try {
-      const answer = await client.request('POST /v1/dashboard/products/import', {
-        body: { rows: payloads, source },
-        idempotencyKey: attemptKey,
-      });
-      if (mine !== generation.current) return;
+      for (;;) {
+        const answer = await client.request('POST /v1/dashboard/products/import', {
+          body: { rows: current.part.rows, source },
+          idempotencyKey: current.key,
+        });
+        if (mine !== generation.current) return;
 
-      key.current = undefined;
-      setAttempt({ status: 'done', answer });
-      onImported?.(answer);
+        const merged = mergeAnswers(current.merged, current.part, answer);
+        const rest = remainderOf(current.part, answer);
+
+        if (rest === null) {
+          progress.current = undefined;
+          setAttempt({ status: 'done', answer: merged });
+          onImported?.(merged);
+          return;
+        }
+
+        /*
+         * The part ran out of time rather than into a problem, so the rest goes
+         * straight away, as a new attempt with a new key (review fix, P1-25).
+         */
+        current = { part: rest, key: newKey(), merged };
+        progress.current = current;
+        setAttempt({ status: 'sending', applied: appliedCount(merged) });
+      }
     } catch (error) {
       if (mine !== generation.current) return;
 
       /*
-       * **The key is kept.** A failure can come after the import ran, on a
-       * connection that dropped on the way back; the same key sent again answers
-       * with that import's result, or says it is still running, and never
-       * applies it twice (P1-26). A 409 here is the second case: the key is
-       * forgotten whenever the rows change, so it cannot be the other one.
+       * **The progress is kept, key and all.** A failure can come after the part
+       * ran, on a connection that dropped on the way back; the same key sent
+       * again answers with that part's result, or says it is still running, and
+       * never applies it twice (P1-26). A 409 here is the second case: the key
+       * is forgotten whenever the rows change, so it cannot be the other one.
        */
       setAttempt({
         status: 'failed',
@@ -313,6 +349,12 @@ export const ImportSummary = ({
             Scarica le righe da correggere
           </button>
         </details>
+      )}
+
+      {attempt.status === 'sending' && attempt.applied !== undefined && (
+        <p class="cr-import-summary__result" role="status">
+          {`Importazione in corso: ${String(attempt.applied)} righe importate finora…`}
+        </p>
       )}
 
       {attempt.status === 'done' && (

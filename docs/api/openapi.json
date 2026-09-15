@@ -2125,7 +2125,7 @@
       "/v1/dashboard/products/import": {
         "post": {
           "summary": "Import wines in bulk, matched by SKU",
-          "description": "Creates the wines whose SKU is new to this catalogue, updates the ones that changed and leaves the rest untouched, queuing an embedding only where the text the model reads moved. Nothing is ever archived or cleared: a field a row does not carry keeps its value. Rows are applied in batches of 200, each in its own transaction, so a failure part-way answers with how far the import got - send the same rows again under a new Idempotency-Key to resume, since rows already applied come back unchanged. A row that does not match the product contract refuses the whole request before anything is written, and rows sharing a SKU are all refused. A body over 5 MB is refused before it is parsed. The body names where the rows came from - form, paste or file, with the file name - for the single audit entry written by an import that reached the catalogue. Every import carries an Idempotency-Key header holding a UUID per attempt: a repeat with the same key and the same rows answers with the body the first attempt returned and runs nothing, even when that attempt stopped part-way. The same key with different rows, or while the first attempt is still running, answers 409.\n\nRequires the `catalog:write` capability.",
+          "description": "Creates the wines whose SKU is new to this catalogue, updates the ones that changed and leaves the rest untouched, queuing an embedding only where the text the model reads moved. Nothing is ever archived or cleared: a field a row does not carry keeps its value. Rows are applied in batches of 200, each in its own transaction, so an import that stops part-way answers with how far it got, and stoppedAt.reason says why: 'failed' when a batch failed, or 'time-budget' when the request ran out of time before the next batch. An import too large for one request stops between batches after about six seconds, rather than being cut off by the ten-second timeout. Either way, send the rows from fromRow on, less those refused as duplicate SKUs, under a new Idempotency-Key to continue; a row already applied comes back unchanged if it is sent again. A row that does not match the product contract refuses the whole request before anything is written, and rows sharing a SKU are all refused. A body over 5 MB is refused before it is parsed. The body names where the rows came from - form, paste or file, with the file name - for the single audit entry written by an import that reached the catalogue. Every import carries an Idempotency-Key header holding a UUID per attempt: a repeat with the same key and the same rows answers with the body the first attempt returned and runs nothing, even when that attempt stopped part-way. The same key with different rows, or while the first attempt is still running, answers 409.\n\nRequires the `catalog:write` capability.",
           "operationId": "postV1DashboardProductsImport",
           "x-required-capability": "catalog:write",
           "responses": {
@@ -2309,12 +2309,20 @@
                                 "type": "integer",
                                 "exclusiveMinimum": 0,
                                 "maximum": 9007199254740991
+                              },
+                              "reason": {
+                                "type": "string",
+                                "enum": [
+                                  "failed",
+                                  "time-budget"
+                                ]
                               }
                             },
                             "required": [
                               "batch",
                               "fromRow",
-                              "toRow"
+                              "toRow",
+                              "reason"
                             ],
                             "additionalProperties": false
                           },

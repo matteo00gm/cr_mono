@@ -291,7 +291,9 @@ describe('confirming', () => {
         [IMPORT]: () => {
           calls += 1;
           return Promise.resolve(
-            calls === 1 ? imported({ batch: 1, fromRow: 2, toRow: 2 }) : imported(),
+            calls === 1
+              ? imported({ batch: 1, fromRow: 2, toRow: 2, reason: 'failed' })
+              : imported(),
           );
         },
       },
@@ -345,5 +347,102 @@ describe('confirming', () => {
     });
 
     expect(sentTo(request, IMPORT).map((sent) => sent.idempotencyKey)).toEqual(['key-1', 'key-2']);
+  });
+});
+
+describe('an import too large for one request (review fix)', () => {
+  const CREATED = (index: number, productId: string) =>
+    ({ index, outcome: 'created', productId }) as const;
+
+  it('sends the rest by itself, as a new attempt with only the rows left, and reports the whole', async () => {
+    const onImported = vi.fn<(answer: ProductsImportedResponse) => void>();
+    const drafts = draftsOf(GOOD, { ...GOOD, sku: 'B' }, { ...GOOD, sku: 'C' });
+    let calls = 0;
+
+    const { request } = mount(
+      drafts,
+      {
+        [PREVIEW]: previewOf({ created: 3 }),
+        [IMPORT]: () => {
+          calls += 1;
+          return Promise.resolve(
+            calls === 1
+              ? {
+                  outcomes: [CREATED(0, 'p-1')],
+                  counts: counts({ created: 1 }),
+                  stoppedAt: { batch: 2, fromRow: 2, toRow: 3, reason: 'time-budget' },
+                }
+              : {
+                  outcomes: [CREATED(0, 'p-2'), CREATED(1, 'p-3')],
+                  counts: counts({ created: 2 }),
+                  stoppedAt: null,
+                },
+          );
+        },
+      },
+      { newKey: keys('key-1', 'key-2'), onImported },
+    );
+
+    await screen.findByText(/Nuovi: 3/);
+    fireEvent.click(button('Importa 3 righe'));
+
+    expect(
+      await screen.findByText('Importazione completata. Nuovi: 3 · Aggiornati: 0 · Invariati: 0.'),
+    ).toBeTruthy();
+
+    const sent = sentTo(request, IMPORT);
+    expect(sent.map((init) => init.idempotencyKey)).toEqual(['key-1', 'key-2']);
+    expect((sent[1]?.body as { rows: unknown[] }).rows).toEqual([
+      drafts[1]?.payload,
+      drafts[2]?.payload,
+    ]);
+
+    // One answer for the whole import, numbered as the seller's list is.
+    expect(onImported).toHaveBeenCalledTimes(1);
+    expect(onImported.mock.calls[0]?.[0]).toEqual({
+      outcomes: [CREATED(0, 'p-1'), CREATED(1, 'p-2'), CREATED(2, 'p-3')],
+      counts: counts({ created: 3 }),
+      stoppedAt: null,
+    });
+  });
+
+  it('resumes a continuation that dropped with its own key, sending only the rows it held', async () => {
+    const drafts = draftsOf(GOOD, { ...GOOD, sku: 'B' });
+    let calls = 0;
+
+    const { request } = mount(
+      drafts,
+      {
+        [PREVIEW]: previewOf({ created: 2 }),
+        [IMPORT]: () => {
+          calls += 1;
+          if (calls === 1) {
+            return Promise.resolve({
+              outcomes: [CREATED(0, 'p-1')],
+              counts: counts({ created: 1 }),
+              stoppedAt: { batch: 2, fromRow: 2, toRow: 2, reason: 'time-budget' },
+            });
+          }
+          if (calls === 2) return Promise.reject(new TypeError('Failed to fetch'));
+          return Promise.resolve({
+            outcomes: [CREATED(0, 'p-2')],
+            counts: counts({ created: 1 }),
+            stoppedAt: null,
+          });
+        },
+      },
+      { newKey: keys('key-1', 'key-2', 'key-3') },
+    );
+
+    await screen.findByText(/Nuovi: 2/);
+    fireEvent.click(button('Importa 2 righe'));
+    expect(await screen.findByText(/Importazione non riuscita/)).toBeTruthy();
+
+    fireEvent.click(button('Importa 2 righe'));
+    expect(await screen.findByText(/Importazione completata\. Nuovi: 2 ·/)).toBeTruthy();
+
+    const sent = sentTo(request, IMPORT);
+    expect(sent.map((init) => init.idempotencyKey)).toEqual(['key-1', 'key-2', 'key-2']);
+    expect((sent[2]?.body as { rows: unknown[] }).rows).toEqual([drafts[1]?.payload]);
   });
 });
