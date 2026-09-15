@@ -1114,7 +1114,6 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'that something did. Carries no tenant, user or catalogue data.',
       example: { surface: 'dashboard' },
       response: surfaceResponse,
-      refusals: [],
     },
   ],
   [
