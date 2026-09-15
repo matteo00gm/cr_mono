@@ -175,6 +175,7 @@ export const widgetCors =
       status: resolution.status,
       locale: resolution.locale,
     });
+    c.set('widgetOrigin', normalized.origin);
 
     // Rule 5: the same resolution answered the preflight, so it gets the same answer.
     if (c.req.method === 'OPTIONS') {

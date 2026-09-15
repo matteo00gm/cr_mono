@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { resolveTenantByKeyAndOrigin } from '@catalogorosso/db';
+import {
+  generateWidgetTokenKey,
+  InvalidWidgetTokenKeysError,
+} from '@catalogorosso/security/tokens';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app.js';
@@ -270,5 +274,30 @@ describe('the widget surface (P2-10)', () => {
 
   it("buckets addresses under the deployment's own secret", () => {
     expect(buildDependencies(config).widget.ipSecret).toBe(config.authSecret);
+  });
+});
+
+describe('the widget session keys (P2-12)', () => {
+  it('leaves the session route unconfigured without a keyset', () => {
+    expect(buildDependencies(config).widget.tokenKeys).toBeUndefined();
+  });
+
+  it('loads the keyset it is given once, however many mints ask at once', async () => {
+    const serialized = JSON.stringify({ keys: [await generateWidgetTokenKey('k1')] });
+    const { tokenKeys } = buildDependencies({ ...config, widgetTokenKeys: serialized }).widget;
+    if (tokenKeys === undefined) throw new Error('expected a key loader');
+
+    const [first, second] = await Promise.all([tokenKeys(), tokenKeys()]);
+
+    expect(first).toBe(second);
+    expect(first.signingKid).toBe('k1');
+  });
+
+  it('keeps a keyset that will not load failing with its reason, rather than retrying it', async () => {
+    const { tokenKeys } = buildDependencies({ ...config, widgetTokenKeys: 'not json' }).widget;
+    if (tokenKeys === undefined) throw new Error('expected a key loader');
+
+    await expect(tokenKeys()).rejects.toThrow(InvalidWidgetTokenKeysError);
+    await expect(tokenKeys()).rejects.toThrow(/not JSON/);
   });
 });
