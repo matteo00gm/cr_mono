@@ -433,6 +433,13 @@ export const productsImportedResponse = z.object({
       batch: z.number().int().positive(),
       fromRow: z.number().int().positive(),
       toRow: z.number().int().positive(),
+      /**
+       * `failed`: a batch failed, and every row before `fromRow` applied.
+       * `time-budget`: the request ran out of time before starting that batch
+       * (review fix). Nothing is wrong with the rows; sending the rest is how the
+       * import finishes, and the dashboard does it by itself.
+       */
+      reason: z.enum(['failed', 'time-budget']),
     })
     .nullable(),
 });

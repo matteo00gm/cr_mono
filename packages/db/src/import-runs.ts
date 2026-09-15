@@ -14,13 +14,20 @@ import type { DbTransaction } from './with-tenant.js';
 /**
  * How long a claim with no result is taken to be still running.
  *
- * **Fifteen minutes is the longest an AWS Lambda can run**, so a claim older
- * than that belongs to an invocation that no longer exists — killed by a timeout
- * or a deploy between its claim and its completion. Without an expiry that key
+ * **Three times the API function's ten-second timeout**, so a claim older than
+ * this belongs to an invocation that no longer exists — killed by the timeout or
+ * a deploy between its claim and its completion. Without an expiry that key
  * would answer "still running" forever, and a seller retrying the same import
  * would be refused for the rest of time.
+ *
+ * It was fifteen minutes, the longest *any* Lambda can run, which was the wrong
+ * ceiling (review fix): this function is killed at ten seconds, so a seller whose
+ * import was cut off was refused its own retry for a quarter of an hour. The
+ * number is restated rather than imported, since this package cannot depend on
+ * `packages/core`; `apps/api/test/import-time-budget.test.ts` asserts it still
+ * clears `API_TIMEOUT_SECONDS`.
  */
-export const IMPORT_CLAIM_EXPIRES_AFTER_MINUTES = 15;
+export const IMPORT_CLAIM_EXPIRES_AFTER_SECONDS = 30;
 
 export type ImportRunClaim =
   | { readonly outcome: 'claimed'; readonly runId: string }
@@ -56,7 +63,7 @@ export const claimImportRun = async (
   tx: DbTransaction,
   request: ImportRunRequest,
 ): Promise<ImportRunClaim> => {
-  const expiry = sql.raw(`interval '${String(IMPORT_CLAIM_EXPIRES_AFTER_MINUTES)} minutes'`);
+  const expiry = sql.raw(`interval '${String(IMPORT_CLAIM_EXPIRES_AFTER_SECONDS)} seconds'`);
 
   const claimed = await tx.execute(sql`
     INSERT INTO import_runs (tenant_id, idempotency_key, request_hash)

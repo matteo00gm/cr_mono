@@ -38,3 +38,30 @@ export const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
  * an import that large is P1-23's decision, recorded as open in the plan.
  */
 export const MAX_IMPORT_BODY_BYTES = 5 * 1024 * 1024;
+
+/**
+ * The API function's timeout, in seconds — the `timeout` in `infra/api.ts`.
+ *
+ * Restated rather than imported, because nothing under `infra/` can be imported
+ * outside a deploy. `apps/api/test/import-time-budget.test.ts` reads the line
+ * out of `infra/api.ts` and fails when the two disagree, so the import below
+ * cannot go on budgeting against a timeout that has moved.
+ */
+export const API_TIMEOUT_SECONDS = 10;
+
+/**
+ * How long one import request may spend applying batches (review fix, P1-25).
+ *
+ * **The function is killed at ten seconds, and a large import did not fit.**
+ * Ten thousand changed wines took 12.2 s against local Postgres, the fastest a
+ * database will ever be, so in production the Lambda was cut off part-way: the
+ * batches before the kill committed, and the seller got a gateway error and no
+ * report of how far it got.
+ *
+ * So the import stops *between* batches once another would not fit, stores
+ * where it stopped like any other stopped import, and the dashboard sends the
+ * rest as a new attempt. Six seconds leaves the rest of the ten for parsing and
+ * validating up to 5 MB of rows before the budget starts, one batch that runs
+ * slower than any before it, and storing the result.
+ */
+export const IMPORT_TIME_BUDGET_MS = 6_000;

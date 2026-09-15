@@ -37,6 +37,9 @@ let webhooks: WebhooksPort;
 let tenantId: string;
 let otherTenantId: string;
 
+/** No deadline: these cases are about what an import writes, not how long it takes. */
+const NO_DEADLINE = Number.POSITIVE_INFINITY;
+
 const VALUES = {
   sku: 'BAR-2019',
   name: 'Barolo Bussia',
@@ -292,8 +295,39 @@ describe('createProductsPort', () => {
       return ([...(rows ?? [])][0] as { n: number }).n;
     };
 
+    it('stops cleanly at the time budget: the batch that ran committed, the next never started', async () => {
+      /*
+       * Review fix. A deadline already past still runs the first batch, so a
+       * request always makes progress, and then stops before the second —
+       * which, against a real database, means exactly one batch of rows exists.
+       */
+      const run = randomUUID();
+      const result = await products.importRows({
+        tenantId,
+        deadline: 0,
+        rows: numbered(450, (index) => ({ sku: `BUDGET-${run}-${String(index)}` })),
+      });
+
+      expect(result.stoppedAt).toMatchObject({
+        batch: 2,
+        fromIndex: IMPORT_BATCH_SIZE,
+        toIndex: IMPORT_BATCH_SIZE * 2 - 1,
+        reason: 'time-budget',
+      });
+      expect(countImportOutcomes(result.outcomes)).toMatchObject({ created: IMPORT_BATCH_SIZE });
+      expect(
+        await countWhere(
+          sql`select count(*)::int as n from products where sku like ${`BUDGET-${run}-%`}`,
+        ),
+      ).toBe(IMPORT_BATCH_SIZE);
+    });
+
     it('applies a thousand rows, one embedding job each', async () => {
-      const result = await products.importRows({ tenantId, rows: numbered(1000) });
+      const result = await products.importRows({
+        tenantId,
+        deadline: NO_DEADLINE,
+        rows: numbered(1000),
+      });
 
       expect(result.stoppedAt).toBeNull();
       expect(countImportOutcomes(result.outcomes)).toMatchObject({ created: 1000, updated: 0 });
@@ -313,7 +347,7 @@ describe('createProductsPort', () => {
       expect(IMPORT_BATCH_SIZE).toBe(200);
       const rows = numbered(600, (index) => (index === 450 ? { priceCents: 3_000_000_000 } : {}));
 
-      const result = await products.importRows({ tenantId, rows });
+      const result = await products.importRows({ tenantId, deadline: NO_DEADLINE, rows });
 
       expect(result.stoppedAt).toMatchObject({ batch: 3, fromIndex: 400, toIndex: 599 });
       expect(result.outcomes).toHaveLength(400);
@@ -327,7 +361,7 @@ describe('createProductsPort', () => {
     it('refuses a SKU repeated in different batches, rather than letting the later row win', async () => {
       const rows = numbered(450, (index) => (index === 5 || index === 350 ? { sku: 'DUP' } : {}));
 
-      const result = await products.importRows({ tenantId, rows });
+      const result = await products.importRows({ tenantId, deadline: NO_DEADLINE, rows });
 
       expect(
         result.outcomes
@@ -346,9 +380,9 @@ describe('createProductsPort', () => {
 
     it('comes back unchanged when the same rows are imported again, which is how to resume', async () => {
       const rows = numbered(250);
-      await products.importRows({ tenantId, rows });
+      await products.importRows({ tenantId, deadline: NO_DEADLINE, rows });
 
-      const again = await products.importRows({ tenantId, rows });
+      const again = await products.importRows({ tenantId, deadline: NO_DEADLINE, rows });
 
       expect(countImportOutcomes(again.outcomes)).toMatchObject({ unchanged: 250, created: 0 });
       expect(
@@ -366,7 +400,7 @@ describe('createProductsPort', () => {
       const first = await products.claimImport(attempt);
       if (first.outcome !== 'claimed') throw new Error(`expected a claim, got ${first.outcome}`);
 
-      const result = await products.importRows({ tenantId, rows: [VALUES] });
+      const result = await products.importRows({ tenantId, deadline: NO_DEADLINE, rows: [VALUES] });
       const body = {
         outcomes: result.outcomes,
         counts: countImportOutcomes(result.outcomes),
@@ -422,6 +456,7 @@ describe('createProductsPort', () => {
 
       const result = await products.importRows({
         tenantId,
+        deadline: NO_DEADLINE,
         rows: [
           { ...VALUES, sku: `AUD-${randomUUID()}` },
           { ...VALUES, sku: `AUD-${randomUUID()}` },
@@ -485,6 +520,7 @@ describe('createProductsPort', () => {
       const fresh = `PRE-${randomUUID()}`;
       await products.importRows({
         tenantId,
+        deadline: NO_DEADLINE,
         rows: [
           { ...VALUES, sku: kept },
           { ...VALUES, sku: repriced },
@@ -509,7 +545,7 @@ describe('createProductsPort', () => {
         'created',
       ]);
 
-      const applied = await products.importRows({ tenantId, rows });
+      const applied = await products.importRows({ tenantId, deadline: NO_DEADLINE, rows });
       expect(applied.outcomes.map((outcome) => outcome.outcome)).toEqual(
         preview.map((outcome) => outcome.outcome),
       );

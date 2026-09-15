@@ -277,7 +277,7 @@ export {
 export {
   claimImportRun,
   completeImportRun,
-  IMPORT_CLAIM_EXPIRES_AFTER_MINUTES,
+  IMPORT_CLAIM_EXPIRES_AFTER_SECONDS,
   type ImportRunClaim,
   type ImportRunRequest,
 } from './import-runs.js';

@@ -144,6 +144,10 @@ export const api = new sst.aws.Function('Api', {
   /**
    * 10 seconds, well under SST's 20-second default.
    *
+   * **Restated as `API_TIMEOUT_SECONDS` in `packages/core`**, which the import's
+   * time budget and claim expiry are sized from. `apps/api/test/import-time-budget.test.ts`
+   * reads this line and fails if the two disagree, so change both together.
+   *
    * Nothing on this function talks to a model — the endpoint that does is the
    * streaming one in P2-29, with its own timeout. What a long timeout buys here
    * is a request that has already failed continuing to bill, and a caller

@@ -4,7 +4,12 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
-import { claimImportRun, completeImportRun, type ImportRunRequest } from '../src/import-runs.js';
+import {
+  claimImportRun,
+  completeImportRun,
+  IMPORT_CLAIM_EXPIRES_AFTER_SECONDS,
+  type ImportRunRequest,
+} from '../src/import-runs.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 import { startPostgres, type TestPostgres } from './support/postgres.js';
 import { createTenant } from './support/tenant.js';
@@ -150,11 +155,11 @@ describe('claimImportRun', () => {
     }
   });
 
-  it('takes over a claim abandoned past the Lambda limit, for the same body only', async () => {
+  it('takes over a claim abandoned past its expiry, for the same body only', async () => {
     const abandoned = await claim();
     if (abandoned.outcome !== 'claimed') throw new Error('expected a claim');
 
-    await ageClaims('16 minutes');
+    await ageClaims(`${String(IMPORT_CLAIM_EXPIRES_AFTER_SECONDS + 1)} seconds`);
 
     expect(await claim({ requestHash: 'another-body' })).toEqual({ outcome: 'different-body' });
     expect(await claim()).toEqual({ outcome: 'claimed', runId: abandoned.runId });
@@ -162,7 +167,7 @@ describe('claimImportRun', () => {
 
   it('does not take over a claim that is merely slow', async () => {
     await claim();
-    await ageClaims('14 minutes');
+    await ageClaims(`${String(IMPORT_CLAIM_EXPIRES_AFTER_SECONDS - 1)} seconds`);
 
     expect(await claim()).toEqual({ outcome: 'in-progress' });
   });

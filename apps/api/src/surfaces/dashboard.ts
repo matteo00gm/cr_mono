@@ -30,6 +30,7 @@ import {
   COMPLETENESS_BANDS,
   COMPLETENESS_FIELDS,
   ConflictError,
+  IMPORT_TIME_BUDGET_MS,
   InvalidRequestError,
   MAX_IMPORT_BODY_BYTES,
   MAX_IMPORT_ROWS,
@@ -38,7 +39,7 @@ import {
 } from '@catalogorosso/core';
 import {
   EMBEDDING_STATES,
-  IMPORT_CLAIM_EXPIRES_AFTER_MINUTES,
+  IMPORT_CLAIM_EXPIRES_AFTER_SECONDS,
   isSortField,
   MAX_LIMIT,
   productInsert,
@@ -606,6 +607,12 @@ export const createDashboardApp = ({
 
   app.post('/products/import', requireCapability('catalog:write'), async (c) => {
     /*
+     * Taken before anything else, so the budget covers reading and validating
+     * up to 5 MB of rows as well as the batches (review fix).
+     */
+    const deadline = Date.now() + IMPORT_TIME_BUDGET_MS;
+
+    /*
      * The key is checked first and claimed last. First, so a request without
      * one is refused before ten thousand rows are parsed. Last, so a request
      * refused for a broken row uses nothing up: the seller fixes the row and
@@ -649,16 +656,25 @@ export const createDashboardApp = ({
       throw new ConflictError(
         `The import sent with this ${IDEMPOTENCY_KEY_HEADER} has not finished. Retry with the ` +
           'same key shortly to read its result; an attempt that never finishes is released ' +
-          `after ${String(IMPORT_CLAIM_EXPIRES_AFTER_MINUTES)} minutes.`,
+          `after ${String(IMPORT_CLAIM_EXPIRES_AFTER_SECONDS)} seconds.`,
       );
     }
 
-    const result = await products.importRows({ tenantId, rows });
+    const result = await products.importRows({ tenantId, rows, deadline });
 
-    if (result.stoppedAt !== null) {
+    if (result.stoppedAt?.reason === 'failed') {
       logger.error(
         { err: result.stoppedAt.cause },
         `a product import stopped at batch ${String(result.stoppedAt.batch)} (P1-25)`,
+      );
+    } else if (result.stoppedAt?.reason === 'time-budget') {
+      /*
+       * Not an error: the import is doing what it should with a catalogue too
+       * large for one request. Logged so a budget that stops *every* import
+       * shows up as a pattern, rather than as sellers reporting slow imports.
+       */
+      logger.info(
+        `a product import used its time budget and stopped before batch ${String(result.stoppedAt.batch)}`,
       );
     }
 
@@ -673,6 +689,7 @@ export const createDashboardApp = ({
               batch: result.stoppedAt.batch,
               fromRow: result.stoppedAt.fromIndex + 1,
               toRow: result.stoppedAt.toIndex + 1,
+              reason: result.stoppedAt.reason,
             },
     };
 
@@ -1371,9 +1388,13 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'changed and leaves the rest untouched, queuing an embedding only where the text ' +
         'the model reads moved. Nothing is ever archived or cleared: a field a row does ' +
         'not carry keeps its value. Rows are applied in batches of 200, each in its own ' +
-        'transaction, so a failure part-way answers with how far the import got - send ' +
-        'the same rows again under a new Idempotency-Key to resume, since rows already ' +
-        'applied come back unchanged. ' +
+        'transaction, so an import that stops part-way answers with how far it got, and ' +
+        "stoppedAt.reason says why: 'failed' when a batch failed, or 'time-budget' when the " +
+        'request ran out of time before the next batch. An import too large for one request ' +
+        'stops between batches after about six seconds, rather than being cut off by the ' +
+        'ten-second timeout. Either way, send the rows from fromRow on, less those refused ' +
+        'as duplicate SKUs, under a new Idempotency-Key to continue; a row already applied ' +
+        'comes back unchanged if it is sent again. ' +
         'A row that does not match the product contract refuses the whole request before ' +
         'anything is written, and rows sharing a SKU are all refused. A body over 5 MB is ' +
         'refused before it is parsed. The body names where the rows came from - form, paste ' +
