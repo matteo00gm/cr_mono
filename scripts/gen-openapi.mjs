@@ -37,7 +37,9 @@ const { createApp } = await import('../apps/api/dist/app.js');
 const { DASHBOARD_ROUTES, responseJsonSchema } =
   await import('../apps/api/dist/surfaces/dashboard.js');
 const { DASHBOARD_PREFIX, WIDGET_PREFIX } = await import('../apps/api/dist/routes.js');
+const { WIDGET_ROUTES } = await import('../apps/api/dist/surfaces/widget.js');
 const { registeredRoutes, routeKey } = await import('../apps/api/dist/middleware/capability.js');
+const { WIDGET_REFUSED } = await import('../apps/api/dist/middleware/cors.js');
 
 /** A stand-in: constructing the real Better Auth would open a connection. */
 const stubAuth = {
@@ -65,10 +67,26 @@ for (const route of registeredRoutes(app)) {
 // ------------------------------------------------------------- completeness
 const problems = [];
 
-for (const endpoint of endpoints) {
-  if (!endpoint.path.startsWith(DASHBOARD_PREFIX)) continue;
+/**
+ * Which table documents an endpoint, if any.
+ *
+ * The widget's CORS preflights are declared for access (P0-49) and deliberately
+ * not documented: an `OPTIONS` answer has no body to describe, and a reference
+ * listing one would be describing the browser rather than the API.
+ */
+const tableFor = (endpoint) => {
+  if (endpoint.path.startsWith(DASHBOARD_PREFIX)) return DASHBOARD_ROUTES;
+  if (endpoint.path.startsWith(WIDGET_PREFIX) && endpoint.method !== 'OPTIONS') {
+    return WIDGET_ROUTES;
+  }
+  return undefined;
+};
 
-  const doc = DASHBOARD_ROUTES.get(endpoint.key);
+for (const endpoint of endpoints) {
+  const table = tableFor(endpoint);
+  if (table === undefined) continue;
+
+  const doc = table.get(endpoint.key);
   if (!doc) {
     /*
      * Unreachable in practice, and kept anyway. `createApp` runs P0-49's boot
@@ -77,7 +95,7 @@ for (const endpoint of endpoints) {
      * that currently has a first, and it stops being redundant the moment a
      * route is declared for access but not documented.
      */
-    problems.push(`${endpoint.key}: served by the router, absent from DASHBOARD_ROUTES`);
+    problems.push(`${endpoint.key}: served by the router, absent from its route table`);
     continue;
   }
   if (!doc.summary?.trim()) problems.push(`${endpoint.key}: empty summary`);
@@ -86,8 +104,8 @@ for (const endpoint of endpoints) {
   if (!doc.response) problems.push(`${endpoint.key}: no response schema`);
 }
 
-for (const key of DASHBOARD_ROUTES.keys()) {
-  if (!seen.has(key)) problems.push(`${key}: described in DASHBOARD_ROUTES, served by nothing`);
+for (const key of [...DASHBOARD_ROUTES.keys(), ...WIDGET_ROUTES.keys()]) {
+  if (!seen.has(key)) problems.push(`${key}: described in a route table, served by nothing`);
 }
 
 if (problems.length > 0) {
@@ -124,7 +142,40 @@ const errorResponse = {
   },
 };
 
-const operationFor = (endpoint, doc) => {
+const DASHBOARD_ERRORS = { 401: errorResponse, 403: errorResponse };
+
+/**
+ * The widget's refusals, which are not the dashboard's.
+ *
+ * There is no session to be missing, so no 401: a widget request is refused for
+ * its key and `Origin` (403) or for its rate (429). The 403 is one answer for an
+ * unknown key and a stolen one alike, and the reference says so rather than
+ * inviting a reader to look for the difference.
+ */
+const widgetError = (description, code, message) => ({
+  description,
+  content: {
+    'application/json': {
+      example: { error: { code, message, requestId: '5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93' } },
+    },
+  },
+});
+
+const WIDGET_ERRORS = {
+  403: widgetError(
+    "The key and the request's Origin do not belong to one tenant. The same answer whatever " +
+      'the reason, and it carries no CORS headers, so a browser script cannot read it.',
+    'forbidden',
+    WIDGET_REFUSED,
+  ),
+  429: widgetError(
+    'A rate limit refused the request. `Retry-After` says when to try again.',
+    'rate_limited',
+    'Too many requests. Try again shortly.',
+  ),
+};
+
+const operationFor = (endpoint, doc, errors) => {
   const capability = doc.access.kind === 'capability' ? doc.access.capability : undefined;
 
   return {
@@ -157,13 +208,12 @@ const operationFor = (endpoint, doc) => {
           },
         },
       },
-      401: errorResponse,
-      403: errorResponse,
+      ...errors,
     }),
   };
 };
 
-const documentFor = (title, description, prefix, table) => {
+const documentFor = (title, description, prefix, table, errors) => {
   const paths = {};
 
   for (const endpoint of endpoints) {
@@ -172,7 +222,7 @@ const documentFor = (title, description, prefix, table) => {
     if (!doc) continue;
 
     paths[endpoint.path] ??= {};
-    paths[endpoint.path][endpoint.method.toLowerCase()] = operationFor(endpoint, doc);
+    paths[endpoint.path][endpoint.method.toLowerCase()] = operationFor(endpoint, doc, errors);
   }
 
   return {
@@ -192,13 +242,15 @@ const document = {
       'query or header is ignored.',
     DASHBOARD_PREFIX,
     DASHBOARD_ROUTES,
+    DASHBOARD_ERRORS,
   ),
   widget: documentFor(
     'Sommelier widget API',
     'Public, called from sellers’ own sites. Authenticated by origin-bound tokens ' +
       'rather than cookies; this surface accepts no credentials.',
     WIDGET_PREFIX,
-    new Map(),
+    WIDGET_ROUTES,
+    WIDGET_ERRORS,
   ),
 };
 

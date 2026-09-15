@@ -3,6 +3,11 @@
 import { api } from './api';
 import { originSecret } from './config';
 import { SPA_REWRITE_CODE, VIEWER_IP_CODE } from './edge-functions';
+import {
+  WIDGET_CONFIG_CACHE_KEY,
+  WIDGET_CONFIG_MAX_AGE_SEC,
+  WIDGET_CONFIG_PATH,
+} from './widget-cache';
 import { isProtectedStage } from './stage';
 
 /**
@@ -166,6 +171,31 @@ const apiBehaviourBase = {
   functionAssociations: [{ eventType: 'viewer-request', functionArn: viewerIp.arn }],
 };
 
+/**
+ * The widget config cache (P2-10) — see `widget-cache.ts` for why each figure is
+ * what it is. `minTtl` is zero so a response without `Cache-Control` (every
+ * refusal) is never held, and the maximum is the API's own `max-age`.
+ */
+const widgetConfigCache = new aws.cloudfront.CachePolicy('WidgetConfigCache', {
+  comment: 'GET /v1/widget/config, keyed on Origin and the public key (P2-10)',
+  minTtl: 0,
+  defaultTtl: WIDGET_CONFIG_MAX_AGE_SEC,
+  maxTtl: WIDGET_CONFIG_MAX_AGE_SEC,
+  parametersInCacheKeyAndForwardedToOrigin: {
+    cookiesConfig: { cookieBehavior: 'none' },
+    headersConfig: {
+      headerBehavior: 'whitelist',
+      headers: { items: [...WIDGET_CONFIG_CACHE_KEY.headers] },
+    },
+    queryStringsConfig: {
+      queryStringBehavior: 'whitelist',
+      queryStrings: { items: [...WIDGET_CONFIG_CACHE_KEY.queryStrings] },
+    },
+    enableAcceptEncodingBrotli: true,
+    enableAcceptEncodingGzip: true,
+  },
+});
+
 // Main CloudFront Distribution
 export const distribution = new aws.cloudfront.Distribution('Cdn', {
   enabled: true,
@@ -272,6 +302,17 @@ export const distribution = new aws.cloudfront.Distribution('Cdn', {
        * surfaces as a clean SSE `error` event rather than an opaque CloudFront
        * 504 arriving mid-stream.
        */
+    },
+    {
+      /*
+       * The widget config (P2-10): the one API path that may be cached, for a
+       * minute, keyed on Origin and the public key. Inserted before `/v1/*`,
+       * which would otherwise match first and cache nothing.
+       */
+      ...apiBehaviourBase,
+      pathPattern: WIDGET_CONFIG_PATH,
+      cachePolicyId: widgetConfigCache.id,
+      compress: true,
     },
     {
       // Everything else on the API. Same origin, same policies; it caches

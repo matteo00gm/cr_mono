@@ -1,4 +1,4 @@
-import type { LimitCheck } from './types.js';
+import type { LimitCheck, MonthlyCheck } from './types.js';
 
 /**
  * The widget's limit dimensions (P2-04, §3.6).
@@ -73,6 +73,25 @@ const MINUTE = 60;
 const PLAN_CAP_SUFFIX = ':month';
 
 /**
+ * A tenant's monthly plan cap, as a check.
+ *
+ * **One definition for spending the month and for reading it** (P2-10). Chat
+ * spends it through `widgetLimitChecks`; the config route reads how much is left
+ * with the same key and the same window. Two definitions would be two chances
+ * to disagree, and the symptom of that is a widget told `ok` by one and refused
+ * by the other.
+ */
+export const planCapCheck = (
+  tenantId: string,
+  plan: WidgetPlan | null,
+  limits: WidgetLimits = WIDGET_LIMITS,
+): MonthlyCheck => ({
+  key: `tenant:${tenantId}${PLAN_CAP_SUFFIX}`,
+  limit: limits.messagesPerMonth[plan ?? 'none'],
+  window: 'month',
+});
+
+/**
  * The checks one widget request makes.
  *
  * **Keys carry the endpoint wherever the limit differs by endpoint.** §3.6
@@ -115,13 +134,7 @@ export const widgetLimitChecks = (
    * counting config would spend a winery's allowance on every page view by a
    * visitor who never opened the widget.
    */
-  if (endpoint === 'chat') {
-    checks.push({
-      key: `tenant:${tenantId}${PLAN_CAP_SUFFIX}`,
-      limit: limits.messagesPerMonth[tier],
-      window: 'month',
-    });
-  }
+  if (endpoint === 'chat') checks.push(planCapCheck(tenantId, request.plan, limits));
 
   return checks;
 };
@@ -135,3 +148,22 @@ export const widgetLimitChecks = (
  */
 export const isPlanCap = (key: string): boolean =>
   key.startsWith('tenant:') && key.endsWith(PLAN_CAP_SUFFIX);
+
+/** What a visitor's widget is told about the month (P2-10, §1.3). */
+export type QuotaState = 'ok' | 'near' | 'exceeded';
+
+/** From this share of the plan cap on, the widget is told `near`. */
+export const QUOTA_NEAR_SHARE = 0.8;
+
+/**
+ * The month, coarsened.
+ *
+ * **An enum and never a number**, because `/v1/widget/config` is
+ * world-readable and edge-cached: a remaining count would let a competitor read
+ * a shop's traffic off its own widget (P2-10). Three states are what the widget
+ * needs — carry on, warn the seller, show `QUOTA_EXCEEDED` — and nothing more.
+ */
+export const quotaStateOf = (used: number, limit: number): QuotaState => {
+  if (used >= limit) return 'exceeded';
+  return used >= limit * QUOTA_NEAR_SHARE ? 'near' : 'ok';
+};

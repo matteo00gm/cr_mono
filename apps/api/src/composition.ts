@@ -9,11 +9,17 @@ import {
   type ResetPasswordEmail,
   type SuppressionCheck,
 } from '@catalogorosso/core';
-import type { RateLimiter } from '@catalogorosso/security';
-import { isSuppressed, readMembershipsForUser, withUser } from '@catalogorosso/db';
+import { memoryRateLimiter, type MonthlyCheck, type RateLimiter } from '@catalogorosso/security';
+import {
+  isSuppressed,
+  readMembershipsForUser,
+  resolveTenantByKeyAndOrigin,
+  withUser,
+} from '@catalogorosso/db';
 
 import { createMembersPort, type MembersPort } from './members.js';
 import { createProductsPort, type ProductsPort } from './products.js';
+import type { WidgetDependencies } from './surfaces/widget.js';
 import { createWebhooksPort, type WebhooksPort } from './webhooks.js';
 import type { AuthPort } from './middleware/auth.js';
 import { AUTH_PUBLIC_PATH } from './routes.js';
@@ -116,6 +122,13 @@ export interface RuntimeConfig {
    * only the surface has a use for it.
    */
   readonly resendWebhookSecret?: string | undefined;
+
+  /**
+   * Reads how much of a limit window has been spent without spending it (P2-10):
+   * `createRateLimiter().peek` in a deployment. Absent means an untouched month,
+   * which is what a local run with an in-process limiter honestly has.
+   */
+  readonly readUsage?: ((check: MonthlyCheck) => Promise<number>) | undefined;
 }
 
 export interface Dependencies {
@@ -130,6 +143,8 @@ export interface Dependencies {
   readonly webhooks: WebhooksPort;
   /** Passed through to `createApp`; absent means the endpoint refuses. */
   readonly resendWebhookSecret?: string | undefined;
+  /** The widget surface's resolution, limits and usage read (P2-04 to P2-10). */
+  readonly widget: WidgetDependencies;
   /** Exposed so the wiring is assertable, not because anything else calls it. */
   readonly sendResetPassword: (email: ResetPasswordEmail) => Promise<void>;
 }
@@ -257,6 +272,22 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
      * applies before this is ever reached.
      */
     webhooks: createWebhooksPort(),
+
+    /*
+     * The widget surface (P2-10). Resolution is the real accessor, always. The
+     * limiter is the Postgres one `index.ts` supplies in a deployment — which it
+     * refuses to start without — and an in-process one only on a local run, where
+     * there is one visitor and no fleet of containers to multiply the limits
+     * across. The address salt derives from the auth secret, which `bucketIp`
+     * turns into a daily key, so there is no second secret to lose.
+     */
+    widget: {
+      resolve: resolveTenantByKeyAndOrigin,
+      limiter: config.rateLimiter ?? memoryRateLimiter(),
+      readUsage: config.readUsage ?? (() => Promise.resolve(0)),
+      ipSecret: config.authSecret,
+      environment: config.stage === 'unknown' ? 'development' : 'production',
+    },
 
     ...(config.resendWebhookSecret === undefined
       ? {}

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { buildDependencies, RuntimeConfig } from '../src/composition.js';
 import { ORIGIN_SECRET_HEADER } from '../src/middleware/origin-secret.js';
 
 describe('api test wiring', () => {
@@ -76,6 +77,30 @@ const load = async (environment: Environment) => {
   return { handler: entry.handler as unknown as LambdaHandler, warned };
 };
 
+/**
+ * What `index.ts` hands the composition root, captured on the way through.
+ *
+ * For the wiring a request cannot reach without a database: the real
+ * `buildDependencies` still runs, so the handler is exactly what it would be.
+ */
+const capturingConfig = (): RuntimeConfig[] => {
+  const seen: RuntimeConfig[] = [];
+
+  vi.doMock('../src/composition.js', async (importOriginal) => {
+    const actual = await importOriginal<{ buildDependencies: typeof buildDependencies }>();
+
+    return {
+      ...actual,
+      buildDependencies: (config: RuntimeConfig) => {
+        seen.push(config);
+        return actual.buildDependencies(config);
+      },
+    };
+  });
+
+  return seen;
+};
+
 /** A Function URL request, payload format 2.0 — the shape `hono/aws-lambda` reads. */
 const functionUrlEvent = (headers: Record<string, string> = {}) => ({
   version: '2.0',
@@ -107,6 +132,7 @@ const functionUrlEvent = (headers: Record<string, string> = {}) => ({
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+  vi.doUnmock('../src/composition.js');
 });
 
 describe('the Lambda entry point', () => {
@@ -131,6 +157,19 @@ describe('the Lambda entry point', () => {
     'refuses to start without AUTH_SECRET, and says where the value lives',
     async () => {
       await expect(load({ AUTH_SECRET: '' })).rejects.toThrow('/sommelier/<stage>/auth/secret');
+    },
+    COLD_START_MS,
+  );
+
+  it(
+    'reads no widget usage on a local run, where there is no bucket to read (P2-10)',
+    async () => {
+      const seen = capturingConfig();
+
+      await load({});
+
+      expect(seen).toHaveLength(1);
+      expect(seen[0]?.readUsage).toBeUndefined();
     },
     COLD_START_MS,
   );
@@ -164,6 +203,27 @@ describe('the Lambda entry point', () => {
         expect(bypassed.statusCode).toBe(404);
         expect(viaEdge.statusCode).toBe(200);
         expect(JSON.parse(viaEdge.body) as unknown).toEqual({ surface: 'dashboard' });
+      },
+      COLD_START_MS,
+    );
+
+    it(
+      "reads the widget's month through the Postgres limiter that spends it (P2-10)",
+      async () => {
+        /*
+         * The config route tells a widget its month is nearly spent. Read from
+         * anywhere but the bucket chat is refused by, it can say `ok` while
+         * every message is being turned away.
+         */
+        const seen = capturingConfig();
+
+        await load({ SST_STAGE: 'review', ORIGIN_SECRET: randomUUID() });
+
+        const [config] = seen;
+        const limiter = config?.rateLimiter as { peek?: unknown } | undefined;
+
+        expect(typeof config?.readUsage).toBe('function');
+        expect(config?.readUsage).toBe(limiter?.peek);
       },
       COLD_START_MS,
     );

@@ -248,4 +248,34 @@ export const createRateLimiter = (database: Database = getDb()) => ({
         if (error instanceof BucketsExceeded) return error.result;
         throw error;
       }),
+
+  /**
+   * How much of a window has been consumed, **without consuming any** (P2-10).
+   *
+   * The config route tells a widget whether its month is nearly spent, and the
+   * only honest source is the bucket that actually refuses messages: a count
+   * kept anywhere else could say `ok` while chat is being refused. The window
+   * is computed by the same expression consumption writes, so a peek and a
+   * check always name the same row.
+   *
+   * A method of this limiter rather than a new function, because the limiter is
+   * the named caller of `rate_limit_buckets` on a connection that sets nothing
+   * (ADR 0020). A second way in would be a second caller to name.
+   */
+  peek: async (check: BucketCheck): Promise<number> => {
+    const rows = await database.execute(sql`
+      SELECT count FROM rate_limit_buckets
+      WHERE bucket_key = ${check.key} AND window_start = ${bounds(check).start}
+    `);
+
+    const row = [...rows][0] as { count: number | string } | undefined;
+    if (row === undefined) return 0;
+
+    const count = Number(row.count);
+    if (!Number.isFinite(count)) {
+      throw new Error(`peek: ${check.key} returned a non-numeric count (${String(row.count)})`);
+    }
+
+    return count;
+  },
 });

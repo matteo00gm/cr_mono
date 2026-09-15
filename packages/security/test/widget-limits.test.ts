@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isPlanCap,
+  planCapCheck,
+  QUOTA_NEAR_SHARE,
+  quotaStateOf,
   WIDGET_LIMITS,
   widgetLimitChecks,
   type WidgetLimits,
@@ -115,5 +118,43 @@ describe('isPlanCap', () => {
     [`endpoint:chat:${TENANT}`, false],
   ])('%s → %s', (key, expected) => {
     expect(isPlanCap(key)).toBe(expected);
+  });
+});
+
+describe('planCapCheck (P2-10)', () => {
+  it('is exactly the check chat spends, so reading the month and spending it cannot disagree', () => {
+    const chat = widgetLimitChecks(request({ endpoint: 'chat', plan: 'ECOMMERCE' }));
+
+    expect(chat.at(-1)).toEqual(planCapCheck(TENANT, 'ECOMMERCE'));
+  });
+
+  it('counts a tenant with no plan at the no-subscription tier', () => {
+    expect(planCapCheck(TENANT, null)).toEqual({
+      key: `tenant:${TENANT}:month`,
+      limit: 100,
+      window: 'month',
+    });
+  });
+
+  it('is recognised as the plan cap, so its numbers stay out of headers', () => {
+    expect(isPlanCap(planCapCheck(TENANT, 'CANTINA').key)).toBe(true);
+  });
+});
+
+describe('quotaStateOf (P2-10)', () => {
+  it.each<[number, number, 'ok' | 'near' | 'exceeded']>([
+    [0, 1_000, 'ok'],
+    [799, 1_000, 'ok'],
+    [800, 1_000, 'near'],
+    [999, 1_000, 'near'],
+    [1_000, 1_000, 'exceeded'],
+    [1_500, 1_000, 'exceeded'],
+    [0, 0, 'exceeded'],
+  ])('%i used of %i is %s', (used, limit, state) => {
+    expect(quotaStateOf(used, limit)).toBe(state);
+  });
+
+  it('warns from four fifths of the cap', () => {
+    expect(QUOTA_NEAR_SHARE).toBe(0.8);
   });
 });

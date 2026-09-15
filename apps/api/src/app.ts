@@ -14,7 +14,11 @@ import { requestContext } from './middleware/logger.js';
 import { requireOriginSecret } from './middleware/origin-secret.js';
 import { createDashboardApp, DASHBOARD_ROUTE_ACCESS } from './surfaces/dashboard.js';
 import { createWebhookApp, WEBHOOK_ROUTE_ACCESS } from './surfaces/webhooks.js';
-import { createWidgetApp } from './surfaces/widget.js';
+import {
+  createWidgetApp,
+  WIDGET_ROUTE_ACCESS,
+  type WidgetDependencies,
+} from './surfaces/widget.js';
 import type { WebhooksPort } from './webhooks.js';
 
 /**
@@ -97,6 +101,13 @@ export interface AppOptions {
    * going unrecorded, which is E7 rather than a hole.
    */
   readonly resendWebhookSecret?: string | undefined;
+
+  /**
+   * The widget surface's resolution, limits and usage read (P2-04 to P2-10).
+   * Optional on the `members` terms: absent, the widget's routes exist and
+   * answer with a wiring error rather than serving config with no CORS decision.
+   */
+  readonly widget?: WidgetDependencies | undefined;
 }
 
 export const createApp = ({
@@ -107,6 +118,7 @@ export const createApp = ({
   originSecret,
   webhooks,
   resendWebhookSecret,
+  widget,
 }: AppOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
@@ -169,7 +181,7 @@ export const createApp = ({
   app.get('/v1/health', (c) => c.json({ status: 'ok' as const, sha: buildSha() }));
 
   app.route(DASHBOARD_PREFIX, createDashboardApp({ auth, readMemberships, members, products }));
-  app.route(WIDGET_PREFIX, createWidgetApp());
+  app.route(WIDGET_PREFIX, createWidgetApp(widget));
   app.route(WEBHOOK_PREFIX, createWebhookApp({ webhooks, resendWebhookSecret }));
 
   /*
@@ -200,6 +212,13 @@ export const createApp = ({
    * session in the way.
    */
   assertEveryRouteDeclared(app, WEBHOOK_ROUTE_ACCESS, WEBHOOK_PREFIX);
+
+  /*
+   * And for the widget (P2-10), which now serves its first real route. Public by
+   * construction like the webhooks, and declared for the same reason: the table
+   * is where each route says *why* it needs no session.
+   */
+  assertEveryRouteDeclared(app, WIDGET_ROUTE_ACCESS, WIDGET_PREFIX);
 
   return app;
 };

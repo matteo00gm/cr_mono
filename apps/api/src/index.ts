@@ -136,7 +136,7 @@ const dependencies = buildDependencies({
    */
   stage,
   ...(originSecret === undefined ? {} : { originSecret }),
-  ...(rateLimiter === undefined ? {} : { rateLimiter }),
+  ...(rateLimiter === undefined ? {} : { rateLimiter, readUsage: rateLimiter.peek }),
   ...(resendWebhookSecret === undefined ? {} : { resendWebhookSecret }),
 
   emailFrom: optionalEnvironment('EMAIL_FROM') ?? 'AI Sommelier <noreply@localhost>',

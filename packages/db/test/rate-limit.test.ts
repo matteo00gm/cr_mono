@@ -360,3 +360,61 @@ describe('what the driver actually returns', () => {
     expect(result.resetAt).toEqual(new Date(october * 1000));
   });
 });
+
+describe('peek (P2-10)', () => {
+  /** A database whose `execute` answers the peek's one read. */
+  const peekDb = (rows: unknown[]) => {
+    const { statements, execute } = capturing(rows);
+    const db = {
+      execute,
+      transaction: () => Promise.reject(new Error('peek must not open a transaction')),
+    } as unknown as Parameters<typeof createRateLimiter>[0];
+
+    return { db, statements, execute };
+  };
+
+  it('reads the count for the window the check names, and writes nothing', async () => {
+    const { db, statements } = peekDb([{ count: '7' }]);
+
+    await expect(
+      createRateLimiter(db).peek(window60('k', 10)[0] ?? { key: 'k', limit: 10, windowSec: 60 }),
+    ).resolves.toBe(7);
+
+    const sql = text(statements[0]);
+    expect(statements).toHaveLength(1);
+    expect(sql).toContain('SELECT count FROM rate_limit_buckets');
+    // Without the key, a peek reads whichever bucket shares the window.
+    expect(sql).toMatch(/WHERE bucket_key =\s+AND window_start =/);
+    expect(sql).toContain('extract(epoch from now())');
+    expect(sql).not.toMatch(/INSERT|UPDATE|DELETE/);
+  });
+
+  it('reads a monthly window from the same UTC calendar expression consumption writes', async () => {
+    const { db, statements } = peekDb([{ count: 3 }]);
+
+    await expect(
+      createRateLimiter(db).peek({ key: 'tenant:t:month', limit: 100, window: 'month' }),
+    ).resolves.toBe(3);
+
+    expect(text(statements[0])).toContain(
+      "date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'",
+    );
+  });
+
+  it('reads an untouched window as zero', async () => {
+    const { db } = peekDb([]);
+
+    await expect(
+      createRateLimiter(db).peek({ key: 'tenant:t:month', limit: 100, window: 'month' }),
+    ).resolves.toBe(0);
+  });
+
+  it('refuses a count it cannot read as a number, rather than calling it zero', async () => {
+    // Zero would tell a widget its month is untouched when nothing is known.
+    const { db } = peekDb([{ count: 'not-a-number' }]);
+
+    await expect(
+      createRateLimiter(db).peek({ key: 'tenant:t:month', limit: 100, window: 'month' }),
+    ).rejects.toThrow(/non-numeric/);
+  });
+});

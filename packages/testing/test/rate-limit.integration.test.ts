@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 
-import { BucketsExceeded, consumeBuckets, pruneClosedWindows } from '@catalogorosso/db';
+import {
+  BucketsExceeded,
+  consumeBuckets,
+  createRateLimiter,
+  pruneClosedWindows,
+} from '@catalogorosso/db';
 import { createDbClient, type Database, type DbClient } from '@catalogorosso/db/test-support';
 
 import { describeRateLimiter, type RateLimiter } from '../src/rate-limit-suite.js';
@@ -229,5 +234,32 @@ describe('pruneClosedWindows', () => {
     // The table has no other reaper, and an unbounded one would eventually make
     // the limiter slower than the thing it protects.
     expect(keys).toEqual([current]);
+  });
+});
+
+describe('peek (P2-10)', () => {
+  it('reports what a window has consumed, and consumes nothing itself', async () => {
+    const limiter = createRateLimiter(db);
+    const month = { key: `test:${randomUUID()}`, limit: 5, window: 'month' as const };
+
+    expect(await limiter.peek(month)).toBe(0);
+
+    await limiter.check([month]);
+    await limiter.check([month]);
+
+    expect(await limiter.peek(month)).toBe(2);
+    expect(await limiter.peek(month)).toBe(2);
+
+    // Peeking twice spent nothing: the next check is the third, not the fifth.
+    expect((await limiter.check([month])).remaining).toBe(2);
+  });
+
+  it('reads a fixed window from the same boundary consumption writes', async () => {
+    const limiter = createRateLimiter(db);
+    const minute = { key: `test:${randomUUID()}`, limit: 5, windowSec: 60 };
+
+    await limiter.check([minute]);
+
+    expect(await limiter.peek(minute)).toBe(1);
   });
 });
