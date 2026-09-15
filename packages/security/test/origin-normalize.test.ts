@@ -110,3 +110,131 @@ describe('normalizeOrigin — development', () => {
     expect(refusal('http://localhost:5173', 'production')).toBe('not_https');
   });
 });
+
+/*
+ * ---- P2-06: the exhaustive table ------------------------------------------
+ *
+ * The row's cases, verbatim, then the bypass strings. A bypass only matters
+ * against P2-08's comparison, which is exact string equality with a verified
+ * origin — so each one is asserted to be refused or to normalise to something
+ * that is not that origin. "Handled" is not an outcome.
+ */
+
+const VERIFIED = 'https://winery.com';
+
+describe('the table (P2-06)', () => {
+  it.each<[string, string]>([
+    ['winery.com', 'https://winery.com'],
+    ['HTTPS://WINERY.COM/', 'https://winery.com'],
+    ['www.winery.com', 'https://www.winery.com'],
+    ['winería.com', 'https://xn--winera-7va.com'],
+    ['winery.co.uk', 'https://winery.co.uk'],
+    ['shop.winery.com', 'https://shop.winery.com'],
+    ['winery.com:8443', 'https://winery.com:8443'],
+  ])('accepts %j as %s', (input, origin) => {
+    expect(accepted(input).origin).toBe(origin);
+  });
+
+  it.each<[string, NormalizeFailure]>([
+    ['com', 'public_suffix'],
+    ['co.uk', 'public_suffix'],
+    ['localhost', 'localhost'],
+    ['192.168.1.1', 'ip_literal'],
+    ['[::1]', 'ip_literal'],
+    ['winery', 'single_label'],
+    ['winery.com/shop', 'has_path'],
+    ['http://winery.com', 'not_https'],
+    ['', 'invalid_url'],
+    [' \t\n', 'invalid_url'],
+    ['javascript:alert(1)', 'invalid_url'],
+  ])('refuses %j as %s', (input, reason) => {
+    expect(refusal(input)).toBe(reason);
+  });
+
+  it('keeps a non-default port as part of the origin, deliberately', () => {
+    // A different origin to a browser; collapsing the two would let one stand in
+    // for the other.
+    expect(accepted('winery.com:8443').origin).not.toBe(VERIFIED);
+  });
+});
+
+describe('bypass attempts against the verified origin (P2-06)', () => {
+  /** What P2-08 would compare: the normalised origin, or nothing at all. */
+  const standsInFor = (input: string, origin = VERIFIED): boolean => {
+    const result = normalizeOrigin(input);
+    return result.ok && result.origin === origin;
+  };
+
+  it.each([
+    'evil-winery.com',
+    'winery.com.attacker.io',
+    'WINERY.COM.attacker.io',
+    'winery.com.evil.io',
+    'wínery.com',
+    'xn--winery.com',
+    'winery.com%00.evil.io',
+    'winery.com%2eevil.io',
+    'winery.com@evil.io',
+    'https://winery.com@evil.io',
+    'https://evil.io#@winery.com',
+    'https://evil.io?.winery.com',
+    'https://winery.com:443.evil.io',
+    'https://winery.com/.evil.io',
+    'winery.com\\@evil.io',
+    '*.winery.com',
+    'https://*.winery.com',
+    'wwinery.com',
+    'winery.comm',
+    'winery.co',
+  ])('%j does not stand in for https://winery.com', (input) => {
+    expect(standsInFor(input)).toBe(false);
+  });
+
+  it('refuses the shapes that are not names at all, rather than rewriting them', () => {
+    expect(refusal('winery.com%00.evil.io')).toBe('invalid_url');
+    expect(refusal('winery.com@evil.io')).toBe('invalid_url');
+    expect(refusal('https://winery.com:443.evil.io')).toBe('invalid_url');
+    expect(refusal('*.winery.com')).toBe('invalid_url');
+    expect(refusal('https://evil.io#@winery.com')).toBe('has_path');
+  });
+
+  it('turns a homoglyph into a different punycode name, not the one it imitates', () => {
+    expect(accepted('wínery.com').origin).toBe('https://xn--wnery-zsa.com');
+  });
+
+  it('keeps a trailing dot stable either way, and only as the same name', () => {
+    expect(accepted('winery.com.').origin).toBe(VERIFIED);
+    expect(accepted(accepted('winery.com.').origin).origin).toBe(VERIFIED);
+    expect(refusal('winery.com..')).toBe('invalid_url');
+  });
+
+  it('is idempotent, so a stored origin normalises to itself', () => {
+    for (const input of [
+      'winery.com',
+      'HTTPS://WWW.WINERY.COM:8443/',
+      'winería.com',
+      'shop.winery.co.uk.',
+    ]) {
+      const once = accepted(input).origin;
+      expect(accepted(once).origin).toBe(once);
+    }
+  });
+
+  it('lets only spellings of the one name reach the verified origin', () => {
+    /*
+     * The inverse of the list above, and the half a refusal-only suite cannot
+     * see: a normaliser that let an attacker's string collapse onto a verified
+     * origin would pass every refusal and fail here.
+     */
+    for (const spelling of [
+      'winery.com',
+      'WINERY.COM',
+      'https://winery.com/',
+      'https://winery.com:443',
+      'winery.com.',
+      ' winery.com ',
+    ]) {
+      expect(standsInFor(spelling)).toBe(true);
+    }
+  });
+});
