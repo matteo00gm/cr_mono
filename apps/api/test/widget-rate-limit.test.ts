@@ -23,7 +23,7 @@ import { limitWidgetRequest } from '../src/middleware/rate-limit.js';
  */
 
 const TENANT = '11111111-1111-1111-1111-111111111111';
-const CANTINA: WidgetTenant = { tenantId: TENANT, plan: 'CANTINA' };
+const CANTINA: WidgetTenant = { tenantId: TENANT, plan: 'CANTINA', status: 'ACTIVE', locale: 'it' };
 const SECRET = randomUUID();
 
 /** Every dimension roomy, so each test can shrink exactly one. */
@@ -149,7 +149,7 @@ describe('each dimension trips on its own', () => {
   it('per tenant per minute, at the no-subscription tier when there is no plan', async () => {
     const app = widgetApp({
       limiter: memoryRateLimiter(),
-      tenant: { tenantId: TENANT, plan: null },
+      tenant: { tenantId: TENANT, plan: null, status: 'TRIALING', locale: 'it' },
       limits: { ...ROOMY, tenantPerMinute: { ...ROOMY.tenantPerMinute, none: 1 } },
     });
 

@@ -1287,7 +1287,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-05 | ⛔ 🔒 Origin normalization fn | punycode, lowercase, strip path/port, PSL, reject IP/localhost | P0-42 |
 | ✅ P2-06 | 🔒 Origin normalization table test | trailing dot, uppercase, port, `null`, absent, lookalikes | P2-05 |
 | ✅ P2-07 | ⛔ 🔒 Allowlist accessor (uncached) | single accessor so caching is additive later | P2-05,P0-24 |
-| P2-08 | ⛔ 🔒 Dynamic CORS middleware | exact-set match, echo origin, **`Vary: Origin`**, no credentials | P2-07 |
+| ✅ P2-08 | ⛔ 🔒 Dynamic CORS middleware | exact-set match, echo origin, **`Vary: Origin`**, no credentials | P2-07 |
 | P2-09 | 🔒 CORS test suite | exact headers, preflight, 403-with-no-headers, bypass attempts | P2-08 |
 | P2-10 | `GET /v1/widget/config` | public config only, edge-cache 60 s | P2-08 |
 | P2-11 | 🔒 Ed25519 key in SSM + in-process sign | no KMS asymmetric on the hot path (§5.7) | P0-15 |
@@ -4919,6 +4919,16 @@ Mounted **only** on the widget sub-app (P0-54).
 **Tests.** P2-09.
 
 **Files.** `apps/api/src/middleware/cors.ts`. **~130 lines.**
+
+**As built (2026-09-15).** `widgetCors({ resolve, onRejected, environment })` in `apps/api/src/middleware/cors.ts`, tested in `apps/api/test/widget-cors.test.ts`. The five rules are the row's, each with a test; what the row left open:
+
+- **Attached per route, not with `use('*')`.** The widget sub-app's marker and its unknown paths keep their answers — a `use('*')` would turn every unknown path into a 403 — and a guard in the route's own handler chain cannot be registered below the route it guards (P0-54). Nothing mounts it yet: P2-10's `/config` is the first route.
+- **The key travels in the query string** (`?key=`), as §1.2's loader sends it. A preflight carries no custom header values, so a key in a header could not be resolved before the browser decides.
+- **Two refusal types, one response.** A missing, unparseable or mismatched origin is `UNAUTHORIZED_ORIGIN`, and a mismatch carries the key's tenant; a missing or unknown key is `INVALID_KEY`. Every one is the same 403, the same message and no CORS header — asserted byte for byte between a stolen key and an unknown one.
+- **`logSecurityEvent` is an injected hook, `onRejected`,** and it can never fail a request, whether it throws or rejects. The default logs the refusal's type and nothing else — the origin and key would need names in the P0-56 allowlist. **The `security_events` writer is P2-16's**, so P2-09's "and a `security_events` row" assertion arrives with it.
+- **`Access-Control-Expose-Headers` names the rate-limit headers**, because the widget's `RATE_LIMITED` state counts down from `Retry-After` (§1.3). Nothing else is exposed.
+- **The echo is the normalised origin.** An `Origin` that only normalises onto a verified one — `https://winery.com.` — gets a value that differs from its own, and the browser refuses the response.
+- **`widgetTenant` now carries the tenant's status and locale** as well as its id and plan, which is what P2-10's response needs.
 
 ---
 
