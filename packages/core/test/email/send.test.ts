@@ -10,10 +10,12 @@ import {
   chooseTransport,
   EmailSendError,
   logTransport,
+  RESEND_TIMEOUT_MS,
   resendTransport,
   type EmailTransport,
   type OutboundEmail,
 } from '../../src/email/transport.js';
+import { API_TIMEOUT_SECONDS } from '../../src/import-limits.js';
 
 /**
  * The send seam (P0-64).
@@ -146,6 +148,53 @@ describe('sendEmail', () => {
     expect(delays).toEqual([500, 1000]);
   });
 
+  it('sends every attempt at one message under one key, and each message under its own', async () => {
+    // Review fix. The key is what makes retrying a request with no answer safe:
+    // the provider may have sent it, and the key makes the repeat a no-op.
+    const keys: string[] = [];
+    const transport: EmailTransport = {
+      name: 'flaky-once',
+      send: (email) => {
+        keys.push(email.idempotencyKey);
+        if (keys.length === 1) throw new EmailSendError('rate limited', 429, true);
+        return Promise.resolve({ id: `msg_${String(keys.length)}` });
+      },
+    };
+
+    const send = createSendEmail(deps({ transport }));
+    await send(INVITE);
+    await send(INVITE);
+
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('retries a connection that dropped, through the real transport, under the same key', async () => {
+    let calls = 0;
+    const flaky = vi.fn<typeof globalThis.fetch>(() => {
+      calls += 1;
+      return calls === 1
+        ? Promise.reject(new TypeError('fetch failed'))
+        : Promise.resolve(Response.json({ id: 'msg_after_blip' }));
+    });
+
+    const outcome = await createSendEmail(
+      deps({ transport: resendTransport({ apiKey: 'k', fetch: flaky }) }),
+    )(INVITE);
+
+    // Before the fix the TypeError escaped as not retryable, and a reset was abandoned here.
+    expect(outcome).toEqual({ status: 'sent', id: 'msg_after_blip', attempts: 2 });
+
+    const keys = flaky.mock.calls.map(
+      ([, init]) => (init?.headers as Record<string, string> | undefined)?.['idempotency-key'],
+    );
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBeTruthy();
+    expect(keys[1]).toBe(keys[0]);
+  });
+
   it('does not retry a rejection the provider will repeat', async () => {
     let calls = 0;
     const transport: EmailTransport = {
@@ -219,6 +268,7 @@ describe('chooseTransport', () => {
       subject: 's',
       html: '<p>h</p>',
       text: 't',
+      idempotencyKey: 'key-1',
     });
 
     expect(sent).toHaveLength(1);
@@ -244,6 +294,7 @@ describe('chooseTransport', () => {
       subject: 'Reimposta la tua password',
       html: '<p>h</p>',
       text: 'Reimposta la password:\nhttps://app.example/reset/xyz',
+      idempotencyKey: 'key-1',
     });
 
     expect(result.id).toMatch(/^log-/);
@@ -268,6 +319,7 @@ describe('chooseTransport', () => {
       subject: 's',
       html: '<p>h</p>',
       text: 't',
+      idempotencyKey: 'key-1',
     });
 
     // The exception is per recipient rather than a flag that switches the whole
@@ -288,6 +340,7 @@ describe('resendTransport', () => {
     subject: 'Ciao',
     html: '<p>ciao</p>',
     text: 'ciao',
+    idempotencyKey: 'msg-key-1',
   };
 
   it('posts both body parts and returns the provider id', async () => {
@@ -298,6 +351,11 @@ describe('resendTransport', () => {
 
     const [url, init] = vi.mocked(doubled).mock.calls[0] ?? [];
     expect(url).toBe('https://api.resend.com/emails');
+    expect((init?.headers as Record<string, string> | undefined)?.['idempotency-key']).toBe(
+      'msg-key-1',
+    );
+    // Every attempt is bounded; an unbounded one waits for the function's own timeout.
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
     // `body` is a string here by construction — the transport stringifies it —
     // but its declared type is the whole BodyInit union, which includes types
     // that stringify to "[object Object]".
@@ -320,6 +378,8 @@ describe('resendTransport', () => {
 
     expect(await statusOf(429)).toBe(true);
     expect(await statusOf(503)).toBe(true);
+    // Resend's "this key is still being processed by an earlier attempt".
+    expect(await statusOf(409)).toBe(true);
     // A malformed address or an unverified domain is rejected identically on
     // every attempt; retrying it only spends the daily allowance.
     expect(await statusOf(422)).toBe(false);
@@ -333,5 +393,45 @@ describe('resendTransport', () => {
     await expect(resendTransport({ apiKey: 'k', fetch: doubled }).send(message)).rejects.toThrow(
       /no id/,
     );
+  });
+
+  it('turns a request that got no answer into a retryable failure, naming only the error class', async () => {
+    // Review fix. A network error's message can carry the host and more; the class name cannot.
+    const unreachable = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.reject(new TypeError('fetch failed: getaddrinfo ENOTFOUND api.resend.com')),
+    );
+
+    const failure = await resendTransport({ apiKey: 'k', fetch: unreachable })
+      .send(message)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(EmailSendError);
+    expect(failure).toMatchObject({ retryable: true, status: 0 });
+    expect((failure as Error).message).toContain('TypeError');
+    expect((failure as Error).message).not.toContain('ENOTFOUND');
+  });
+
+  it('gives up on an attempt the provider does not answer in time', async () => {
+    const hanging = vi.fn<typeof globalThis.fetch>(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('The operation timed out.', 'TimeoutError'));
+          });
+        }),
+    );
+
+    const failure = await resendTransport({ apiKey: 'k', fetch: hanging, timeoutMs: 5 })
+      .send(message)
+      .catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ retryable: true, status: 0 });
+    expect((failure as Error).message).toContain('TimeoutError');
+    // A second, well under the real two: the attempt must honour the timeout it is given.
+  }, 1_000);
+
+  it('fits three attempts and the backoff between them inside the function that is sending', () => {
+    // Resets and invitations are sent from the API; 500 and 1000 ms are sendEmail's two backoffs.
+    expect(RESEND_TIMEOUT_MS * 3 + 500 + 1_000).toBeLessThan(API_TIMEOUT_SECONDS * 1_000);
   });
 });
