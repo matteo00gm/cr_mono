@@ -384,7 +384,7 @@ Because I argued against file upload earlier, the bug surface it reintroduces mu
 | Italian decimal comma — `12,50` not `12.50` | Locale-tolerant number parse, accepting both; ambiguous values flagged, never guessed |
 | Quoted fields containing the delimiter — `"Barbaresco, Riserva"` | Proper RFC-4180 quote handling, not `split(',')` — one reader shared by paste and CSV (P1-14, P1-16) |
 | Header names that don't match the template | Matched case- and accent-insensitively after trimming; **unrecognised and missing columns are listed by name** rather than silently mapped by position. A downloadable template makes this rare |
-| Enormous files | Row cap (10,000), file-size cap (10 MB) and request cap (5 MB, under the Function URL's 6 MB), with a clear message; upsert sent in batches |
+| Enormous files | Row cap (2,500, the largest plan's catalogue), file-size cap (10 MB) and request cap (5 MB, under the Function URL's 6 MB), with a clear message; upsert sent in batches |
 
 ### 2.2b Import semantics — upsert by SKU, summary first
 
@@ -1266,7 +1266,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P1-24 | `upsertProducts()` core fn | match on `(tenant_id, sku)`, batched | P1-02 |
 | ✅ P1-25 | Bulk upsert endpoint | batches, partial-success reporting | P1-24 |
 | ✅ P1-26 | Import idempotency key + test | replay applies once | P1-25 |
-| ✅ P1-27 | Row + file size caps | 10,000 rows, clear message | P1-25 |
+| ✅ P1-27 | Row + file size caps | 2,500 rows (was 10,000), clear message | P1-25 |
 | ✅ P1-28 | `audit_log` entry per import | counts + actor | P1-25,P0-53 |
 | ✅ P1-29 | Test: no import archives absent rows | guards against accidental full-replace | P1-25 |
 | ✅ P1-30 | CSV export | exactly template field order | P1-06 |
@@ -3980,12 +3980,12 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 **As built.**
 
 - **Every refusal happens before a row is shown, and has a sentence.** Empty, header only, too large, too many rows, not CSV or Excel, an `.xls`, a workbook that needs a sheet chosen, a header missing a required column or naming one twice.
-- **Over the row cap, the whole file is refused, never truncated.** Importing the first ten thousand rows of a longer file leaves a catalogue that looks complete and is not, with nothing pointing at the rows that were never read.
-- **The size cap is 10 MB and is checked before decoding.** Ten thousand wines with long tasting notes are a few megabytes of CSV; a file past ten is something else. Since P1-27 both caps are `MAX_IMPORT_ROWS` and `MAX_IMPORT_FILE_BYTES` from `@catalogorosso/core/import-limits`.
+- **Over the row cap, the whole file is refused, never truncated.** Importing the first rows of a longer file, up to the cap, leaves a catalogue that looks complete and is not, with nothing pointing at the rows that were never read.
+- **The size cap is 10 MB and is checked before decoding.** A full catalogue with long tasting notes is a few megabytes of CSV; a file past ten is something else. Since P1-27 both caps are `MAX_IMPORT_ROWS` and `MAX_IMPORT_FILE_BYTES` from `@catalogorosso/core/import-limits`.
 - **A blank line in the middle of a file is skipped.** Every cell is empty, so there is nothing in it to have misread.
 - **Dispatch is on the file's extension**, the choice the seller made, not on sniffed content. `readWorkbook` still checks the bytes, so a CSV renamed `.xlsx` is refused rather than misread.
 - **Detection notices survive a refusal.** "Codifica rilevata" is how a seller explains a header that did not match.
-- **Fixtures are one real file per hazard** — `import-*.csv`, covered by the binary rule, including a Windows-1252 one — **except the two sizes, generated in the test** *(deviation)*: ten thousand identical rows and ten megabytes of zeros are better described by the line that makes them than by a file nobody will open. The cap is tested at exactly 10,000 as well as 10,001.
+- **Fixtures are one real file per hazard** — `import-*.csv`, covered by the binary rule, including a Windows-1252 one — **except the two sizes, generated in the test** *(deviation)*: a row cap of identical rows and ten megabytes of zeros are better described by the line that makes them than by a file nobody will open. The cap is tested at exactly `MAX_IMPORT_ROWS` as well as one more.
 - The workbook path is exercised through `wines.xlsx`: without a sheet it asks which, and with *Vini* it is refused for the missing *tipologia* column exactly as a CSV would be.
 
 ---
@@ -4025,12 +4025,11 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 
 **Note from P1-26.** The import route now requires an `Idempotency-Key` header holding a UUID (422 without one). Generate it once when the summary is confirmed and reuse it for every resend of that confirmation — a double-click and a retry after a dropped connection must carry the *same* key, or the guard does nothing. "Riprova" after an import that stopped part-way is a new attempt: new key. A 409 whose message says the attempt has not finished is answered by retrying the same key shortly, not by generating a new one.
 
-**Open from P1-27 — a full 10,000-row import does not fit in one request.** The API's Function URL refuses any request over 6 MB before our code runs, and the import route refuses over 5 MB so the message is ours. Measured: ten thousand fully described wines are 5.7 MB of JSON with no tasting notes and 9.5 MB with 400-character ones, so the row cap is not what binds for a real catalogue. Before this screen wires its confirm button, choose one:
-
-- **Gzip the body** — the same 9.5 MB is 0.2 MB compressed, and `CompressionStream` is in every browser the dashboard supports. The API then accepts `Content-Encoding: gzip`, caps the inflated size (a small body can inflate to gigabytes), and needs its binary body path verified through CloudFront and the Function URL before it is trusted. One request stays one import: one key, whole-import duplicate detection, one P1-28 audit row.
-- **Split into requests under 5 MB** — no server change, but duplicate SKUs are no longer found across the whole import, each part needs its own `Idempotency-Key`, and P1-28 would write one audit row per part unless the parts learn a parent id.
-
-`importBodyProblem(rows)` in `draft-rows.ts` already answers whether rows fit, in Italian, whichever is chosen.
+**~~Open from P1-27~~ — resolved (2026-09-15): neither gzip nor split; the row cap became the largest catalogue a plan allows.**
+- **The problem.** The API's Function URL refuses any request over 6 MB before our code runs, and the import route refuses over 5 MB so the message is ours. Measured: ten thousand fully described wines are 5.7 MB of JSON with no tasting notes and 9.5 MB with 400-character ones, so at the old 10,000-row cap the request cap bound first.
+- **The options weighed.** Gzipping the body (0.2 MB compressed, but an inflation cap and a binary body path to verify through CloudFront), or splitting into requests under 5 MB (a key per part, duplicate SKUs no longer found across the import, one audit row per part).
+- **Neither was needed.** The largest plan allows 2,500 SKUs (P5-01), so `MAX_IMPORT_ROWS` is now 2,500, and 2,500 such wines are about 1.4 and 2.4 MB. One request is one import.
+- **What still reaches the cap.** An import whose notes run to kilobytes a wine; `importBodyProblem(rows)` refuses it in Italian and tells the seller to split it.
 
 **Note from P1-28.** The body must also carry `source: { entryPoint, filename? }` — `'file'` with the file's name, `'paste'`, or `'form'` — which the import's audit entry records. A body without it is a 422.
 
@@ -4041,7 +4040,7 @@ The form's values are all strings — arrays comma-joined — and `completenessO
 - **"Importa solo le valide" is the default** *(decision — the row's own recommendation)*. Only rows that validate are previewed and sent; the invalid ones stay listed with their errors and are downloadable as `righe-da-correggere.csv` — template headers, `;`, a byte-order mark and an `errori` column the importer ignores with a notice — so the corrected file imports as it is. `writeDelimited` now sits beside `parseDelimited` for that, held to it by a round-trip test, and is what P1-30's export will use.
 - **One `Idempotency-Key` per attempt, built as P1-26's note asked.** The api-client gained an `idempotencyKey` request option. The key is made at the first confirmation and resent on every retry of it; it is forgotten when the rows change — the same key with other rows would be a 409 — and when an attempt finishes, so resuming a stopped import is a new attempt. A 409 on confirm can therefore only mean "still running", and says so.
 - **A stopped import is reported in the seller's own line numbers**, translated back from the rows the server was sent, because every invalid line left out shifts the numbers after it.
-- **The request cap is checked before anything is sent, and P1-27's decision stays open** *(interim)*. An import over 5 MB is refused on screen with "Dividile in più importazioni", so a seller splits the file by hand. Whether the dashboard should gzip the body instead is still the choice recorded above.
+- **The request cap is checked before anything is sent.** An import over 5 MB is refused on screen with "Dividile in più importazioni". Since the row cap became 2,500 (resolved above), a realistic catalogue no longer reaches it.
 - **Not yet mounted** *(deviation)*. Like P1-22's `DraftGrid`, `ImportSummary` is a tested component with no route in the shell. The screen that joins the file and paste pickers to drafts and to this summary is its own piece of work, and none of this row's files is it.
 
 ---
@@ -4093,7 +4092,7 @@ Enqueue an outbox row **only for rows where `changed`**. Return per-row outcomes
 - **A failure part-way is reported, not thrown.** The answer carries `stoppedAt: { batch, fromRow, toRow }` beside the outcomes of every row that applied; the cause goes to the log and never to the caller (P0-55). **Resuming is importing the same rows again**: what already applied comes back *unchanged* and costs nothing (P1-24). Since P1-26 a resume is a new attempt and carries a new `Idempotency-Key`; the stopped attempt's key keeps answering with its report. The row's `failedBatch?` is this field.
 - **A row that breaks the contract refuses the whole request, before anything is written** *(decision)*. The dashboard validates every row against the same contract first (P1-22), so a row failing here is a client that skipped that step; applying the rest would leave a catalogue that is partly the chosen file and partly not. The refusal names up to five row numbers.
 - **Duplicate SKUs are found across the whole import before batching** *(addition)*. `upsertProducts` refuses duplicates within one call, but a SKU in batch one and again in batch three would otherwise reach it as two calls, and the second would overwrite the first.
-- **Rows are capped at 10,000 in the body schema** — the server's half of §2.2a's cap, since a cap only in the browser is a suggestion. P1-27 turned it and the dashboard's into one shared constant, `MAX_IMPORT_ROWS`.
+- **Rows are capped at `MAX_IMPORT_ROWS` in the body schema** (2,500 since the review fix; it was 10,000) — the server's half of §2.2a's cap, since a cap only in the browser is a suggestion. P1-27 turned it and the dashboard's into one shared constant, `MAX_IMPORT_ROWS`.
 - **The answer counts what P1-23 shows** — created, updated, unchanged, duplicate SKU, and archived matches — computed on the server so the summary and the outcomes cannot disagree.
 - **Review fix (2026-09-15): an import stops at a time budget instead of being killed.** The P1 review measured 10,000 changed wines at 12.2 s against local Postgres, past the API function's 10 s timeout, and a function killed mid-batch stores no report and leaves its key "still running".
   - **The server.** `importRows` takes a `deadline`. After the first batch, which always runs so every request makes progress, it starts a batch only if one as slow as the slowest so far would finish by the deadline. The route sets that deadline `IMPORT_TIME_BUDGET_MS` (6 s) after the request arrives.
@@ -4101,7 +4100,7 @@ Enqueue an outbox row **only for rows where `changed`**. Return per-row outcomes
   - **The stop.** Running out of time is an ordinary stopped import whose `stoppedAt.reason` is `time-budget` rather than `failed`. It is logged at info, not as an error.
   - **The dashboard** sends the rest by itself: the rows from `fromRow` on, less any refused as a repeated SKU, under a new key. It merges the answers into one numbered against the whole list, and a continuation that fails is retried with its own key (`import-continuation.ts`). Each continuation is its own attempt, so an import sent in three parts writes three audit entries.
   - **Consistency.** `API_TIMEOUT_SECONDS` in `packages/core` restates the timeout, and `apps/api/test/import-time-budget.test.ts` reads `infra/api.ts` to hold the two together.
-  - **Still open.** The 5 MB body cap still binds before the row cap for a fully described catalogue (P1-23's open decision); the time budget does not change that.
+  - **The body cap no longer binds.** The row cap is now 2,500, the largest plan's catalogue (P1-27), which is about 2.4 MB even with long tasting notes.
 
 ---
 
@@ -4141,12 +4140,14 @@ Tests: `packages/db/test/import-runs.test.ts` and `schema/import-runs.test.ts` (
 
 **As built — three caps, not two, because measuring the request found the platform's.**
 
-- **The numbers live in `@catalogorosso/core/import-limits`**, a subpath that imports nothing (held to that by `browser-subpaths.test.ts`), and the `core` barrel re-exports them for the API. `MAX_IMPORT_ROWS` is 10,000, `MAX_IMPORT_FILE_BYTES` is 10 MB, and `import-limits.test.ts` pins each by value — a test comparing the dashboard's number with the API's would pass for any number.
-- **"Both call sites" is three on the dashboard.** A file already refused over either cap (P1-21) and now reads the shared constants. **A paste had no cap at all** *(addition)*: `pasteCapProblem(pasted)` refuses one over 10,000 rows, whole, in the same words. And `importBodyProblem(rows)` measures the request before it is sent — the check P1-23 calls.
+- **The numbers live in `@catalogorosso/core/import-limits`**, a subpath that imports nothing (held to that by `browser-subpaths.test.ts`), and the `core` barrel re-exports them for the API. `MAX_IMPORT_ROWS` is 2,500 (10,000 until the review fix below), `MAX_IMPORT_FILE_BYTES` is 10 MB, and `import-limits.test.ts` pins each by value — a test comparing the dashboard's number with the API's would pass for any number.
+- **"Both call sites" is three on the dashboard.** A file already refused over either cap (P1-21) and now reads the shared constants. **A paste had no cap at all** *(addition)*: `pasteCapProblem(pasted)` refuses one over the row cap, whole, in the same words. And `importBodyProblem(rows)` measures the request before it is sent — the check P1-23 calls.
 - **The server's request cap is 5 MB, measured in bytes before parsing** *(addition — the row said "~10 MB" on both sides)*. A Function URL refuses any request over 6 MB before the handler runs, with an answer naming no limit, so a 10 MB server cap could never fire. Five leaves headroom and makes the refusal ours: a 422 that names the limit and says to split the import, each part with its own key. Bytes, not characters: an accented letter is two, and the test for that sends notes that fit as characters and not as bytes.
 - **Checked inside the handler, not with Hono's `bodyLimit`**. The whole request is already in the Lambda's memory, so streaming the count buys nothing, and a second handler on the route would add an entry to the route table P0-49 and the RBAC matrix enumerate.
-- **The file cap stays 10 MB** — a file is not the request. What that leaves open is recorded on P1-23: for a real catalogue the 5 MB request cap binds long before 10,000 rows, and whether the dashboard compresses or splits is that row's decision.
+- **The file cap stays 10 MB** — a file is not the request. At 10,000 rows the 5 MB request cap bound long before the row cap, which P1-23 recorded as open; the review fix below closed it.
 - `infra/api.ts` records the 6 MB ceiling beside the invoke mode, where the next person to change it will look.
+
+**Review fix (2026-09-15): the row cap is 2,500, the largest catalogue a plan allows.** At 10,000 the three import limits disagreed about what an import was. A real 10,000-wine catalogue could not fit the 5 MB request cap, and changed rows took 12.2 s against a 10 s function. The largest plan allows 2,500 SKUs (P5-01), and an import cannot usefully be larger than the catalogue it lands in. At 2,500 a fully described catalogue is about 1.4–2.4 MB and about 3 s of batches, so one request is one import again: one key, whole-import duplicate detection, one audit row. P1-25's time budget stays as the safety net for a slow database, and P1-23's gzip-or-split question closes without either. Per-plan caps (300 for Cantina) belong to the plan enforcement in P5-01 and P2-36, not to this constant.
 
 ---
 
