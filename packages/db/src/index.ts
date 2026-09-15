@@ -121,6 +121,23 @@ export {
 export { withInvitation, type OpenInvitation } from './with-invitation.js';
 
 /**
+ * The widget's resolution scope and its one accessor (P2-07).
+ *
+ * The fifth RLS context, and the only one that cannot write: its transaction is
+ * `READ ONLY`. A public key and a normalised origin admit one key row, that
+ * key's tenant's matching domain, and the tenant only behind a verified domain.
+ * ADR 0022 records why it exists and what it costs.
+ */
+export {
+  InvalidWidgetScopeError,
+  NestedWidgetContextError,
+  WIDGET_KEY_GUC,
+  WIDGET_ORIGIN_GUC,
+  withWidgetKey,
+} from './with-widget-key.js';
+export { resolveTenantByKeyAndOrigin, type WidgetResolution } from './widget-resolution.js';
+
+/**
  * The `invitations` statements (P0-51).
  *
  * Here rather than in an app for the same reason as the audit insert and the

@@ -139,8 +139,18 @@ export default {
         // withOutbox rather than receiving one, because the claim, the send and
         // the release have to be the same transaction for the ordering to mean
         // anything. It is listed separately so that difference stays visible.
+        //
+        // src/with-widget-key.ts is exempt from P2-07, and it is the fifth RLS
+        // context — a design change, recorded in ADR 0022. It narrows rather
+        // than widens: a public key and a normalised origin admit one key row,
+        // that tenant's matching domain, and the tenant row only behind a
+        // verified domain. What makes it safe to hold is that its transaction
+        // is READ ONLY, so nothing inside it can write whatever a policy admits.
+        // src/widget-resolution.ts is exempt on outbox.ts's terms: it writes one
+        // statement and opens its transaction through that scope, never
+        // through a raw connection.
         pathNot:
-          '^packages/db/src/(client|with-tenant|with-user|with-invitation|with-outbox|deploy|auth-db|memberships|members-write|audit|users|invitations)[.]ts$' +
+          '^packages/db/src/(client|with-tenant|with-user|with-invitation|with-outbox|with-widget-key|widget-resolution|deploy|auth-db|memberships|members-write|audit|users|invitations)[.]ts$' +
           '|^packages/db/src/outbox[.]ts$' +
           '|^packages/db/src/email-suppressions[.]ts$' +
           // src/rate-limit.ts is exempt from P2-02 on the same terms: it writes a

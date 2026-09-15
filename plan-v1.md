@@ -1286,7 +1286,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-04 | 🔒 Wire all limit dimensions | session, IP, tenant/min, tenant/month, per-endpoint | P2-02 |
 | ✅ P2-05 | ⛔ 🔒 Origin normalization fn | punycode, lowercase, strip path/port, PSL, reject IP/localhost | P0-42 |
 | ✅ P2-06 | 🔒 Origin normalization table test | trailing dot, uppercase, port, `null`, absent, lookalikes | P2-05 |
-| P2-07 | ⛔ 🔒 Allowlist accessor (uncached) | single accessor so caching is additive later | P2-05,P0-24 |
+| ✅ P2-07 | ⛔ 🔒 Allowlist accessor (uncached) | single accessor so caching is additive later | P2-05,P0-24 |
 | P2-08 | ⛔ 🔒 Dynamic CORS middleware | exact-set match, echo origin, **`Vary: Origin`**, no credentials | P2-07 |
 | P2-09 | 🔒 CORS test suite | exact headers, preflight, 403-with-no-headers, bypass attempts | P2-08 |
 | P2-10 | `GET /v1/widget/config` | public config only, edge-cache 60 s | P2-08 |
@@ -4876,6 +4876,16 @@ Runs **outside** `withTenant` — the tenant is what we are resolving, so RLS ca
 **Tests.** Correct pair resolves; valid key + wrong origin returns `origin_mismatch`; unknown key returns `unknown_key`; revoked key fails but a key inside its grace window succeeds; unverified domain fails.
 
 **Files.** `packages/security/src/origin/resolve.ts`, tests. **~110 lines.**
+
+**As built (2026-09-15) — not as the row describes it, and ADR 0022 is why.** The row runs the query outside `withTenant` with a lint exemption. Under `FORCE ROW LEVEL SECURITY` there is no un-scoped read for `app_rw` to make: all three tables the query joins carry `tenant_isolation`, so it returns nothing, and making it return something needs a role that bypasses RLS on the path an unauthenticated visitor's browser drives. The root invariants also now allow exactly one un-scoped path, and call a new scope a design change.
+
+- **A fifth RLS scope, `withWidgetKey(publicKey, origin)`**, in `packages/db/src/with-widget-key.ts`, beside `withUser`, `withInvitation` and `withOutbox`. Migration `0042` replaces `tenant_isolation` on `widget_keys`, `tenant_domains` and `tenants`. The branches narrow in order: a key reaches its one row; an origin reaches only that key's tenant's matching domain; a tenant row is reachable only behind a verified domain. `WITH CHECK` stays tenant-only on all three.
+- **Its transaction is `READ ONLY`.** A `DELETE` is filtered by `USING` alone, so under an admitting branch it would match admitted rows. ADR 0021 closed that on `outbox` by revoking `DELETE`, which cannot be done on `tenant_domains`, where removing a domain is a real operation; a read-only transaction closes it for all three at once.
+- **The accessor is `resolveTenantByKeyAndOrigin` in `packages/db/src/widget-resolution.ts`**, not `packages/security`: statements live in `packages/db` (P0-09). One statement, LEFT-joined from the key, so "the key exists and the origin does not" is a row with nulls. It answers `unknown_key` for no usable key (including a revoked key past its grace window), `origin_mismatch` carrying the key's tenant for P2-16's `UNAUTHORIZED_ORIGIN` count, or `found` with the tenant's status, plan and locale for P2-08 and P2-10. A verified domain whose tenant row is invisible throws, because that is a policy bug and a refusal would hide it.
+- **The origin must already be normalised (P2-05).** The comparison is exact equality against the stored origin; a raw `Origin` header would miss on case alone.
+- **Tested against real Postgres in `widget-resolution.integration.test.ts`**: every outcome the row lists; what the scope admits (one key, one domain, one tenant, no memberships), that a key alone and a pending domain reach no tenant row, that another tenant's verified origin is invisible to a key it did not issue; that every INSERT, UPDATE and DELETE inside the scope fails as a read-only transaction; that ordinary tenant reads are unchanged; and that nothing is left set on the connection. **Not run locally for this PR** — Docker was not running — so CI's integration job is its first run.
+- `CLAUDE.md` and `AGENTS.md` name every scope, now including `withOutbox()`, which they had missed since P1-31.
+- **The P0-38 isolation suite now walks each table once.** It seeded once per `RLS_POLICIES` entry, and 0042's three superseding entries made the second `widget_keys` insert trip the public key's unique index, which skipped the whole file. CI's first integration run on this PR caught it. From a tenant seat with no widget GUCs set, the superseding policies reduce to the tenant predicate, so the probes' expectations are unchanged.
 
 ---
 
