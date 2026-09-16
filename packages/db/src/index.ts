@@ -138,6 +138,34 @@ export {
 export { resolveTenantByKeyAndOrigin, type WidgetResolution } from './widget-resolution.js';
 
 /**
+ * The widget token revocation read (P2-12a) and the sweep that clears them (P2-14).
+ *
+ * The read is not a context of its own: it runs under `withTenant`, for the
+ * tenant a request resolved. The sweep is the **sixth** context, and ADR 0023:
+ * `withLapsedRevocations` admits every tenant's revocations, but only those whose
+ * token lapsed more than `REVOCATION_SWEEP_GRACE_SEC` ago, and it cannot write.
+ * The rows are written when a domain is removed (P4-06).
+ */
+export { isTokenRevoked, pruneLapsedRevocations } from './token-revocations.js';
+
+/**
+ * The `security_events` writer and its count (P2-16).
+ *
+ * A statement module like the audit insert, with one difference written into
+ * it: it opens its own transaction, because a refusal has to be recorded even
+ * when the request that caused it rolls back.
+ */
+export {
+  countSecurityEvents,
+  insertSecurityEvent,
+  type SecurityEvent,
+  type SecurityEventQuery,
+  type SecurityEventType,
+} from './security-events.js';
+export { REVOCATION_SWEEP_GRACE_SEC } from './revocation-grace.js';
+export { REVOCATION_SWEEPER_GUC, withLapsedRevocations } from './with-lapsed-revocations.js';
+
+/**
  * The `invitations` statements (P0-51).
  *
  * Here rather than in an app for the same reason as the audit insert and the
@@ -202,6 +230,8 @@ export {
   BucketsExceeded,
   consumeBuckets,
   createRateLimiter,
+  MAX_FIXED_WINDOW_SEC,
+  PRUNE_BATCH,
   pruneClosedWindows,
   type BucketCheck,
   type BucketResult,

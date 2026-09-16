@@ -125,6 +125,24 @@ if (stage !== 'unknown' && resendWebhookSecret === undefined) {
   );
 }
 
+/**
+ * The widget token keyset (P2-11, P2-12).
+ *
+ * **A warning rather than a throw, on the webhook secret's terms.** Absent is
+ * restrictive — the session route mints nothing — and generating the keyset is
+ * operator work (`scripts/widget-token-key.mjs`) no deploy can do. What it costs
+ * is every widget on the stage unable to start a conversation, so it is said
+ * once per container rather than blocking the deploy.
+ */
+const widgetTokenKeys = optionalEnvironment('WIDGET_TOKEN_KEYS');
+
+if (stage !== 'unknown' && widgetTokenKeys === undefined) {
+  logger.warn(
+    { kind: 'widget_token_keys_absent' },
+    'WIDGET_TOKEN_KEYS is not set, so no widget session can be minted (P2-11, P2-12)',
+  );
+}
+
 const dependencies = buildDependencies({
   authSecret: requireEnvironment('AUTH_SECRET'),
   authBaseUrl: requireEnvironment('AUTH_BASE_URL'),
@@ -138,6 +156,7 @@ const dependencies = buildDependencies({
   ...(originSecret === undefined ? {} : { originSecret }),
   ...(rateLimiter === undefined ? {} : { rateLimiter, readUsage: rateLimiter.peek }),
   ...(resendWebhookSecret === undefined ? {} : { resendWebhookSecret }),
+  ...(widgetTokenKeys === undefined ? {} : { widgetTokenKeys }),
 
   emailFrom: optionalEnvironment('EMAIL_FROM') ?? 'AI Sommelier <noreply@localhost>',
   resendApiKey: optionalEnvironment('RESEND_API_KEY'),
