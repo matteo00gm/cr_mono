@@ -163,3 +163,20 @@ export { allowlisted, allowlistRecommendations, type AllowlistResult } from './a
  * miss it a third time while the visitor waits.
  */
 export { withSchemaRepair, type PairingOutcome, type SchemaRepairOptions } from './repair.js';
+
+/**
+ * The escalation cascade (P2-28).
+ *
+ * A provider swap rather than a second code path: same prompt, same schema,
+ * same allowlist, same repair — a better model.
+ */
+export {
+  constraintsIn,
+  DEFAULT_THRESHOLDS,
+  escalationsFor,
+  tierFor,
+  type EscalationReason,
+  type EscalationSignals,
+  type EscalationThresholds,
+  type ProviderTiers,
+} from './escalation.js';

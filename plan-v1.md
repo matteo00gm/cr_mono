@@ -1326,7 +1326,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-25 | ⛔ 🔒 Output allowlisting | every `productId` ∈ tenant **∩** retrieved candidate set | P2-24 |
 | ✅ P2-26 | 🔒 Test: output allowlisting | injected foreign and hallucinated ids are dropped + logged | P2-25 |
 | ✅ P2-27 | Schema-failure retry + fallback | one repair attempt, then text-only with no cards | P2-24 |
-| P2-28 | Escalation cascade | low score / schema fail / complex query → stronger tier | P2-27 |
+| ✅ P2-28 | Escalation cascade | low score / schema fail / complex query → stronger tier | P2-27 |
 | P2-29 | `POST /v1/widget/chat` (SSE) | Function URL `RESPONSE_STREAM` | P2-13,25 |
 | P2-30 | Conversation + message persistence | | P0-28 |
 | P2-31 | `usage_events` writer | tokens, model, cost per turn | P0-30 |
@@ -5533,6 +5533,17 @@ Return `dropped` so P2-26 can assert on it and so the caller can log it — a no
 
 **Files.** `escalation.ts`, tests. **~90 lines.**
 
+**As built (2026-09-16).** `packages/core/src/rag/escalation.ts`: `escalationsFor` decides, `tierFor` swaps the provider, and nothing else branches — which is the row's own point about reusing the interface.
+
+- **The retrieval floor is derived, not picked.** `1 / (k + 1)` is exactly what a wine scores when one branch ranks it first and the other never finds it, so a top score below it means *no wine was any branch's first choice*. That is a statement about the ranking rather than a number somebody liked.
+- **It is written out rather than imported from `RRF_K`** *(deviation from this file's own "derive, do not restate" rule, with a measurement behind it)*. The first attempt imported it, which put `packages/db`'s barrel into the module graph of everything reaching escalation and broke nine unrelated suites that mock `@catalogorosso/db` — none of which has any business knowing retrieval exists. The agreement is kept by a test that imports both and fails on drift: a guard that can fail, rather than an import that cannot.
+- **An empty catalogue is not weak retrieval** *(addition)*. Nothing was retrieved because there is nothing to retrieve, and a better model cannot recommend a wine the seller does not stock — escalating there spends more to produce the same "I have nothing for that". §2.4's `ZERO_RESULTS` is what that seller needs.
+- **Constraint counting is a proxy, and says so.** Counting constraints properly means parsing Italian, which is the job of the model this is deciding whether to call. An explicit marker list measures how much a question asks for *at once*, which is what correlates with the failures §4.5 wants escalated. The markers are padded, so a question opening with one — "senza solfiti" — counts.
+- **The other two thresholds are starting points, not findings.** Being parameters is what makes them correctable: P1-46's eval sweeps them against the golden set.
+- **Every reason is reported, not the first.** One escalation happens either way; a metric carrying only the first reason would attribute a climbing rate to whichever check is written above the others, which is the one number this row exists to make trustworthy.
+
+**⚠ Open: the escalation-rate alarm.** The row asks for one when the rate exceeds a few percent, and a *rate* needs a denominator — turns — which does not exist until **P2-29** streams them and **P2-31** counts them. A CloudWatch metric filter over an absolute count would alarm on traffic rather than on the cheap tier failing, which is the opposite of what the row wants. Deferred to P2-31, where the denominator arrives.
+
 ---
 
 ### P2-29 · `POST /v1/widget/chat` (SSE)
@@ -7177,6 +7188,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Bedrock model access confirmed | **closed (2026-09-01)** | Confirmed active in `eu-west-1` via AWS CLI: `amazon.nova-lite-v1:0` (chat/pairing LLM) and `amazon.titan-embed-text-v2:0` (vector embeddings). |
 | Price filtering assumes one currency per tenant | later | P2-21's ceiling is minor units with no currency, and `products.currency` is per row while §2.2 sets one per tenant. A tenant that ever priced two wines in two currencies would have a 30 EUR ceiling silently compared against 30 USD. Closing it means the ceiling carrying a currency and the filter excluding rows priced in another — excluding, not converting, since we hold no rate. Cheap, and not worth the surface until a tenant does it. |
 | Streamed text is not checked for leaked instructions | **P2-32** | `trustedPairing` refuses a parsed reply that quotes the prompt, but adapters stream text deltas before that check runs, so a model echoing its instructions as prose reaches a visitor and no delta can be un-sent. Detail under P2-27's as-built. |
+| Escalation-rate alarm needs a denominator | **P2-31** | P2-28 emits every reason, but a *rate* needs turns to divide by, and those arrive with P2-29's stream and P2-31's `usage_events` row. An alarm on an absolute count would fire on traffic. |
 | OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |
 | Branch protection configured | **closed (2026-09-06)** | All five checks required on `main` — `Format, lint, typecheck`, `Test and coverage gates`, `Integration tests (Postgres)`, `Secret scan`, `Dependency audit` — with `enforce_admins: true`, 0 approvals (1 would deadlock a solo maintainer) and `strict: false` (so a stacked chain does not need rebasing between merges). Verified by attempting a direct push to `main` and being refused. See **E4**. |
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |
