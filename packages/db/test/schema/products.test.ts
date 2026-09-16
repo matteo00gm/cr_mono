@@ -7,6 +7,7 @@ import {
   productStatus,
   productStockStatus,
 } from '../../src/schema/products.js';
+import { STOCK_STATUSES } from '../../src/products-read.js';
 
 /**
  * Shape assertions for `products` (P0-26).
@@ -69,6 +70,16 @@ describe('products schema', () => {
     expect(productStatus.enumValues).toEqual(['ACTIVE', 'ARCHIVED']);
     expect(productEmbeddingState.enumValues).toEqual(['PENDING', 'INDEXED', 'FAILED', 'STALE']);
     expect(productStockStatus.enumValues).toEqual(['IN_STOCK', 'OUT_OF_STOCK', 'PREORDER']);
+  });
+
+  it('hands the stock states to its readers rather than having them restated', () => {
+    /*
+     * Identity, not equality. A hand-written copy of the three values passes an
+     * `toEqual` and then drifts the day a fourth state is added — at which point
+     * the catalogue filter, the API contract and P2-21's availability rule all
+     * go on working and all go on being wrong.
+     */
+    expect(STOCK_STATUSES).toBe(productStockStatus.enumValues);
   });
 
   it('starts a product ACTIVE and unindexed', () => {
