@@ -39,6 +39,8 @@ export const DOMAIN_ERROR_KINDS = [
   'conflict',
   /** The caller is going too fast. */
   'rate_limited',
+  /** It exists and the caller may reach it, but it is switched off — a winery's widget, say. */
+  'unavailable',
 ] as const;
 
 export type DomainErrorKind = (typeof DOMAIN_ERROR_KINDS)[number];
@@ -103,6 +105,20 @@ export class ConflictError extends DomainError {
 export class RateLimitedError extends DomainError {
   constructor(message = 'Too many requests', options?: { cause?: unknown }) {
     super('rate_limited', message, options);
+  }
+}
+
+/**
+ * Switched off: not missing, and not forbidden (P2-12).
+ *
+ * A widget whose winery is not paying or trialling. Kept apart from `forbidden`
+ * on purpose: the widget renders a disabled state for this and an error for that
+ * (P3-21), and a lapsed subscription must not look like a broken widget. The
+ * message names no billing state — §1.3 says a visitor is never shown one.
+ */
+export class UnavailableError extends DomainError {
+  constructor(message = 'Not available', options?: { cause?: unknown }) {
+    super('unavailable', message, options);
   }
 }
 
