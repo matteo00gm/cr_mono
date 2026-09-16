@@ -12,6 +12,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./tokens": {
+      "types": "./dist/tokens/keys.d.ts",
+      "default": "./dist/tokens/keys.js"
     }
   },
   "files": [
@@ -21,6 +25,7 @@
     "@catalogorosso/testing": "workspace:*"
   },
   "dependencies": {
+    "jose": "6.2.12",
     "tldts": "7.4.11"
   }
 }

@@ -36,34 +36,6 @@
                   }
                 }
               }
-            },
-            "401": {
-              "description": "The request failed. `code` is stable; `message` is for a human.",
-              "content": {
-                "application/json": {
-                  "example": {
-                    "error": {
-                      "code": "forbidden",
-                      "message": "This role cannot billing manage.",
-                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
-                    }
-                  }
-                }
-              }
-            },
-            "403": {
-              "description": "The request failed. `code` is stable; `message` is for a human.",
-              "content": {
-                "application/json": {
-                  "example": {
-                    "error": {
-                      "code": "forbidden",
-                      "message": "This role cannot billing manage.",
-                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
-                    }
-                  }
-                }
-              }
             }
           }
         }
@@ -2393,7 +2365,7 @@
       "/v1/dashboard/products/import/preview": {
         "post": {
           "summary": "Preview what an import would do, writing nothing",
-          "description": "Classifies each row exactly as the import would - created, updated, unchanged, or refused for sharing a SKU with another row - so a screen can show what confirming will change before anything does. Nothing is written, locked, queued or audited, and no Idempotency-Key is needed. The import body limits apply: at most 10,000 rows and 5 MB, every row valid against the product contract. A preview is not a promise: a wine edited between the preview and the import can change its outcome, which is why the import answers with its own.\n\nRequires the `catalog:write` capability.",
+          "description": "Classifies each row exactly as the import would - created, updated, unchanged, or refused for sharing a SKU with another row - so a screen can show what confirming will change before anything does. Nothing is written, locked, queued or audited, and no Idempotency-Key is needed. The import body limits apply: at most 2,500 rows and 5 MB, every row valid against the product contract. A preview is not a promise: a wine edited between the preview and the import can change its outcome, which is why the import answers with its own.\n\nRequires the `catalog:write` capability.",
           "operationId": "postV1DashboardProductsImportPreview",
           "x-required-capability": "catalog:write",
           "responses": {
@@ -2815,6 +2787,87 @@
                     "welcomeMessage": "Ciao! Sono il sommelier di questa cantina. Che vino stai cercando?",
                     "cartUrl": "/cart",
                     "quotaState": "ok"
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The key and the request's Origin do not belong to one tenant. The same answer whatever the reason, and it carries no CORS headers, so a browser script cannot read it.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This widget is not available on this site.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "429": {
+              "description": "A rate limit refused the request. `Retry-After` says when to try again.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "rate_limited",
+                      "message": "Too many requests. Try again shortly.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/widget/session": {
+        "post": {
+          "summary": "Mint a widget session token",
+          "description": "Mints a 15-minute EdDSA token bound to the request Origin, the tenant the public key belongs to, and a session id. Nothing in the body is read: the tenant, the session and the origin all come from the request itself. To continue a conversation, send its last token as `Authorization: Bearer <token>`: up to 30 minutes after that token expired, and 4 hours after the session's first token, the new token keeps the session id. A token that cannot be verified, or is past either limit, starts a fresh session instead. Refused with 403 and no CORS headers unless the key and the Origin belong to one tenant; with 403 and code 'unavailable' when that tenant's widget is switched off, which the widget renders as disabled; and with 401 when the token sent belongs to another site or tenant, or was revoked. Never cached.\n\nNo capability required. Called before a visitor has any identity, so it requires no token and no session; a previous token only continues one. What gates it is the (pk_, Origin) pair, the tenant being active or trialling - read uncached on every call - and the per-address, per-tenant and per-endpoint limits, because it is the cheapest endpoint on the surface to abuse.",
+          "operationId": "postV1WidgetSession",
+          "responses": {
+            "200": {
+              "description": "Mint a widget session token",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "token": {
+                        "type": "string"
+                      },
+                      "expiresAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      }
+                    },
+                    "required": [
+                      "token",
+                      "expiresAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "token": "header.payload.signature",
+                    "expiresAt": "2026-09-15T10:15:00.000Z"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The token sent to continue a session belongs to another site or another tenant, or was revoked. The same answer whatever the reason; mint again without it to start a new session.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "unauthenticated",
+                      "message": "This session is no longer valid. Start a new one.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
                   }
                 }
               }

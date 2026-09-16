@@ -83,7 +83,7 @@ export const limitWidgetRequest =
           tenantId: tenant.tenantId,
           plan: tenant.plan,
           ipBucket: visitorBucket(c.req.header('x-forwarded-for'), ipSecret, now()),
-          // Absent until P2-13 verifies a token, whatever the variable's type says.
+          // Set only by requireWidgetToken (P2-13), on a route that needs a session; absent otherwise.
           sessionId: c.get('widgetSessionId'),
         },
         limits,
