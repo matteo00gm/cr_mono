@@ -406,3 +406,19 @@ export {
   type EmbeddingStatusWrite,
   type StoredEmbedding,
 } from './embeddings.js';
+
+/**
+ * Retrieval against the catalogue (P2-18, §4.4).
+ *
+ * Here rather than in `packages/core/src/rag/` where the row puts it, for the
+ * reason every statement module is here: queries live where the driver is
+ * (P0-09). What is pure about retrieval — fusion, filters, the candidate cap —
+ * stays in `packages/core`, and each of these takes the caller's transaction so
+ * a whole retrieval is one `withTenant` on one connection.
+ */
+export {
+  vectorSearch,
+  VECTOR_CANDIDATE_LIMIT,
+  type VectorCandidate,
+  type VectorSearchRequest,
+} from './retrieval.js';
