@@ -11,13 +11,21 @@
  * without pulling the `core` barrel into a browser (P1-13's rule).
  */
 
-/** Wines per import. Over it the whole import is refused, never truncated. */
-export const MAX_IMPORT_ROWS = 10_000;
+/**
+ * Wines per import. Over it the whole import is refused, never truncated.
+ *
+ * **The largest catalogue any plan allows**, E-commerce's 2,500 SKUs (P5-01),
+ * rather than the 10,000 it was (review fix). An import cannot usefully be larger
+ * than the catalogue it lands in, and at 2,500 the other limits stop binding for
+ * a real one: it fits the request cap below with room to spare, and its batches
+ * take about three seconds of `IMPORT_TIME_BUDGET_MS`.
+ */
+export const MAX_IMPORT_ROWS = 2_500;
 
 /**
  * The size of a file the dashboard will read.
  *
- * Ten thousand wines with long tasting notes are a few megabytes of CSV; ten is
+ * A full catalogue with long tasting notes is a few megabytes of CSV; ten is
  * room for that, and refuses a file that could only be something else — a
  * photo, an export of a whole shop — before a tab hangs parsing it.
  */
@@ -32,10 +40,11 @@ export const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
  * leaves room for the rest of the request and makes the message a seller reads
  * the one that says what to do.
  *
- * **For a real catalogue it binds before the row cap does** — measured, not
- * guessed: ten thousand fully described wines serialise to 5.7 MB of JSON with
- * no tasting notes and 9.5 MB with 400-character ones. How the dashboard sends
- * an import that large is P1-23's decision, recorded as open in the plan.
+ * **For a real catalogue it no longer binds** — measured, not guessed: ten
+ * thousand fully described wines serialise to 5.7 MB of JSON with no tasting
+ * notes and 9.5 MB with 400-character ones, so the 2,500 the row cap allows come
+ * to about 1.4 and 2.4 MB. It still refuses an import whose notes run to
+ * kilobytes a wine, and that refusal tells the seller to split the file.
  */
 export const MAX_IMPORT_BODY_BYTES = 5 * 1024 * 1024;
 

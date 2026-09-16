@@ -13,6 +13,8 @@
  * tables carry a policy.
  */
 
+import { REVOCATION_SWEEP_GRACE_SEC } from './revocation-grace.js';
+
 /**
  * The tenant comparison, wrapped in `nullif`.
  *
@@ -79,6 +81,20 @@ const INVITATION = "nullif(current_setting('app.invitation_token', true), '')";
  * which is a different thing entirely.
  */
 const POLLER = "nullif(current_setting('app.outbox_poller', true), '') = 'on'";
+
+/**
+ * The revocation sweep's flag (P2-14) — the **sixth** context, and ADR 0023.
+ *
+ * It widens across tenants, as the poller's does: the sweep deletes lapsed
+ * revocations for the whole platform in one statement. Unlike the poller's,
+ * **its branch carries a row predicate**, so the flag never admits a revocation
+ * on its own — only one whose token lapsed more than the continuation window ago
+ * (P2-12a). What it can see and delete is exactly the rows that no longer refuse
+ * anything, and a revocation that could still stop a continuing session is
+ * invisible to it whatever the statement asks for.
+ */
+const SWEEPER = "nullif(current_setting('app.revocation_sweeper', true), '') = 'on'";
+const LAPSED = `expires_at < now() - make_interval(secs => ${String(REVOCATION_SWEEP_GRACE_SEC)})`;
 
 /**
  * The widget's public key and normalised origin, set by `withWidgetKey` (P2-07)
@@ -154,6 +170,7 @@ const HEADERS: Readonly<Record<string, string>> = {
   '0036_outbox_poller_rls': 'The outbox poller reads across tenants (P1-31).',
   '0040_import_runs_rls': 'Row-level security for import runs (P1-26).',
   '0042_widget_key_rls': 'The widget resolves its tenant from a key and an origin (P2-07).',
+  '0043_revocation_sweep_rls': 'The sweep deletes lapsed token revocations across tenants (P2-14).',
 };
 
 /** Every migration file this list generates, in first-appearance order. */
@@ -310,6 +327,22 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
       'reachable only behind a VERIFIED domain whose tenant owns the presented key, so a key on ' +
       'its own, or a pending claim, never reaches a tenant row. WITH CHECK stays tenant-only, ' +
       'and the widget scope cannot write.',
+  },
+  {
+    table: 'token_revocations',
+    migration: '0043_revocation_sweep_rls',
+    supersedes: true,
+    using: `tenant_id = ${TENANT}
+    OR (${SWEEPER}
+      AND ${LAPSED})`,
+    withCheck: `tenant_id = ${TENANT}`,
+    note:
+      'The sweep deletes lapsed revocations for every tenant in one statement, so the ' +
+      'boilerplate returns zero rows, silently, on the one path that has to reach all of them ' +
+      '(P2-14, ADR 0023). The flag never admits a row on its own: only a revocation whose token ' +
+      'lapsed more than the continuation window ago, so one that could still refuse a ' +
+      'continuing session is invisible to it. WITH CHECK stays tenant-only, so the flag can ' +
+      'neither write a revocation nor move one.',
   },
 ];
 

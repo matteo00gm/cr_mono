@@ -10,8 +10,11 @@ import {
   type SuppressionCheck,
 } from '@catalogorosso/core';
 import { memoryRateLimiter, type MonthlyCheck, type RateLimiter } from '@catalogorosso/security';
+import { loadWidgetTokenKeys, type WidgetTokenKeys } from '@catalogorosso/security/tokens';
 import {
+  insertSecurityEvent,
   isSuppressed,
+  isTokenRevoked,
   readMembershipsForUser,
   resolveTenantByKeyAndOrigin,
   withUser,
@@ -19,6 +22,7 @@ import {
 
 import { createMembersPort, type MembersPort } from './members.js';
 import { createProductsPort, type ProductsPort } from './products.js';
+import { refusalRecorders } from './security-events.js';
 import type { WidgetDependencies } from './surfaces/widget.js';
 import { createWebhooksPort, type WebhooksPort } from './webhooks.js';
 import type { AuthPort } from './middleware/auth.js';
@@ -129,7 +133,30 @@ export interface RuntimeConfig {
    * which is what a local run with an in-process limiter honestly has.
    */
   readonly readUsage?: ((check: MonthlyCheck) => Promise<number>) | undefined;
+
+  /**
+   * The widget token keyset, serialised (P2-11). Absent — every stage until an
+   * operator sets `WidgetTokenKeys` — leaves the session route answering with a
+   * wiring error, which is restrictive: nothing is minted without a key.
+   */
+  readonly widgetTokenKeys?: string | undefined;
 }
+
+/**
+ * Loads the keyset once per container, on first use, and keeps the attempt.
+ *
+ * A keyset that will not load does not repair itself without a deploy, so a
+ * failed load is kept rather than retried: every mint fails with the same
+ * reason, which reaches the log and never a response (P0-55).
+ */
+const keysLoader = (serialized: string): (() => Promise<WidgetTokenKeys>) => {
+  let loading: Promise<WidgetTokenKeys> | undefined;
+
+  return () => {
+    loading ??= loadWidgetTokenKeys(serialized);
+    return loading;
+  };
+};
 
 export interface Dependencies {
   readonly auth: AuthPort;
@@ -287,6 +314,16 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
       readUsage: config.readUsage ?? (() => Promise.resolve(0)),
       ipSecret: config.authSecret,
       environment: config.stage === 'unknown' ? 'development' : 'production',
+      ...(config.widgetTokenKeys === undefined
+        ? {}
+        : { tokenKeys: keysLoader(config.widgetTokenKeys) }),
+      isTokenRevoked,
+      /*
+       * Where a refused widget request is recorded (P2-16). The middleware
+       * reports through a hook that swallows a throw and a rejection alike, so
+       * a database refusing writes cannot become a way to refuse service.
+       */
+      onRejected: refusalRecorders(insertSecurityEvent).onRejected,
     },
 
     ...(config.resendWebhookSecret === undefined
