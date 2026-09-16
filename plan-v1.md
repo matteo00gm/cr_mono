@@ -1320,7 +1320,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-19 | Lexical search query | `tsvector` italian | P1-07 |
 | ✅ P2-20 | RRF fusion + test | | P2-18,19 |
 | ✅ P2-21 | Availability + price filters | out-of-stock excluded unless nothing matches | P2-20 |
-| P2-22 | Candidate cap (top 8) | cost + injection surface control | P2-20 |
+| ✅ P2-22 | Candidate cap (top 8) | cost + injection surface control | P2-20 |
 | ✅ P2-23 | 🔒 Prompt assembly | product content delimited and labelled untrusted | P2-22 |
 | ✅ P2-24 | Structured output schema | `{reply, recommendations[]}` + Zod | P1-42 |
 | P2-25 | ⛔ 🔒 Output allowlisting | every `productId` ∈ tenant **∩** retrieved candidate set | P2-24 |
@@ -5371,6 +5371,12 @@ One round trip, one connection, one transaction, and the `FULL OUTER JOIN` handl
 **Tests.** Returns at most 8; preserves fused order; records the pre-cap count.
 
 **Files.** `candidates.ts`, tests. **~50 lines.**
+
+**As built (2026-09-16).** `capCandidates` in `packages/core/src/rag/candidates.ts`.
+
+- **The pre-cap count is returned, not logged** *(deviation)*. The row says log it, and a log line is exactly what §2.4's panel cannot read. `consideredCount` comes back beside the candidates, so the caller can log it *and* branch on it — which is the thing the row actually wanted it for.
+- **It refuses a cap that is not a count.** A negative one reaches `slice(0, -1)`, which drops the last candidate and returns the rest: a sweep would run, report a number, and have measured something other than what it asked for. Zero is accepted, because "what does the model say with no candidates?" is a real cell in that sweep.
+- **It does not re-rank.** The order is fusion's, narrowed by P2-21; a cap that sorted would be a third ranking nobody asked for.
 
 ---
 

@@ -131,3 +131,16 @@ export {
   type RetrievalFilters,
   type StockStatus,
 } from './filters.js';
+
+/**
+ * The candidate cap (P2-22).
+ *
+ * Cost, latency and prompt-injection surface are the same number, and the
+ * pre-cap count is what §2.4 reads to tell a weak match from no match.
+ */
+export {
+  capCandidates,
+  InvalidCandidateCapError,
+  MAX_CANDIDATES,
+  type CappedCandidates,
+} from './candidates.js';
