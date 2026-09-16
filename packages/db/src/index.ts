@@ -409,6 +409,15 @@ export {
 } from './embeddings.js';
 
 /**
+ * The usage ledger (P2-31, P0-30).
+ *
+ * The statements only: the price table, the cost and the period are pure and
+ * live in `packages/core/src/usage.ts`. `recordUsage` takes the caller's
+ * transaction so the bill and P2-30's turn are one write.
+ */
+export { countUsage, recordUsage, type UsageToRecord } from './usage.js';
+
+/**
  * Recording a turn (P2-30).
  *
  * Here rather than in `packages/core/src/conversations.ts` where the row puts

@@ -1329,7 +1329,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-28 | Escalation cascade | low score / schema fail / complex query → stronger tier | P2-27 |
 | P2-29 | `POST /v1/widget/chat` (SSE) | Function URL `RESPONSE_STREAM` | P2-13,25 |
 | ✅ P2-30 | Conversation + message persistence | | P0-28 |
-| P2-31 | `usage_events` writer | tokens, model, cost per turn | P0-30 |
+| ✅ P2-31 | `usage_events` writer | tokens, model, cost per turn | P0-30 |
 | P2-32 | 🔒 Prompt-injection test suite | instructions seeded into `tasting_notes` | P2-23 |
 | P2-33 | 🔒 PII redaction pre-prompt | regex + fixtures; nothing personal reaches the model | P2-23 |
 | P2-34 | Language detection + reply locale | IT/EN | P2-29 |
@@ -5566,6 +5566,8 @@ X-Accel-Buffering: no
 
 **Tests.** Integration against a stubbed provider: event sequence is correct; abort stops provider consumption; quota rejection happens with **zero** provider calls (assert the spy); a provider error mid-stream emits an `error` event rather than truncating silently; the response carries the four headers above.
 
+**Carried in from P2-31:** the composition root calls `assertModelPriced` on the configured chat model, so a deploy with an unpriced one fails at startup rather than on a request that has already paid for the model call.
+
 **Carried in from P2-26:** this route consumes `allowlisted(provider.streamPairing(…), candidateIds)` — never the provider's own stream. The adapters yield whatever the model returned, by design, so this is the only place the P2-25 boundary is applied on the chat path. P2-26's stubbed-provider case is asserted at the stream; **repeat it here over HTTP**, where the thing proven is a response with no card rather than a chunk with no item.
 
 **Files.** `apps/api/src/routes/widget-chat.ts`, tests. **~180 lines.** *Split if heavy: SSE transport helper separately.*
@@ -5717,6 +5719,16 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 **Tests.** Row written with correct counts and cost; failed-after-call still records; the price table covers every configured model (a test asserting that, so adding a provider without a price is a CI failure).
 
 **Files.** `packages/core/src/usage.ts`, price table, tests. **~90 lines.**
+
+**As built (2026-09-16).** Split along this repository's usual seam: the price table, the cost and the period are pure and live in `packages/core/src/usage.ts` exactly where the row puts them; `recordUsage` and `countUsage` are statements and live in `packages/db/src/usage.ts` (P0-09).
+
+- **The price table is §5.3's own table**, model for model, and it is what makes "covers every configured model" checkable: `costMicrosFor` refuses a model absent from it, so a provider added without a price fails on its first turn rather than metering at nought — which is a number the margin dashboard would believe.
+- **Gemini 2.5 Flash-Lite is deliberately absent and asserted absent.** It is the cheapest number on that board and it retires on 16 October 2026; pricing it here would make it configurable, which is the one thing §5.3 says not to do.
+- **`assertModelPriced` for the composition root** *(addition)*, on `assertQueryProviderMatchesIndex`'s terms: a deployment configured with an unpriced model should fail at startup, not on a request that already paid for the model call. **P2-29 calls it** — recorded there.
+- **Costs round *up*.** A turn costing a fraction of a micro costs us that fraction, and rounding to nought makes a million cheap turns free. Half a micro is not worth arguing about; a systematic bias towards nought is.
+- **`periodOf` reads UTC**, so a tenant's month does not depend on which region answered the request — a local reading moves a message across a quota boundary for half the world.
+- **`countUsage` throws rather than returning nought when it reads no row** *(decision)*. Unreachable, since `count(*)` always returns one — and the default that suggests itself is the one that grants unlimited usage, which is the failure the `period` column's own comment warns about.
+- **The tenant predicates are asserted in a unit suite, not an integration one** *(note)*. RLS scopes both tables, so a statement that dropped its explicit predicate behaves identically against a real database: every integration case passes and the redundancy that protects the day a policy changes is gone. Only the statement text can say whether it is still there — P2-31's mutation run found exactly that.
 
 ---
 
