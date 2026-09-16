@@ -1,3 +1,5 @@
+import type { StockStatus } from '@catalogorosso/db';
+
 /**
  * Availability and price filtering, after fusion (P2-21, §4.4).
  *
@@ -16,8 +18,15 @@
  * a model deciding what a visitor can afford.
  */
 
-/** §2.2's availability states, as `product_stock_status` spells them. */
-export type StockStatus = 'IN_STOCK' | 'OUT_OF_STOCK' | 'PREORDER';
+/**
+ * §2.2's availability states.
+ *
+ * Taken from the schema's own enum rather than restated (P0-42), and re-exported
+ * so a caller of this module needs one import rather than two. A *type* import,
+ * so no driver reaches this file — and a fourth state added to the column
+ * arrives here by compiling, instead of being silently treated as available.
+ */
+export type { StockStatus };
 
 /**
  * The little a filter needs to know about a wine.

@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, gte, lt, gt, lte, or, sql, type SQL } from 'drizzle-orm';
 
 import type { EmbeddingState } from './embedding-status.js';
-import { products } from './schema/products.js';
+import { products, productStockStatus } from './schema/products.js';
 import type { ProductRow } from './products.js';
 import type { DbTransaction } from './with-tenant.js';
 
@@ -189,8 +189,16 @@ export const completenessExpression = (weights: readonly CompletenessWeight[]): 
   return sql`round(((${sql.join(terms, sql` + `)})::numeric * 100) / ${total})`;
 };
 
-/** The stock states from P0-26, as the filter accepts them. */
-export const STOCK_STATUSES = ['IN_STOCK', 'OUT_OF_STOCK', 'PREORDER'] as const;
+/**
+ * The stock states from P0-26, as the filter accepts them.
+ *
+ * Read off the `pgEnum` rather than restated, so the column and everything that
+ * narrows on it cannot disagree (P0-42). A fourth state added to the schema
+ * reaches the filter, the API contract and P2-21's availability rule by
+ * compiling; written out here it would reach none of them, and the filter would
+ * go on treating the new state as available because nothing said otherwise.
+ */
+export const STOCK_STATUSES = productStockStatus.enumValues;
 export type StockStatus = (typeof STOCK_STATUSES)[number];
 
 /**

@@ -5359,6 +5359,7 @@ One round trip, one connection, one transaction, and the `FULL OUTER JOIN` handl
 - **`fusedSearch` returns `stockStatus` and `priceCents`** *(deviation from P2-20's shape)*, from one tenant-scoped join onto the products its branches already narrowed to. The filter stays pure and nothing makes a second trip for two columns the statement has in hand.
 - **The result carries one `outOfStockOnly` flag rather than per-candidate flags**, because the fallback set is entirely out of stock by construction — and every candidate carries its own `stockStatus` anyway, which is what §1.5's badge reads.
 - **Nothing here parses.** The row says structured rather than model-inferred, so the ceiling arrives in minor units from the caller that read the visitor's message.
+- **The stock states are read off the `pgEnum`, not restated** *(review fix)*. The filter's `StockStatus` and `products-read`'s `STOCK_STATUSES` were each a hand-written copy of the column's three values, which is what P0-42 forbids for a reason this row makes concrete: a fourth state would leave `available()` treating it as in stock, silently and everywhere. One derivation now, asserted by identity rather than equality so a copy fails the test.
 - **No price *floor*** *(scope)*. The row and its tests name a ceiling; "at least 20 euro" is not a thing visitors ask, and a filter nobody calls is a filter nobody tests.
 
 ---

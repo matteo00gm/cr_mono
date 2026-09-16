@@ -1,6 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm';
 
 import { activeEmbeddingVersionFilter } from './embeddings.js';
+import type { StockStatus } from './products-read.js';
 import type { DbTransaction } from './with-tenant.js';
 
 /**
@@ -269,7 +270,7 @@ export interface FusedCandidate {
    * Carried here rather than fetched afterwards because the filter is pure and
    * a second trip for two columns of rows we already have is a second trip.
    */
-  readonly stockStatus: 'IN_STOCK' | 'OUT_OF_STOCK' | 'PREORDER';
+  readonly stockStatus: StockStatus;
   /** Minor units, in the tenant's currency. */
   readonly priceCents: number;
 }
