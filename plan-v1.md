@@ -1313,7 +1313,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-14 | 🔒 Revocation sweep job | EventBridge, prunes expired `jti` | P0-35 |
 | ✅ P2-15 | 🔒 Token test suite | replay, cross-origin, absent Origin, alg confusion | P2-13 |
 | ✅ P2-16 | 🔒 `security_events` writer | `UNAUTHORIZED_ORIGIN` etc., counted per `(pk_, origin)` | P0-32 |
-| P2-17 | Query embedding | via `EmbeddingProvider` | P1-36 |
+| ✅ P2-17 | Query embedding | via `EmbeddingProvider` | P1-36 |
 | P2-18 | Vector search query | `halfvec` cosine, HNSW, explicit tenant predicate + RLS | P1-27 |
 | P2-19 | Lexical search query | `tsvector` italian | P1-07 |
 | P2-20 | RRF fusion + test | | P2-18,19 |
@@ -5219,6 +5219,14 @@ What the row left open:
 **Tests.** Returns a 1024-dim normalised vector; over-long input is truncated not rejected; a model mismatch throws at startup.
 
 **Files.** `packages/core/src/rag/embed-query.ts`, tests. **~70 lines.**
+
+**As built (2026-09-16).** As the row specifies, in `packages/core/src/rag/embed-query.ts`. What it left open:
+
+- **The startup assertion is `assertQueryProviderMatchesIndex`**, which refuses a provider whose model *or* dimension differs from what the catalogue was indexed with. It is exported and not yet called: nothing in the API constructs an embedding provider until there is a query path, so P2-18 wires it where that path is built *(open)*.
+- **The cap truncates and never refuses**, at 500 characters. A visitor who pastes three paragraphs asked a real question; the first five hundred characters carry the intent, and embedding the rest is a bill rather than a better answer.
+- **Normalisation is trim and collapse, and nothing else** — no stemming, no accent folding, no lowercasing. Each of those throws away signal the model was trained on: `perché`, `più` and `rossi` are all closer to their neighbours in the model's space than any regular expression would leave them.
+- **An empty message is refused rather than embedded** *(addition)*. Not a truncation case: there is nothing to embed, and a vector of whitespace is one the search would happily rank wines against, paid for at the provider.
+- **The vector is returned as the provider gave it** *(deviation from "normalised")*. Titan v2 returns unit-length vectors and pgvector's cosine operator is scale-free, so re-normalising here would be a second place for the convention to drift. What is asserted is the dimension, at startup and again on every answer, because a provider can change under a running service.
 
 ---
 
