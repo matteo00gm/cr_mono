@@ -417,8 +417,12 @@ export {
  * a whole retrieval is one `withTenant` on one connection.
  */
 export {
+  lexicalSearch,
+  LEXICAL_CANDIDATE_LIMIT,
   vectorSearch,
   VECTOR_CANDIDATE_LIMIT,
+  type LexicalCandidate,
+  type LexicalSearchRequest,
   type VectorCandidate,
   type VectorSearchRequest,
 } from './retrieval.js';

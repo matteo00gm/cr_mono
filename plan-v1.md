@@ -1315,7 +1315,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-16 | 🔒 `security_events` writer | `UNAUTHORIZED_ORIGIN` etc., counted per `(pk_, origin)` | P0-32 |
 | ✅ P2-17 | Query embedding | via `EmbeddingProvider` | P1-36 |
 | ✅ P2-18 | Vector search query | `halfvec` cosine, HNSW, explicit tenant predicate + RLS | P1-27 |
-| P2-19 | Lexical search query | `tsvector` italian | P1-07 |
+| ✅ P2-19 | Lexical search query | `tsvector` italian | P1-07 |
 | P2-20 | RRF fusion + test | | P2-18,19 |
 | P2-21 | Availability + price filters | out-of-stock excluded unless nothing matches | P2-20 |
 | P2-22 | Candidate cap (top 8) | cost + injection surface control | P2-20 |
@@ -5279,6 +5279,15 @@ The index is kept — it is cheap at this size and a corpus that outgrows the sc
 **Tests.** Finds by grape and producer; a misspelling hits the trigram fallback; a query with operator characters does not error; tenant-scoped.
 
 **Files.** `packages/core/src/rag/lexical-search.ts`, tests. **~90 lines.**
+
+**As built (2026-09-16).** `lexicalSearch` sits beside `vectorSearch` in `packages/db/src/retrieval.ts`, on P2-18's deviation: a statement lives where the driver is. What the row left open:
+
+- **`websearch_to_tsquery`, never `to_tsquery`** — the row names the first and it matters more than it looks. A visitor types quotes, `and`, a stray `!`, an emoji; `to_tsquery` raises a syntax error on all of it and the chat request fails. The suite sends five such questions and asserts each answers.
+- **Finding by grape is a containment query** *(addition)*. P1-07 deliberately kept `grape_varieties` out of `search_tsv` — it is an array, and a wine made from Nebbiolo does not say so in its description — so the text branch gains an arm that matches the question's words against the array.
+  - Compared lowercased, so `nebbiolo` answers `Nebbiolo`.
+  - That comparison cannot use the gin containment index, which at §5.0's scale is a scan the planner is right to choose *(deviation worth naming, since P7-03 measured exact search at 5.9 ms)*.
+- **The trigram fallback runs only when the words matched nothing**, which is what makes it a fallback. `%` is a similarity threshold, so on a question that already matched it would add wines that merely look like the words — a guess is better than nothing and worse than an answer. Each candidate says which branch found it.
+- **Same tenant predicate, same `ACTIVE` filter, same bound limits** as the vector branch, for the same reasons.
 
 ---
 

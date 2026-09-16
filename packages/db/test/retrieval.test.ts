@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { vectorSearch, VECTOR_CANDIDATE_LIMIT } from '../src/retrieval.js';
+import {
+  lexicalSearch,
+  LEXICAL_CANDIDATE_LIMIT,
+  vectorSearch,
+  VECTOR_CANDIDATE_LIMIT,
+} from '../src/retrieval.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 
 /**
@@ -25,10 +30,15 @@ const text = (statement: unknown): string =>
     })
     .join(' ');
 
-const capturing = (rows: unknown[] = []) => {
+/** Answers each statement in turn, so a fallback can be told from a first attempt. */
+const capturing = (...responses: unknown[][]) => {
   const statements: unknown[] = [];
+  let call = 0;
   const execute = vi.fn((statement: unknown): Promise<unknown[]> => {
     statements.push(statement);
+    const rows = responses[call] ?? [];
+    call += 1;
+
     return Promise.resolve(rows);
   });
 
@@ -110,5 +120,79 @@ describe('the vector search statement', () => {
     await expect(vectorSearch(tx, { vector })).resolves.toEqual([
       { productId: 'p1', distance: 0.25 },
     ]);
+  });
+});
+
+describe('the lexical search statement', () => {
+  const query = 'nebbiolo di Poderi Colla';
+
+  it('parses what a visitor typed, rather than a query grammar they do not know', async () => {
+    /*
+     * `to_tsquery` raises a syntax error on quotes, `and`, a stray `!` or an
+     * emoji — all of which visitors type — and the chat request would fail.
+     * `websearch_to_tsquery` reads the same input the way a search box does and
+     * never throws.
+     */
+    const { statements, tx } = capturing([{ product_id: 'p1', rank: 1 }]);
+
+    await lexicalSearch(tx, { query });
+
+    expect(text(statements[0])).toContain("websearch_to_tsquery('italian'");
+    expect(text(statements[0])).not.toContain('to_tsquery($');
+  });
+
+  it('matches a grape through the array the text column deliberately omits', async () => {
+    // P1-07 left `grape_varieties` out of `search_tsv`: a wine made from
+    // Nebbiolo does not say so in its description, and the row asks lexical
+    // search to find by grape.
+    const { statements, tx } = capturing([{ product_id: 'p1', rank: 1 }]);
+
+    await lexicalSearch(tx, { query });
+
+    expect(text(statements[0])).toContain('unnest(p.grape_varieties)');
+    expect(text(statements[0])).toContain('lower(g)');
+  });
+
+  it('writes the tenant predicate out and offers only wines still listed', async () => {
+    const { statements, tx } = capturing([{ product_id: 'p1', rank: 1 }]);
+
+    await lexicalSearch(tx, { query });
+
+    const statement = text(statements[0]);
+
+    expect(statement).toContain("current_setting('app.tenant_id'");
+    expect(statement).toContain("p.status = 'ACTIVE'");
+  });
+
+  it('asks the trigram fallback only when the words matched nothing', async () => {
+    /*
+     * `%` is a similarity threshold, so on a query that already matched it
+     * would add wines that merely look like the words. A guess is better than
+     * nothing, and worse than an answer.
+     */
+    const matched = capturing([{ product_id: 'p1', rank: 2 }]);
+    const nothing = capturing([], [{ product_id: 'p2', rank: 0.4 }]);
+
+    const found = await lexicalSearch(matched.tx, { query });
+    const guessed = await lexicalSearch(nothing.tx, { query });
+
+    expect(matched.statements).toHaveLength(1);
+    expect(found).toEqual([{ productId: 'p1', rank: 2, matched: 'text' }]);
+
+    expect(nothing.statements).toHaveLength(2);
+    expect(text(nothing.statements[1])).toContain('similarity(');
+    expect(guessed).toEqual([{ productId: 'p2', rank: 0.4, matched: 'similar' }]);
+  });
+
+  it('reads a rank back as a number, whatever the driver decoded it as', async () => {
+    const { tx } = capturing([{ product_id: 'p1', rank: '0.75' }]);
+
+    await expect(lexicalSearch(tx, { query })).resolves.toEqual([
+      { productId: 'p1', rank: 0.75, matched: 'text' },
+    ]);
+  });
+
+  it('offers forty wines by default, as the vector branch does', () => {
+    expect(LEXICAL_CANDIDATE_LIMIT).toBe(40);
   });
 });
