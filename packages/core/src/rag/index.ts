@@ -29,6 +29,24 @@ export {
 } from './embedding-provider.js';
 
 /**
+ * Embedding the visitor's question (P2-17).
+ *
+ * The other half of the seam above: the catalogue's vectors are only comparable
+ * with a query vector from the same model, and a mismatch is meaningless rather
+ * than merely worse — so it is refused at startup, where a deployment can fail.
+ */
+export {
+  assertQueryProviderMatchesIndex,
+  embedQuery,
+  MAX_QUERY_CHARACTERS,
+  normaliseQuery,
+  QueryDimensionMismatchError,
+  QueryModelMismatchError,
+  type IndexedEmbedding,
+  type QueryEmbedding,
+} from './embed-query.js';
+
+/**
  * The embedding state machine (P1-38).
  *
  * One pure function, so an illegal transition is impossible rather than merely
