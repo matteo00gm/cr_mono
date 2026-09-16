@@ -12,6 +12,7 @@ import {
   type WidgetCorsOptions,
 } from '../src/middleware/cors.js';
 import { errorHandler } from '../src/middleware/error.js';
+import { bucketIp } from '../src/middleware/ip-bucket.js';
 import { requestContext } from '../src/middleware/logger.js';
 
 /**
@@ -494,5 +495,42 @@ describe('a trailing-dot Origin (P2-09)', () => {
 
     expect(response.headers.get('access-control-allow-origin')).toBe(ORIGIN_A);
     expect(response.headers.get('access-control-allow-origin')).not.toBe(dotted);
+  });
+});
+
+describe('what a refusal hands the recorder (P2-16)', () => {
+  const recording = (options: Partial<WidgetCorsOptions> = {}) => {
+    const rejected: RejectedWidgetRequest[] = [];
+    const app = widgetApp({
+      resolve: resolver().resolve,
+      onRejected: (event) => {
+        rejected.push(event);
+        return Promise.resolve();
+      },
+      ...options,
+    });
+
+    return { app, rejected };
+  };
+
+  it('carries the visitor as a bucket, never as an address', async () => {
+    const ipSecret = randomUUID();
+    const { app, rejected } = recording({ ipSecret });
+
+    await request(app, { origin: 'https://evil.example', key: KEY_A });
+
+    // The address never reaches the row; what does is P2-04's daily-salted HMAC.
+    expect(rejected[0]?.ipBucket).toBe(bucketIp(undefined, ipSecret, Date.now()));
+    expect(rejected[0]?.ipBucket).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it('records no bucket at all when there is no secret to bucket with', async () => {
+    const { app, rejected } = recording();
+
+    await request(app, { origin: 'https://evil.example', key: KEY_A });
+
+    expect(rejected[0]?.ipBucket).toBeUndefined();
+    // A real key from a site its winery has not verified: the theft signal (§3.2).
+    expect(rejected[0]?.type).toBe('UNAUTHORIZED_ORIGIN');
   });
 });

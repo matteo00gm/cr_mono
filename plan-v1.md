@@ -1312,7 +1312,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P2-37 | RAG diagnostic sandbox | real pipeline + scores, no billing, no analytics; retrieval-only by default | P2-22 |
 | ✅ P2-14 | 🔒 Revocation sweep job | EventBridge, prunes expired `jti` | P0-35 |
 | ✅ P2-15 | 🔒 Token test suite | replay, cross-origin, absent Origin, alg confusion | P2-13 |
-| P2-16 | 🔒 `security_events` writer | `UNAUTHORIZED_ORIGIN` etc., counted per `(pk_, origin)` | P0-32 |
+| ✅ P2-16 | 🔒 `security_events` writer | `UNAUTHORIZED_ORIGIN` etc., counted per `(pk_, origin)` | P0-32 |
 | P2-17 | Query embedding | via `EmbeddingProvider` | P1-36 |
 | P2-18 | Vector search query | `halfvec` cosine, HNSW, explicit tenant predicate + RLS | P1-27 |
 | P2-19 | Lexical search query | `tsvector` italian | P1-07 |
@@ -5199,6 +5199,16 @@ What the row left open:
 **Tests.** Each rejection path writes the expected type; a forced write failure does not fail the request; counters increment per pair.
 
 **Files.** `packages/security/src/events.ts`, tests. **~90 lines.**
+
+**As built (2026-09-16).** The statement is `insertSecurityEvent` in `packages/db/src/security-events.ts`; what a refusal becomes is `refusalRecorders` in `apps/api/src/security-events.ts`. What the row left open:
+
+- **In `packages/db`, not `packages/security`** *(deviation)*. The same reason the limiter and the audit insert moved: statements live where queries belong, so no domain module imports a driver (P0-09). Which refusals are worth recording stays in the app.
+- **It opens its own transaction**, as the row asks, so a refusal is recorded whether or not the request that caused it commits. With a tenant it writes under `withTenant`; without one it writes the unattributed row this table's own `WITH CHECK` admits by name. No new scope, and no GUC.
+- **No `RETURNING`.** P0-32's suite already proved Postgres refuses it for an unattributed row (42501): the SELECT policy applies to the clause, and such a row is deliberately invisible under `USING`.
+- **A new type, `INVALID_TOKEN`** *(addition, migration 0044)*. The six existing types describe a key and an origin; none describes a token. P2-13's six reasons map onto two — the binding failures are `TOKEN_ORIGIN_MISMATCH`, the rest `INVALID_TOKEN` — and the exact reason travels in `metadata`, so P6-05 groups by type without the panel becoming a histogram of implementation detail.
+- **`ip` became `ip_bucket`** *(fix, same migration)*. The row asks for the address hashed as P2-04 hashes it, and an HMAC is not an `inet`; the house rule elsewhere is a salted hash and never a raw address (§3.9, P0-28). Nothing had ever written the column. Both refusal hooks now carry the bucket, which is why `widgetCors` and `requireWidgetToken` take the address secret.
+- **The counter is a query, not a column.** `countSecurityEvents` counts one tenant's rows for a key and an origin, on the index P0-32 built for exactly that. Unattributed rows stay invisible to a tenant scope by design, so counting abuse across them is `app_admin`'s — which is what P7-02's alert will need.
+- **Open.** P2-09's "and a `security_events` row" and P2-15's "writes the correct type" are now true for the CORS refusals, wired at the composition root. The token hook is wired where the middleware is mounted, which is P2-29's chat route.
 
 ---
 

@@ -147,6 +147,21 @@ export { resolveTenantByKeyAndOrigin, type WidgetResolution } from './widget-res
  * The rows are written when a domain is removed (P4-06).
  */
 export { isTokenRevoked, pruneLapsedRevocations } from './token-revocations.js';
+
+/**
+ * The `security_events` writer and its count (P2-16).
+ *
+ * A statement module like the audit insert, with one difference written into
+ * it: it opens its own transaction, because a refusal has to be recorded even
+ * when the request that caused it rolls back.
+ */
+export {
+  countSecurityEvents,
+  insertSecurityEvent,
+  type SecurityEvent,
+  type SecurityEventQuery,
+  type SecurityEventType,
+} from './security-events.js';
 export { REVOCATION_SWEEP_GRACE_SEC } from './revocation-grace.js';
 export { REVOCATION_SWEEPER_GUC, withLapsedRevocations } from './with-lapsed-revocations.js';
 

@@ -309,6 +309,13 @@
       "when": 1788654188578,
       "tag": "0043_revocation_sweep_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1788654188579,
+      "tag": "0044_security_event_token_type",
+      "breakpoints": true
     }
   ]
 }

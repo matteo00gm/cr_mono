@@ -74,6 +74,30 @@ const getConfig = (
     headers: { origin, 'x-forwarded-for': '203.0.113.7' },
   });
 
+describe('a refusal the surface records (P2-16)', () => {
+  it('carries the visitor as a bucket, because the surface hands CORS its secret', async () => {
+    /*
+     * The wiring nothing else would catch. `widgetCors` can only bucket an
+     * address if the surface passes it the secret, and a refusal recorded
+     * without one loses the only thing that tells a run of attempts from one
+     * visitor apart — while the response, and every other test, look identical.
+     */
+    const buckets: (string | undefined)[] = [];
+    const built = app({
+      onRejected: (event) => {
+        buckets.push(event.ipBucket);
+        return Promise.resolve();
+      },
+    });
+
+    const response = await getConfig(built, { origin: 'https://evil.example' });
+
+    expect(response.status).toBe(403);
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0]).toMatch(/^[0-9a-f]{32}$/);
+  });
+});
+
 describe('the response', () => {
   it('is exactly the public shape, with no tenant id, plan or count anywhere', async () => {
     const response = await getConfig(app());

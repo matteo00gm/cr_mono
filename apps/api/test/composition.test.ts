@@ -287,6 +287,16 @@ describe('the widget session keys (P2-12)', () => {
     expect(buildDependencies(config).widget.isTokenRevoked).toBe(isTokenRevoked);
   });
 
+  it('records a refused widget request rather than only logging it (P2-16)', () => {
+    /*
+     * Without this the middleware falls back to its own logger, which writes
+     * the refusal's type and nothing else — P6-05 has no rows to show a seller,
+     * and the abuse threshold has nothing to count. E9's shape again: the guard
+     * is proven to work and not proven to be wired.
+     */
+    expect(buildDependencies(config).widget.onRejected).toBeDefined();
+  });
+
   it('loads the keyset it is given once, however many mints ask at once', async () => {
     const serialized = JSON.stringify({ keys: [await generateWidgetTokenKey('k1')] });
     const { tokenKeys } = buildDependencies({ ...config, widgetTokenKeys: serialized }).widget;

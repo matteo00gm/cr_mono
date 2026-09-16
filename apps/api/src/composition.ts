@@ -12,6 +12,7 @@ import {
 import { memoryRateLimiter, type MonthlyCheck, type RateLimiter } from '@catalogorosso/security';
 import { loadWidgetTokenKeys, type WidgetTokenKeys } from '@catalogorosso/security/tokens';
 import {
+  insertSecurityEvent,
   isSuppressed,
   isTokenRevoked,
   readMembershipsForUser,
@@ -21,6 +22,7 @@ import {
 
 import { createMembersPort, type MembersPort } from './members.js';
 import { createProductsPort, type ProductsPort } from './products.js';
+import { refusalRecorders } from './security-events.js';
 import type { WidgetDependencies } from './surfaces/widget.js';
 import { createWebhooksPort, type WebhooksPort } from './webhooks.js';
 import type { AuthPort } from './middleware/auth.js';
@@ -316,6 +318,12 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
         ? {}
         : { tokenKeys: keysLoader(config.widgetTokenKeys) }),
       isTokenRevoked,
+      /*
+       * Where a refused widget request is recorded (P2-16). The middleware
+       * reports through a hook that swallows a throw and a rejection alike, so
+       * a database refusing writes cannot become a way to refuse service.
+       */
+      onRejected: refusalRecorders(insertSecurityEvent).onRejected,
     },
 
     ...(config.resendWebhookSecret === undefined
