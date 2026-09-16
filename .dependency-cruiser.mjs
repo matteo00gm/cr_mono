@@ -204,6 +204,12 @@ export default {
           // policy, and the caller is inside withTenant — which is what makes a
           // whole retrieval one transaction on one connection (P2-20).
           '|^packages/db/src/retrieval[.]ts$' +
+          // src/conversations.ts is exempt from P2-30 on products.ts's terms: it
+          // writes the turn and reads the history back, and takes the transaction
+          // from its caller — which is the row's own requirement rather than a
+          // convenience, because the turn and P2-31's usage_events row have to be
+          // one write. Both tables carry the boilerplate tenant policy.
+          '|^packages/db/src/conversations[.]ts$' +
           // src/with-lapsed-revocations.ts is exempt from P2-14, and it is the
           // sixth RLS context — a design change, recorded in ADR 0023. It widens
           // across tenants like with-outbox.ts, and what bounds it is in the

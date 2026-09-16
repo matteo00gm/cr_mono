@@ -409,6 +409,22 @@ export {
 } from './embeddings.js';
 
 /**
+ * Recording a turn (P2-30).
+ *
+ * Here rather than in `packages/core/src/conversations.ts` where the row puts
+ * it, for the reason every statement module is here: queries live where the
+ * driver is (P0-09). It takes the caller's transaction so the turn and P2-31's
+ * `usage_events` row are one write.
+ */
+export {
+  readConversation,
+  recordTurn,
+  type RecordedMessage,
+  type RecordedTurn,
+  type TurnToRecord,
+} from './conversations.js';
+
+/**
  * Retrieval against the catalogue (P2-18, §4.4).
  *
  * Here rather than in `packages/core/src/rag/` where the row puts it, for the

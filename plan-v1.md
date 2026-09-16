@@ -1328,7 +1328,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-27 | Schema-failure retry + fallback | one repair attempt, then text-only with no cards | P2-24 |
 | ✅ P2-28 | Escalation cascade | low score / schema fail / complex query → stronger tier | P2-27 |
 | P2-29 | `POST /v1/widget/chat` (SSE) | Function URL `RESPONSE_STREAM` | P2-13,25 |
-| P2-30 | Conversation + message persistence | | P0-28 |
+| ✅ P2-30 | Conversation + message persistence | | P0-28 |
 | P2-31 | `usage_events` writer | tokens, model, cost per turn | P0-30 |
 | P2-32 | 🔒 Prompt-injection test suite | instructions seeded into `tasting_notes` | P2-23 |
 | P2-33 | 🔒 PII redaction pre-prompt | regex + fixtures; nothing personal reaches the model | P2-23 |
@@ -5698,6 +5698,15 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 **Tests.** Turn persisted with product ids; a mid-stream abort still persists the partial assistant message; conversation reuse across turns.
 
 **Files.** `packages/core/src/conversations.ts`, tests. **~90 lines.**
+
+**As built (2026-09-16).** `recordTurn` and `readConversation` in `packages/db/src/conversations.ts`, on this repository's standing deviation: a statement lives where the driver is (P0-09).
+
+- **Migration 0045 adds `unique (tenant_id, session_id)`** *(addition the row implies and does not state)*. "Upsert the conversation by `session_id`" has no upsert without it, and select-then-insert loses the race: two messages arriving together each find no row and each insert one, so the visitor gets a second conversation with no history and the model answers the follow-up having forgotten the question. Nothing errors. Scoped by tenant too, because a session id is minted per tenant (P2-12).
+- **One turn is two statements**, not three: the conversation upsert, then both messages in one `INSERT ... VALUES (...), (...)`. Counted in the unit suite, because a turn that became three round trips would pass every integration case while a visitor waited for each one.
+- **`started` comes back from `xmax = 0`**, which is true only for a row the statement inserted. §2.4 counts sessions with it, and deriving it any other way needs a second query that can disagree with the first.
+- **`readConversation` lands here too** *(addition)*. The two messages of a turn share `now()`, so ordering a history by time alone can put the answer before the question — a history in which the model spoke first, which is exactly what a model will try to make sense of. The tie is broken by `role`, and that belongs next to the insert that creates it rather than in P2-35.
+- **The cap keeps the recent end.** P2-35 bounds how much history a prompt carries; a cap that kept the oldest messages would send the model the opening of a conversation it is being asked to continue.
+- **`retrieved_product_ids` is on the answer, never on the question**, and survives the wine being deleted — asserted, because what a complaint asks is what the model was *shown*.
 
 ---
 

@@ -1,0 +1,12 @@
+-- One conversation per widget session (P2-30).
+--
+-- A turn upserts the conversation its session belongs to, and without this
+-- constraint two messages arriving close together each find no row and each
+-- insert one. The visitor then has two conversations, the second with no
+-- history — so the model answers the follow-up having forgotten the question,
+-- and §2.4 counts one visitor as two. Nothing errors.
+--
+-- Scoped by tenant as well as session, because a session id is minted per
+-- tenant (P2-12) and a global unique index would make one tenant's session id
+-- collide with another's.
+CREATE UNIQUE INDEX "conversations_tenant_session_key" ON "conversations" ("tenant_id","session_id");
