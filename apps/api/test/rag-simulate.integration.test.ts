@@ -163,21 +163,32 @@ beforeAll(async () => {
   tenantId = await createTenant('sandbox');
   otherTenantId = await createTenant('neighbour');
 
+  /*
+   * **Only one wine answers the words, and that is what makes the order
+   * deterministic.** Three wines all named "Barolo …" by the same producer tie
+   * on `ts_rank_cd`, so the lexical branch ranks them by `product_id` — a
+   * random UUID — and the fused sums come out equal. The first draft of this
+   * suite did exactly that and passed locally while failing in CI, which is the
+   * flake being asserted away here rather than re-run away.
+   *
+   * The other two still reach the ranking through the vector branch, which is
+   * what the filter and cap cases below need them for.
+   */
   stocked = await addWine(tenantId, {
     name: 'Barolo Monfortino',
     index: 0,
     producer: 'Giacomo Conterno',
   });
   soldOut = await addWine(tenantId, {
-    name: 'Barolo Cannubi',
+    name: 'Dolcetto Comune',
     index: 1,
-    producer: 'Giacomo Conterno',
+    producer: 'Cantina Bassa',
     stock: 'OUT_OF_STOCK',
   });
   dear = await addWine(tenantId, {
-    name: 'Barolo Riserva',
+    name: 'Nebbiolo Semplice',
     index: 2,
-    producer: 'Giacomo Conterno',
+    producer: 'Cantina Alta',
     priceCents: 40_000,
   });
 
@@ -207,6 +218,15 @@ describe('what a simulation reports', () => {
     expect(first?.lexicalRank).not.toBeNull();
     expect(first?.rrfScore).toBeGreaterThan(0);
     expect(first?.name).toBe('Barolo Monfortino');
+
+    /*
+     * Strictly ahead, not merely first. A tie is what made an earlier version of
+     * this suite flake: equal fused sums fall back to `product_id`, so the
+     * assertion above became a coin toss on a random UUID and passed locally
+     * while failing in CI. This fails on the tie itself rather than on whichever
+     * side it landed.
+     */
+    expect(first?.rrfScore).toBeGreaterThan(result.candidates[1]?.rrfScore ?? 0);
   });
 
   it('reports a similarity rather than the distance the database computed', async () => {
