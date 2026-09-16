@@ -18,6 +18,7 @@ import {
   productReindexedResponse,
   productUpdatedResponse,
   productsImportedResponse,
+  ragSimulationResponse,
   roleChangeResponse,
   rosterResponse,
   surfaceResponse,
@@ -62,6 +63,7 @@ import {
   unconfiguredProducts,
   type ProductsPort,
 } from '../products.js';
+import { unconfiguredRag, type RagPort } from '../rag.js';
 import { AUTH_ROUTE_PREFIX, DASHBOARD_PREFIX } from '../routes.js';
 
 /**
@@ -96,6 +98,13 @@ export interface DashboardOptions {
    * refuses every call with a wiring error rather than answering plausibly.
    */
   readonly products?: ProductsPort | undefined;
+
+  /**
+   * The retrieval sandbox (P2-37). Optional on the `products` terms: absent
+   * refuses every call with a wiring error rather than reporting an empty
+   * candidate list, which a merchant would read as "retrieval found nothing".
+   */
+  readonly rag?: RagPort | undefined;
 }
 
 /**
@@ -338,11 +347,30 @@ const listQuery = z.object({
   completeness: z.enum(COMPLETENESS_BANDS).optional(),
 });
 
+/**
+ * What a merchant asks the sandbox (P2-37).
+ *
+ * **`.strict()`**, unlike the product bodies: every field here is a knob on a
+ * diagnostic, and a misspelt one that parses cleanly would report on a run
+ * nobody asked for. A sweep silently using the default cap is the failure.
+ *
+ * **The price ceiling arrives structured**, never inferred from the question
+ * (P2-21). The whole point of a diagnostic is that its inputs are known.
+ */
+const simulationRequest = z
+  .object({
+    query: z.string().trim().min(1).max(500),
+    maxPriceCents: z.number().int().nonnegative().optional(),
+    cap: z.number().int().nonnegative().max(40).optional(),
+  })
+  .strict();
+
 export const createDashboardApp = ({
   auth,
   readMemberships,
   members = unconfiguredMembers,
   products = unconfiguredProducts,
+  rag = unconfiguredRag,
 }: DashboardOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
@@ -959,6 +987,47 @@ export const createDashboardApp = ({
     return c.json({ product: toProductResponse(result.product), queued: true as const }, 202);
   });
 
+  /* ---- the retrieval sandbox (P2-37) ----------------------------------- */
+
+  /**
+   * Run the real retrieval path and show its working.
+   *
+   * **`catalog:read`, because what it returns is the catalogue** — the wines
+   * that matched, in the order they matched, with the numbers that put them
+   * there. Nothing here is written, so a write capability would be asking for
+   * a permission the endpoint does not use.
+   *
+   * **It is the same code the widget runs**, not a reimplementation of it: one
+   * embedding, the fused statement, P2-21's filter, P2-22's cap. A sandbox
+   * that ran its own version would answer questions about itself, which is the
+   * one thing a diagnostic must not do.
+   *
+   * **No usage, no analytics, no conversation.** A merchant debugging a bad
+   * recommendation clicks this repeatedly, and every click that moved a counter
+   * would corrupt the analytics they are about to look at next.
+   *
+   * **No system prompt in the response**, only a hash of it. Returning the
+   * assembled prompt would hand our instructions to every tenant (§3.7); the
+   * hash is enough for support to confirm which version ran.
+   */
+  app.post('/rag/simulate', requireCapability('catalog:read'), async (c) => {
+    const parsed = simulationRequest.safeParse(await readJson(c));
+
+    if (!parsed.success) {
+      throw new InvalidRequestError(
+        'Send a JSON body with a query, and optionally maxPriceCents or cap.',
+      );
+    }
+
+    return c.json(
+      await rag.simulate({
+        /* From a `memberships` row, never from the body (P0-48). */
+        tenantId: c.get('tenantId'),
+        ...parsed.data,
+      }),
+    );
+  });
+
   /* ---- the members screen (E8) ---------------------------------------- */
 
   /**
@@ -1114,6 +1183,8 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'that something did. Carries no tenant, user or catalogue data.',
       example: { surface: 'dashboard' },
       response: surfaceResponse,
+      // Refuses nothing: no session to lack and no capability to check (review fix).
+      refusals: [],
     },
   ],
   [
@@ -1389,6 +1460,50 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
     },
   ],
   [
+    routeKey('POST', `${DASHBOARD_PREFIX}/rag/simulate`),
+    {
+      access: requires('catalog:read'),
+      summary: 'Run retrieval for a question and show its working',
+      description:
+        'Runs the real retrieval pipeline for a question - the same embedding, the same ' +
+        'hybrid search, the same availability and price filter, the same candidate cap that ' +
+        'a visitor gets - and returns the ranking with the numbers that produced it. This ' +
+        'is the endpoint for "the widget recommends the wrong wine": reproducing that ' +
+        'through the live widget inflates usage counters, fills analytics with ' +
+        'conversations nobody had, and still shows only the answer rather than the ' +
+        'reasoning. Each candidate reports where each branch ranked it, the fused score, ' +
+        'how completely it is described, and whether it reached the prompt - with ' +
+        'excludedBy saying why not, which is usually the answer: the right wine was found ' +
+        'at rank eleven and cut by the cap, or it is out of stock. preCapCount separates ' +
+        '"nothing matched" from "matched, but weakly". No usage, no analytics and no ' +
+        'conversation is recorded, so it can be run as often as it takes. Retrieval only: ' +
+        'no model is asked to write a reply, and the instructions that would be sent are ' +
+        'identified by hash rather than returned.',
+      example: {
+        candidates: [
+          {
+            productId: '3f1c0b7e-4a30-4c1a-9f2e-1b7e4a304c1a',
+            name: 'Barolo Monfortino Riserva',
+            vectorRank: 2,
+            vectorScore: 0.81,
+            lexicalRank: 1,
+            rrfScore: 0.0325,
+            completeness: { score: 78, missing: ['annata'], topSuggestion: 'annata' },
+            stockStatus: 'IN_STOCK',
+            priceCents: 18_500,
+            included: true,
+            excludedBy: null,
+          },
+        ],
+        preCapCount: 23,
+        zeroResultKind: null,
+        timings: { embedMs: 142.6, searchMs: 38.2 },
+        systemPromptHash: '9f2e1b7e4a304c1a',
+      },
+      response: ragSimulationResponse,
+    },
+  ],
+  [
     routeKey('POST', `${DASHBOARD_PREFIX}/products/import`),
     {
       access: requires('catalog:write'),
@@ -1433,7 +1548,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'Classifies each row exactly as the import would - created, updated, unchanged, or ' +
         'refused for sharing a SKU with another row - so a screen can show what confirming ' +
         'will change before anything does. Nothing is written, locked, queued or audited, and ' +
-        'no Idempotency-Key is needed. The import body limits apply: at most 10,000 rows and ' +
+        'no Idempotency-Key is needed. The import body limits apply: at most 2,500 rows and ' +
         '5 MB, every row valid against the product contract. A preview is not a promise: a ' +
         'wine edited between the preview and the import can change its outcome, which is why ' +
         'the import answers with its own.',

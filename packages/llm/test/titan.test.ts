@@ -7,7 +7,7 @@ import {
   TITAN_PROVENANCE,
   titanEmbeddingProvider,
   truncateForTitan,
-} from '../src/providers/titan.js';
+} from '../src/titan.js';
 
 /**
  * The Titan adapter (P1-36).

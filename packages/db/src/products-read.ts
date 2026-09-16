@@ -1,7 +1,7 @@
-import { and, asc, desc, eq, gte, lt, gt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lt, gt, lte, or, sql, type SQL } from 'drizzle-orm';
 
 import type { EmbeddingState } from './embedding-status.js';
-import { products } from './schema/products.js';
+import { products, productStockStatus } from './schema/products.js';
 import type { ProductRow } from './products.js';
 import type { DbTransaction } from './with-tenant.js';
 
@@ -189,8 +189,16 @@ export const completenessExpression = (weights: readonly CompletenessWeight[]): 
   return sql`round(((${sql.join(terms, sql` + `)})::numeric * 100) / ${total})`;
 };
 
-/** The stock states from P0-26, as the filter accepts them. */
-export const STOCK_STATUSES = ['IN_STOCK', 'OUT_OF_STOCK', 'PREORDER'] as const;
+/**
+ * The stock states from P0-26, as the filter accepts them.
+ *
+ * Read off the `pgEnum` rather than restated, so the column and everything that
+ * narrows on it cannot disagree (P0-42). A fourth state added to the schema
+ * reaches the filter, the API contract and P2-21's availability rule by
+ * compiling; written out here it would reach none of them, and the filter would
+ * go on treating the new state as available because nothing said otherwise.
+ */
+export const STOCK_STATUSES = productStockStatus.enumValues;
 export type StockStatus = (typeof STOCK_STATUSES)[number];
 
 /**
@@ -617,4 +625,45 @@ export const listProducts = async (
   }
 
   return page;
+};
+
+/**
+ * The wines behind a set of ids, in the order the ids were given (P2-37).
+ *
+ * **Retrieval ranks ids and nothing else** — the fused statement carries only
+ * what fusion and P2-21's filter need — so anything that has to *show* a wine
+ * hydrates it here. The sandbox is the first caller; P2-23's prompt is the next.
+ *
+ * **The order is the caller's, not the database's.** Fusion's order is the
+ * answer to "why this wine?", and re-sorting by anything the table knows would
+ * throw it away. Postgres has no reason to return rows in `any()` order, so the
+ * ordering is applied here rather than assumed.
+ *
+ * **Scoped by RLS, and by the predicate as well.** An id from another tenant
+ * returns nothing rather than a row, which is what makes the sandbox unable to
+ * read across a tenant even if a caller handed it foreign ids.
+ */
+export const productsByIds = async (
+  tx: DbTransaction,
+  ids: readonly string[],
+): Promise<ProductRow[]> => {
+  if (ids.length === 0) return [];
+
+  const rows = await tx
+    .select()
+    .from(products)
+    .where(
+      and(
+        eq(products.tenantId, sql`nullif(current_setting('app.tenant_id', true), '')::uuid`),
+        inArray(products.id, [...ids]),
+      ),
+    );
+
+  const byId = new Map(rows.map((row) => [row.id, row]));
+
+  return ids.flatMap((id) => {
+    const row = byId.get(id);
+
+    return row === undefined ? [] : [row];
+  });
 };

@@ -161,8 +161,27 @@ export const describeRateLimiter = (
       const { limiter, advancePast, freshKey } = await makeFixture();
       const key = freshKey();
 
-      await limiter.check(one(key, 1, 1));
-      expect((await limiter.check(one(key, 1, 1))).allowed).toBe(false);
+      /*
+       * **Exhausted in a loop rather than in two calls**, and the reason is the
+       * flake this replaces. With a one-second window, a loaded machine can
+       * cross the boundary between consuming the allowance and asserting the
+       * refusal — so the counter resets, the second call is allowed, and the
+       * test fails having observed the very behaviour it exists to prove, one
+       * line early. That the second call in a window is refused is asserted by
+       * the cases above, with windows nobody is racing.
+       */
+      const exhaust = async (): Promise<void> => {
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          if (!(await limiter.check(one(key, 1, 1))).allowed) return;
+        }
+
+        throw new Error(
+          'the limiter allowed ten consecutive requests against a limit of one, so either ' +
+            'every one of them landed in its own window or the limit is not being counted',
+        );
+      };
+
+      await exhaust();
 
       await advancePast(1);
 
