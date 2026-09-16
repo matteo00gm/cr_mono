@@ -10,6 +10,7 @@ import {
   NotFoundError,
   RateLimitedError,
   UnauthenticatedError,
+  UnavailableError,
   type DomainErrorKind,
 } from '../src/errors.js';
 
@@ -31,6 +32,7 @@ describe('the subclasses', () => {
     [InvalidRequestError, 'invalid'],
     [ConflictError, 'conflict'],
     [RateLimitedError, 'rate_limited'],
+    [UnavailableError, 'unavailable'],
   ];
 
   it.each(cases)('%s carries its kind', (Ctor, kind) => {
