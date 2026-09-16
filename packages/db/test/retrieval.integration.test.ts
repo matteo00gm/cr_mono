@@ -63,6 +63,8 @@ const addWine = async (
     producer,
     grapes,
     embed = true,
+    stock = 'IN_STOCK',
+    priceCents = 1000,
   }: {
     name: string;
     index: number;
@@ -73,6 +75,8 @@ const addWine = async (
     grapes?: string[];
     /** False for a wine the vector branch cannot see, so fusion has one side only. */
     embed?: boolean;
+    stock?: 'IN_STOCK' | 'OUT_OF_STOCK' | 'PREORDER';
+    priceCents?: number;
   },
 ): Promise<string> => {
   await useTenant(db, tenant);
@@ -84,7 +88,7 @@ const addWine = async (
     values (
       ${tenant}::uuid, ${`sku-${randomUUID()}`}, ${name}, ${producer ?? null},
       ${grapes === undefined ? null : `{${grapes.join(',')}}`}::text[],
-      'red', 1000, 'EUR', 'IN_STOCK', ${status}::product_status
+      'red', ${priceCents}, 'EUR', ${stock}::product_stock_status, ${status}::product_status
     )
     returning id
   `);
@@ -416,6 +420,23 @@ describe('fused retrieval (P2-20)', () => {
     const at = found.find((candidate) => candidate.productId === misspelled);
 
     expect(at?.lexicalRank).not.toBeNull();
+  });
+
+  it('reports the stock status and price P2-21 filters on, per wine (P2-21)', async () => {
+    const soldOut = await addWine(fusedTenant, {
+      name: 'Barolo Esaurito',
+      index: 4,
+      producer: 'Giacomo Conterno',
+      stock: 'OUT_OF_STOCK',
+      priceCents: 4500,
+    });
+
+    const found = await fuse(fusedTenant);
+    const gone = found.find((candidate) => candidate.productId === soldOut);
+    const stocked = found.find((candidate) => candidate.productId === both);
+
+    expect(gone).toMatchObject({ stockStatus: 'OUT_OF_STOCK', priceCents: 4500 });
+    expect(stocked).toMatchObject({ stockStatus: 'IN_STOCK', priceCents: 1000 });
   });
 
   it('completes on a pool of one connection, which two transactions could not', async () => {

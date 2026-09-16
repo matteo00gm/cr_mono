@@ -249,11 +249,45 @@ describe('the fused statement', () => {
 
   it('reads ranks back as numbers, and a branch that missed as null', async () => {
     const { tx } = capturing([
-      { product_id: 'p1', vector_rank: '1', lexical_rank: null, score: '0.0163' },
+      {
+        product_id: 'p1',
+        vector_rank: '1',
+        lexical_rank: null,
+        stock_status: 'IN_STOCK',
+        // `integer` arrives as a number, `bigint` and `numeric` as strings.
+        price_cents: 2400,
+        score: '0.0163',
+      },
     ]);
 
     await expect(fusedSearch(tx, { vector, query })).resolves.toEqual([
-      { productId: 'p1', score: 0.0163, vectorRank: 1, lexicalRank: null },
+      {
+        productId: 'p1',
+        score: 0.0163,
+        vectorRank: 1,
+        lexicalRank: null,
+        stockStatus: 'IN_STOCK',
+        priceCents: 2400,
+      },
     ]);
+  });
+
+  it('carries what P2-21 filters on, from the tenant the setting names', async () => {
+    /*
+     * The join is scoped explicitly as well as by RLS. A candidate is only ever
+     * a product one of the branches found, so the join cannot widen the set —
+     * but a predicate written once in each branch and nowhere here is how the
+     * one place that lacks it becomes the place a wine crosses a tenant.
+     */
+    const { statements, tx } = capturing([]);
+
+    await fusedSearch(tx, { vector, query });
+
+    const statement = text(statements[0]);
+
+    expect(statement).toContain('p.stock_status');
+    expect(statement).toContain('p.price_cents');
+    expect(statement).toContain('join products p on p.id = product_id and p.tenant_id =');
+    expect(statement).toContain("current_setting('app.tenant_id'");
   });
 });

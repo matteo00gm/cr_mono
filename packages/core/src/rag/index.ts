@@ -117,3 +117,17 @@ export {
   sanitiseUntrusted,
   type PairingPrompt,
 } from './prompt.js';
+
+/**
+ * Availability and price filtering (P2-21).
+ *
+ * Applied to the fused list, because filtering inside a branch distorts the
+ * rank sets RRF then fuses.
+ */
+export {
+  applyFilters,
+  type FilterableCandidate,
+  type FilterResult,
+  type RetrievalFilters,
+  type StockStatus,
+} from './filters.js';

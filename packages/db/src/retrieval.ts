@@ -263,6 +263,15 @@ export interface FusedCandidate {
   /** Where each branch placed it, or null where that branch missed it. P2-37 shows these. */
   readonly vectorRank: number | null;
   readonly lexicalRank: number | null;
+  /**
+   * What P2-21 filters on, read in the statement that found the wine.
+   *
+   * Carried here rather than fetched afterwards because the filter is pure and
+   * a second trip for two columns of rows we already have is a second trip.
+   */
+  readonly stockStatus: 'IN_STOCK' | 'OUT_OF_STOCK' | 'PREORDER';
+  /** Minor units, in the tenant's currency. */
+  readonly priceCents: number;
 }
 
 export interface FusedSearchRequest {
@@ -291,6 +300,11 @@ export interface FusedSearchRequest {
  *
  * **P2-19's fallback survives fusion** as a third CTE that contributes only when
  * the words matched nothing, so a misspelled producer still reaches the ranking.
+ *
+ * **Stock and price come back with the ranks** (P2-21), from a join onto the
+ * products the branches already narrowed to. The filter that reads them is pure
+ * and lives in `packages/core`; fetching them afterwards would be a second trip
+ * for two columns of rows this statement has in hand.
  */
 export const fusedSearch = async (
   tx: DbTransaction,
@@ -324,22 +338,36 @@ export const fusedSearch = async (
     select product_id,
            vec.rank as vector_rank,
            lex.rank as lexical_rank,
+           p.stock_status,
+           p.price_cents,
            coalesce(1.0 / (${k} + vec.rank), 0) + coalesce(1.0 / (${k} + lex.rank), 0) as score
     from vec full outer join lex using (product_id)
+    join products p on p.id = product_id and p.tenant_id = ${tenantScope}
     order by score desc, product_id
     limit ${limit}
   `);
 
+  /*
+   * `postgres-js` returns `bigint` and `numeric` as strings and `integer` as a
+   * number, so the ranks and the score are coerced and the price is not. The
+   * asymmetry is the driver's, not ours: a blanket `Number()` over the price
+   * would be a conversion that provably cannot do anything, which both the
+   * linter and P2-21's mutation run said out loud.
+   */
   return [...rows].map((row) => {
     const {
       product_id: productId,
       vector_rank: vectorRank,
       lexical_rank: lexicalRank,
+      stock_status: stockStatus,
+      price_cents: priceCents,
       score,
     } = row as {
       product_id: string;
       vector_rank: number | string | null;
       lexical_rank: number | string | null;
+      stock_status: FusedCandidate['stockStatus'];
+      price_cents: number;
       score: number | string;
     };
 
@@ -348,6 +376,8 @@ export const fusedSearch = async (
       score: Number(score),
       vectorRank: vectorRank === null ? null : Number(vectorRank),
       lexicalRank: lexicalRank === null ? null : Number(lexicalRank),
+      stockStatus,
+      priceCents,
     };
   });
 };

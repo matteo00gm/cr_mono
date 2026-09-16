@@ -672,6 +672,8 @@ LIMIT 40;
 
 The explicit `e.tenant_id = current_setting(...)` is **redundant with RLS on purpose** — belt and braces, and it also gives the planner a usable predicate.
 
+*As built (P2-18, P2-21):* the sketch's `stock_status <> 'OUT_OF_STOCK'` is **not** in the branch, and step 4 above is the one that holds. Filtering inside a branch changes the ranks of everything below what it removed, so RRF would fuse a ranking that never existed — and a sold-out wine has to survive fusion at all to be returned flagged when nothing else matches (§1.5). `status = 'ACTIVE'` does stay in the branch, because an archived wine is retrievable by no path whatever (P1-05). The cast is `::halfvec`, per the storage decision above.
+
 **Known scaling concern, with a mitigation:** a filtered ANN search over a shared HNSW index can over-scan as tenant count grows, because the index is traversed globally and then filtered. Plan for it now: enable pgvector's iterative index scans (`hnsw.iterative_scan`), and when a tenant's catalog or the tenant count crosses a measured threshold, **hash-partition `product_embeddings` by `tenant_id`** (or add partial indexes for the largest tenants). A k6 scenario with 200 synthetic tenants × 2,000 products measures p95 and tells us when to pull that lever — do not guess.
 
 ### 4.5 Generation
@@ -1317,7 +1319,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-18 | Vector search query | `halfvec` cosine, HNSW, explicit tenant predicate + RLS | P1-27 |
 | ✅ P2-19 | Lexical search query | `tsvector` italian | P1-07 |
 | ✅ P2-20 | RRF fusion + test | | P2-18,19 |
-| P2-21 | Availability + price filters | out-of-stock excluded unless nothing matches | P2-20 |
+| ✅ P2-21 | Availability + price filters | out-of-stock excluded unless nothing matches | P2-20 |
 | P2-22 | Candidate cap (top 8) | cost + injection surface control | P2-20 |
 | ✅ P2-23 | 🔒 Prompt assembly | product content delimited and labelled untrusted | P2-22 |
 | ✅ P2-24 | Structured output schema | `{reply, recommendations[]}` + Zod | P1-42 |
@@ -5348,6 +5350,17 @@ One round trip, one connection, one transaction, and the `FULL OUTER JOIN` handl
 
 **Files.** `filters.ts`, tests. **~70 lines.**
 
+**As built (2026-09-16).** `applyFilters` in `packages/core/src/rag/filters.ts`, over the fused list, with the two columns it reads carried back by `fusedSearch`.
+
+- **The ceiling applies first, and the sold-out fallback is drawn from what survives it.** The other order answers "nothing in stock under 30" with a 40-euro bottle that is also sold out — wrong twice.
+- **`PREORDER` is available** *(decision)*. It can be ordered, which is the question a visitor is asking.
+- **The ceiling is inclusive.** "Under 30 euro" and "around 30 euro" both mean the shelf at 30; a caller that means strictly under passes one cent less.
+- **A ceiling of zero is a ceiling.** `?? undefined`, never `|| Infinity`, which is the version that silently drops it.
+- **`fusedSearch` returns `stockStatus` and `priceCents`** *(deviation from P2-20's shape)*, from one tenant-scoped join onto the products its branches already narrowed to. The filter stays pure and nothing makes a second trip for two columns the statement has in hand.
+- **The result carries one `outOfStockOnly` flag rather than per-candidate flags**, because the fallback set is entirely out of stock by construction — and every candidate carries its own `stockStatus` anyway, which is what §1.5's badge reads.
+- **Nothing here parses.** The row says structured rather than model-inferred, so the ceiling arrives in minor units from the caller that read the visitor's message.
+- **No price *floor*** *(scope)*. The row and its tests name a ceiling; "at least 20 euro" is not a thing visitors ask, and a filter nobody calls is a filter nobody tests.
+
 ---
 
 ### P2-22 · Candidate cap
@@ -7109,6 +7122,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Infra typecheck needs `sst install` in CI | later | `pnpm typecheck:infra` is local-only until CI runs `sst install` first; that download is the cost of enforcing it. Consequence: every infra invariant is guarded by a CI grep rather than by types — see **A3** and **E3**. |
 | SST deploy verified | **closed (2026-09-01)** | Deployed and verified on `dev` stage in `eu-west-1` (VPC, NAT, RDS Postgres 16 with TLS, SSM parameters with SecureString decryption, SNS Topic + subscription, Budgets). Cleanly torn down with `sst remove` to avoid idle costs. |
 | Bedrock model access confirmed | **closed (2026-09-01)** | Confirmed active in `eu-west-1` via AWS CLI: `amazon.nova-lite-v1:0` (chat/pairing LLM) and `amazon.titan-embed-text-v2:0` (vector embeddings). |
+| Price filtering assumes one currency per tenant | later | P2-21's ceiling is minor units with no currency, and `products.currency` is per row while §2.2 sets one per tenant. A tenant that ever priced two wines in two currencies would have a 30 EUR ceiling silently compared against 30 USD. Closing it means the ceiling carrying a currency and the filter excluding rows priced in another — excluding, not converting, since we hold no rate. Cheap, and not worth the surface until a tenant does it. |
 | OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |
 | Branch protection configured | **closed (2026-09-06)** | All five checks required on `main` — `Format, lint, typecheck`, `Test and coverage gates`, `Integration tests (Postgres)`, `Secret scan`, `Dependency audit` — with `enforce_admins: true`, 0 approvals (1 would deadlock a solo maintainer) and `strict: false` (so a stacked chain does not need rebasing between merges). Verified by attempting a direct push to `main` and being refused. See **E4**. |
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |
