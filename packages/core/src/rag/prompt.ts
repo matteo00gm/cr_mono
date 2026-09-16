@@ -153,6 +153,27 @@ const SYSTEM_PROMPT = [
 /** The instructions, identical for every request — the prefix a provider caches. */
 export const pairingSystemPrompt = (): string => SYSTEM_PROMPT;
 
+/**
+ * What is added to the instructions on a repair attempt (P2-27).
+ *
+ * **Appended to the system prompt, never to a turn.** §3.7 puts operator
+ * instructions in the system position only, and a repair is an operator
+ * instruction — putting it in a user turn would teach a model, by its own
+ * failure, that instructions can arrive from where the visitor's message does.
+ *
+ * It costs the cached prefix for one request, which is the trade the row makes:
+ * a repair that shares the cached prefix cannot say anything new.
+ */
+const REPAIR_PROMPT = [
+  '',
+  'Your previous answer did not match the schema and was discarded.',
+  'Answer again with JSON matching the schema above exactly, and nothing else:',
+  'no prose outside the JSON, no code fence, no trailing commentary.',
+].join('\n');
+
+/** The instructions plus the repair note, for the one retry P2-27 allows. */
+export const pairingRepairPrompt = (): string => `${SYSTEM_PROMPT}${REPAIR_PROMPT}`;
+
 /** Whether a piece of model output quotes the instructions or their delimiters. P2-27 treats it as a failure. */
 export const leaksInstructions = (text: string): boolean =>
   text.includes(PROMPT_MARKER) || /<\/?(?:candidat[oi]|messaggio_visitatore)\b/i.test(text);
@@ -213,5 +234,9 @@ export const buildPairingPrompt = (request: PairingRequest): PairingPrompt => {
     content: sanitiseUntrusted(turn.content, FIELD_CAPS.historyTurn),
   }));
 
-  return { system: SYSTEM_PROMPT, history, user };
+  return {
+    system: request.repairing === true ? pairingRepairPrompt() : SYSTEM_PROMPT,
+    history,
+    user,
+  };
 };

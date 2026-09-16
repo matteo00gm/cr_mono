@@ -1325,7 +1325,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-24 | Structured output schema | `{reply, recommendations[]}` + Zod | P1-42 |
 | ✅ P2-25 | ⛔ 🔒 Output allowlisting | every `productId` ∈ tenant **∩** retrieved candidate set | P2-24 |
 | ✅ P2-26 | 🔒 Test: output allowlisting | injected foreign and hallucinated ids are dropped + logged | P2-25 |
-| P2-27 | Schema-failure retry + fallback | one repair attempt, then text-only with no cards | P2-24 |
+| ✅ P2-27 | Schema-failure retry + fallback | one repair attempt, then text-only with no cards | P2-24 |
 | P2-28 | Escalation cascade | low score / schema fail / complex query → stronger tier | P2-27 |
 | P2-29 | `POST /v1/widget/chat` (SSE) | Function URL `RESPONSE_STREAM` | P2-13,25 |
 | P2-30 | Conversation + message persistence | | P0-28 |
@@ -5511,6 +5511,18 @@ Return `dropped` so P2-26 can assert on it and so the caller can log it — a no
 
 **Files.** `packages/core/src/rag/pairing.ts`, tests. **~110 lines.**
 
+**As built (2026-09-16).** `withSchemaRepair` in `packages/core/src/rag/repair.ts`. (`repair.ts`, not `pairing.ts`: `pairing-schema.ts` sits beside it and `packages/llm/src/pairing.ts` already exists, so a third `pairing` would name three different things.)
+
+- **The repair instruction goes in the system position**, through a `repairing` flag on `PairingRequest` that `buildPairingPrompt` reads. §3.7 puts operator instructions there and nowhere else, and appending a repair note to a turn would place it exactly where retrieved text sits — a model's own failure teaching it that instructions can arrive from there. It costs the cached prefix for one request, which is the trade.
+- **The validation issues are *not* sent to the model** *(deviation — the row says to append them)*. Carrying them would mean a field on `PairingChunk`'s error that must never be forwarded to SSE, and a field like that is a leak waiting for the one route that forwards it. The repair says *that* the schema was missed; the schema itself is already in the system prompt. `PairingParse.issues` is for logs, and its comment now says so.
+- **A lower temperature is not set** *(deferred)*. `LlmProvider` has no temperature and adding one means three vendor spellings and three adapters; the repair's determinism comes from restating the requirement. Worth revisiting with P1-47's bake-off, where per-provider knobs are the subject.
+- **The repair's reply is suppressed when the first attempt already wrote one** *(addition the row does not mention and the streaming path forces)*. Both attempts answer the same question, so letting the second through shows a visitor two replies to it — the second arriving after they have read the first. When the first attempt wrote nothing, the repair's reply is the only one there is and it goes out.
+- **A failed repair degrades rather than errors**: the reply stands and an empty `recommendations` chunk says there are no cards, for P2-26's reason. It errors only when *neither* attempt wrote anything, where there is no answer to degrade to.
+- **The reply is capped at `MAX_REPLY_CHARACTERS` as it streams.** That is what a parsed reply is capped at, so a streamed one running longer is a model ignoring its instructions rather than a longer answer worth reading.
+- **The outcome is reported through a callback, exactly once** — `ok`, `repaired`, `schema_failed`, `refusal` or `provider_error`. P2-31 writes it to `usage_events`, which is what makes §4.5's disqualification rate measurable per provider.
+
+**⚠ Open: streamed text is not checked for leaked instructions.** `trustedPairing` refuses a *parsed* reply that quotes the prompt (P1-42), but the adapters stream text deltas before that check runs — so a model that echoes its instructions as prose reaches a visitor, and nothing here can un-send a delta. Closing it means either holding text back by the length of the longest marker before releasing it, or buffering the reply and giving up streaming. It belongs with **P2-32**, where adversarial prompts are the subject and the cost of each option can be measured against real attempts.
+
 ---
 
 ### P2-28 · Escalation cascade
@@ -7164,6 +7176,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | SST deploy verified | **closed (2026-09-01)** | Deployed and verified on `dev` stage in `eu-west-1` (VPC, NAT, RDS Postgres 16 with TLS, SSM parameters with SecureString decryption, SNS Topic + subscription, Budgets). Cleanly torn down with `sst remove` to avoid idle costs. |
 | Bedrock model access confirmed | **closed (2026-09-01)** | Confirmed active in `eu-west-1` via AWS CLI: `amazon.nova-lite-v1:0` (chat/pairing LLM) and `amazon.titan-embed-text-v2:0` (vector embeddings). |
 | Price filtering assumes one currency per tenant | later | P2-21's ceiling is minor units with no currency, and `products.currency` is per row while §2.2 sets one per tenant. A tenant that ever priced two wines in two currencies would have a 30 EUR ceiling silently compared against 30 USD. Closing it means the ceiling carrying a currency and the filter excluding rows priced in another — excluding, not converting, since we hold no rate. Cheap, and not worth the surface until a tenant does it. |
+| Streamed text is not checked for leaked instructions | **P2-32** | `trustedPairing` refuses a parsed reply that quotes the prompt, but adapters stream text deltas before that check runs, so a model echoing its instructions as prose reaches a visitor and no delta can be un-sent. Detail under P2-27's as-built. |
 | OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |
 | Branch protection configured | **closed (2026-09-06)** | All five checks required on `main` — `Format, lint, typecheck`, `Test and coverage gates`, `Integration tests (Postgres)`, `Secret scan`, `Dependency audit` — with `enforce_admins: true`, 0 approvals (1 would deadlock a solo maintainer) and `strict: false` (so a stacked chain does not need rebasing between merges). Verified by attempting a direct push to `main` and being refused. See **E4**. |
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |

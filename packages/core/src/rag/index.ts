@@ -113,6 +113,7 @@ export {
   leaksInstructions,
   MAX_HISTORY_TURNS,
   pairingSystemPrompt,
+  pairingRepairPrompt,
   PROMPT_MARKER,
   sanitiseUntrusted,
   type PairingPrompt,
@@ -153,3 +154,12 @@ export {
  * it is this one.
  */
 export { allowlisted, allowlistRecommendations, type AllowlistResult } from './allowlist.js';
+
+/**
+ * One repair attempt, and then an honest answer (P2-27).
+ *
+ * A schema failure is a normal outcome with a next step, not an error — and the
+ * next step happens once, because a model that missed the schema twice will
+ * miss it a third time while the visitor waits.
+ */
+export { withSchemaRepair, type PairingOutcome, type SchemaRepairOptions } from './repair.js';
