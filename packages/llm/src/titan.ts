@@ -13,12 +13,17 @@ import {
 /**
  * Titan Text Embeddings V2, behind the P1-35 port (P1-36).
  *
- * **In `apps/worker` rather than `packages/core`, where the row puts it.** The
+ * **In `packages/llm` rather than `packages/core`, where the row puts it.** The
  * P0-09 boundary rule forbids `core` importing the AWS SDK, and the reason is
  * exactly the one that applies here: the moment it does, testing anything in
  * that package needs a mocked cloud, and the suites that are fast and trusted
  * stop being either. The *port* stays in core, which is what every other module
- * compiles against; the adapter lives beside its only consumer.
+ * compiles against; the adapter lives with the other model adapters.
+ *
+ * **Moved out of `apps/worker` by P2-37**, which needs to embed a query from
+ * the API. An adapter in one app is unreachable from another — correctly, since
+ * apps do not import apps — and the choice was a second copy or one package.
+ * This is the package whose stated job is model adapters.
  */
 
 /** §5.3's choice, and the string written to `product_embeddings.model`. */

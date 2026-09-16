@@ -37,6 +37,11 @@ const STATUS_BY_KIND: Record<DomainErrorKind, ContentfulStatusCode> = {
   invalid: 422,
   conflict: 409,
   rate_limited: 429,
+  /**
+   * 403 like `forbidden`, and told apart by its code (P2-12): the widget shows a
+   * disabled state for a winery that is switched off, and an error for a refusal.
+   */
+  unavailable: 403,
 };
 
 /** What every failing response looks like, for callers and for the typed client (P0-63). */

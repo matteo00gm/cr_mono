@@ -223,7 +223,7 @@ describe('pruneClosedWindows', () => {
     `);
     await db.transaction((tx) => consumeBuckets(tx, [{ key: current, limit: 5, windowSec: 60 }]));
 
-    const deleted = await pruneClosedWindows(db, 3600);
+    const deleted = await pruneClosedWindows(1_000, db);
     expect(deleted).toBeGreaterThanOrEqual(1);
 
     const remaining = await db.execute(
@@ -234,6 +234,81 @@ describe('pruneClosedWindows', () => {
     // The table has no other reaper, and an unbounded one would eventually make
     // the limiter slower than the thing it protects.
     expect(keys).toEqual([current]);
+  });
+
+  it("keeps this month's plan cap and deletes last month's (P2-14)", async () => {
+    const thisMonth = `test:${randomUUID()}:month`;
+    const lastMonth = `test:${randomUUID()}:month`;
+
+    await db.transaction((tx) =>
+      consumeBuckets(tx, [{ key: thisMonth, limit: 5, window: 'month' }]),
+    );
+    await db.execute(sql`
+      INSERT INTO rate_limit_buckets (bucket_key, window_start, count)
+      VALUES (
+        ${lastMonth},
+        (date_trunc('month', now() AT TIME ZONE 'UTC') - interval '1 month') AT TIME ZONE 'UTC',
+        3
+      )
+    `);
+
+    await pruneClosedWindows(1_000, db);
+
+    const rows = await db.execute(
+      sql`SELECT bucket_key FROM rate_limit_buckets WHERE bucket_key IN (${thisMonth}, ${lastMonth})`,
+    );
+
+    expect([...rows].map((r) => (r as { bucket_key: string }).bucket_key)).toEqual([thisMonth]);
+  });
+
+  it('deletes a window that closed within the last two hours (P2-14)', async () => {
+    /*
+     * **Pins the hour itself.** Every other case here is two hours old or half
+     * an hour old, so a sweep that waited two hours would pass all of them while
+     * leaving closed windows behind — the table growing, and nothing failing.
+     */
+    const closed = `test:${randomUUID()}`;
+
+    await db.execute(sql`
+      INSERT INTO rate_limit_buckets (bucket_key, window_start, count)
+      VALUES (${closed}, now() - interval '90 minutes', 1)
+    `);
+
+    await pruneClosedWindows(1_000, db);
+
+    const rows = await db.execute(
+      sql`SELECT bucket_key FROM rate_limit_buckets WHERE bucket_key = ${closed}`,
+    );
+
+    expect([...rows]).toHaveLength(0);
+  });
+
+  it('keeps a window that started within the longest fixed window', async () => {
+    const recent = `test:${randomUUID()}`;
+
+    await db.execute(sql`
+      INSERT INTO rate_limit_buckets (bucket_key, window_start, count)
+      VALUES (${recent}, now() - interval '30 minutes', 1)
+    `);
+
+    await pruneClosedWindows(1_000, db);
+
+    const rows = await db.execute(
+      sql`SELECT bucket_key FROM rate_limit_buckets WHERE bucket_key = ${recent}`,
+    );
+
+    expect([...rows]).toHaveLength(1);
+  });
+
+  it('deletes no more than its batch in one statement', async () => {
+    for (let index = 0; index < 3; index += 1) {
+      await db.execute(sql`
+        INSERT INTO rate_limit_buckets (bucket_key, window_start, count)
+        VALUES (${`test:${randomUUID()}`}, now() - interval '2 hours', 1)
+      `);
+    }
+
+    expect(await pruneClosedWindows(2, db)).toBe(2);
   });
 });
 
