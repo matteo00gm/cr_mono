@@ -1316,7 +1316,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-17 | Query embedding | via `EmbeddingProvider` | P1-36 |
 | ✅ P2-18 | Vector search query | `halfvec` cosine, HNSW, explicit tenant predicate + RLS | P1-27 |
 | ✅ P2-19 | Lexical search query | `tsvector` italian | P1-07 |
-| P2-20 | RRF fusion + test | | P2-18,19 |
+| ✅ P2-20 | RRF fusion + test | | P2-18,19 |
 | P2-21 | Availability + price filters | out-of-stock excluded unless nothing matches | P2-20 |
 | P2-22 | Candidate cap (top 8) | cost + injection surface control | P2-20 |
 | ✅ P2-23 | 🔒 Prompt assembly | product content delimited and labelled untrusted | P2-22 |
@@ -5328,6 +5328,15 @@ One round trip, one connection, one transaction, and the `FULL OUTER JOIN` handl
 **Tests.** A product ranked highly by both outranks one ranked highly by only one; a product found by only one source still appears; both sources empty returns empty; determinism given fixed inputs; **exactly one connection is checked out for the duration of a retrieval** (assert via pool instrumentation — that is the regression this correction exists to prevent).
 
 **Files.** `packages/core/src/rag/fuse.ts`, tests. **~110 lines.**
+
+**As built (2026-09-16).** `fusedSearch` joins the two branches in `packages/db/src/retrieval.ts`, on P2-18's deviation: the statement lives where the driver is. What the row left open:
+
+- **One statement, as the correction requires.** The unit suite counts the statements a retrieval issues, because only a unit test can count them; the integration suite proves one completes on a `max: 1` pool, which two transactions could not.
+- **No pure RRF function in `packages/core`** *(deviation)*. The scoring is in the SQL the correction mandates, and a TypeScript copy of it would be a second answer that can disagree with the first. `RRF_K` is exported for P1-46's sweep, which is what the row wanted the constant for.
+- **P2-19's trigram fallback survives fusion** *(addition)*. The row's SQL sketch has two CTEs; a third contributes only when the words matched nothing, so a misspelled producer still reaches the ranking instead of being dropped by the branch that was meant to catch it.
+- **Every candidate reports the rank each branch gave it**, or null where a branch missed it. That is what P2-37's sandbox shows, and it costs nothing to carry.
+- **`k` and all three limits are bound parameters.**
+- **Carries P1-05**, as the row says: that an archived wine cannot be retrieved is asserted through this function, not through a query written for the test.
 
 ---
 

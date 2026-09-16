@@ -417,10 +417,15 @@ export {
  * a whole retrieval is one `withTenant` on one connection.
  */
 export {
+  fusedSearch,
+  FUSED_CANDIDATE_LIMIT,
   lexicalSearch,
   LEXICAL_CANDIDATE_LIMIT,
+  RRF_K,
   vectorSearch,
   VECTOR_CANDIDATE_LIMIT,
+  type FusedCandidate,
+  type FusedSearchRequest,
   type LexicalCandidate,
   type LexicalSearchRequest,
   type VectorCandidate,
