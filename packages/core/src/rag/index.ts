@@ -144,3 +144,12 @@ export {
   MAX_CANDIDATES,
   type CappedCandidates,
 } from './candidates.js';
+
+/**
+ * Output allowlisting (P2-25).
+ *
+ * The boundary that makes a hallucinated or cross-tenant wine structurally
+ * unable to reach a visitor. If one function in this package has to be right,
+ * it is this one.
+ */
+export { allowlistRecommendations, type AllowlistResult } from './allowlist.js';

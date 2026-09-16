@@ -1323,7 +1323,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-22 | Candidate cap (top 8) | cost + injection surface control | P2-20 |
 | ✅ P2-23 | 🔒 Prompt assembly | product content delimited and labelled untrusted | P2-22 |
 | ✅ P2-24 | Structured output schema | `{reply, recommendations[]}` + Zod | P1-42 |
-| P2-25 | ⛔ 🔒 Output allowlisting | every `productId` ∈ tenant **∩** retrieved candidate set | P2-24 |
+| ✅ P2-25 | ⛔ 🔒 Output allowlisting | every `productId` ∈ tenant **∩** retrieved candidate set | P2-24 |
 | P2-26 | 🔒 Test: output allowlisting | injected foreign and hallucinated ids are dropped + logged | P2-25 |
 | P2-27 | Schema-failure retry + fallback | one repair attempt, then text-only with no cards | P2-24 |
 | P2-28 | Escalation cascade | low score / schema fail / complex query → stronger tier | P2-27 |
@@ -5475,6 +5475,13 @@ Return `dropped` so P2-26 can assert on it and so the caller can log it — a no
 **Tests.** P2-26.
 
 **Files.** `packages/core/src/rag/allowlist.ts`. **~60 lines.**
+
+**As built (2026-09-16).** `allowlistRecommendations`, with the signature the row specifies.
+
+- **No re-query, as the row insists**, and the comment says why at length: the candidates were retrieved under `withTenant` with an explicit tenant predicate, so set membership already implies ownership — and a second check would invite a later change to relax the first on the grounds that the second covers it. It does not: a wine can be in the tenant's catalogue and still be one the model invented.
+- **A repeat is dropped after the first** *(addition)*. Not a security failure — the id is in the set both times — but two identical cards is a visible defect, and this is the one place the list is examined before a visitor sees it. It lands in `dropped` because it is the same signal: the model did not do what it was asked.
+- **`items` holds the same objects, not copies.** Rebuilding a recommendation here would be a second place its shape is decided, one `reason` cap away from disagreeing with P2-24.
+- **Tests landed with the function** *(deviation — the row defers them to P2-26)*. A function this load-bearing arriving with no tests would be trusted for however long P2-26 takes. What is here is the function's own behaviour, including the subtle case the row names; P2-26's crafted outputs and stubbed-provider integration test are still its own row.
 
 ---
 
