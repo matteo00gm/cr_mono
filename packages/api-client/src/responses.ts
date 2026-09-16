@@ -558,3 +558,19 @@ export const widgetConfigResponse = z.strictObject({
 });
 
 export type WidgetConfigResponse = z.infer<typeof widgetConfigResponse>;
+
+/**
+ * A minted widget session (P2-12, §3.4).
+ *
+ * **The token and when it lapses, and nothing else.** The claims inside the
+ * token are for our own verifier; the widget reads `exp` from the token only to
+ * time a refresh (P3-21), and `expiresAt` says the same for a caller that does
+ * not decode it. Strict, so a claim copied into the body by mistake fails the
+ * route's own test.
+ */
+export const widgetSessionResponse = z.strictObject({
+  token: z.string(),
+  expiresAt: z.iso.datetime(),
+});
+
+export type WidgetSessionResponse = z.infer<typeof widgetSessionResponse>;
