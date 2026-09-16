@@ -48,6 +48,7 @@ const LOCAL = {
   SST_STAGE: '',
   ORIGIN_SECRET: '',
   RESEND_WEBHOOK_SECRET: '',
+  WIDGET_TOKEN_KEYS: '',
 };
 
 type Environment = Partial<Record<keyof typeof LOCAL, string>>;
@@ -253,6 +254,39 @@ describe('the Lambda entry point', () => {
         });
 
         expect(warned()).not.toContain('webhook_secret_absent');
+      },
+      COLD_START_MS,
+    );
+
+    it(
+      'warns, rather than refusing to start, when the widget token keyset is absent (P2-12)',
+      async () => {
+        // Restrictive when absent: no session is minted, so it is said, not enforced.
+        const { warned } = await load({ SST_STAGE: 'review', ORIGIN_SECRET: randomUUID() });
+
+        expect(warned()).toContain('widget_token_keys_absent');
+      },
+      COLD_START_MS,
+    );
+
+    it(
+      'passes the widget token keyset on, and stops warning, once it is set (P2-12)',
+      async () => {
+        /*
+         * The variable only has to arrive; whether it loads is the loader's
+         * business. Its content is opaque here, so nothing key-shaped is written.
+         */
+        const keyset = randomUUID();
+        const seen = capturingConfig();
+
+        const { warned } = await load({
+          SST_STAGE: 'review',
+          ORIGIN_SECRET: randomUUID(),
+          WIDGET_TOKEN_KEYS: keyset,
+        });
+
+        expect(seen[0]?.widgetTokenKeys).toBe(keyset);
+        expect(warned()).not.toContain('widget_token_keys_absent');
       },
       COLD_START_MS,
     );

@@ -15,8 +15,9 @@ import {
  */
 
 describe('import limits', () => {
-  it('caps an import at ten thousand wines, as §2.2a states', () => {
-    expect(MAX_IMPORT_ROWS).toBe(10_000);
+  it('caps an import at the largest catalogue a plan allows, E-commerce’s 2,500 SKUs', () => {
+    // Review fix: it was 10,000, which the 5 MB request cap could never carry for a real catalogue.
+    expect(MAX_IMPORT_ROWS).toBe(2_500);
   });
 
   it('caps a file the dashboard reads at 10 MB', () => {

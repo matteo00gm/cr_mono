@@ -1114,6 +1114,8 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'that something did. Carries no tenant, user or catalogue data.',
       example: { surface: 'dashboard' },
       response: surfaceResponse,
+      // Refuses nothing: no session to lack and no capability to check (review fix).
+      refusals: [],
     },
   ],
   [
@@ -1433,7 +1435,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'Classifies each row exactly as the import would - created, updated, unchanged, or ' +
         'refused for sharing a SKU with another row - so a screen can show what confirming ' +
         'will change before anything does. Nothing is written, locked, queued or audited, and ' +
-        'no Idempotency-Key is needed. The import body limits apply: at most 10,000 rows and ' +
+        'no Idempotency-Key is needed. The import body limits apply: at most 2,500 rows and ' +
         '5 MB, every row valid against the product contract. A preview is not a promise: a ' +
         'wine edited between the preview and the import can change its outcome, which is why ' +
         'the import answers with its own.',
