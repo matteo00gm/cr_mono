@@ -2,16 +2,22 @@ import {
   betterAuthRateLimitStorage,
   chooseTransport,
   createAuth,
+  assertQueryProviderMatchesIndex,
   createSendEmail,
   logTransport,
   resendTransport,
+  type IndexedEmbedding,
   type MembershipReader,
   type ResetPasswordEmail,
   type SuppressionCheck,
 } from '@catalogorosso/core';
+import { titanEmbeddingProvider } from '@catalogorosso/llm';
 import { memoryRateLimiter, type MonthlyCheck, type RateLimiter } from '@catalogorosso/security';
+import { loadWidgetTokenKeys, type WidgetTokenKeys } from '@catalogorosso/security/tokens';
 import {
+  insertSecurityEvent,
   isSuppressed,
+  isTokenRevoked,
   readMembershipsForUser,
   resolveTenantByKeyAndOrigin,
   withUser,
@@ -19,6 +25,8 @@ import {
 
 import { createMembersPort, type MembersPort } from './members.js';
 import { createProductsPort, type ProductsPort } from './products.js';
+import { createRagPort, type RagPort } from './rag.js';
+import { refusalRecorders } from './security-events.js';
 import type { WidgetDependencies } from './surfaces/widget.js';
 import { createWebhooksPort, type WebhooksPort } from './webhooks.js';
 import type { AuthPort } from './middleware/auth.js';
@@ -129,7 +137,30 @@ export interface RuntimeConfig {
    * which is what a local run with an in-process limiter honestly has.
    */
   readonly readUsage?: ((check: MonthlyCheck) => Promise<number>) | undefined;
+
+  /**
+   * The widget token keyset, serialised (P2-11). Absent — every stage until an
+   * operator sets `WidgetTokenKeys` — leaves the session route answering with a
+   * wiring error, which is restrictive: nothing is minted without a key.
+   */
+  readonly widgetTokenKeys?: string | undefined;
 }
+
+/**
+ * Loads the keyset once per container, on first use, and keeps the attempt.
+ *
+ * A keyset that will not load does not repair itself without a deploy, so a
+ * failed load is kept rather than retried: every mint fails with the same
+ * reason, which reaches the log and never a response (P0-55).
+ */
+const keysLoader = (serialized: string): (() => Promise<WidgetTokenKeys>) => {
+  let loading: Promise<WidgetTokenKeys> | undefined;
+
+  return () => {
+    loading ??= loadWidgetTokenKeys(serialized);
+    return loading;
+  };
+};
 
 export interface Dependencies {
   readonly auth: AuthPort;
@@ -139,6 +170,8 @@ export interface Dependencies {
   readonly members: MembersPort;
   /** The catalogue (P1-02). */
   readonly products: ProductsPort;
+  /** The retrieval sandbox (P2-37). */
+  readonly rag: RagPort;
   /** Records provider delivery events (P0-64b). */
   readonly webhooks: WebhooksPort;
   /** Passed through to `createApp`; absent means the endpoint refuses. */
@@ -163,6 +196,25 @@ export interface Dependencies {
 const suppressionForUser = (userId: string): SuppressionCheck => ({
   isSuppressed: (address) => withUser(userId, (tx) => isSuppressed(tx, address)),
 });
+
+/**
+ * What the catalogue's vectors were produced by (P2-17).
+ *
+ * **Written out rather than imported from the adapter**, which looks like the
+ * duplication P0-42 forbids and is the opposite of it. These two values
+ * describe rows already in `product_embeddings`; the adapter describes what the
+ * next call will produce. Taking both from the same constant would compare a
+ * value with itself, and the check exists precisely for the deployment that
+ * changes one of them — P1-47's bake-off is a configuration change away from
+ * being that deployment.
+ *
+ * Changing the indexed model means re-embedding every wine under a new
+ * `version` (P1-49) and moving this line with it.
+ */
+const INDEXED_EMBEDDING: IndexedEmbedding = {
+  model: 'amazon.titan-embed-text-v2:0',
+  dim: 1024,
+};
 
 export const buildDependencies = (config: RuntimeConfig): Dependencies => {
   const log = logTransport(config.log);
@@ -266,6 +318,16 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
     products: createProductsPort(),
 
     /*
+     * The retrieval sandbox (P2-37), and the first place P2-17's startup check
+     * is a real one. `assertQueryProviderMatchesIndex` throws here rather than
+     * on a request, so a provider that cannot read this catalogue's vectors
+     * fails the deployment and the previous version keeps answering.
+     */
+    rag: createRagPort({
+      provider: assertQueryProviderMatchesIndex(titanEmbeddingProvider(), INDEXED_EMBEDDING),
+    }),
+
+    /*
      * Built unconditionally, unlike the secret beside it. The port is what
      * records a bounce once one is verified, and there is no configuration that
      * makes recording one wrong — the gate is the signature, which the surface
@@ -287,6 +349,16 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
       readUsage: config.readUsage ?? (() => Promise.resolve(0)),
       ipSecret: config.authSecret,
       environment: config.stage === 'unknown' ? 'development' : 'production',
+      ...(config.widgetTokenKeys === undefined
+        ? {}
+        : { tokenKeys: keysLoader(config.widgetTokenKeys) }),
+      isTokenRevoked,
+      /*
+       * Where a refused widget request is recorded (P2-16). The middleware
+       * reports through a hook that swallows a throw and a rejection alike, so
+       * a database refusing writes cannot become a way to refuse service.
+       */
+      onRejected: refusalRecorders(insertSecurityEvent).onRejected,
     },
 
     ...(config.resendWebhookSecret === undefined

@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
+import { REVOCATION_SWEEP_GRACE_SEC } from '../src/revocation-grace.js';
 import { RLS_POLICIES, rlsDownSql, rlsMigrationSql, rlsMigrations } from '../src/rls.js';
 
 /**
@@ -160,6 +161,24 @@ describe('rls migration', () => {
     expect(down).not.toContain('app.outbox_poller');
     expect(down).not.toContain('DISABLE ROW LEVEL SECURITY');
     expect(down).not.toContain('NO FORCE ROW LEVEL SECURITY');
+  });
+
+  it('lets the sweep flag reach only revocations past the continuation window (P2-14)', () => {
+    /*
+     * **The flag and the predicate are one branch.** A flag on its own in USING
+     * would admit every tenant's live revocations, and a DELETE is filtered by
+     * USING alone — so the sweep could clear a revocation that is still
+     * refusing a continuing session. WITH CHECK stays tenant-only, as the
+     * poller's does, so the flag cannot write.
+     */
+    const current = RLS_POLICIES.filter((policy) => policy.table === 'token_revocations').at(-1);
+
+    expect(current?.using).toContain(
+      "OR (nullif(current_setting('app.revocation_sweeper', true), '') = 'on'\n" +
+        `      AND expires_at < now() - make_interval(secs => ${String(REVOCATION_SWEEP_GRACE_SEC)}))`,
+    );
+    expect(current?.withCheck).not.toContain('app.revocation_sweeper');
+    expect(rlsDownSql('0043_revocation_sweep_rls')).not.toContain('app.revocation_sweeper');
   });
 
   it('does not claim to enable RLS in a migration that only replaces a policy', () => {

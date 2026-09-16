@@ -109,6 +109,21 @@ export const consumeBuckets = async (
   let rejected: BucketResult | undefined;
 
   for (const check of checks) {
+    if (
+      !('window' in check) &&
+      !(
+        Number.isInteger(check.windowSec) &&
+        check.windowSec > 0 &&
+        check.windowSec <= MAX_FIXED_WINDOW_SEC
+      )
+    ) {
+      throw new Error(
+        `consumeBuckets: ${check.key} asks for a ${String(check.windowSec)}s window. A fixed ` +
+          `window is a whole number of seconds up to ${String(MAX_FIXED_WINDOW_SEC)}, because ` +
+          'the sweep deletes one that long after it starts (P2-14); anything longer is a month.',
+      );
+    }
+
     const { start, end } = bounds(check);
 
     /*
@@ -208,16 +223,47 @@ export class BucketsExceeded extends Error {
 }
 
 /**
- * Deletes windows that have closed (P2-14's sweep, in its simplest form).
+ * The longest fixed window the limiter counts (P2-14).
  *
- * Not scheduled here — the caller decides when. Exposed now because the table
- * has no other reaper and an unbounded one would eventually make the limiter
- * slower than the thing it protects.
+ * **What makes the sweep safe, enforced where windows are made.** The sweep
+ * deletes a fixed window this long after it starts, which is right only while no
+ * fixed window is longer. Longer windows are months, which the sweep knows about.
+ * `consumeBuckets` refuses anything else, so a daily limit added later fails its
+ * first request instead of being reset by every sweep.
  */
-export const pruneClosedWindows = async (db: Connection, olderThanSec = 3600): Promise<number> => {
+export const MAX_FIXED_WINDOW_SEC = 3600;
+
+/** How many rows one sweep statement deletes (P2-14): short statements, short locks. */
+export const PRUNE_BATCH = 1_000;
+
+/**
+ * Deletes a batch of windows that have closed (P2-14).
+ *
+ * **Two kinds of window, and the current month has to survive.**
+ * - A fixed window closes at most `MAX_FIXED_WINDOW_SEC` after it starts, so one
+ *   that started longer ago than that is over.
+ * - A month is over only when the month is. This month's bucket is the plan cap a
+ *   winery is counting against (P2-04), and a sweep that deleted it would hand
+ *   every tenant a fresh month every quarter of an hour — which is what the first
+ *   version of this function, deleting anything an hour old, would have done
+ *   once scheduled. So its start is excluded by name; every other month started
+ *   before this one, and is over.
+ *
+ * `LIMIT` inside a keyed subselect, so a large backlog goes in short statements
+ * rather than one that holds the table. The caller loops.
+ */
+export const pruneClosedWindows = async (
+  limit: number = PRUNE_BATCH,
+  db: Connection = getDb(),
+): Promise<number> => {
   const rows = await db.execute(sql`
     DELETE FROM rate_limit_buckets
-    WHERE window_start < now() - (${olderThanSec} * interval '1 second')
+    WHERE (bucket_key, window_start) IN (
+      SELECT bucket_key, window_start FROM rate_limit_buckets
+      WHERE window_start < now() - make_interval(secs => ${MAX_FIXED_WINDOW_SEC})
+        AND window_start <> date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+      LIMIT ${limit}
+    )
     RETURNING 1
   `);
 

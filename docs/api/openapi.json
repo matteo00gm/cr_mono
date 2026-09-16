@@ -36,34 +36,6 @@
                   }
                 }
               }
-            },
-            "401": {
-              "description": "The request failed. `code` is stable; `message` is for a human.",
-              "content": {
-                "application/json": {
-                  "example": {
-                    "error": {
-                      "code": "forbidden",
-                      "message": "This role cannot billing manage.",
-                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
-                    }
-                  }
-                }
-              }
-            },
-            "403": {
-              "description": "The request failed. `code` is stable; `message` is for a human.",
-              "content": {
-                "application/json": {
-                  "example": {
-                    "error": {
-                      "code": "forbidden",
-                      "message": "This role cannot billing manage.",
-                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
-                    }
-                  }
-                }
-              }
             }
           }
         }
@@ -2393,7 +2365,7 @@
       "/v1/dashboard/products/import/preview": {
         "post": {
           "summary": "Preview what an import would do, writing nothing",
-          "description": "Classifies each row exactly as the import would - created, updated, unchanged, or refused for sharing a SKU with another row - so a screen can show what confirming will change before anything does. Nothing is written, locked, queued or audited, and no Idempotency-Key is needed. The import body limits apply: at most 10,000 rows and 5 MB, every row valid against the product contract. A preview is not a promise: a wine edited between the preview and the import can change its outcome, which is why the import answers with its own.\n\nRequires the `catalog:write` capability.",
+          "description": "Classifies each row exactly as the import would - created, updated, unchanged, or refused for sharing a SKU with another row - so a screen can show what confirming will change before anything does. Nothing is written, locked, queued or audited, and no Idempotency-Key is needed. The import body limits apply: at most 2,500 rows and 5 MB, every row valid against the product contract. A preview is not a promise: a wine edited between the preview and the import can change its outcome, which is why the import answers with its own.\n\nRequires the `catalog:write` capability.",
           "operationId": "postV1DashboardProductsImportPreview",
           "x-required-capability": "catalog:write",
           "responses": {
@@ -2684,6 +2656,250 @@
             }
           }
         }
+      },
+      "/v1/dashboard/rag/simulate": {
+        "post": {
+          "summary": "Run retrieval for a question and show its working",
+          "description": "Runs the real retrieval pipeline for a question - the same embedding, the same hybrid search, the same availability and price filter, the same candidate cap that a visitor gets - and returns the ranking with the numbers that produced it. This is the endpoint for \"the widget recommends the wrong wine\": reproducing that through the live widget inflates usage counters, fills analytics with conversations nobody had, and still shows only the answer rather than the reasoning. Each candidate reports where each branch ranked it, the fused score, how completely it is described, and whether it reached the prompt - with excludedBy saying why not, which is usually the answer: the right wine was found at rank eleven and cut by the cap, or it is out of stock. preCapCount separates \"nothing matched\" from \"matched, but weakly\". No usage, no analytics and no conversation is recorded, so it can be run as often as it takes. Retrieval only: no model is asked to write a reply, and the instructions that would be sent are identified by hash rather than returned.\n\nRequires the `catalog:read` capability.",
+          "operationId": "postV1DashboardRagSimulate",
+          "x-required-capability": "catalog:read",
+          "responses": {
+            "200": {
+              "description": "Run retrieval for a question and show its working",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "candidates": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "productId": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "vectorRank": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "vectorScore": {
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "lexicalRank": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "rrfScore": {
+                              "type": "number"
+                            },
+                            "completeness": {
+                              "type": "object",
+                              "properties": {
+                                "score": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 100
+                                },
+                                "missing": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "topSuggestion": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "score",
+                                "missing"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "stockStatus": {
+                              "type": "string",
+                              "enum": [
+                                "IN_STOCK",
+                                "OUT_OF_STOCK",
+                                "PREORDER"
+                              ]
+                            },
+                            "priceCents": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "included": {
+                              "type": "boolean"
+                            },
+                            "excludedBy": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "stock",
+                                    "price",
+                                    "cap"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "productId",
+                            "name",
+                            "vectorRank",
+                            "vectorScore",
+                            "lexicalRank",
+                            "rrfScore",
+                            "completeness",
+                            "stockStatus",
+                            "priceCents",
+                            "included",
+                            "excludedBy"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "preCapCount": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "zeroResultKind": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "no_matches",
+                              "filtered_out",
+                              "out_of_stock_only"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "timings": {
+                        "type": "object",
+                        "properties": {
+                          "embedMs": {
+                            "type": "number"
+                          },
+                          "searchMs": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "embedMs",
+                          "searchMs"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "systemPromptHash": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "candidates",
+                      "preCapCount",
+                      "zeroResultKind",
+                      "timings",
+                      "systemPromptHash"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "candidates": [
+                      {
+                        "productId": "3f1c0b7e-4a30-4c1a-9f2e-1b7e4a304c1a",
+                        "name": "Barolo Monfortino Riserva",
+                        "vectorRank": 2,
+                        "vectorScore": 0.81,
+                        "lexicalRank": 1,
+                        "rrfScore": 0.0325,
+                        "completeness": {
+                          "score": 78,
+                          "missing": [
+                            "annata"
+                          ],
+                          "topSuggestion": "annata"
+                        },
+                        "stockStatus": "IN_STOCK",
+                        "priceCents": 18500,
+                        "included": true,
+                        "excludedBy": null
+                      }
+                    ],
+                    "preCapCount": 23,
+                    "zeroResultKind": null,
+                    "timings": {
+                      "embedMs": 142.6,
+                      "searchMs": 38.2
+                    },
+                    "systemPromptHash": "9f2e1b7e4a304c1a"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -2815,6 +3031,87 @@
                     "welcomeMessage": "Ciao! Sono il sommelier di questa cantina. Che vino stai cercando?",
                     "cartUrl": "/cart",
                     "quotaState": "ok"
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The key and the request's Origin do not belong to one tenant. The same answer whatever the reason, and it carries no CORS headers, so a browser script cannot read it.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This widget is not available on this site.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "429": {
+              "description": "A rate limit refused the request. `Retry-After` says when to try again.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "rate_limited",
+                      "message": "Too many requests. Try again shortly.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/widget/session": {
+        "post": {
+          "summary": "Mint a widget session token",
+          "description": "Mints a 15-minute EdDSA token bound to the request Origin, the tenant the public key belongs to, and a session id. Nothing in the body is read: the tenant, the session and the origin all come from the request itself. To continue a conversation, send its last token as `Authorization: Bearer <token>`: up to 30 minutes after that token expired, and 4 hours after the session's first token, the new token keeps the session id. A token that cannot be verified, or is past either limit, starts a fresh session instead. Refused with 403 and no CORS headers unless the key and the Origin belong to one tenant; with 403 and code 'unavailable' when that tenant's widget is switched off, which the widget renders as disabled; and with 401 when the token sent belongs to another site or tenant, or was revoked. Never cached.\n\nNo capability required. Called before a visitor has any identity, so it requires no token and no session; a previous token only continues one. What gates it is the (pk_, Origin) pair, the tenant being active or trialling - read uncached on every call - and the per-address, per-tenant and per-endpoint limits, because it is the cheapest endpoint on the surface to abuse.",
+          "operationId": "postV1WidgetSession",
+          "responses": {
+            "200": {
+              "description": "Mint a widget session token",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "token": {
+                        "type": "string"
+                      },
+                      "expiresAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      }
+                    },
+                    "required": [
+                      "token",
+                      "expiresAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "token": "header.payload.signature",
+                    "expiresAt": "2026-09-15T10:15:00.000Z"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The token sent to continue a session belongs to another site or another tenant, or was revoked. The same answer whatever the reason; mint again without it to start a new session.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "unauthenticated",
+                      "message": "This session is no longer valid. Start a new one.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
                   }
                 }
               }

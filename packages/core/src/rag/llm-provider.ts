@@ -45,6 +45,16 @@ export interface PairingRequest {
   readonly locale: string;
   readonly candidates: readonly CandidateProduct[];
   readonly history: readonly Turn[];
+  /**
+   * This is the second attempt, after one that did not match the schema (P2-27).
+   *
+   * **A flag rather than a repaired prompt**, because the repair instruction is
+   * an operator instruction and §3.7 puts those in the system position only.
+   * Interpolating one into a user turn would place it exactly where retrieved
+   * text sits, which is the arrangement P2-23 exists to prevent — and it would
+   * be a model's own failure teaching it where instructions can appear.
+   */
+  readonly repairing?: boolean | undefined;
 }
 
 /**
