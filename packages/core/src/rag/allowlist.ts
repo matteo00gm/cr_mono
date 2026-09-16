@@ -1,4 +1,4 @@
-import type { Recommendation } from './llm-provider.js';
+import type { PairingChunk, Recommendation } from './llm-provider.js';
 import type { PairingOutput } from './pairing-schema.js';
 
 /**
@@ -52,15 +52,15 @@ export interface AllowlistResult {
  * examined before a visitor sees it. It lands in `dropped` because it is the
  * same kind of signal: the model did not do what it was asked.
  */
-export const allowlistRecommendations = (
-  out: PairingOutput,
+const partition = (
+  recommendations: readonly Recommendation[],
   candidateIds: ReadonlySet<string>,
 ): AllowlistResult => {
   const items: Recommendation[] = [];
   const dropped: Recommendation[] = [];
   const seen = new Set<string>();
 
-  for (const recommendation of out.recommendations) {
+  for (const recommendation of recommendations) {
     if (candidateIds.has(recommendation.productId) && !seen.has(recommendation.productId)) {
       seen.add(recommendation.productId);
       items.push(recommendation);
@@ -70,4 +70,48 @@ export const allowlistRecommendations = (
   }
 
   return { items, dropped };
+};
+
+export const allowlistRecommendations = (
+  out: PairingOutput,
+  candidateIds: ReadonlySet<string>,
+): AllowlistResult => partition(out.recommendations, candidateIds);
+
+/**
+ * The allowlist, applied to a provider's stream (P2-26).
+ *
+ * **One place, not three.** Every adapter in `packages/llm` yields a
+ * `recommendations` chunk straight from what the model returned, because an
+ * adapter's job is to translate a vendor's format and nothing else. If each of
+ * them applied the allowlist there would be three copies of the boundary and
+ * the next adapter would make four — and the one that forgot would be the one
+ * nobody noticed, because its output looks identical until a model misbehaves.
+ *
+ * **Text and errors pass through untouched.** The reply is prose this cannot
+ * check (P2-23 caps it, P2-27 checks it for leaked instructions); an error is
+ * the caller's to handle.
+ *
+ * **An answer whose every card was dropped still yields an empty
+ * `recommendations` chunk**, rather than none. "The model named nothing you may
+ * see" and "the model is still writing" are different states, and a consumer
+ * waiting for a chunk that never comes would show a spinner for the second when
+ * it is in the first.
+ */
+export const allowlisted = async function* (
+  chunks: AsyncIterable<PairingChunk>,
+  candidateIds: ReadonlySet<string>,
+  onDropped: (dropped: readonly Recommendation[]) => void = () => undefined,
+): AsyncIterable<PairingChunk> {
+  for await (const chunk of chunks) {
+    if (chunk.type !== 'recommendations') {
+      yield chunk;
+      continue;
+    }
+
+    const { items, dropped } = partition(chunk.items, candidateIds);
+
+    if (dropped.length > 0) onDropped(dropped);
+
+    yield { type: 'recommendations', items };
+  }
 };

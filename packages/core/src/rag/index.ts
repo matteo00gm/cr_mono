@@ -152,4 +152,4 @@ export {
  * unable to reach a visitor. If one function in this package has to be right,
  * it is this one.
  */
-export { allowlistRecommendations, type AllowlistResult } from './allowlist.js';
+export { allowlisted, allowlistRecommendations, type AllowlistResult } from './allowlist.js';

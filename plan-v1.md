@@ -1324,7 +1324,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-23 | 🔒 Prompt assembly | product content delimited and labelled untrusted | P2-22 |
 | ✅ P2-24 | Structured output schema | `{reply, recommendations[]}` + Zod | P1-42 |
 | ✅ P2-25 | ⛔ 🔒 Output allowlisting | every `productId` ∈ tenant **∩** retrieved candidate set | P2-24 |
-| P2-26 | 🔒 Test: output allowlisting | injected foreign and hallucinated ids are dropped + logged | P2-25 |
+| ✅ P2-26 | 🔒 Test: output allowlisting | injected foreign and hallucinated ids are dropped + logged | P2-25 |
 | P2-27 | Schema-failure retry + fallback | one repair attempt, then text-only with no cards | P2-24 |
 | P2-28 | Escalation cascade | low score / schema fail / complex query → stronger tier | P2-27 |
 | P2-29 | `POST /v1/widget/chat` (SSE) | Function URL `RESPONSE_STREAM` | P2-13,25 |
@@ -5491,6 +5491,14 @@ Return `dropped` so P2-26 can assert on it and so the caller can log it — a no
 
 **Files.** `packages/core/test/allowlist.spec.ts`, integration test. **~140 test lines.**
 
+**As built (2026-09-16).** `packages/core/test/rag/allowlist-attacks.test.ts`, 14 cases. (`.test.ts`, not `.spec.ts`: the vitest projects match `*.test.ts` and a `.spec.ts` would simply not run — the failure mode this row is about, one file up.)
+
+- **The row's integration test needed a path that did not exist**, and this row built the twenty lines of it: `allowlisted`, an async generator that applies the boundary to a provider's chunk stream *(addition)*. Every adapter in `packages/llm` yields `recommendations` straight from what the model returned, because translating a vendor's format is all an adapter should do — so without this there were three places the allowlist could be applied and four as soon as there is another adapter, and the one that forgot would be the one nobody noticed. **P2-29 consumes the guarded stream, never the provider's own.**
+- **The stubbed-provider case is asserted at the stream** rather than over HTTP, because `POST /v1/widget/chat` is P2-29. What it proves is the row's claim: a provider returning a foreign id produces an answer with no card for it. An HTTP-level repeat belongs with P2-29 *(open)*.
+- **An answer whose every card was dropped still yields an empty `recommendations` chunk** *(decision)*. "The model named nothing you may see" and "the model is still writing" are different states, and a consumer waiting for a chunk that never comes shows a spinner for the first.
+- **`dropped` reaches the caller through a callback**, so the chat route can log and alert on it without the guard knowing what a log is.
+- **A candidate id differing only in case is dropped** *(addition)*. `3F1C…` and `3f1c…` are one value to a human reading a log and two strings to a `Set`; normalising would be a rule about ids invented inside the boundary, and the safe direction for a mismatch is to drop.
+
 ---
 
 ### P2-27 · Schema-failure retry and fallback
@@ -5534,6 +5542,8 @@ X-Accel-Buffering: no
 `no-transform` is the load-bearing one — it tells CloudFront not to compress or otherwise rewrite the body, and compression is itself a buffering step. `X-Accel-Buffering` does nothing at CloudFront but disables buffering in nginx, which sits in front of some sellers' setups. **Do not gzip the SSE response.**
 
 **Tests.** Integration against a stubbed provider: event sequence is correct; abort stops provider consumption; quota rejection happens with **zero** provider calls (assert the spy); a provider error mid-stream emits an `error` event rather than truncating silently; the response carries the four headers above.
+
+**Carried in from P2-26:** this route consumes `allowlisted(provider.streamPairing(…), candidateIds)` — never the provider's own stream. The adapters yield whatever the model returned, by design, so this is the only place the P2-25 boundary is applied on the chat path. P2-26's stubbed-provider case is asserted at the stream; **repeat it here over HTTP**, where the thing proven is a response with no card rather than a chunk with no item.
 
 **Files.** `apps/api/src/routes/widget-chat.ts`, tests. **~180 lines.** *Split if heavy: SSE transport helper separately.*
 
