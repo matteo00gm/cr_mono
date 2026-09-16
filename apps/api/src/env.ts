@@ -52,6 +52,13 @@ export interface AppEnv {
 
     /** The session a verified widget token names (P2-13). Absent until then. */
     widgetSessionId: string;
+
+    /**
+     * The request's origin as CORS normalised and verified it (P2-08) — what a
+     * session token is bound to (P2-12), so no handler re-derives it from the
+     * raw header and disagrees with the check that admitted the request.
+     */
+    widgetOrigin: string;
   };
 }
 

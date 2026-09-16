@@ -1,7 +1,10 @@
+import { randomUUID } from 'node:crypto';
+
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
+import { countSecurityEvents, insertSecurityEvent } from '../src/security-events.js';
 import { startPostgres } from './support/postgres.js';
 import { createTenant } from './support/tenant.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
@@ -63,8 +66,8 @@ describe('security_events', () => {
      * P2-16's writer must not use RETURNING for these.
      */
     await db.execute(sql`
-      insert into security_events (type, origin, public_key, ip)
-      values ('INVALID_KEY', 'https://attacker.example', 'pk_bogus', '203.0.113.9')
+      insert into security_events (type, origin, public_key, ip_bucket)
+      values ('INVALID_KEY', 'https://attacker.example', 'pk_bogus', 'a1b2c3d4e5f6')
     `);
 
     // Invisible to the tenant-scoped role...
@@ -189,5 +192,84 @@ describe('security_events', () => {
     );
 
     expect([...rows]).toHaveLength(0);
+  });
+});
+
+describe('insertSecurityEvent (P2-16)', () => {
+  const publicKey = () => ['pk', 'test', randomUUID().replaceAll('-', '')].join('_');
+
+  it('writes the row an unknown key produces, with no tenant context to write it in', async () => {
+    // The writer opens its own transaction and sets nothing: the policy admits
+    // an unattributed row by name, which is what makes this row possible at all.
+    const key = publicKey();
+
+    await insertSecurityEvent(
+      { type: 'INVALID_KEY', origin: 'https://evil.example', publicKey: key, ipBucket: 'bucket' },
+      db,
+    );
+
+    const asAdmin = await adminDb.execute(
+      sql`select tenant_id, ip_bucket, origin from security_events where public_key = ${key}`,
+    );
+
+    expect([...asAdmin]).toHaveLength(1);
+    expect([...asAdmin][0]).toMatchObject({
+      tenant_id: null,
+      ip_bucket: 'bucket',
+      origin: 'https://evil.example',
+    });
+  });
+
+  it('writes an attributed row under its tenant, and no other winery sees it', async () => {
+    const key = publicKey();
+
+    await insertSecurityEvent(
+      { type: 'UNAUTHORIZED_ORIGIN', tenantId, origin: 'https://thief.example', publicKey: key },
+      db,
+    );
+
+    const other = await createTenant(db, 'sec-other');
+    const theirs = await db.execute(sql`select 1 from security_events where public_key = ${key}`);
+
+    await expect(countSecurityEvents({ tenantId, publicKey: key }, db)).resolves.toBe(1);
+    await expect(countSecurityEvents({ tenantId: other, publicKey: key }, db)).resolves.toBe(0);
+    expect([...theirs]).toHaveLength(0);
+  });
+
+  it('records a token refusal under the type migration 0044 added', async () => {
+    // The type did not exist when this table was created, so this fails on a
+    // database that has the table and not the migration.
+    const key = publicKey();
+
+    await insertSecurityEvent(
+      { type: 'INVALID_TOKEN', tenantId, publicKey: key, metadata: { reason: 'revoked' } },
+      db,
+    );
+
+    const rows = await db.execute(
+      sql`select type::text as type, metadata from security_events where public_key = ${key}`,
+    );
+
+    expect([...rows][0]).toMatchObject({ type: 'INVALID_TOKEN', metadata: { reason: 'revoked' } });
+  });
+});
+
+describe('countSecurityEvents (P2-16)', () => {
+  it('counts one key from one origin, which is the question P6-05 asks', async () => {
+    const key = ['pk', 'test', randomUUID().replaceAll('-', '')].join('_');
+    const origin = 'https://thief.example';
+
+    for (const each of [origin, origin, 'https://elsewhere.example']) {
+      await insertSecurityEvent(
+        { type: 'UNAUTHORIZED_ORIGIN', tenantId, origin: each, publicKey: key },
+        db,
+      );
+    }
+
+    await expect(countSecurityEvents({ tenantId, publicKey: key, origin }, db)).resolves.toBe(2);
+    await expect(countSecurityEvents({ tenantId, publicKey: key }, db)).resolves.toBe(3);
+    await expect(
+      countSecurityEvents({ tenantId, publicKey: key, type: 'INVALID_TOKEN' }, db),
+    ).resolves.toBe(0);
   });
 });

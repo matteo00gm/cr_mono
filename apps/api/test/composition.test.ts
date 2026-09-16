@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { resolveTenantByKeyAndOrigin } from '@catalogorosso/db';
+import { isTokenRevoked, resolveTenantByKeyAndOrigin } from '@catalogorosso/db';
+import {
+  generateWidgetTokenKey,
+  InvalidWidgetTokenKeysError,
+} from '@catalogorosso/security/tokens';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app.js';
@@ -270,5 +274,45 @@ describe('the widget surface (P2-10)', () => {
 
   it("buckets addresses under the deployment's own secret", () => {
     expect(buildDependencies(config).widget.ipSecret).toBe(config.authSecret);
+  });
+});
+
+describe('the widget session keys (P2-12)', () => {
+  it('leaves the session route unconfigured without a keyset', () => {
+    expect(buildDependencies(config).widget.tokenKeys).toBeUndefined();
+  });
+
+  it('asks the database whether a continuing token was revoked (P2-12a)', () => {
+    // Absent, every previous token would be ignored and no conversation could continue.
+    expect(buildDependencies(config).widget.isTokenRevoked).toBe(isTokenRevoked);
+  });
+
+  it('records a refused widget request rather than only logging it (P2-16)', () => {
+    /*
+     * Without this the middleware falls back to its own logger, which writes
+     * the refusal's type and nothing else — P6-05 has no rows to show a seller,
+     * and the abuse threshold has nothing to count. E9's shape again: the guard
+     * is proven to work and not proven to be wired.
+     */
+    expect(buildDependencies(config).widget.onRejected).toBeDefined();
+  });
+
+  it('loads the keyset it is given once, however many mints ask at once', async () => {
+    const serialized = JSON.stringify({ keys: [await generateWidgetTokenKey('k1')] });
+    const { tokenKeys } = buildDependencies({ ...config, widgetTokenKeys: serialized }).widget;
+    if (tokenKeys === undefined) throw new Error('expected a key loader');
+
+    const [first, second] = await Promise.all([tokenKeys(), tokenKeys()]);
+
+    expect(first).toBe(second);
+    expect(first.signingKid).toBe('k1');
+  });
+
+  it('keeps a keyset that will not load failing with its reason, rather than retrying it', async () => {
+    const { tokenKeys } = buildDependencies({ ...config, widgetTokenKeys: 'not json' }).widget;
+    if (tokenKeys === undefined) throw new Error('expected a key loader');
+
+    await expect(tokenKeys()).rejects.toThrow(InvalidWidgetTokenKeysError);
+    await expect(tokenKeys()).rejects.toThrow(/not JSON/);
   });
 });
