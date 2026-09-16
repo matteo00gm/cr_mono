@@ -106,6 +106,13 @@ export default $config({
     await import('./infra/queue');
 
     /*
+     * The sweep (P2-14): lapsed token revocations and closed rate-limit
+     * windows, on a schedule. After `config` for the database URL, and as
+     * independent of the API as the queue is.
+     */
+    await import('./infra/schedules');
+
+    /*
      * The deploy-time database path (P0-21b). Last, and independent of the
      * others: it is never invoked by a deploy, only created by one. See
      * `infra/migrator.ts` for why running migrations automatically is not

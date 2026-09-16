@@ -1,4 +1,4 @@
-import { index, inet, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { index, jsonb, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 import { tenants } from './tenants.js';
 
@@ -18,6 +18,13 @@ export const securityEventType = pgEnum('security_event_type', [
   'UNAUTHORIZED_ORIGIN',
   'INVALID_KEY',
   'TOKEN_ORIGIN_MISMATCH',
+  /**
+   * A token that did not verify, was revoked, or carried none of the claims
+   * we mint (P2-16). The types beside it describe a key and an origin, and
+   * none of them describes a token; which of those it was goes in
+   * `metadata`, because the type is what the counting groups by.
+   */
+  'INVALID_TOKEN',
   'RATE_LIMITED',
   'QUOTA_EXCEEDED',
   'REPLAYED_WEBHOOK',
@@ -56,7 +63,13 @@ export const securityEvents = pgTable(
     /** The `pk_` presented. Public by design, so storing it leaks nothing. */
     publicKey: text('public_key'),
 
-    ip: inet('ip'),
+    /**
+     * The visitor's address as P2-04 buckets it: an HMAC under a daily salt,
+     * never the address. A column holding one would be personal data kept for
+     * forensics, and the bucket answers what forensics actually asks — whether
+     * these refusals came from one place — without being reversible.
+     */
+    ipBucket: text('ip_bucket'),
 
     metadata: jsonb('metadata'),
 

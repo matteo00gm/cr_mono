@@ -7,6 +7,7 @@ import {
   NotFoundError,
   RateLimitedError,
   UnauthenticatedError,
+  UnavailableError,
   type DomainErrorKind,
 } from '@catalogorosso/core';
 import { Hono } from 'hono';
@@ -63,6 +64,7 @@ describe('domain errors', () => {
     [new InvalidRequestError(), 'invalid', 422],
     [new ConflictError(), 'conflict', 409],
     [new RateLimitedError(), 'rate_limited', 429],
+    [new UnavailableError(), 'unavailable', 403],
   ];
 
   it.each(cases)('%s maps to its status', async (error, kind, status) => {

@@ -74,6 +74,30 @@ const getConfig = (
     headers: { origin, 'x-forwarded-for': '203.0.113.7' },
   });
 
+describe('a refusal the surface records (P2-16)', () => {
+  it('carries the visitor as a bucket, because the surface hands CORS its secret', async () => {
+    /*
+     * The wiring nothing else would catch. `widgetCors` can only bucket an
+     * address if the surface passes it the secret, and a refusal recorded
+     * without one loses the only thing that tells a run of attempts from one
+     * visitor apart — while the response, and every other test, look identical.
+     */
+    const buckets: (string | undefined)[] = [];
+    const built = app({
+      onRejected: (event) => {
+        buckets.push(event.ipBucket);
+        return Promise.resolve();
+      },
+    });
+
+    const response = await getConfig(built, { origin: 'https://evil.example' });
+
+    expect(response.status).toBe(403);
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0]).toMatch(/^[0-9a-f]{32}$/);
+  });
+});
+
 describe('the response', () => {
   it('is exactly the public shape, with no tenant id, plan or count anywhere', async () => {
     const response = await getConfig(app());
@@ -123,9 +147,9 @@ describe('the response', () => {
 describe('the quota', () => {
   it.each<[number, 'ok' | 'near' | 'exceeded']>([
     [0, 'ok'],
-    [799, 'ok'],
-    [800, 'near'],
-    [1_000, 'exceeded'],
+    [1_199, 'ok'],
+    [1_200, 'near'],
+    [1_500, 'exceeded'],
   ])('reads %i of a CANTINA month as %s', async (used, state) => {
     const built = app({ readUsage: () => Promise.resolve(used) });
 
@@ -307,7 +331,7 @@ describe('wiring', () => {
     }).toThrow(UndeclaredRouteError);
   });
 
-  it('documents only the refusals each route can give: none for the marker, 403 and 429 for config', () => {
+  it('documents only the refusals each route can give: none for the marker, 403 and 429 for the guarded routes', () => {
     // Review fix: the reference listed 403 and 429 on the marker, which refuses nothing.
     const refusals = Object.fromEntries(
       [...WIDGET_ROUTES].map(([key, doc]) => [key, doc.refusals]),
@@ -316,6 +340,7 @@ describe('wiring', () => {
     expect(refusals).toEqual({
       [`GET ${WIDGET_PREFIX}`]: [],
       [`GET ${WIDGET_PREFIX}/config`]: [403, 429],
+      [`POST ${WIDGET_PREFIX}/session`]: [401, 403, 429],
     });
   });
 });

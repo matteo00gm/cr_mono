@@ -48,8 +48,9 @@ patch will not, because the ORM's own documentation shows the forbidden form.
   in the boundary rules: `@catalogorosso/db/auth`, for the Better Auth adapter,
   which runs before a tenant is known (P0-45). Everything else that looks like
   an exception is a second _scope_, not an escape from scoping: `withUser()`
-  (P0-47), `withInvitation()` (P0-51), `withOutbox()` (P1-31) and the
-  read-only `withWidgetKey()` (P2-07) each set a different GUC and read under a
+  (P0-47), `withInvitation()` (P0-51), `withOutbox()` (P1-31), the read-only
+  `withWidgetKey()` (P2-07) and `withLapsedRevocations()` (P2-14), which reaches
+  only revocations past their window, each set a different GUC and read under a
   policy that admits it. A new one of those is a design change with its own ADR
   — every GUC is another way a row becomes visible.
 - Three tables carry **no `tenant_id` and no policy on purpose**, and are
@@ -107,6 +108,10 @@ patch will not, because the ORM's own documentation shows the forbidden form.
 - CORS matching is exact-set equality. Never a regular expression, never
   `startsWith`, never `endsWith` — suffix matching is defeated by
   `evil-example.com` (§3.4, P2-08).
+- Every widget route counts the visitor's address before anything else:
+  `limitUnresolvedWidgetRequest`, then `widgetCors`, then `limitWidgetRequest`.
+  Resolving a key is a query, and a route that resolves first hands a script one
+  free query per invented key (P2-04).
 - Every outbound fetch to a user-supplied host goes through `guardedFetch`
   (P4-03a).
 

@@ -1,7 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
+import { REVOCATION_SWEEP_GRACE_SEC } from '../src/revocation-grace.js';
+import { isTokenRevoked, pruneLapsedRevocations } from '../src/token-revocations.js';
+import { withTenant } from '../src/with-tenant.js';
 import { startPostgres } from './support/postgres.js';
 import { createTenant } from './support/tenant.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
@@ -109,5 +113,132 @@ describe('token_revocations', () => {
     const rows = await db.execute(sql`select 1 from token_revocations where jti = 'jti-tenant'`);
 
     expect([...rows]).toHaveLength(0);
+  });
+});
+
+describe('isTokenRevoked (P2-12a)', () => {
+  it('finds a revoked token, and only that one', async () => {
+    await revoke('jti-found');
+
+    await expect(isTokenRevoked(tenantId, 'jti-found', db)).resolves.toBe(true);
+    await expect(isTokenRevoked(tenantId, 'jti-never-revoked', db)).resolves.toBe(false);
+  });
+
+  it("does not see another tenant's revocation of the same id", async () => {
+    // Asked under the tenant a request resolved: the policy answers for that tenant alone.
+    await revoke('jti-shared');
+    const other = await createTenant(db, 'tok-other');
+
+    await expect(isTokenRevoked(other, 'jti-shared', db)).resolves.toBe(false);
+    await expect(isTokenRevoked(tenantId, 'jti-shared', db)).resolves.toBe(true);
+  });
+
+  it('still counts a revocation past its expiry, until the sweep removes it', async () => {
+    // A session may continue on a token for half an hour after it lapses (P2-12a).
+    await revoke('jti-lapsed', '2020-01-01T00:00:00Z');
+
+    await expect(isTokenRevoked(tenantId, 'jti-lapsed', db)).resolves.toBe(true);
+  });
+});
+
+describe('pruneLapsedRevocations (P2-14)', () => {
+  /** A revocation whose token lapsed `secondsAgo` ago, written under its own tenant. */
+  const revokeLapsed = (tenant: string, jti: string, secondsAgo: number) =>
+    withTenant(
+      tenant,
+      (tx) =>
+        tx.execute(sql`
+          insert into token_revocations (jti, tenant_id, expires_at)
+          values (${jti}, ${tenant}::uuid, now() - make_interval(secs => ${secondsAgo}))
+        `),
+      db,
+    );
+
+  const unique = (label: string) => `${label}-${randomUUID()}`;
+
+  it("deletes every tenant's revocations once the window has passed, and nothing sooner", async () => {
+    const other = await createTenant(db, 'tok-sweep');
+    const lapsed = unique('lapsed');
+    const otherLapsed = unique('other-lapsed');
+    const inWindow = unique('in-window');
+    const live = unique('live');
+
+    await revokeLapsed(tenantId, lapsed, REVOCATION_SWEEP_GRACE_SEC + 60);
+    await revokeLapsed(other, otherLapsed, REVOCATION_SWEEP_GRACE_SEC + 60);
+    await revokeLapsed(tenantId, inWindow, REVOCATION_SWEEP_GRACE_SEC - 60);
+    await revokeLapsed(tenantId, live, -600);
+
+    expect(await pruneLapsedRevocations(1_000, db)).toBeGreaterThanOrEqual(2);
+
+    await expect(isTokenRevoked(tenantId, lapsed, db)).resolves.toBe(false);
+    await expect(isTokenRevoked(other, otherLapsed, db)).resolves.toBe(false);
+    // A continuation could still present this token, so its revocation has to stay.
+    await expect(isTokenRevoked(tenantId, inWindow, db)).resolves.toBe(true);
+    await expect(isTokenRevoked(tenantId, live, db)).resolves.toBe(true);
+  });
+
+  it('deletes no more than its batch in one statement', async () => {
+    for (let index = 0; index < 3; index += 1) {
+      await revokeLapsed(tenantId, unique('batch'), REVOCATION_SWEEP_GRACE_SEC + 60);
+    }
+
+    expect(await pruneLapsedRevocations(2, db)).toBe(2);
+  });
+
+  describe('the flag on its own (ADR 0023)', () => {
+    /** A transaction holding the sweep flag and no tenant, whatever the connection had before. */
+    const asSweeper = <T>(
+      fn: (tx: Parameters<Parameters<Database['transaction']>[0]>[0]) => Promise<T>,
+    ) =>
+      db.transaction(async (tx) => {
+        await tx.execute(sql`select set_config('app.tenant_id', '', true)`);
+        await tx.execute(sql`select set_config('app.revocation_sweeper', 'on', true)`);
+        return fn(tx);
+      });
+
+    const failureCode = (promise: Promise<unknown>) =>
+      promise.then(
+        () => undefined,
+        (error: unknown) => pgErrorCode(error) ?? (error as { code?: string }).code,
+      );
+
+    it('cannot see or delete a revocation the window still covers', async () => {
+      const inWindow = unique('guarded');
+      await revokeLapsed(tenantId, inWindow, REVOCATION_SWEEP_GRACE_SEC - 60);
+
+      const seen = await asSweeper((tx) =>
+        tx.execute(sql`select 1 from token_revocations where jti = ${inWindow}`),
+      );
+      const deleted = await asSweeper((tx) =>
+        tx.execute(sql`delete from token_revocations where jti = ${inWindow} returning 1`),
+      );
+
+      expect([...seen]).toHaveLength(0);
+      expect([...deleted]).toHaveLength(0);
+      await expect(isTokenRevoked(tenantId, inWindow, db)).resolves.toBe(true);
+    });
+
+    it('cannot write a revocation, or move a lapsed one back into the window', async () => {
+      const lapsed = unique('immovable');
+      await revokeLapsed(tenantId, lapsed, REVOCATION_SWEEP_GRACE_SEC + 60);
+
+      const inserted = failureCode(
+        asSweeper((tx) =>
+          tx.execute(sql`
+            insert into token_revocations (jti, tenant_id, expires_at)
+            values (${unique('forged')}, ${tenantId}::uuid, now())
+          `),
+        ),
+      );
+      const moved = failureCode(
+        asSweeper((tx) =>
+          tx.execute(sql`update token_revocations set expires_at = now() where jti = ${lapsed}`),
+        ),
+      );
+
+      // insufficient_privilege: the row fails WITH CHECK, which the flag is not part of.
+      await expect(inserted).resolves.toBe('42501');
+      await expect(moved).resolves.toBe('42501');
+    });
   });
 });
