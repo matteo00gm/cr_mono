@@ -62,6 +62,23 @@ const emailAllowlist = new sst.Secret('EmailAllowlist', '');
  *   `sst secret set ResendWebhookSecret --stage <stage>`
  */
 const resendWebhookSecret = new sst.Secret('ResendWebhookSecret', '');
+
+/**
+ * The widget session token keyset (P2-11): one or two Ed25519 private JWKs, the
+ * first of which signs.
+ *
+ * **An `sst.Secret`, which SST keeps as an SSM `SecureString`** — where §5.7 puts
+ * the key, through the mechanism every other operator-supplied value here uses.
+ * One value holding both active keys rather than a parameter per `kid`, so a
+ * rotation is a single write and there is never a moment when the new signing
+ * key is set and its predecessor has already gone.
+ *
+ * Empty by default, like the email secrets: nothing reads it until P2-12 mints
+ * tokens, and a secret with no default would block every deploy on it. Generate
+ * it and set it through a pipe, so the key never touches a file or a history:
+ *   `node scripts/widget-token-key.mjs | sst secret set WidgetTokenKeys --stage <stage>`
+ */
+const widgetTokenKeys = new sst.Secret('WidgetTokenKeys', '');
 import { vpc } from './vpc';
 
 /**
@@ -263,6 +280,13 @@ export const api = new sst.aws.Function('Api', {
      * suppression list is indistinguishable from a domain with no bounces.
      */
     RESEND_WEBHOOK_SECRET: resendWebhookSecret.value,
+
+    /**
+     * The widget token keyset (P2-11), read once per container when P2-12's
+     * session route loads its keys — injected like `AUTH_SECRET`, for the same
+     * cold-start reason.
+     */
+    WIDGET_TOKEN_KEYS: widgetTokenKeys.value,
   },
 
   /**
@@ -273,7 +297,23 @@ export const api = new sst.aws.Function('Api', {
    * skims — see P0-15. One wildcard `ssm:GetParameter` would mean a bug in the
    * widget path yields every secret in the account.
    */
-  permissions: parameterReadPermissions(['database/url', 'auth/secret']),
+  permissions: [
+    ...parameterReadPermissions(['database/url', 'auth/secret']),
+    {
+      /*
+       * Titan, and only Titan (P2-37). This function embeds a query for the
+       * retrieval sandbox, and will embed a visitor's question for P2-29. The
+       * grant is the worker's, written out again rather than shared: a wildcard
+       * on `bedrock:InvokeModel` would let a bug here invoke any model the
+       * account can reach, including ones billed at fifty times the rate, and
+       * the bill is the only place that would show up.
+       */
+      actions: ['bedrock:InvokeModel'],
+      resources: [
+        $interpolate`arn:aws:bedrock:${aws.getRegionOutput().name}::foundation-model/amazon.titan-embed-text-v2:0`,
+      ],
+    },
+  ],
 });
 
 /**

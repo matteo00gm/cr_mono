@@ -500,6 +500,54 @@ export type ImportPreviewResponse = z.infer<typeof importPreviewResponse>;
  * The client's `request()` is typed off this, so calling an endpoint returns
  * the right shape without a cast and a typo in the path is a compile error.
  */
+/**
+ * One candidate, as the retrieval sandbox explains it (P2-37).
+ *
+ * Every number here came from the statement that produced the ranking, not from
+ * a second one run to describe it. `excludedBy` is why the wine did not reach
+ * the prompt: the cap cut it, the price ceiling refused it, or it is sold out.
+ */
+export const simulatedCandidate = z.object({
+  productId: z.string(),
+  name: z.string(),
+  vectorRank: z.number().int().positive().nullable(),
+  /** Cosine similarity: one is identical, nought unrelated. Null where the vector branch missed it. */
+  vectorScore: z.number().nullable(),
+  lexicalRank: z.number().int().positive().nullable(),
+  rrfScore: z.number(),
+  /** `completenessOf`, as the catalogue grid shows it: a thin wine ranks badly for a reason. */
+  completeness: z.object({
+    score: z.number().int().min(0).max(100),
+    missing: z.array(z.string()),
+    topSuggestion: z.string().optional(),
+  }),
+  /** Restated rather than imported, like every other enum here: this package depends on zod alone. */
+  stockStatus: z.enum(['IN_STOCK', 'OUT_OF_STOCK', 'PREORDER']),
+  priceCents: z.number().int().nonnegative(),
+  included: z.boolean(),
+  excludedBy: z.enum(['stock', 'price', 'cap']).nullable(),
+});
+
+/**
+ * What a simulation reports (P2-37).
+ *
+ * **No prompt.** `systemPromptHash` identifies the instruction prefix that
+ * would have been sent without disclosing it — returning the assembled prompt
+ * would publish our instructions to every tenant (§3.7).
+ *
+ * **No generation.** The row keeps an LLM call behind an opt-in flag; until
+ * P2-31 can bill one, there is nothing here to opt into, so a simulation makes
+ * no provider call beyond the one embedding it needs.
+ */
+export const ragSimulationResponse = z.object({
+  candidates: z.array(simulatedCandidate),
+  /** How many survived filtering before the cap. Tells a weak match from no match. */
+  preCapCount: z.number().int().nonnegative(),
+  zeroResultKind: z.enum(['no_matches', 'filtered_out', 'out_of_stock_only']).nullable(),
+  timings: z.object({ embedMs: z.number(), searchMs: z.number() }),
+  systemPromptHash: z.string(),
+});
+
 export const DASHBOARD_RESPONSES = {
   'GET /v1/dashboard': surfaceResponse,
   'GET /v1/dashboard/me': meResponse,
@@ -519,6 +567,7 @@ export const DASHBOARD_RESPONSES = {
   'POST /v1/dashboard/products/:id/reindex': productReindexedResponse,
   'POST /v1/dashboard/products/import': productsImportedResponse,
   'POST /v1/dashboard/products/import/preview': importPreviewResponse,
+  'POST /v1/dashboard/rag/simulate': ragSimulationResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;
@@ -558,3 +607,19 @@ export const widgetConfigResponse = z.strictObject({
 });
 
 export type WidgetConfigResponse = z.infer<typeof widgetConfigResponse>;
+
+/**
+ * A minted widget session (P2-12, §3.4).
+ *
+ * **The token and when it lapses, and nothing else.** The claims inside the
+ * token are for our own verifier; the widget reads `exp` from the token only to
+ * time a refresh (P3-21), and `expiresAt` says the same for a caller that does
+ * not decode it. Strict, so a claim copied into the body by mistake fails the
+ * route's own test.
+ */
+export const widgetSessionResponse = z.strictObject({
+  token: z.string(),
+  expiresAt: z.iso.datetime(),
+});
+
+export type WidgetSessionResponse = z.infer<typeof widgetSessionResponse>;

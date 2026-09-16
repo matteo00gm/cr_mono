@@ -29,6 +29,24 @@ export {
 } from './embedding-provider.js';
 
 /**
+ * Embedding the visitor's question (P2-17).
+ *
+ * The other half of the seam above: the catalogue's vectors are only comparable
+ * with a query vector from the same model, and a mismatch is meaningless rather
+ * than merely worse — so it is refused at startup, where a deployment can fail.
+ */
+export {
+  assertQueryProviderMatchesIndex,
+  embedQuery,
+  MAX_QUERY_CHARACTERS,
+  normaliseQuery,
+  QueryDimensionMismatchError,
+  QueryModelMismatchError,
+  type IndexedEmbedding,
+  type QueryEmbedding,
+} from './embed-query.js';
+
+/**
  * The embedding state machine (P1-38).
  *
  * One pure function, so an illegal transition is impossible rather than merely
@@ -95,7 +113,70 @@ export {
   leaksInstructions,
   MAX_HISTORY_TURNS,
   pairingSystemPrompt,
+  pairingRepairPrompt,
   PROMPT_MARKER,
   sanitiseUntrusted,
   type PairingPrompt,
 } from './prompt.js';
+
+/**
+ * Availability and price filtering (P2-21).
+ *
+ * Applied to the fused list, because filtering inside a branch distorts the
+ * rank sets RRF then fuses.
+ */
+export {
+  applyFilters,
+  type FilterableCandidate,
+  type FilterResult,
+  type RetrievalFilters,
+  type StockStatus,
+} from './filters.js';
+
+/**
+ * The candidate cap (P2-22).
+ *
+ * Cost, latency and prompt-injection surface are the same number, and the
+ * pre-cap count is what §2.4 reads to tell a weak match from no match.
+ */
+export {
+  capCandidates,
+  InvalidCandidateCapError,
+  MAX_CANDIDATES,
+  type CappedCandidates,
+} from './candidates.js';
+
+/**
+ * Output allowlisting (P2-25).
+ *
+ * The boundary that makes a hallucinated or cross-tenant wine structurally
+ * unable to reach a visitor. If one function in this package has to be right,
+ * it is this one.
+ */
+export { allowlisted, allowlistRecommendations, type AllowlistResult } from './allowlist.js';
+
+/**
+ * One repair attempt, and then an honest answer (P2-27).
+ *
+ * A schema failure is a normal outcome with a next step, not an error — and the
+ * next step happens once, because a model that missed the schema twice will
+ * miss it a third time while the visitor waits.
+ */
+export { withSchemaRepair, type PairingOutcome, type SchemaRepairOptions } from './repair.js';
+
+/**
+ * The escalation cascade (P2-28).
+ *
+ * A provider swap rather than a second code path: same prompt, same schema,
+ * same allowlist, same repair — a better model.
+ */
+export {
+  constraintsIn,
+  DEFAULT_THRESHOLDS,
+  escalationsFor,
+  tierFor,
+  type EscalationReason,
+  type EscalationSignals,
+  type EscalationThresholds,
+  type ProviderTiers,
+} from './escalation.js';

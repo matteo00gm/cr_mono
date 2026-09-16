@@ -73,7 +73,14 @@ export type PairingParse =
   | { readonly ok: true; readonly value: PairingOutput }
   | {
       readonly ok: false;
-      /** `path: message`, one per problem — what P2-27's repair prompt shows the model. */
+      /**
+       * `path: message`, one per problem.
+       *
+       * For logs, not for the model: P2-27's repair says *that* the schema was
+       * missed rather than how, because carrying the how to the model means a
+       * field on the chunk union that must never reach the wire, and a field
+       * like that is a leak waiting for the one route that forwards it.
+       */
       readonly issues: readonly string[];
     };
 

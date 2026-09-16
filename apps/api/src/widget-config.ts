@@ -22,6 +22,15 @@ import type { WidgetTenant } from './env.js';
  */
 const SERVICEABLE: ReadonlySet<WidgetTenant['status']> = new Set(['ACTIVE', 'TRIALING']);
 
+/** Whether a widget runs for this tenant at all — one answer for config (P2-10) and session mint (P2-12). */
+export const isServiceable = (status: WidgetTenant['status']): boolean => SERVICEABLE.has(status);
+
+/**
+ * What a switched-off winery's widget is told, never naming why (§1.3) — by the
+ * session mint (P2-12) and by every call that needs a session (P2-13).
+ */
+export const WIDGET_UNAVAILABLE = 'This widget is not available right now.';
+
 /**
  * The appearance a widget has before a seller has chosen one.
  *
@@ -48,7 +57,7 @@ export const widgetConfigFor = (
   tenant: WidgetTenant,
   quotaState: QuotaState,
 ): WidgetConfigResponse => ({
-  status: SERVICEABLE.has(tenant.status) ? 'ACTIVE' : 'DISABLED',
+  status: isServiceable(tenant.status) ? 'ACTIVE' : 'DISABLED',
   locale: tenant.locale,
   theme: { ...DEFAULT_THEME },
   welcomeMessage: tenant.locale === 'en' ? WELCOME.en : WELCOME.it,
