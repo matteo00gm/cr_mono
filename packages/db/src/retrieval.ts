@@ -265,6 +265,17 @@ export interface FusedCandidate {
   readonly vectorRank: number | null;
   readonly lexicalRank: number | null;
   /**
+   * Cosine distance to the query vector, or null where the vector branch missed
+   * it. Nought is identical and two is opposite, so a similarity is `1 - d`.
+   *
+   * Carried for P2-37's sandbox, which is the one caller that has to explain a
+   * ranking rather than act on it. RRF reads ranks, so nothing here depends on
+   * this number — which is exactly why it has to come from the statement that
+   * computed it rather than be recomputed later against a vector that may have
+   * been re-indexed in between.
+   */
+  readonly vectorDistance: number | null;
+  /**
    * What P2-21 filters on, read in the statement that found the wine.
    *
    * Carried here rather than fetched afterwards because the filter is pure and
@@ -320,7 +331,8 @@ export const fusedSearch = async (
 ): Promise<FusedCandidate[]> => {
   const rows = await tx.execute(sql`
     with vec as (
-      select product_id, row_number() over (order by distance, product_id) as rank
+      select product_id, distance,
+             row_number() over (order by distance, product_id) as rank
       from (${nearestWines(JSON.stringify([...vector]), vectorLimit)}) nearest
     ),
     words as (${wordMatches(query, termsOf(query), lexicalLimit)}),
@@ -339,6 +351,7 @@ export const fusedSearch = async (
     select product_id,
            vec.rank as vector_rank,
            lex.rank as lexical_rank,
+           vec.distance as vector_distance,
            p.stock_status,
            p.price_cents,
            coalesce(1.0 / (${k} + vec.rank), 0) + coalesce(1.0 / (${k} + lex.rank), 0) as score
@@ -350,8 +363,8 @@ export const fusedSearch = async (
 
   /*
    * `postgres-js` returns `bigint` and `numeric` as strings and `integer` as a
-   * number, so the ranks and the score are coerced and the price is not. The
-   * asymmetry is the driver's, not ours: a blanket `Number()` over the price
+   * number, so the ranks and the score are coerced and the price and the distance are not.
+   * The asymmetry is the driver's, not ours: a blanket `Number()` over the price
    * would be a conversion that provably cannot do anything, which both the
    * linter and P2-21's mutation run said out loud.
    */
@@ -360,6 +373,7 @@ export const fusedSearch = async (
       product_id: productId,
       vector_rank: vectorRank,
       lexical_rank: lexicalRank,
+      vector_distance: vectorDistance,
       stock_status: stockStatus,
       price_cents: priceCents,
       score,
@@ -367,6 +381,7 @@ export const fusedSearch = async (
       product_id: string;
       vector_rank: number | string | null;
       lexical_rank: number | string | null;
+      vector_distance: number | null;
       stock_status: FusedCandidate['stockStatus'];
       price_cents: number;
       score: number | string;
@@ -377,6 +392,7 @@ export const fusedSearch = async (
       score: Number(score),
       vectorRank: vectorRank === null ? null : Number(vectorRank),
       lexicalRank: lexicalRank === null ? null : Number(lexicalRank),
+      vectorDistance,
       stockStatus,
       priceCents,
     };

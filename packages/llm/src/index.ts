@@ -37,3 +37,18 @@ export {
 } from './gemini.js';
 
 export type { PairingUsage } from './usage.js';
+
+/**
+ * The embedding adapter (P1-36), here since P2-37.
+ *
+ * Both the worker that indexes a catalogue and the API that embeds a visitor's
+ * question reach it through this package, so there is one adapter rather than
+ * one per app.
+ */
+export {
+  TITAN_DIMENSIONS,
+  TITAN_MODEL,
+  TITAN_PROVENANCE,
+  titanEmbeddingProvider,
+  truncateForTitan,
+} from './titan.js';

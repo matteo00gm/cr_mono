@@ -2,13 +2,16 @@ import {
   betterAuthRateLimitStorage,
   chooseTransport,
   createAuth,
+  assertQueryProviderMatchesIndex,
   createSendEmail,
   logTransport,
   resendTransport,
+  type IndexedEmbedding,
   type MembershipReader,
   type ResetPasswordEmail,
   type SuppressionCheck,
 } from '@catalogorosso/core';
+import { titanEmbeddingProvider } from '@catalogorosso/llm';
 import { memoryRateLimiter, type MonthlyCheck, type RateLimiter } from '@catalogorosso/security';
 import { loadWidgetTokenKeys, type WidgetTokenKeys } from '@catalogorosso/security/tokens';
 import {
@@ -22,6 +25,7 @@ import {
 
 import { createMembersPort, type MembersPort } from './members.js';
 import { createProductsPort, type ProductsPort } from './products.js';
+import { createRagPort, type RagPort } from './rag.js';
 import { refusalRecorders } from './security-events.js';
 import type { WidgetDependencies } from './surfaces/widget.js';
 import { createWebhooksPort, type WebhooksPort } from './webhooks.js';
@@ -166,6 +170,8 @@ export interface Dependencies {
   readonly members: MembersPort;
   /** The catalogue (P1-02). */
   readonly products: ProductsPort;
+  /** The retrieval sandbox (P2-37). */
+  readonly rag: RagPort;
   /** Records provider delivery events (P0-64b). */
   readonly webhooks: WebhooksPort;
   /** Passed through to `createApp`; absent means the endpoint refuses. */
@@ -190,6 +196,25 @@ export interface Dependencies {
 const suppressionForUser = (userId: string): SuppressionCheck => ({
   isSuppressed: (address) => withUser(userId, (tx) => isSuppressed(tx, address)),
 });
+
+/**
+ * What the catalogue's vectors were produced by (P2-17).
+ *
+ * **Written out rather than imported from the adapter**, which looks like the
+ * duplication P0-42 forbids and is the opposite of it. These two values
+ * describe rows already in `product_embeddings`; the adapter describes what the
+ * next call will produce. Taking both from the same constant would compare a
+ * value with itself, and the check exists precisely for the deployment that
+ * changes one of them — P1-47's bake-off is a configuration change away from
+ * being that deployment.
+ *
+ * Changing the indexed model means re-embedding every wine under a new
+ * `version` (P1-49) and moving this line with it.
+ */
+const INDEXED_EMBEDDING: IndexedEmbedding = {
+  model: 'amazon.titan-embed-text-v2:0',
+  dim: 1024,
+};
 
 export const buildDependencies = (config: RuntimeConfig): Dependencies => {
   const log = logTransport(config.log);
@@ -291,6 +316,16 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
      * the capability — is applied before this is reached.
      */
     products: createProductsPort(),
+
+    /*
+     * The retrieval sandbox (P2-37), and the first place P2-17's startup check
+     * is a real one. `assertQueryProviderMatchesIndex` throws here rather than
+     * on a request, so a provider that cannot read this catalogue's vectors
+     * fails the deployment and the previous version keeps answering.
+     */
+    rag: createRagPort({
+      provider: assertQueryProviderMatchesIndex(titanEmbeddingProvider(), INDEXED_EMBEDDING),
+    }),
 
     /*
      * Built unconditionally, unlike the secret beside it. The port is what

@@ -327,6 +327,7 @@ export {
   isSortField,
   listProducts,
   MAX_LIMIT,
+  productsByIds,
   SORTABLE,
   STOCK_STATUSES,
   type EmbeddingState,

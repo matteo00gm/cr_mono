@@ -2656,6 +2656,250 @@
             }
           }
         }
+      },
+      "/v1/dashboard/rag/simulate": {
+        "post": {
+          "summary": "Run retrieval for a question and show its working",
+          "description": "Runs the real retrieval pipeline for a question - the same embedding, the same hybrid search, the same availability and price filter, the same candidate cap that a visitor gets - and returns the ranking with the numbers that produced it. This is the endpoint for \"the widget recommends the wrong wine\": reproducing that through the live widget inflates usage counters, fills analytics with conversations nobody had, and still shows only the answer rather than the reasoning. Each candidate reports where each branch ranked it, the fused score, how completely it is described, and whether it reached the prompt - with excludedBy saying why not, which is usually the answer: the right wine was found at rank eleven and cut by the cap, or it is out of stock. preCapCount separates \"nothing matched\" from \"matched, but weakly\". No usage, no analytics and no conversation is recorded, so it can be run as often as it takes. Retrieval only: no model is asked to write a reply, and the instructions that would be sent are identified by hash rather than returned.\n\nRequires the `catalog:read` capability.",
+          "operationId": "postV1DashboardRagSimulate",
+          "x-required-capability": "catalog:read",
+          "responses": {
+            "200": {
+              "description": "Run retrieval for a question and show its working",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "candidates": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "productId": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "vectorRank": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "vectorScore": {
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "lexicalRank": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "rrfScore": {
+                              "type": "number"
+                            },
+                            "completeness": {
+                              "type": "object",
+                              "properties": {
+                                "score": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 100
+                                },
+                                "missing": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "topSuggestion": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "score",
+                                "missing"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "stockStatus": {
+                              "type": "string",
+                              "enum": [
+                                "IN_STOCK",
+                                "OUT_OF_STOCK",
+                                "PREORDER"
+                              ]
+                            },
+                            "priceCents": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "included": {
+                              "type": "boolean"
+                            },
+                            "excludedBy": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "stock",
+                                    "price",
+                                    "cap"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "productId",
+                            "name",
+                            "vectorRank",
+                            "vectorScore",
+                            "lexicalRank",
+                            "rrfScore",
+                            "completeness",
+                            "stockStatus",
+                            "priceCents",
+                            "included",
+                            "excludedBy"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "preCapCount": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "zeroResultKind": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "no_matches",
+                              "filtered_out",
+                              "out_of_stock_only"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "timings": {
+                        "type": "object",
+                        "properties": {
+                          "embedMs": {
+                            "type": "number"
+                          },
+                          "searchMs": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "embedMs",
+                          "searchMs"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "systemPromptHash": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "candidates",
+                      "preCapCount",
+                      "zeroResultKind",
+                      "timings",
+                      "systemPromptHash"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "candidates": [
+                      {
+                        "productId": "3f1c0b7e-4a30-4c1a-9f2e-1b7e4a304c1a",
+                        "name": "Barolo Monfortino Riserva",
+                        "vectorRank": 2,
+                        "vectorScore": 0.81,
+                        "lexicalRank": 1,
+                        "rrfScore": 0.0325,
+                        "completeness": {
+                          "score": 78,
+                          "missing": [
+                            "annata"
+                          ],
+                          "topSuggestion": "annata"
+                        },
+                        "stockStatus": "IN_STOCK",
+                        "priceCents": 18500,
+                        "included": true,
+                        "excludedBy": null
+                      }
+                    ],
+                    "preCapCount": 23,
+                    "zeroResultKind": null,
+                    "timings": {
+                      "embedMs": 142.6,
+                      "searchMs": 38.2
+                    },
+                    "systemPromptHash": "9f2e1b7e4a304c1a"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   },

@@ -1311,7 +1311,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-12 | ⛔ 🔒 `POST /v1/widget/session` | mint token with `origin`/`tid`/`jti`, 15 min | P2-11 |
 | ✅ P2-12a | 🔒 Session continuation | re-mint keeping `sid`, **requires the previous token** — never a client-supplied `sid` | P2-12 |
 | ✅ P2-13 | ⛔ 🔒 Token verify middleware | sig, exp, aud, iss, alg, origin match, jti, **tenant ACTIVE** | P2-12 |
-| P2-37 | RAG diagnostic sandbox | real pipeline + scores, no billing, no analytics; retrieval-only by default | P2-22 |
+| ✅ P2-37 | RAG diagnostic sandbox | real pipeline + scores, no billing, no analytics; retrieval-only by default | P2-22 |
 | ✅ P2-14 | 🔒 Revocation sweep job | EventBridge, prunes expired `jti` | P0-35 |
 | ✅ P2-15 | 🔒 Token test suite | replay, cross-origin, absent Origin, alg confusion | P2-13 |
 | ✅ P2-16 | 🔒 `security_events` writer | `UNAUTHORIZED_ORIGIN` etc., counted per `(pk_, origin)` | P0-32 |
@@ -4354,7 +4354,9 @@ Several infra modules need none of that: `queue-config.ts`, `static-assets.ts`, 
 
 **Files.** `packages/core/src/rag/providers/titan.ts`, tests. **~120 lines.**
 
-**As built — in `apps/worker`, not `packages/core`, because the boundary rule forbids the AWS SDK there.** That rule exists for exactly this case: the moment `core` imports an AWS client, testing anything in that package needs a mocked cloud, and the suites that are fast and trusted stop being either (P0-09). The *port* stays in core, which is what every other module compiles against; the adapter lives beside its only consumer, with the client injected so none of its tests need credentials or a network.
+**As built — in `packages/llm`, not `packages/core`, because the boundary rule forbids the AWS SDK there.** That rule exists for exactly this case: the moment `core` imports an AWS client, testing anything in that package needs a mocked cloud, and the suites that are fast and trusted stop being either (P0-09). The *port* stays in core, which is what every other module compiles against; the adapter lives with the other model adapters, with the client injected so none of its tests need credentials or a network.
+
+*It landed in `apps/worker`, beside its only consumer, and **P2-37 moved it**.* The API has to embed a query, an adapter in one app is unreachable from another, and the choice was a second copy or one package — so it went to the package whose stated job is model adapters. `apps/worker` no longer depends on the Bedrock SDK directly.
 
 - **`normalize: true` is not a formatting preference.** Normalised vectors make cosine distance equivalent to inner product and keep magnitudes consistent across rows, so a long tasting note does not outrank a short one for having more words in it. pgvector's `<=>` *is* cosine distance, and mixing normalised and unnormalised vectors in one index gives answers that are wrong in a way nothing reports.
 - **The token limit is budgeted in characters**, because tokens are the model's unit and there is no tokeniser here — pulling one in would be a dependency and a version to keep aligned with a remote model. Four characters per token is conservative for Italian, and being conservative costs a slightly shorter tail on a very long note where being wrong the other way costs a rejected call the retry loop then repeats.
@@ -5224,7 +5226,7 @@ What the row left open:
 
 **As built (2026-09-16).** As the row specifies, in `packages/core/src/rag/embed-query.ts`. What it left open:
 
-- **The startup assertion is `assertQueryProviderMatchesIndex`**, which refuses a provider whose model *or* dimension differs from what the catalogue was indexed with. It is exported and not yet called: nothing in the API constructs an embedding provider until there is a query path, so P2-18 wires it where that path is built *(open)*.
+- **The startup assertion is `assertQueryProviderMatchesIndex`**, which refuses a provider whose model *or* dimension differs from what the catalogue was indexed with. It is exported and was not called at first — nothing in the API constructed an embedding provider until there was a query path. **Closed by P2-37**, whose composition root builds the provider and passes it through this, so a mismatch fails the deployment rather than a request.
 - **The cap truncates and never refuses**, at 500 characters. A visitor who pastes three paragraphs asked a real question; the first five hundred characters carry the intent, and embedding the rest is a bill rather than a better answer.
 - **Normalisation is trim and collapse, and nothing else** — no stemming, no accent folding, no lowercasing. Each of those throws away signal the model was trained on: `perché`, `più` and `rossi` are all closer to their neighbours in the model's space than any regular expression would leave them.
 - **An empty message is refused rather than embedded** *(addition)*. Not a truncation case: there is nothing to embed, and a vector of whitespace is one the search would happily rank wines against, paid for at the provider.
@@ -5631,6 +5633,21 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 **Tests.** Returns candidates with populated ranks and scores; writes **no** `usage_events` or `widget_events` rows (assert counts before and after); tenant B cannot simulate against tenant A's catalog; the system prompt is absent from the response; generation flag off means zero provider calls.
 
 **Files.** `apps/api/src/routes/rag-simulate.ts`, dashboard drawer, tests. **~150 lines.**
+
+**As built (2026-09-16).** `apps/api/src/rag.ts` behind `POST /v1/dashboard/rag/simulate`, on `catalog:read`.
+
+- **A port, not a route module** *(deviation)*. `apps/api` has no `routes/` directory: a route is a handler in the surface and the work behind it is a port, the shape `products` and `members` already use. The route is a body parse and one call.
+- **It runs the real functions, not a copy.** `embedQuery`, `fusedSearch`, `applyFilters`, `capCandidates` — the four the widget will call, on one `withTenant` transaction. A sandbox with its own copy of the filter would answer questions about itself.
+- **`excludedBy` beside `included`** *(addition)*. The row asks for `included`, but "retrieved at rank 11 and cut" and "retrieved at rank 2 and sold out" are the same `false`, and they are the two answers the ticket is choosing between. The value is `cap`, `price` or `stock`, and the price ceiling is named first because it is applied first (P2-21).
+- **`zeroResultKind` is three values, not a boolean**: `no_matches`, `filtered_out`, `out_of_stock_only`. An empty catalogue and a catalogue that is entirely sold out are different problems with different fixes, and §2.4's panel exists to tell a seller which one they have.
+- **`vectorScore` is a similarity**, `1 - distance`, carried out of the fused statement as `vectorDistance` rather than recomputed. RRF reads ranks, so nothing depends on the number — which is exactly why it has to come from the statement that computed it and not from a vector that may have been re-indexed since.
+- **Hydration is a second statement** (`productsByIds`), not more columns on the fused one. Only this endpoint needs a wine's whole row; the widget path ranks ids. Order is the caller's, because fusion's order *is* the answer.
+- **The `.strict()` body** — unlike the product bodies, and the difference is who is sending. Every field here is a knob on an experiment: a misspelt `maxPrice` that parsed cleanly would report on a run nobody asked for, and the report would look exactly like the one they wanted.
+- **Generation is not built, rather than built and defaulted off** *(scope)*. The row puts an LLM call behind an opt-in flag, "hard rate-limited, and billed" — and there is nothing to bill it to until P2-31's `usage_events` writer exists. A flag with no writer behind it would be the endpoint's one dangerous default shipped untested. The suite asserts what is true instead: one embedding per run and no model asked to write anything.
+- **No dashboard drawer** *(scope)*. The endpoint is what P1-47's bake-off and P2's tuning need; the drawer is a screen for it and belongs with P6-04's panels.
+- **The Titan adapter moved to `packages/llm`** *(deviation)*. It lived in `apps/worker`, which the API cannot import — correctly, since apps do not import apps — so the choice was a second copy or one package. This is the package whose stated job is model adapters. `apps/worker` no longer depends on the Bedrock SDK directly.
+- **This is where P2-17's startup check becomes real.** `assertQueryProviderMatchesIndex` had no caller; the composition root now runs it, so a provider that cannot read this catalogue's vectors fails the deployment rather than a request.
+- **`infra/api.ts` grants `bedrock:InvokeModel` on Titan alone**, and `infra/test/model-grants.test.ts` reads both function definitions to assert no wildcard reaches either. A wildcard there is one careless line, deploys cleanly, works, and shows up only on an invoice.
 
 ---
 

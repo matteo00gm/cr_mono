@@ -297,7 +297,23 @@ export const api = new sst.aws.Function('Api', {
    * skims — see P0-15. One wildcard `ssm:GetParameter` would mean a bug in the
    * widget path yields every secret in the account.
    */
-  permissions: parameterReadPermissions(['database/url', 'auth/secret']),
+  permissions: [
+    ...parameterReadPermissions(['database/url', 'auth/secret']),
+    {
+      /*
+       * Titan, and only Titan (P2-37). This function embeds a query for the
+       * retrieval sandbox, and will embed a visitor's question for P2-29. The
+       * grant is the worker's, written out again rather than shared: a wildcard
+       * on `bedrock:InvokeModel` would let a bug here invoke any model the
+       * account can reach, including ones billed at fifty times the rate, and
+       * the bill is the only place that would show up.
+       */
+      actions: ['bedrock:InvokeModel'],
+      resources: [
+        $interpolate`arn:aws:bedrock:${aws.getRegionOutput().name}::foundation-model/amazon.titan-embed-text-v2:0`,
+      ],
+    },
+  ],
 });
 
 /**
