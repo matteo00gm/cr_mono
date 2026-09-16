@@ -7,6 +7,7 @@ import type { AppEnv } from './env.js';
 import type { AuthPort } from './middleware/auth.js';
 import type { MembersPort } from './members.js';
 import type { ProductsPort } from './products.js';
+import type { RagPort } from './rag.js';
 import { assertEveryRouteDeclared } from './middleware/capability.js';
 import { errorHandler, normaliseThrown, notFoundHandler } from './middleware/error.js';
 import { DASHBOARD_PREFIX, WEBHOOK_PREFIX, WIDGET_PREFIX } from './routes.js';
@@ -87,6 +88,13 @@ export interface AppOptions {
   readonly products?: ProductsPort | undefined;
 
   /**
+   * The retrieval sandbox (P2-37). Optional on the `members` terms: absent
+   * refuses with a wiring error rather than reporting an empty ranking, which
+   * a merchant would read as an answer.
+   */
+  readonly rag?: RagPort | undefined;
+
+  /**
    * Provider delivery events (P0-64b). Optional, and absent refuses every call
    * with a wiring error — the `members` shape, not the `originSecret` one.
    */
@@ -115,6 +123,7 @@ export const createApp = ({
   readMemberships,
   members,
   products,
+  rag,
   originSecret,
   webhooks,
   resendWebhookSecret,
@@ -180,7 +189,10 @@ export const createApp = ({
    */
   app.get('/v1/health', (c) => c.json({ status: 'ok' as const, sha: buildSha() }));
 
-  app.route(DASHBOARD_PREFIX, createDashboardApp({ auth, readMemberships, members, products }));
+  app.route(
+    DASHBOARD_PREFIX,
+    createDashboardApp({ auth, readMemberships, members, products, rag }),
+  );
   app.route(WIDGET_PREFIX, createWidgetApp(widget));
   app.route(WEBHOOK_PREFIX, createWebhookApp({ webhooks, resendWebhookSecret }));
 

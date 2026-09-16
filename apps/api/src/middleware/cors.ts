@@ -4,7 +4,8 @@ import { normalizeOrigin } from '@catalogorosso/security';
 import type { MiddlewareHandler } from 'hono';
 
 import type { AppEnv } from '../env.js';
-import { logger } from './logger.js';
+import { bucketIp } from './ip-bucket.js';
+import { clientIp, logger } from './logger.js';
 
 /**
  * Dynamic CORS for the widget surface (P2-08, §3.1).
@@ -75,6 +76,13 @@ export interface RejectedWidgetRequest {
   /** As the browser sent it, verbatim: what was claimed is the evidence. */
   readonly origin: string | undefined;
   readonly publicKey: string | undefined;
+  /**
+   * The visitor's address as P2-04 buckets it, when a secret is configured
+   * to bucket it with. Never the address: `security_events` keeps the bucket
+   * so a run of refusals can be told apart from one visitor without the row
+   * becoming personal data (P2-16).
+   */
+  readonly ipBucket?: string | undefined;
 }
 
 export type WidgetResolver = (publicKey: string, origin: string) => Promise<WidgetResolution>;
@@ -92,6 +100,11 @@ export interface WidgetCorsOptions {
   readonly onRejected?: ((event: RejectedWidgetRequest) => Promise<void>) | undefined;
   /** `development` admits `http:` and `localhost` origins (P2-05). */
   readonly environment?: 'production' | 'development' | undefined;
+  /**
+   * What the daily address salt is derived from (P2-04). Absent, a refusal
+   * is recorded without a bucket rather than with an address.
+   */
+  readonly ipSecret?: string | undefined;
 }
 
 /**
@@ -130,6 +143,7 @@ export const widgetCors =
     resolve,
     onRejected = logRejection,
     environment = 'production',
+    ipSecret,
   }: WidgetCorsOptions): MiddlewareHandler<AppEnv> =>
   async (c, next) => {
     // Rule 1: before any decision, so no path out of here can miss it.
@@ -139,7 +153,20 @@ export const widgetCors =
     const publicKey = c.req.query(WIDGET_KEY_PARAM);
 
     const refuse = (event: Omit<RejectedWidgetRequest, 'origin' | 'publicKey'>): never => {
-      report(onRejected, { ...event, origin: sentOrigin, publicKey });
+      report(onRejected, {
+        ...event,
+        origin: sentOrigin,
+        publicKey,
+        ...(ipSecret === undefined
+          ? {}
+          : {
+              ipBucket: bucketIp(
+                clientIp(c.req.header('x-forwarded-for')).ip,
+                ipSecret,
+                Date.now(),
+              ),
+            }),
+      });
       // Rule 3: nothing but `Vary` has been set, and nothing else will be.
       throw new ForbiddenError(WIDGET_REFUSED);
     };
@@ -175,6 +202,7 @@ export const widgetCors =
       status: resolution.status,
       locale: resolution.locale,
     });
+    c.set('widgetOrigin', normalized.origin);
 
     // Rule 5: the same resolution answered the preflight, so it gets the same answer.
     if (c.req.method === 'OPTIONS') {

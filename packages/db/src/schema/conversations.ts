@@ -1,5 +1,15 @@
 import { sql } from 'drizzle-orm';
-import { check, index, integer, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  check,
+  index,
+  integer,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 
 import { tenants } from './tenants.js';
 
@@ -58,6 +68,21 @@ export const conversations = pgTable(
 
     /** The purge job (P7-07) and every analytics panel scan this way. */
     index('conversations_tenant_started_idx').on(table.tenantId, table.startedAt.desc()),
+
+    /**
+     * One conversation per session (P2-30).
+     *
+     * A turn upserts by this pair, and without the constraint two messages
+     * arriving close together each find no row and each insert one: the visitor
+     * gets a second conversation with no history, the model answers the
+     * follow-up having forgotten the question, and §2.4 counts one visitor as
+     * two. Nothing errors.
+     *
+     * Scoped by tenant as well, because a session id is minted per tenant
+     * (P2-12) and a global unique index would let one tenant's id collide with
+     * another's.
+     */
+    uniqueIndex('conversations_tenant_session_key').on(table.tenantId, table.sessionId),
   ],
 );
 
