@@ -191,6 +191,13 @@ export default {
           // withTenant, never through a raw connection, and token_revocations
           // carries the boilerplate tenant policy.
           '|^packages/db/src/token-revocations[.]ts$' +
+          // src/with-lapsed-revocations.ts is exempt from P2-14, and it is the
+          // sixth RLS context — a design change, recorded in ADR 0023. It widens
+          // across tenants like with-outbox.ts, and what bounds it is in the
+          // policy rather than the file: the flag admits a revocation only once
+          // its token lapsed past the continuation window, and WITH CHECK stays
+          // tenant-only. It opens a transaction and sets one GUC, nothing else.
+          '|^packages/db/src/with-lapsed-revocations[.]ts$' +
           // src/embeddings.ts is exempt from P1-37 on the same terms as
           // products.ts: it writes statements and takes the transaction from
           // its caller, opening nothing. Its tables are tenant-scoped and under

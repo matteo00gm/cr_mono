@@ -138,13 +138,17 @@ export {
 export { resolveTenantByKeyAndOrigin, type WidgetResolution } from './widget-resolution.js';
 
 /**
- * The widget token revocation read (P2-12a).
+ * The widget token revocation read (P2-12a) and the sweep that clears them (P2-14).
  *
- * Not a sixth context: it runs under `withTenant`, for the tenant a request
- * resolved, and `token_revocations` carries the boilerplate policy. The rows
- * are written when a domain is removed (P4-06).
+ * The read is not a context of its own: it runs under `withTenant`, for the
+ * tenant a request resolved. The sweep is the **sixth** context, and ADR 0023:
+ * `withLapsedRevocations` admits every tenant's revocations, but only those whose
+ * token lapsed more than `REVOCATION_SWEEP_GRACE_SEC` ago, and it cannot write.
+ * The rows are written when a domain is removed (P4-06).
  */
-export { isTokenRevoked } from './token-revocations.js';
+export { isTokenRevoked, pruneLapsedRevocations } from './token-revocations.js';
+export { REVOCATION_SWEEP_GRACE_SEC } from './revocation-grace.js';
+export { REVOCATION_SWEEPER_GUC, withLapsedRevocations } from './with-lapsed-revocations.js';
 
 /**
  * The `invitations` statements (P0-51).
@@ -211,6 +215,8 @@ export {
   BucketsExceeded,
   consumeBuckets,
   createRateLimiter,
+  MAX_FIXED_WINDOW_SEC,
+  PRUNE_BATCH,
   pruneClosedWindows,
   type BucketCheck,
   type BucketResult,
