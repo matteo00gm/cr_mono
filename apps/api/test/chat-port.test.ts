@@ -48,6 +48,13 @@ vi.mock('@catalogorosso/db', () => ({
 
 const { createChatPort, QuotaExceededError } = await import('../src/chat.js');
 
+/*
+ * Derived rather than imported: `chat.ts` is loaded with `await import` so the
+ * mock above is in place before it runs, and a type import beside it would be
+ * a second reference to the module under a different loader.
+ */
+type TurnReport = Parameters<Parameters<ReturnType<typeof createChatPort>['answer']>[1]>[0];
+
 const tenant: WidgetTenant = {
   tenantId: TENANT,
   plan: 'CANTINA',
@@ -90,7 +97,7 @@ const ask = async (
   message = 'qualcosa per una bistecca',
 ) => {
   const chunks: PairingChunk[] = [];
-  let report;
+  let report: TurnReport | undefined;
 
   for await (const chunk of port.answer(
     {
