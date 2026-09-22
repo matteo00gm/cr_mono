@@ -1330,7 +1330,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-29 | `POST /v1/widget/chat` (SSE) | Function URL `RESPONSE_STREAM` | P2-13,25 |
 | ✅ P2-30 | Conversation + message persistence | | P0-28 |
 | ✅ P2-31 | `usage_events` writer | tokens, model, cost per turn | P0-30 |
-| P2-32 | 🔒 Prompt-injection test suite | instructions seeded into `tasting_notes` | P2-23 |
+| ✅ P2-32 | 🔒 Prompt-injection test suite | instructions seeded into `tasting_notes` | P2-23 |
 | P2-33 | 🔒 PII redaction pre-prompt | regex + fixtures; nothing personal reaches the model | P2-23 |
 | P2-34 | Language detection + reply locale | IT/EN | P2-29 |
 | P2-35 | History + token caps | 6 turns, hard token ceiling | P2-29 |
@@ -5755,6 +5755,14 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 
 **Files.** `packages/core/test/prompt-injection.spec.ts`. **~170 test lines.**
 
+**As built (2026-09-22).** `packages/core/test/rag/prompt-injection.test.ts`: twelve payloads, each in the field a seller would actually type it into, and each run through four structural assertions — 48 cases before the behavioural ones.
+
+- **What a deterministic suite can prove, it proves in CI.** That a payload cannot forge a delimiter, cannot close the block it sits in, cannot carry a comment, a fence or a blockquote into the prompt, and that the instructions stay where they were. Those are properties of *our* code and hold against any model, so they run on every push rather than in an opt-in job.
+- **What it cannot prove is that the model resists**, and that half stays in the eval job beside `packages/llm`'s `*.live.test.ts` *(open)*. A mocked provider demonstrating injection resistance is demonstrating the mock.
+- **The open item P2-27 recorded is closed here.** `withoutLeakedInstructions` is the streaming half of §3.7's boundary: `trustedPairing` refuses a *parsed* reply that quotes the prompt, and the adapters stream text before that check runs. P2-29's chat route wraps its stream in it.
+- **The guard holds back whatever could still become a pattern**, not a fixed number of characters — and the fixed version was the first design. With the check running on everything received so far, a marker's opening characters are released before its closing ones arrive: the guard stopped after leaking twenty-two of the marker's twenty-six. **The mutation run found it.** Holding a tail that is a *prefix* of something we refuse makes a release boundary unable to fall inside a pattern, which is also why each release can then be checked on its own.
+- **A leak stops the reply rather than erroring it.** Nothing recognisable was released, so the visitor has an answer that stops early instead of one quoting our prompt — and erroring would replace a partial answer with no answer. The turn report carries `leaked`, which is how anybody else finds out an attack landed.
+
 ---
 
 ### P2-33 · PII redaction before the prompt 🔒
@@ -7236,7 +7244,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | SST deploy verified | **closed (2026-09-01)** | Deployed and verified on `dev` stage in `eu-west-1` (VPC, NAT, RDS Postgres 16 with TLS, SSM parameters with SecureString decryption, SNS Topic + subscription, Budgets). Cleanly torn down with `sst remove` to avoid idle costs. |
 | Bedrock model access confirmed | **closed (2026-09-01)** | Confirmed active in `eu-west-1` via AWS CLI: `amazon.nova-lite-v1:0` (chat/pairing LLM) and `amazon.titan-embed-text-v2:0` (vector embeddings). |
 | Price filtering assumes one currency per tenant | later | P2-21's ceiling is minor units with no currency, and `products.currency` is per row while §2.2 sets one per tenant. A tenant that ever priced two wines in two currencies would have a 30 EUR ceiling silently compared against 30 USD. Closing it means the ceiling carrying a currency and the filter excluding rows priced in another — excluding, not converting, since we hold no rate. Cheap, and not worth the surface until a tenant does it. |
-| Streamed text is not checked for leaked instructions | **P2-32** | `trustedPairing` refuses a parsed reply that quotes the prompt, but adapters stream text deltas before that check runs, so a model echoing its instructions as prose reaches a visitor and no delta can be un-sent. Detail under P2-27's as-built. |
+| Streamed text is not checked for leaked instructions | **closed (2026-09-22)** | `withoutLeakedInstructions` (P2-32) holds back any tail that could still become a marker or a delimiter, so nothing recognisable is released; P2-29's chat route wraps its stream in it. The fixed-window first attempt leaked 22 of the marker's 26 characters and the mutation run caught it. |
 | Escalation-rate alarm needs a denominator | **P2-31** | P2-28 emits every reason, but a *rate* needs turns to divide by, and those arrive with P2-29's stream and P2-31's `usage_events` row. An alarm on an absolute count would fire on traffic. |
 | The plan cap is counted twice | **closed (2026-09-22)** | Both counters stay and the stricter wins, which over-refuses by the chat error rate — the safe direction. The alternative was tried and reverted: dropping the limiter's bucket gives up atomicity, so at the cap every concurrent request passes. **ADR 0024** has the argument and names the signal that would reopen it. |
 | OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |

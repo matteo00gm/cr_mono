@@ -8,6 +8,7 @@ import {
   periodOf,
   QUOTA_EXCEEDED_MESSAGE,
   tierFor,
+  withoutLeakedInstructions,
   withSchemaRepair,
   type CandidateProduct,
   type EmbeddingProvider,
@@ -93,6 +94,14 @@ export interface TurnReport {
   readonly preCapCount: number;
   /** Recommendations the allowlist refused. Non-empty is worth alerting on (P2-25). */
   readonly dropped: readonly string[];
+  /**
+   * The reply was cut short because it began quoting the instructions (P2-32).
+   *
+   * **True is an attack that got as far as the model**, and it is the signal a
+   * seeded tasting note produces when it works. The visitor sees a reply that
+   * stops early; this is how anyone else finds out.
+   */
+  readonly leaked: boolean;
   readonly costMicros: number;
 }
 
@@ -211,21 +220,35 @@ export const createChatPort = ({
         let outcome: PairingOutcome = 'provider_error';
         const dropped: string[] = [];
         let reply = '';
+        let leaked = false;
 
-        const answered = allowlisted(
-          withSchemaRepair(
-            provider,
-            { query: message, locale: tenant.locale, candidates, history },
-            signal,
-            {
-              onOutcome: (reported) => {
-                outcome = reported;
+        /*
+         * **Two boundaries, both wrapping the stream rather than following it**
+         * (P2-25, P2-32). The inner one refuses an id outside this request's
+         * candidates; the outer refuses text quoting our instructions, which
+         * the adapters stream before `trustedPairing` ever sees a parsed reply.
+         * Neither can be applied after the fact: a chunk yielded is a chunk
+         * sent.
+         */
+        const answered = withoutLeakedInstructions(
+          allowlisted(
+            withSchemaRepair(
+              provider,
+              { query: message, locale: tenant.locale, candidates, history },
+              signal,
+              {
+                onOutcome: (reported) => {
+                  outcome = reported;
+                },
               },
+            ),
+            new Set(candidates.map((candidate) => candidate.id)),
+            (refused: readonly Recommendation[]) => {
+              dropped.push(...refused.map((item) => item.productId));
             },
           ),
-          new Set(candidates.map((candidate) => candidate.id)),
-          (refused: readonly Recommendation[]) => {
-            dropped.push(...refused.map((item) => item.productId));
+          () => {
+            leaked = true;
           },
         );
 
@@ -285,6 +308,7 @@ export const createChatPort = ({
             candidates: candidates.length,
             preCapCount: capped.consideredCount,
             dropped,
+            leaked,
             costMicros,
           });
         }

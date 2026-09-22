@@ -180,3 +180,11 @@ export {
   type EscalationThresholds,
   type ProviderTiers,
 } from './escalation.js';
+
+/**
+ * Nothing that quotes the instructions reaches a visitor (P2-32).
+ *
+ * The streaming half of §3.7's boundary: `trustedPairing` checks a parsed
+ * reply, and the adapters stream text before that check runs.
+ */
+export { LONGEST_PATTERN, withoutLeakedInstructions } from './leak-guard.js';
