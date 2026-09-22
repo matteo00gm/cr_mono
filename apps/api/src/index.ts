@@ -24,9 +24,10 @@ import { logger } from './middleware/logger.js';
  * the environment, which is the part that legitimately cannot be tested without
  * one.
  *
- * `handle`, not `streamHandle`: this function is BUFFERED (§5.1). The streaming
- * chat endpoint gets its own `RESPONSE_STREAM` Function URL in P2-29, because
- * the two modes are a property of the *function*, not of the route.
+ * `handle`, not `streamHandle`: this function is BUFFERED (§5.1), because every
+ * route but one answers with a small JSON body. The streaming chat endpoint has
+ * its own `RESPONSE_STREAM` function and Function URL (P2-29, `streaming.ts`),
+ * because the two modes are a property of the *function*, not of the route.
  */
 
 const requireEnvironment = (name: string): string => {
@@ -143,7 +144,12 @@ if (stage !== 'unknown' && widgetTokenKeys === undefined) {
   );
 }
 
-const dependencies = buildDependencies({
+/**
+ * Exported for `streaming.ts`, which is a second *function* over the same app
+ * (P2-29). Building them twice would be two composition roots, and the second
+ * would be the one that drifts.
+ */
+export const dependencies = buildDependencies({
   authSecret: requireEnvironment('AUTH_SECRET'),
   authBaseUrl: requireEnvironment('AUTH_BASE_URL'),
 

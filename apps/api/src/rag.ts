@@ -1,24 +1,16 @@
 import { createHash } from 'node:crypto';
 
 import {
-  applyFilters,
-  capCandidates,
   completenessOf,
-  embedQuery,
   MAX_CANDIDATES,
   pairingSystemPrompt,
   type Completeness,
   type EmbeddingProvider,
   type ScorableProduct,
 } from '@catalogorosso/core';
-import {
-  fusedSearch,
-  productsByIds,
-  withTenant,
-  type FusedCandidate,
-  type ProductRow,
-  type StockStatus,
-} from '@catalogorosso/db';
+import type { FusedCandidate, ProductRow, StockStatus } from '@catalogorosso/db';
+
+import { retrieve, SIMULATION_LIMIT } from './retrieval.js';
 
 /**
  * The retrieval diagnostic (P2-37, §4.4).
@@ -42,9 +34,6 @@ import {
  * row's opt-in generation flag waits for P2-31's usage writer, because billing
  * a call this endpoint makes needs somewhere to write the bill.
  */
-
-/** How many candidates a simulation reports on, before the cap decides which eight matter. */
-export const SIMULATION_LIMIT = 40;
 
 /**
  * Why a retrieval came back with nothing a visitor could be shown.
@@ -168,37 +157,16 @@ export const createRagPort = ({
   now = () => performance.now(),
 }: RagPortOptions): RagPort => ({
   async simulate({ tenantId, query, maxPriceCents, cap = MAX_CANDIDATES }) {
-    const embedStarted = now();
-    const { vector } = await embedQuery(provider, query);
-    const embedMs = now() - embedStarted;
-
     /*
-     * One transaction for both reads, like every other retrieval (P2-20). The
-     * hydration is a second statement rather than more columns on the fused
-     * one, because only this endpoint needs a wine's whole row — the widget
-     * path ranks ids.
+     * **The same function the chat route calls**, which is this endpoint's one
+     * real claim: a sandbox running its own pipeline would answer questions
+     * about itself rather than about the answer a merchant is complaining
+     * about (`src/retrieval.ts`).
      */
-    const searchStarted = now();
-    const { fused, rows } = await withTenant(tenantId, async (tx) => {
-      const found = await fusedSearch(tx, { vector, query, limit: SIMULATION_LIMIT });
-
-      return {
-        fused: found,
-        rows: await productsByIds(
-          tx,
-          found.map((candidate) => candidate.productId),
-        ),
-      };
-    });
-    const searchMs = now() - searchStarted;
-
-    /*
-     * The same two functions the widget will call, on the same list. A copy of
-     * either rule here is how a sandbox comes to disagree with the thing it
-     * exists to explain.
-     */
-    const filtered = applyFilters(fused, { maxPriceCents });
-    const capped = capCandidates(filtered.candidates, cap);
+    const { fused, rows, filtered, capped, embedMs, searchMs } = await retrieve(
+      { provider, now },
+      { tenantId, query, maxPriceCents, cap, limit: SIMULATION_LIMIT },
+    );
 
     const kept = new Set(capped.candidates.map((candidate) => candidate.productId));
     const survivedFilter = new Set(filtered.candidates.map((candidate) => candidate.productId));

@@ -1,4 +1,5 @@
 import {
+  widgetChatEvent,
   widgetConfigResponse,
   widgetSessionResponse,
   widgetSurfaceResponse,
@@ -13,11 +14,18 @@ import {
   type WidgetEndpoint,
 } from '@catalogorosso/security';
 import type { WidgetTokenKeys } from '@catalogorosso/security/tokens';
-import { Hono, type Handler } from 'hono';
+import { InvalidRequestError } from '@catalogorosso/core';
+import { createHash } from 'node:crypto';
+import { z } from 'zod';
+import { Hono, type Context, type Handler, type MiddlewareHandler } from 'hono';
+import { streamSSE } from 'hono/streaming';
 
 import type { AppEnv } from '../env.js';
+import { QuotaExceededError, type ChatPort } from '../chat.js';
+import { requireWidgetToken, type RejectedWidgetToken } from '../middleware/widget-auth.js';
 import { routeKey } from '../middleware/capability.js';
 import { widgetCors, type RejectedWidgetRequest, type WidgetResolver } from '../middleware/cors.js';
+import { clientIp, logger } from '../middleware/logger.js';
 import { limitUnresolvedWidgetRequest, limitWidgetRequest } from '../middleware/rate-limit.js';
 import { WIDGET_PREFIX } from '../routes.js';
 import { widgetConfigFor } from '../widget-config.js';
@@ -73,6 +81,14 @@ export interface WidgetDependencies {
    * continuing without asking could revive a revoked token's conversation.
    */
   readonly isTokenRevoked?: TokenRevocationCheck | undefined;
+  /** Where a refused *token* goes (P2-16). Separate from `onRejected`, which is CORS's. */
+  readonly onTokenRejected?: ((event: RejectedWidgetToken) => Promise<void>) | undefined;
+  /**
+   * Answers one question (P2-29). Absent, `/chat` reports a wiring error rather
+   * than a silence: a widget that streams nothing and errors nothing is a
+   * widget nobody can debug.
+   */
+  readonly chat?: ChatPort | undefined;
 }
 
 /**
@@ -115,6 +131,60 @@ export const WIDGET_CONFIG_CACHE_CONTROL = 'public, max-age=60';
 
 const CONFIG_PATH = '/config';
 const SESSION_PATH = '/session';
+const CHAT_PATH = '/chat';
+
+/**
+ * The only thing a chat body carries (P0-48).
+ *
+ * `.strict()`: the tenant, the origin and the session id all come from guards
+ * that established them, so a body offering any of them is a caller trying
+ * something rather than a client sending too much.
+ */
+const chatRequest = z.object({ message: z.string().trim().min(1).max(500) }).strict();
+
+export const CHAT_BODY_EXPECTED = 'Send a JSON body with a message.';
+
+/** A body, or null when there is not one — the dashboard surface's argument, on this surface. */
+const readChatJson = async (c: { req: { json: () => Promise<unknown> } }): Promise<unknown> => {
+  try {
+    return await c.req.json();
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The visitor, as §3.9 allows them to be recorded: a salted hash, never an
+ * address. Null when no secret is configured, which is a local run rather than
+ * a deployment.
+ */
+const visitorHashOf = (c: Context<AppEnv>, ipSecret: string): string | null => {
+  const { ip } = clientIp(c.req.header('x-forwarded-for'));
+
+  return ip === undefined ? null : createHash('sha256').update(`${ip}|${ipSecret}`).digest('hex');
+};
+
+/**
+ * What an SSE response must carry through CloudFront (P2-29).
+ *
+ * **`no-transform` is the load-bearing one.** It tells CloudFront not to
+ * compress or otherwise rewrite the body, and compression is itself a buffering
+ * step — a buffered stream is indistinguishable from a slow one, so
+ * time-to-first-token silently becomes total-generation-time and the widget
+ * feels broken rather than alive.
+ *
+ * `X-Accel-Buffering` does nothing at CloudFront and disables buffering in
+ * nginx, which sits in front of some sellers' setups.
+ */
+export const SSE_HEADERS: Readonly<Record<string, string>> = {
+  'Content-Type': 'text/event-stream',
+  'Cache-Control': 'no-cache, no-store, no-transform',
+  Connection: 'keep-alive',
+  'X-Accel-Buffering': 'no',
+};
+
+/** How often an idle stream says something, so an intermediary does not drop it. */
+export const HEARTBEAT_MS = 15_000;
 
 /**
  * A token is never held by a cache between the widget and us (P2-12). The
@@ -128,6 +198,14 @@ interface GuardedRoute {
   readonly methods: readonly ('GET' | 'POST' | 'OPTIONS')[];
   readonly path: string;
   readonly endpoint: WidgetEndpoint;
+  /**
+   * Whether a verified session token is required (P2-13).
+   *
+   * Placed between CORS and the tenant's limits, which is the only order that
+   * works: CORS establishes the tenant and origin the token is checked against,
+   * and the limits need the session id the token carries.
+   */
+  readonly session?: boolean | undefined;
 }
 
 /**
@@ -152,12 +230,10 @@ interface GuardedRoute {
 const mountGuarded = (
   app: Hono<AppEnv>,
   widget: WidgetDependencies,
-  { methods, path, endpoint }: GuardedRoute,
+  { methods, path, endpoint, session = false }: GuardedRoute,
   handler: Handler<AppEnv>,
 ): void => {
-  app.on(
-    [...methods],
-    path,
+  const guards: MiddlewareHandler<AppEnv>[] = [
     limitUnresolvedWidgetRequest({ limiter: widget.limiter, ipSecret: widget.ipSecret }),
     widgetCors({
       resolve: widget.resolve,
@@ -166,9 +242,28 @@ const mountGuarded = (
       // So a recorded refusal carries the visitor's bucket, never the address (P2-16).
       ipSecret: widget.ipSecret,
     }),
-    limitWidgetRequest({ limiter: widget.limiter, endpoint, ipSecret: widget.ipSecret }),
-    handler,
-  );
+  ];
+
+  if (session) {
+    guards.push(
+      requireWidgetToken({
+        loadKeys:
+          widget.tokenKeys ?? (() => Promise.reject(new WidgetTokenKeysNotConfiguredError())),
+        /*
+         * A verifier that cannot ask has nothing to fail closed on, so an
+         * absent check refuses every token rather than accepting one whose
+         * revocation it could not read (P2-12a).
+         */
+        isRevoked: widget.isTokenRevoked ?? (() => Promise.resolve(true)),
+        ...(widget.onTokenRejected === undefined ? {} : { onRejected: widget.onTokenRejected }),
+        ipSecret: widget.ipSecret,
+      }),
+    );
+  }
+
+  guards.push(limitWidgetRequest({ limiter: widget.limiter, endpoint, ipSecret: widget.ipSecret }));
+
+  app.on([...methods], [path], ...guards, handler);
 };
 
 export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
@@ -182,6 +277,9 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
       throw new WidgetNotConfiguredError();
     });
     app.on(['POST', 'OPTIONS'], SESSION_PATH, () => {
+      throw new WidgetNotConfiguredError();
+    });
+    app.on(['POST', 'OPTIONS'], CHAT_PATH, () => {
       throw new WidgetNotConfiguredError();
     });
 
@@ -232,6 +330,95 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
       c.header('Cache-Control', WIDGET_SESSION_CACHE_CONTROL);
 
       return c.json(session);
+    },
+  );
+
+  /**
+   * Answer one question, streamed (P2-29, §4.5).
+   *
+   * **The order is security, not style**, and `mountGuarded` holds it: the
+   * address limit, CORS, the session token, then the tenant's limits. The quota
+   * is checked inside the port, before retrieval and before generation, because
+   * a check after either has already spent what it exists to save.
+   *
+   * **Nothing in the body is read but the message.** The tenant, the origin and
+   * the session id all come from guards that established them (P0-48).
+   *
+   * **A refusal before the first event is a status; a failure after it is an
+   * event.** Once the response has begun there is no status left to change, so
+   * a provider error mid-stream arrives as `error` rather than truncating
+   * silently — which a client cannot tell from a finished answer.
+   */
+  mountGuarded(
+    app,
+    widget,
+    { methods: ['POST', 'OPTIONS'], path: CHAT_PATH, endpoint: 'chat', session: true },
+    async (c) => {
+      const { chat } = widget;
+
+      if (chat === undefined) throw new WidgetNotConfiguredError();
+
+      const parsed = chatRequest.safeParse(await readChatJson(c));
+
+      if (!parsed.success) throw new InvalidRequestError(CHAT_BODY_EXPECTED);
+
+      const tenant = c.get('widgetTenant');
+      const answering = chat.answer(
+        {
+          tenant,
+          sessionId: c.get('widgetSessionId'),
+          origin: c.get('widgetOrigin'),
+          visitorHash: visitorHashOf(c, widget.ipSecret),
+          message: parsed.data.message,
+          /* A visitor who closes the tab stops generation, and stops billing. */
+          signal: c.req.raw.signal,
+        },
+        (report) => {
+          logger.info({ ...report, tenantId: tenant.tenantId }, 'widget chat turn');
+        },
+      );
+
+      const response = streamSSE(c, async (stream) => {
+        const beat = setInterval(() => {
+          /* A comment, not an event: it keeps intermediaries from dropping an
+           * idle connection and means nothing to a client. */
+          void stream.writeln(': keep-alive');
+        }, HEARTBEAT_MS);
+
+        try {
+          for await (const chunk of answering) {
+            await stream.writeSSE({ event: chunk.type, data: JSON.stringify(chunk) });
+          }
+        } catch (error) {
+          /*
+           * The response has already begun, so there is no status left to
+           * change. The code is ours and says nothing a visitor could not be
+           * told; the provider's own message never reaches here (P0-55).
+           */
+          await stream.writeSSE({
+            event: 'error',
+            data: JSON.stringify({
+              code: error instanceof QuotaExceededError ? 'quota_exceeded' : 'provider_error',
+            }),
+          });
+        } finally {
+          clearInterval(beat);
+          await stream.writeSSE({ event: 'done', data: '{}' });
+        }
+      });
+
+      /*
+       * **Set after, because `streamSSE` sets its own.** It writes
+       * `Cache-Control: no-cache`, which drops `no-store` and — the one that
+       * matters — `no-transform`. Without `no-transform` CloudFront may
+       * compress the body, and compression is a buffering step: the stream
+       * still arrives, all at once, and a buffered stream is indistinguishable
+       * from a slow one.
+       */
+      for (const [header, value] of Object.entries(SSE_HEADERS))
+        response.headers.set(header, value);
+
+      return response;
     },
   );
 
@@ -292,6 +479,34 @@ export const WIDGET_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, Rout
     },
   ],
   [
+    routeKey('POST', `${WIDGET_PREFIX}${CHAT_PATH}`),
+    {
+      access: publicRoute(
+        'A visitor has no account, so there is no capability to hold. What gates it is the ' +
+          '(pk_, Origin) pair, a verified session token bound to both, the per-address, ' +
+          'per-session and per-endpoint limits, and the monthly plan cap - which is checked ' +
+          'before retrieval and before any model call, because a check after either has ' +
+          'already spent what it exists to save.',
+      ),
+      summary: 'Ask for a recommendation, streamed',
+      description:
+        'Answers one question against this shop catalogue and streams the reply as it is ' +
+        'written. The response is text/event-stream: `text` events carry the reply in ' +
+        'pieces, one `recommendations` event carries the wines to show, `error` carries a ' +
+        'code if something failed after the stream began, and `done` is always last. A ' +
+        'comment line arrives every fifteen seconds on an idle stream so intermediaries do ' +
+        'not drop it. Only wines this request retrieved can be recommended: an id the model ' +
+        'invents or borrows from another shop is dropped before the event is sent. Nothing ' +
+        'in the body is read but the message - the tenant, the origin and the session all ' +
+        'come from the key, the Origin and the token. Refused with 401 when the token is ' +
+        'missing, expired, revoked or bound elsewhere; 403 when the key and Origin do not ' +
+        'belong to one tenant; 429 when a limit or the month is spent. Never cached.',
+      example: { type: 'text', delta: 'Con una bistecca le consiglio ' },
+      response: widgetChatEvent,
+      refusals: [401, 403, 422, 429],
+    },
+  ],
+  [
     routeKey('POST', `${WIDGET_PREFIX}${SESSION_PATH}`),
     {
       access: publicRoute(
@@ -330,6 +545,13 @@ export const WIDGET_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, Rout
  */
 export const WIDGET_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map<string, RouteAccess>([
   ...[...WIDGET_ROUTES].map(([key, doc]): [string, RouteAccess] => [key, doc.access]),
+  [
+    routeKey('OPTIONS', `${WIDGET_PREFIX}${CHAT_PATH}`),
+    publicRoute(
+      'The CORS preflight for the chat route. Answered by the same (pk_, Origin) ' +
+        'resolution as the message it precedes, with no body and no token.',
+    ),
+  ],
   [
     routeKey('OPTIONS', `${WIDGET_PREFIX}${CONFIG_PATH}`),
     publicRoute(

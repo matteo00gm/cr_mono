@@ -2944,6 +2944,166 @@
           }
         }
       },
+      "/v1/widget/chat": {
+        "post": {
+          "summary": "Ask for a recommendation, streamed",
+          "description": "Answers one question against this shop catalogue and streams the reply as it is written. The response is text/event-stream: `text` events carry the reply in pieces, one `recommendations` event carries the wines to show, `error` carries a code if something failed after the stream began, and `done` is always last. A comment line arrives every fifteen seconds on an idle stream so intermediaries do not drop it. Only wines this request retrieved can be recommended: an id the model invents or borrows from another shop is dropped before the event is sent. Nothing in the body is read but the message - the tenant, the origin and the session all come from the key, the Origin and the token. Refused with 401 when the token is missing, expired, revoked or bound elsewhere; 403 when the key and Origin do not belong to one tenant; 429 when a limit or the month is spent. Never cached.\n\nNo capability required. A visitor has no account, so there is no capability to hold. What gates it is the (pk_, Origin) pair, a verified session token bound to both, the per-address, per-session and per-endpoint limits, and the monthly plan cap - which is checked before retrieval and before any model call, because a check after either has already spent what it exists to save.",
+          "operationId": "postV1WidgetChat",
+          "responses": {
+            "200": {
+              "description": "Ask for a recommendation, streamed",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "text"
+                          },
+                          "delta": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "delta"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "recommendations"
+                          },
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "productId": {
+                                  "type": "string"
+                                },
+                                "reason": {
+                                  "type": "string"
+                                },
+                                "confidence": {
+                                  "type": "number",
+                                  "minimum": 0,
+                                  "maximum": 1
+                                }
+                              },
+                              "required": [
+                                "productId",
+                                "reason",
+                                "confidence"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "items"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "error"
+                          },
+                          "code": {
+                            "type": "string",
+                            "enum": [
+                              "schema_invalid",
+                              "refusal",
+                              "provider_error",
+                              "quota_exceeded"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "code"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "example": {
+                    "type": "text",
+                    "delta": "Con una bistecca le consiglio "
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The token sent to continue a session belongs to another site or another tenant, or was revoked. The same answer whatever the reason; mint again without it to start a new session.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "unauthenticated",
+                      "message": "This session is no longer valid. Start a new one.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The key and the request's Origin do not belong to one tenant. The same answer whatever the reason, and it carries no CORS headers, so a browser script cannot read it.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This widget is not available on this site.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "The body did not match what the route accepts. Chat is the only widget route with one, and it reads nothing but the message: the tenant, the Origin and the session all come from the key, the Origin and the token.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "invalid_request",
+                      "message": "Send a JSON body with a message.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "429": {
+              "description": "A rate limit or the month refused the request. `Retry-After` says when to try again; a month says nothing about the plan, which is the seller business rather than the visitor.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "rate_limited",
+                      "message": "Too many requests. Try again shortly.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/widget/config": {
         "get": {
           "summary": "The widget's public configuration",
@@ -3050,7 +3210,7 @@
               }
             },
             "429": {
-              "description": "A rate limit refused the request. `Retry-After` says when to try again.",
+              "description": "A rate limit or the month refused the request. `Retry-After` says when to try again; a month says nothing about the plan, which is the seller business rather than the visitor.",
               "content": {
                 "application/json": {
                   "example": {
@@ -3131,7 +3291,7 @@
               }
             },
             "429": {
-              "description": "A rate limit refused the request. `Retry-After` says when to try again.",
+              "description": "A rate limit or the month refused the request. `Retry-After` says when to try again; a month says nothing about the plan, which is the seller business rather than the visitor.",
               "content": {
                 "application/json": {
                   "example": {

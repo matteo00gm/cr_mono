@@ -103,6 +103,73 @@ describe('when the first attempt answers', () => {
   });
 });
 
+describe('that it is a stream at all', () => {
+  it('passes a chunk on before the next one exists', async () => {
+    /*
+     * **The case that had no test, and the defect it let through.** The first
+     * version collected each attempt and yielded it when the attempt ended: a
+     * buffered stream and a streamed one produce the same chunks in the same
+     * order, so every other case here passed either way. The difference is
+     * *when* — and when is the whole feature. Time-to-first-token became
+     * total-generation-time, and a reply already written was lost if the
+     * provider then failed.
+     *
+     * This provider will not produce its second chunk until its first has been
+     * read, so a consumer that waits for the end waits forever.
+     */
+    let released: () => void = () => {
+      /* Replaced below, before anything can call it. */
+    };
+    const secondChunk = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+
+    const provider: LlmProvider = {
+      id: 'held',
+      streamPairing: () =>
+        (async function* () {
+          yield await Promise.resolve<PairingChunk>({ type: 'text', delta: 'first' });
+          await secondChunk;
+          yield { type: 'text', delta: 'second' } satisfies PairingChunk;
+        })(),
+    };
+
+    const seen: PairingChunk[] = [];
+
+    for await (const chunk of withSchemaRepair(provider, ASKED, new AbortController().signal)) {
+      seen.push(chunk);
+      released();
+    }
+
+    expect(text(seen)).toBe('firstsecond');
+  });
+
+  it('keeps what was already written when the provider then fails', async () => {
+    // A visitor who read half an answer has read it. Losing it on the throw is
+    // what buffering does, and it is invisible in the chunk list either way.
+    const provider: LlmProvider = {
+      id: 'failing',
+      streamPairing: () =>
+        (async function* () {
+          yield await Promise.resolve<PairingChunk>({ type: 'text', delta: 'Un Barolo' });
+          throw new Error('the provider fell over');
+        })(),
+    };
+
+    const seen: PairingChunk[] = [];
+
+    await expect(
+      (async () => {
+        for await (const chunk of withSchemaRepair(provider, ASKED, new AbortController().signal)) {
+          seen.push(chunk);
+        }
+      })(),
+    ).rejects.toThrow('fell over');
+
+    expect(text(seen)).toBe('Un Barolo');
+  });
+});
+
 describe('when the first attempt misses the schema', () => {
   it('repairs once and returns the cards', async () => {
     const item = card();

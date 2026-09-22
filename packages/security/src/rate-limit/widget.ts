@@ -171,6 +171,14 @@ export const widgetLimitChecks = (
    * Only chat counts against the month. A message is what a plan sells, and
    * counting config would spend a winery's allowance on every page view by a
    * visitor who never opened the widget.
+   *
+   * **This is the second of two counters for one cap, and ADR 0024 explains
+   * why both stay.** P2-36 counts billed turns in `usage_events`, which is what
+   * an invoice and §2.3's banner are built from; this bucket is atomic, so
+   * concurrent requests cannot both pass it at the cap. They diverge on a
+   * request refused *after* this check and before the model — this spends a
+   * message that was never billed. The stricter wins, which over-refuses by
+   * that margin: the safe direction, and bounded by the error rate.
    */
   if (endpoint === 'chat') checks.push(planCapCheck(tenantId, request.plan, limits));
 

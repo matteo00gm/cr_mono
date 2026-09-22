@@ -11,7 +11,7 @@ import {
   type ResetPasswordEmail,
   type SuppressionCheck,
 } from '@catalogorosso/core';
-import { titanEmbeddingProvider } from '@catalogorosso/llm';
+import { bedrockNovaProvider, titanEmbeddingProvider } from '@catalogorosso/llm';
 import { memoryRateLimiter, type MonthlyCheck, type RateLimiter } from '@catalogorosso/security';
 import { loadWidgetTokenKeys, type WidgetTokenKeys } from '@catalogorosso/security/tokens';
 import {
@@ -25,6 +25,7 @@ import {
 
 import { createMembersPort, type MembersPort } from './members.js';
 import { createProductsPort, type ProductsPort } from './products.js';
+import { createChatPort, type ChatPort } from './chat.js';
 import { createQuotaPort, type QuotaPort } from './quota.js';
 import { createRagPort, type RagPort } from './rag.js';
 import { refusalRecorders } from './security-events.js';
@@ -175,6 +176,8 @@ export interface Dependencies {
   readonly rag: RagPort;
   /** The monthly plan cap (P2-36). Exposed so P2-29's route can gate on it. */
   readonly quota: QuotaPort;
+  /** Answers one question (P2-29). */
+  readonly chat: ChatPort;
   /** Records provider delivery events (P0-64b). */
   readonly webhooks: WebhooksPort;
   /** Passed through to `createApp`; absent means the endpoint refuses. */
@@ -219,9 +222,39 @@ const INDEXED_EMBEDDING: IndexedEmbedding = {
   dim: 1024,
 };
 
+/**
+ * The two tiers a question can be answered by (§5.3, P2-28).
+ *
+ * **Written out rather than read from the environment.** Which model answers is
+ * a decision with a price attached, and a deployment that could change it from
+ * a variable is a deployment that could change the bill without a commit.
+ * P1-47's bake-off moves these lines; it does not set a variable.
+ */
+const CHAT_MODELS = {
+  base: 'amazon.nova-lite-v1:0',
+  strong: 'amazon.nova-2-lite-v1:0',
+} as const;
+
 export const buildDependencies = (config: RuntimeConfig): Dependencies => {
   const log = logTransport(config.log);
   const quota = createQuotaPort();
+
+  /*
+   * Answering a question (P2-29). The providers are factories rather than
+   * instances because tokens are reported per construction (P1-42's `onUsage`)
+   * and the bill is per turn — the SDK client is the expensive part, and
+   * `bedrockNovaProvider` builds one per call unless given one, so this is the
+   * place that keeps that cost in check.
+   */
+  const chat = createChatPort({
+    embeddings: assertQueryProviderMatchesIndex(titanEmbeddingProvider(), INDEXED_EMBEDDING),
+    providers: {
+      base: (onUsage) => bedrockNovaProvider({ modelId: CHAT_MODELS.base, onUsage }),
+      strong: (onUsage) => bedrockNovaProvider({ modelId: CHAT_MODELS.strong, onUsage }),
+    },
+    models: CHAT_MODELS,
+    quota,
+  });
 
   /*
    * The provider is built only when there is a key. Without one the log
@@ -325,6 +358,14 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
     quota,
 
     /*
+     * Answering a question (P2-29). The providers are factories rather than
+     * instances because tokens are reported per construction (P1-42's
+     * `onUsage`), and the bill is per turn — the SDK client is the expensive
+     * part and it is built once, here.
+     */
+    chat,
+
+    /*
      * The retrieval sandbox (P2-37), and the first place P2-17's startup check
      * is a real one. `assertQueryProviderMatchesIndex` throws here rather than
      * on a request, so a provider that cannot read this catalogue's vectors
@@ -372,6 +413,11 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
        * a database refusing writes cannot become a way to refuse service.
        */
       onRejected: refusalRecorders(insertSecurityEvent).onRejected,
+
+      /** A refused *token* (P2-16), which is a different fact from a refused origin. */
+      onTokenRejected: refusalRecorders(insertSecurityEvent).onTokenRejected,
+
+      chat,
     },
 
     ...(config.resendWebhookSecret === undefined

@@ -82,6 +82,120 @@ const widgetTokenKeys = new sst.Secret('WidgetTokenKeys', '');
 import { vpc } from './vpc';
 
 /**
+ * What both functions read from the environment (P2-29).
+ *
+ * One object, because the buffered function and the streaming one run the same
+ * composition root and would fail in the same way on a missing variable — and a
+ * second copy is how one of them comes to be missing a value the other has.
+ */
+const environment = {
+  /**
+   * The commit this bundle was built from, surfaced by `/v1/health`.
+   *
+   * Read from the CI environment at synth time, since neither SST nor Pulumi
+   * knows about git. Empty on a local `sst deploy`, which the health endpoint
+   * reports as `unknown` rather than failing — see `apps/api/src/app.ts`.
+   */
+  BUILD_SHA: process.env.GITHUB_SHA ?? '',
+
+  /**
+   * `NODE_ENV=production`, and it is load-bearing for security rather than
+   * for bundle size (P0-46).
+   *
+   * **AWS Lambda does not set `NODE_ENV`.** Better Auth reads it with a
+   * default of `'development'`, and two of its behaviours hang off that:
+   *
+   * 1. Rate limiting resolves to `enabled: ?? isProduction`, so every auth
+   *    endpoint would have been unlimited. `packages/core` now sets
+   *    `enabled: true` explicitly, so this is belt and braces there.
+   * 2. `getIP` falls back to `127.0.0.1` for *every* request in development,
+   *    which is the dangerous one: with limiting on and all callers sharing
+   *    one bucket, a single attacker exhausting the sign-in limit locks out
+   *    every user. The limiter becomes a denial of service.
+   *
+   * Nothing about either would have looked wrong in a deployment.
+   */
+  NODE_ENV: 'production',
+
+  /**
+   * Read from SSM at synth time and injected, rather than fetched per cold
+   * start.
+   *
+   * `GetParameter` is free but not instant, and a Lambda that fetches two
+   * parameters before it can answer anything pays that latency on every cold
+   * start across every container. The trade is that rotating either value
+   * needs a deploy — acceptable, since rotating the auth secret invalidates
+   * every session anyway and is never a quiet operation.
+   */
+  DATABASE_URL: databaseUrl.value,
+  AUTH_SECRET: authSecret.value,
+
+  /**
+   * What Better Auth builds password-reset and OAuth callback URLs against.
+   *
+   * **An operator-set secret, and it has to be** *(P0-17a finding).* The
+   * obvious value is the CloudFront domain — a reset link pointing at the raw
+   * Function URL would bypass the edge and break the moment the origin moved.
+   * But reading `distribution.domainName` here creates a **circular
+   * dependency**: CloudFront needs this function's URL as an origin, and this
+   * function would need CloudFront's domain. Neither can be created first.
+   *
+   * That cycle is inherent to the topology rather than an artefact of how it
+   * is written, so it is broken deliberately: the value is supplied out of
+   * band, exactly as `BudgetAlertEmail` is.
+   *
+   * Set it once per stage, after the first deploy tells you the domain:
+   *   `sst secret set AuthBaseUrl https://d111111abcdef8.cloudfront.net`
+   * It becomes a constant the day a custom domain exists, at which point this
+   * stops being a manual step at all.
+   */
+  AUTH_BASE_URL: authBaseUrl.value,
+
+  /**
+   * The stage, which decides whether mail is sent or logged (P0-64).
+   *
+   * Injected explicitly rather than relied upon: Lambda does not set it, and
+   * the composition root defaults an absent value to `unknown` — which routes
+   * to the log transport. So a missing variable here degrades to "logs the
+   * mail" rather than to "mails the customer", and this line is what makes
+   * the *intended* behaviour happen rather than the safe fallback.
+   */
+  SST_STAGE: $app.stage,
+
+  /**
+   * The shared secret CloudFront attaches to origin requests (A2).
+   *
+   * The API refuses any request arriving without it, so this is what stops a
+   * caller reaching the Function URL directly and forging `X-Forwarded-For`
+   * around the edge. `src/index.ts` refuses to start a deployed stage if it
+   * is absent, because absent is *permissive* here and a container that comes
+   * up healthy while quietly reachable is the failure this closes.
+   */
+  ORIGIN_SECRET: originSecret,
+
+  EMAIL_FROM: emailFrom.value,
+  RESEND_API_KEY: resendApiKey.value,
+  EMAIL_ALLOWLIST: emailAllowlist.value,
+
+  /**
+   * Verifies inbound Resend delivery events (P0-64b).
+   *
+   * Absent is restrictive here — the endpoint refuses everything — so unlike
+   * `ORIGIN_SECRET` the API starts without it and logs a warning instead. The
+   * cost of forgetting it is silent in exactly the way E7 describes: an empty
+   * suppression list is indistinguishable from a domain with no bounces.
+   */
+  RESEND_WEBHOOK_SECRET: resendWebhookSecret.value,
+
+  /**
+   * The widget token keyset (P2-11), read once per container when P2-12's
+   * session route loads its keys — injected like `AUTH_SECRET`, for the same
+   * cold-start reason.
+   */
+  WIDGET_TOKEN_KEYS: widgetTokenKeys.value,
+};
+
+/**
  * The API Lambda and its Function URL (P0-54).
  *
  * One function serves both route surfaces (§5.1) — the split between
@@ -182,112 +296,7 @@ export const api = new sst.aws.Function('Api', {
    */
   vpc,
 
-  environment: {
-    /**
-     * The commit this bundle was built from, surfaced by `/v1/health`.
-     *
-     * Read from the CI environment at synth time, since neither SST nor Pulumi
-     * knows about git. Empty on a local `sst deploy`, which the health endpoint
-     * reports as `unknown` rather than failing — see `apps/api/src/app.ts`.
-     */
-    BUILD_SHA: process.env.GITHUB_SHA ?? '',
-
-    /**
-     * `NODE_ENV=production`, and it is load-bearing for security rather than
-     * for bundle size (P0-46).
-     *
-     * **AWS Lambda does not set `NODE_ENV`.** Better Auth reads it with a
-     * default of `'development'`, and two of its behaviours hang off that:
-     *
-     * 1. Rate limiting resolves to `enabled: ?? isProduction`, so every auth
-     *    endpoint would have been unlimited. `packages/core` now sets
-     *    `enabled: true` explicitly, so this is belt and braces there.
-     * 2. `getIP` falls back to `127.0.0.1` for *every* request in development,
-     *    which is the dangerous one: with limiting on and all callers sharing
-     *    one bucket, a single attacker exhausting the sign-in limit locks out
-     *    every user. The limiter becomes a denial of service.
-     *
-     * Nothing about either would have looked wrong in a deployment.
-     */
-    NODE_ENV: 'production',
-
-    /**
-     * Read from SSM at synth time and injected, rather than fetched per cold
-     * start.
-     *
-     * `GetParameter` is free but not instant, and a Lambda that fetches two
-     * parameters before it can answer anything pays that latency on every cold
-     * start across every container. The trade is that rotating either value
-     * needs a deploy — acceptable, since rotating the auth secret invalidates
-     * every session anyway and is never a quiet operation.
-     */
-    DATABASE_URL: databaseUrl.value,
-    AUTH_SECRET: authSecret.value,
-
-    /**
-     * What Better Auth builds password-reset and OAuth callback URLs against.
-     *
-     * **An operator-set secret, and it has to be** *(P0-17a finding).* The
-     * obvious value is the CloudFront domain — a reset link pointing at the raw
-     * Function URL would bypass the edge and break the moment the origin moved.
-     * But reading `distribution.domainName` here creates a **circular
-     * dependency**: CloudFront needs this function's URL as an origin, and this
-     * function would need CloudFront's domain. Neither can be created first.
-     *
-     * That cycle is inherent to the topology rather than an artefact of how it
-     * is written, so it is broken deliberately: the value is supplied out of
-     * band, exactly as `BudgetAlertEmail` is.
-     *
-     * Set it once per stage, after the first deploy tells you the domain:
-     *   `sst secret set AuthBaseUrl https://d111111abcdef8.cloudfront.net`
-     * It becomes a constant the day a custom domain exists, at which point this
-     * stops being a manual step at all.
-     */
-    AUTH_BASE_URL: authBaseUrl.value,
-
-    /**
-     * The stage, which decides whether mail is sent or logged (P0-64).
-     *
-     * Injected explicitly rather than relied upon: Lambda does not set it, and
-     * the composition root defaults an absent value to `unknown` — which routes
-     * to the log transport. So a missing variable here degrades to "logs the
-     * mail" rather than to "mails the customer", and this line is what makes
-     * the *intended* behaviour happen rather than the safe fallback.
-     */
-    SST_STAGE: $app.stage,
-
-    /**
-     * The shared secret CloudFront attaches to origin requests (A2).
-     *
-     * The API refuses any request arriving without it, so this is what stops a
-     * caller reaching the Function URL directly and forging `X-Forwarded-For`
-     * around the edge. `src/index.ts` refuses to start a deployed stage if it
-     * is absent, because absent is *permissive* here and a container that comes
-     * up healthy while quietly reachable is the failure this closes.
-     */
-    ORIGIN_SECRET: originSecret,
-
-    EMAIL_FROM: emailFrom.value,
-    RESEND_API_KEY: resendApiKey.value,
-    EMAIL_ALLOWLIST: emailAllowlist.value,
-
-    /**
-     * Verifies inbound Resend delivery events (P0-64b).
-     *
-     * Absent is restrictive here — the endpoint refuses everything — so unlike
-     * `ORIGIN_SECRET` the API starts without it and logs a warning instead. The
-     * cost of forgetting it is silent in exactly the way E7 describes: an empty
-     * suppression list is indistinguishable from a domain with no bounces.
-     */
-    RESEND_WEBHOOK_SECRET: resendWebhookSecret.value,
-
-    /**
-     * The widget token keyset (P2-11), read once per container when P2-12's
-     * session route loads its keys — injected like `AUTH_SECRET`, for the same
-     * cold-start reason.
-     */
-    WIDGET_TOKEN_KEYS: widgetTokenKeys.value,
-  },
+  environment,
 
   /**
    * Only the two parameters this function actually reads.
@@ -349,7 +358,71 @@ new aws.cloudwatch.MetricAlarm('ApiThrottles', {
 });
 
 /**
+ * The streaming function (P2-29, §5.1).
+ *
+ * **A second function over the same app, and that is the whole difference.**
+ * `RESPONSE_STREAM` is a property of the function rather than of a route: a
+ * Lambda either streams or it does not, and every route but chat answers with a
+ * small JSON body that streaming would cost a warm connection to deliver. So
+ * the chat path gets its own function, its own Function URL and its own
+ * CloudFront origin, and `apps/api/src/streaming.ts` is the entry it runs —
+ * one line different from the buffered one, over the same composition root.
+ *
+ * **Sixty seconds, not ten.** The buffered function's timeout is sized to a
+ * request that either answers quickly or has gone wrong; a generated answer
+ * legitimately takes five to eight seconds and an escalated one longer, and the
+ * cost of a low ceiling here is a visitor watching a reply stop mid-sentence.
+ * Sixty is also what the CloudFront origin behind it allows without a quota
+ * increase, so a longer timeout here would be a promise the edge would break.
+ *
+ * **The same concurrency budget applies and is spent separately.** Each
+ * concurrent invocation holds a Postgres connection, so this function's reserve
+ * is subtracted from the same `max_connections` P1-48 sized — five and ten,
+ * against a pool that tolerates both.
+ */
+export const chat = new sst.aws.Function('Chat', {
+  handler: 'apps/api/src/streaming.handler',
+  url: true,
+
+  architecture: 'arm64',
+  runtime: 'nodejs22.x',
+  memory: '512 MB',
+
+  /** RESPONSE_STREAM, which is the one reason this function exists. */
+  streaming: true,
+
+  timeout: '60 seconds',
+
+  /*
+   * Half the buffered function's reserve, out of the same connection budget.
+   * Chat is the expensive path and the one a burst would hit, so it is capped
+   * rather than left to compete for whatever the API is not using.
+   */
+  concurrency: { reserved: 5 },
+
+  vpc,
+
+  environment,
+
+  permissions: [
+    ...parameterReadPermissions(['database/url', 'auth/secret']),
+    {
+      /* Titan for the query embedding, Nova for the answer, and nothing else. */
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      resources: [
+        $interpolate`arn:aws:bedrock:${aws.getRegionOutput().name}::foundation-model/amazon.titan-embed-text-v2:0`,
+        $interpolate`arn:aws:bedrock:${aws.getRegionOutput().name}::foundation-model/amazon.nova-lite-v1:0`,
+        $interpolate`arn:aws:bedrock:${aws.getRegionOutput().name}::foundation-model/amazon.nova-2-lite-v1:0`,
+      ],
+    },
+  ],
+});
+
+/**
  * Everything the function needs is set on it above: reserved concurrency
  * (P1-48, B1), and VPC placement with its SSM grants (P0-45).
  */
 export const apiUrl = api.url;
+
+/** The streaming origin CloudFront points `/v1/widget/chat` at (P0-17a, P2-29). */
+export const chatUrl = chat.url;

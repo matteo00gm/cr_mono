@@ -22,13 +22,29 @@ import { describe, expect, it } from 'vitest';
 
 const INFRA_API = fileURLToPath(new URL('../../../infra/api.ts', import.meta.url));
 
+/**
+ * The streaming function's ceiling (P2-29), and the CloudFront origin's.
+ *
+ * Equal on purpose: a handler allowed to run longer than the edge will wait has
+ * its answer cut off as a 504 arriving mid-stream, which a client cannot tell
+ * from a network fault.
+ */
+const CHAT_TIMEOUT_SECONDS = 60;
+
 describe('the import clocks', () => {
   it('restate the timeout infra/api.ts actually sets', () => {
+    /*
+     * Two functions since P2-29, and the import runs on the first: the buffered
+     * API at ten seconds, and the streaming chat function at sixty. The second
+     * figure is asserted here rather than ignored, because a file with two
+     * timeouts and a test that reads "the first one" is a test that silently
+     * follows whichever is written higher.
+     */
     const timeouts = [...readFileSync(INFRA_API, 'utf8').matchAll(/timeout: '(\d+) seconds'/g)].map(
       ([, seconds]) => Number(seconds),
     );
 
-    expect(timeouts).toEqual([API_TIMEOUT_SECONDS]);
+    expect(timeouts).toEqual([API_TIMEOUT_SECONDS, CHAT_TIMEOUT_SECONDS]);
   });
 
   it('leave the budget room inside the timeout for the body, one slow batch and the result', () => {

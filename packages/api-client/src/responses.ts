@@ -623,3 +623,34 @@ export const widgetSessionResponse = z.strictObject({
 });
 
 export type WidgetSessionResponse = z.infer<typeof widgetSessionResponse>;
+
+/**
+ * One event on the chat stream (P2-29, §4.5).
+ *
+ * **Not a body — the shape of one `data:` payload.** The response is
+ * `text/event-stream`, so what a client compiles against is the union of what
+ * an event can carry, and the SSE `event:` field names which member arrived.
+ *
+ * `error` carries a code and never a message: the provider's own words could
+ * hold anything, and a `DomainError`'s reach a caller verbatim (P0-55), so
+ * neither is forwarded. `done` is empty and always last.
+ */
+export const widgetChatEvent = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('text'), delta: z.string() }),
+  z.object({
+    type: z.literal('recommendations'),
+    items: z.array(
+      z.object({
+        productId: z.string(),
+        reason: z.string(),
+        confidence: z.number().min(0).max(1),
+      }),
+    ),
+  }),
+  z.object({
+    type: z.literal('error'),
+    code: z.enum(['schema_invalid', 'refusal', 'provider_error', 'quota_exceeded']),
+  }),
+]);
+
+export type WidgetChatEvent = z.infer<typeof widgetChatEvent>;
