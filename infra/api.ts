@@ -2,6 +2,14 @@
 
 import process from 'node:process';
 
+import {
+  CHAT_ESCALATIONS_METRIC,
+  CHAT_METRIC_NAMESPACE,
+  CHAT_TURNS_METRIC,
+  escalationRateExpression,
+  ESCALATION_PERIOD_SECONDS,
+  ESCALATION_RATE_THRESHOLD,
+} from './chat-metrics';
 import { authSecret, databaseUrl, originSecret, parameterReadPermissions } from './config';
 
 /**
@@ -426,3 +434,60 @@ export const apiUrl = api.url;
 
 /** The streaming origin CloudFront points `/v1/widget/chat` at (P0-17a, P2-29). */
 export const chatUrl = chat.url;
+
+/**
+ * The escalation rate (P2-28), and the open item it closes.
+ *
+ * **A rate, not a count, and that is the whole reason this waited.** P2-28
+ * emits every escalation the moment it decides one; a count of those alarms on
+ * a busy Saturday, which is the opposite of what the row wants. The denominator
+ * — turns — arrived with P2-29 and P2-31, and both numbers now come out of one
+ * EMF line the chat route writes.
+ *
+ * **`notBreaching` on missing data**, because the expression deliberately
+ * returns nothing under `ESCALATION_MIN_TURNS`: a rate over two turns is a
+ * statistic about nothing, and an alarm that fired on it would be one people
+ * learn to ignore — which is the failure `EmbeddingDlqDepth` avoids the other
+ * way round.
+ *
+ * No action yet; routing and the runbook entry are P7-02's, as with the others.
+ */
+new aws.cloudwatch.MetricAlarm('ChatEscalationRate', {
+  alarmDescription:
+    'More than a tenth of chat turns are escalating to the stronger tier (P2-28). A few ' +
+    'percent is the cheap tier doing its job; a climbing rate is the cheap tier failing, and ' +
+    'the answer is to revisit §Open Decision 1 rather than to raise this threshold.',
+  comparisonOperator: 'GreaterThanThreshold',
+  evaluationPeriods: 1,
+  threshold: ESCALATION_RATE_THRESHOLD,
+  treatMissingData: 'notBreaching',
+
+  metricQueries: [
+    {
+      id: 'rate',
+      expression: escalationRateExpression(),
+      label: 'Escalation rate',
+      returnData: true,
+    },
+    {
+      id: 't',
+      metric: {
+        namespace: CHAT_METRIC_NAMESPACE,
+        metricName: CHAT_TURNS_METRIC,
+        dimensions: { Stage: $app.stage },
+        stat: 'Sum',
+        period: ESCALATION_PERIOD_SECONDS,
+      },
+    },
+    {
+      id: 'e',
+      metric: {
+        namespace: CHAT_METRIC_NAMESPACE,
+        metricName: CHAT_ESCALATIONS_METRIC,
+        dimensions: { Stage: $app.stage },
+        stat: 'Sum',
+        period: ESCALATION_PERIOD_SECONDS,
+      },
+    },
+  ],
+});
