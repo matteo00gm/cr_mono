@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DEFAULT_API, GLOBAL, HOST_TAG, mount, start } from '../src/loader.js';
+import { attach, DEFAULT_API, GLOBAL, HOST_TAG, mount, start } from '../src/loader.js';
 
 /**
  * The script a seller pastes into their storefront (P3-01).
@@ -239,5 +239,44 @@ describe('when something goes wrong', () => {
     // `mount` is exported for the bundle that comes later, and calling it
     // before `start` is a wiring mistake rather than a visitor's problem.
     expect(mount()).toBeUndefined();
+  });
+});
+
+describe('what the launcher does when it is used', () => {
+  it('runs the press behaviour on a click', () => {
+    const launcher = document.createElement('button');
+    const onPress = vi.fn();
+
+    attach(launcher, { onPress });
+    launcher.click();
+
+    expect(onPress).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs the hover behaviour on pointerenter, separately', () => {
+    /*
+     * A visitor who hovers has not asked for anything. The hint is a separate
+     * listener because P3-04's preload must never be what makes the widget
+     * work — the click has to stand on its own.
+     */
+    const launcher = document.createElement('button');
+    const onPress = vi.fn();
+    const onHover = vi.fn();
+
+    attach(launcher, { onPress, onHover });
+    launcher.dispatchEvent(new Event('pointerenter'));
+
+    expect(onHover).toHaveBeenCalledTimes(1);
+    expect(onPress).not.toHaveBeenCalled();
+  });
+
+  it('wires no hover listener when there is nothing to hint at', () => {
+    const launcher = document.createElement('button');
+    const onPress = vi.fn();
+
+    attach(launcher, { onPress });
+
+    expect(() => launcher.dispatchEvent(new Event('pointerenter'))).not.toThrow();
+    expect(onPress).not.toHaveBeenCalled();
   });
 });

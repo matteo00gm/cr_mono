@@ -32,7 +32,21 @@ const ROOT = resolve(import.meta.dirname, '..');
  */
 const BUDGETS = {
   'loader.js': { limit: 5 * 1024, why: '§1.1: runs on every page of a storefront' },
+  /*
+   * Twelve times the loader's, and that ratio is the argument for the split:
+   * this is paid once by the visitors who open the widget, and the loader is
+   * paid by everybody else.
+   */
+  'widget.js': { limit: 60 * 1024, why: '§1.1: fetched on the first click (P3-05)' },
 };
+
+/**
+ * A static import in a bundle: `import{x}from"./panel.js"` and friends.
+ *
+ * `import(` is a *dynamic* import and is the whole design (P3-04), so it must
+ * not match; `import.meta` must not either. Hence the lookahead.
+ */
+const STATIC_IMPORT = /(?:^|[;}\s])import\s*(?![(.])/mu;
 
 const gzippedSize = (file) => gzipSync(readFileSync(file), { level: 9 }).length;
 
@@ -97,7 +111,33 @@ const main = () => {
     );
   }
 
-  console.log('\n  Every bundle is inside its budget.\n');
+  /*
+   * **The loader must have no static imports, and this is stronger than any
+   * size threshold.** The regression is structural rather than gradual: a
+   * refactor that turns the dynamic import into a static one makes Rollup emit
+   * a *shared chunk*, which the loader then imports at the top. Both budgets
+   * still pass - the loader is measured alone, and the shared chunk is charged
+   * to neither - while every visitor to every storefront now downloads the
+   * widget before the page has finished loading.
+   *
+   * That is exactly what happened the first time this check was written to
+   * look for marker strings inside `loader.js`: the strings were not there,
+   * because the code was in a third file the loader pulled in.
+   */
+  const loader = readFileSync(join(dir, 'loader.js'), 'utf8');
+
+  if (STATIC_IMPORT.test(loader)) {
+    reportDie(
+      'loader.js has a static import, so a browser fetches whatever it names before the page ' +
+        'is interactive. The two entries have collapsed into a shared chunk, and both budgets ' +
+        'still pass because the shared chunk is charged to neither. The widget must be reached ' +
+        'only through `import()` (P3-04).',
+    );
+  }
+
+  console.log('');
+  console.log('  Every bundle is inside its budget, and the two entries are still two.');
+  console.log('');
 };
 
 main();
