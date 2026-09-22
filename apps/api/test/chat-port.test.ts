@@ -286,3 +286,35 @@ describe('a candidate with no row behind it', () => {
     expect(report?.candidates).toBe(0);
   });
 });
+
+describe('what a visitor volunteers', () => {
+  it('never reaches the model, and never reaches the transcript (P2-33)', async () => {
+    /*
+     * Redacted once, at the entry point. The same string is embedded, put in
+     * the prompt and stored — so this asserts it in all three places at once:
+     * the provider sees the redacted question, and so does `recordTurn`.
+     */
+    const seen: string[] = [];
+    const watching: LlmProvider = {
+      id: 'watching',
+      streamPairing: (request) => {
+        seen.push(request.query);
+
+        return speaking().streamPairing({} as never, new AbortController().signal);
+      },
+    };
+
+    const { report } = await ask(portWith(watching), 'scrivimi a mario@example.com per favore');
+
+    expect(seen[0]).not.toContain('mario@example.com');
+    expect(recorded.turns[0]?.question).not.toContain('mario@example.com');
+    expect(report?.redacted).toBe(1);
+  });
+
+  it('leaves a vintage alone, because over-redaction breaks the product', async () => {
+    const { report } = await ask(portWith(speaking()), 'cerco un Barolo del 2016 sotto i 30 euro');
+
+    expect(recorded.turns[0]?.question).toBe('cerco un Barolo del 2016 sotto i 30 euro');
+    expect(report?.redacted).toBe(0);
+  });
+});

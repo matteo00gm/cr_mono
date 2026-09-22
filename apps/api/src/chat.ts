@@ -27,6 +27,7 @@ import {
   type ProductRow,
 } from '@catalogorosso/db';
 import type { PairingUsage } from '@catalogorosso/llm';
+import { redactPii } from '@catalogorosso/security';
 
 import type { WidgetTenant } from './env.js';
 import type { QuotaPort } from './quota.js';
@@ -94,6 +95,13 @@ export interface TurnReport {
   readonly preCapCount: number;
   /** Recommendations the allowlist refused. Non-empty is worth alerting on (P2-25). */
   readonly dropped: readonly string[];
+  /**
+   * How many things P2-33 removed from the message. A count, never a value.
+   *
+   * Reporting what was removed would put it in a log, which is where it was
+   * being kept out of. The count is enough to notice a spike.
+   */
+  readonly redacted: number;
   /**
    * The reply was cut short because it began quoting the instructions (P2-32).
    *
@@ -172,9 +180,19 @@ export const createChatPort = ({
          */
         if (!(await quota.check(tenant)).allowed) throw new QuotaExceededError();
 
+        /*
+         * **Redacted once, here, and nowhere else** (P2-33, §1.4). The same
+         * string is embedded, put in the prompt and stored as the visitor's
+         * message — redacting at each of those would be three chances for one
+         * to be added later without it. Visitors volunteer contact details
+         * unprompted, and none of it should reach a model, a provider's logs,
+         * or a transcript that lives ninety days.
+         */
+        const { text: question, removed } = redactPii(message);
+
         const { fused, rows, capped } = await retrieve(
           { provider: embeddings },
-          { tenantId: tenant.tenantId, query: message },
+          { tenantId: tenant.tenantId, query: question },
         );
 
         const byId = new Map(rows.map((row) => [row.id, row]));
@@ -201,7 +219,7 @@ export const createChatPort = ({
          */
         const escalations = escalationsFor({
           topScore: fused[0]?.score,
-          query: message,
+          query: question,
           schemaFailed: false,
         });
 
@@ -234,7 +252,7 @@ export const createChatPort = ({
           allowlisted(
             withSchemaRepair(
               provider,
-              { query: message, locale: tenant.locale, candidates, history },
+              { query: question, locale: tenant.locale, candidates, history },
               signal,
               {
                 onOutcome: (reported) => {
@@ -282,7 +300,7 @@ export const createChatPort = ({
               origin,
               visitorHash,
               locale: tenant.locale,
-              question: message,
+              question,
               reply,
               retrievedProductIds: candidates.map((candidate) => candidate.id),
               model,
@@ -309,6 +327,7 @@ export const createChatPort = ({
             preCapCount: capped.consideredCount,
             dropped,
             leaked,
+            redacted: removed,
             costMicros,
           });
         }

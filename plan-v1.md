@@ -1331,7 +1331,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-30 | Conversation + message persistence | | P0-28 |
 | ✅ P2-31 | `usage_events` writer | tokens, model, cost per turn | P0-30 |
 | ✅ P2-32 | 🔒 Prompt-injection test suite | instructions seeded into `tasting_notes` | P2-23 |
-| P2-33 | 🔒 PII redaction pre-prompt | regex + fixtures; nothing personal reaches the model | P2-23 |
+| ✅ P2-33 | 🔒 PII redaction pre-prompt | regex + fixtures; nothing personal reaches the model | P2-23 |
 | P2-34 | Language detection + reply locale | IT/EN | P2-29 |
 | P2-35 | History + token caps | 6 turns, hard token ceiling | P2-29 |
 | ✅ P2-36 | Quota check **before** model call | the actual cost gate | P2-04 |
@@ -5774,6 +5774,14 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 **Tests.** Fixtures for each pattern; false-positive check that a vintage year, a price, and a wine name containing digits survive untouched (over-redaction breaks the product).
 
 **Files.** `packages/security/src/redact-pii.ts`, tests. **~100 lines.**
+
+**As built (2026-09-22).** `redactPii` exactly where the row puts it, called once from P2-29's chat port before anything is embedded, prompted or stored.
+
+- **The false-positive half of the suite is as long as the true-positive half**, because over-redaction is the failure nobody reports: a vintage is four digits, a price has digits, and half the wines in Italy have a number in the name. Eleven cases assert that a vintage, a price with cents, a price with a thousands separator, an alcohol percentage, a quantity, a year range and a wine named for a number all survive untouched.
+- **The phone pattern needs a `+` or separators**, and the long-digit run needs twelve. Both bounds exist to keep a vintage out, and both are what the mutation run attacks.
+- **Order matters and is asserted.** Email before phone: a local part like `mario.333.123.4567@example.com` is phone-shaped, and a phone pattern running first leaves the domain behind for the model. The mutation run surfaced that the first fixture could not tell.
+- **The count is reported, never the value** *(addition)*. `removed` goes to the turn's log line so a spike is visible; putting the value there would be putting it in the place the function exists to keep it out of.
+- **Replaced, not deleted**, so the sentence still reads — and idempotent, because the entry point being the only caller is a thing that stays true only until it does not.
 
 ---
 

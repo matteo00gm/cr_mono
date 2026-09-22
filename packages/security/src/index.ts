@@ -8,4 +8,5 @@
 export * from './capabilities.js';
 export * from './origin/normalize.js';
 export * from './redact.js';
+export * from './redact-pii.js';
 export * from './rate-limit/index.js';
