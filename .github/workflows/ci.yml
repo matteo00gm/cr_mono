@@ -410,6 +410,14 @@ jobs:
       - name: Check the API consumer map is current
         run: pnpm consumers:check
 
+      # §1.1's promise to the seller (P3-02). Gzipped, not raw: minified
+      # JavaScript compresses to roughly a third, so a raw budget of 5 KB is a
+      # gzipped budget of about fifteen — and every byte on this path crosses
+      # the network gzipped. Measured against a real build, because a budget
+      # measured against anything else is a budget nobody is holding.
+      - name: Enforce the widget bundle budgets
+        run: pnpm size:check
+
       - name: Test with coverage
         run: pnpm test:coverage
 

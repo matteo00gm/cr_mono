@@ -1340,9 +1340,9 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 
 | # | Task | How / notes | Deps |
 |---|---|---|---|
-| P3-01 | Loader `w.js` | custom element, Shadow DOM, launcher only | P2-10 |
-| P3-02 | CI: loader size budget | ≤ 5 KB gz, build fails over | P3-01 |
-| P3-03 | Config fetch + DISABLED short-circuit | no session, no bundle, no model call | P3-01 |
+| ✅ P3-01 | Loader `w.js` | custom element, Shadow DOM, launcher only | P2-10 |
+| ✅ P3-02 | CI: loader size budget | ≤ 5 KB gz, build fails over | P3-01 |
+| ✅ P3-03 | Config fetch + DISABLED short-circuit | no session, no bundle, no model call | P3-01 |
 | P3-04 | Lazy-load main bundle on click | | P3-03 |
 | P3-05 | CI: widget size budget | ≤ 60 KB gz | P3-04 |
 | P3-06 | Chat UI + SSE consumption | streaming into an ARIA live region | P2-29,P3-04 |
@@ -5861,6 +5861,13 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 
 **Files.** `apps/widget/src/loader.ts`, tests. **~120 lines.**
 
+**As built (2026-09-22).** 0.97 KB gzipped against the 5 KB budget.
+
+- **Idempotent by the global, not by a DOM query** *(decision)*. A seller who pastes the snippet in a header partial *and* a page template renders it twice; asking the document whether a host exists is a race when both run in the same tick, and a flag set synchronously is not. The first key wins, because picking the later one would silently point the widget at whichever tag happened to be last.
+- **`document.currentScript` is read at module top level**, as the row insists — and the test defines it, because it is null outside script execution and a suite that did not stand it in would be testing a loader that reads nothing.
+- **Every entry point returns rather than throws.** A document with no body, a browser without `attachShadow`, a missing key: each leaves the storefront exactly as it was. Silent, because there is no console on a seller's page that is ours to write to.
+- **What it does *not* do is most of the suite**: one global and no others, one element on the page, no `<style>` outside the shadow root, no markup parsed anywhere.
+
 ---
 
 ### P3-02 · CI: loader size budget
@@ -5873,6 +5880,13 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 
 **Files.** `.size-limit.json`, CI step. **~30 lines.**
 
+**As built (2026-09-22).** `scripts/check-bundle-size.mjs` and a CI step, over a real Vite build.
+
+- **A script rather than `size-limit`** *(the row allows either)*. The budget is one number and a comparison; a dependency to hold it would be a dependency to keep current, and this repository already keeps its gates as scripts with their own tests.
+- **Gzipped, and a test proves it.** Minified JavaScript compresses to roughly a third, so a raw budget of 5 KB is a gzipped budget of about fifteen — the mutation table has that case, and so does a fixture of repeated bytes that is far over raw and far under compressed.
+- **`inlineDynamicImports` in `vite.config.ts`** is what keeps the budget honest rather than merely measured: a shared vendor chunk would put the widget inside the loader, and the budget would pass while the promise it encodes was broken.
+- **A budgeted bundle that was not built is a failure**, not a pass — otherwise a renamed entry takes its budget with it and the gate reports success having measured nothing.
+
 ---
 
 ### P3-03 · Config fetch and DISABLED short-circuit
@@ -5884,6 +5898,13 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 **Tests.** `DISABLED` config renders the notice and issues no further requests (assert on a fetch spy — the absence of calls is the whole point); `ACTIVE` proceeds; a 403 renders error without a crash.
 
 **Files.** `apps/widget/src/bootstrap.ts`, tests. **~100 lines.**
+
+**As built (2026-09-22).** `readConfig`, returning one of three states.
+
+- **The assertion the row is about is an absence**, so the fetch is a spy and its call count is the test: a `DISABLED` tenant costs exactly one request and nothing else.
+- **A 4xx is not retried** *(addition)*. A 403 is the key and the Origin disagreeing — a seller's setup mistake, and a setup mistake on the fourth attempt too. Retrying turns one refused request into four, each counted against the tenant. A 5xx and a network failure are retried, bounded and with a growing backoff, because a visitor is looking at the page.
+- **`credentials: 'omit'`**, because this surface accepts no cookies (P2-08) and asking is how CORS fails for a reason nobody reading the file would guess.
+- **`disabled` and `error` are different states**, because the first is the seller's own choice and the second is ours.
 
 ---
 

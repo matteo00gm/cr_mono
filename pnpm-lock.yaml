@@ -153,7 +153,15 @@ importers:
         specifier: ^26.4.0
         version: 26.4.0
 
-  apps/widget: {}
+  apps/widget:
+    dependencies:
+      '@catalogorosso/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
+    devDependencies:
+      vite:
+        specifier: ^8.2.2
+        version: 8.2.2(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.13)(yaml@2.9.0)
 
   apps/worker:
     dependencies:

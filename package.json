@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "AI Sommelier — Multi-Tenant SaaS RAG Platform",
+  "description": "AI Sommelier \u2014 Multi-Tenant SaaS RAG Platform",
   "packageManager": "pnpm@11.24.0",
   "engines": {
     "node": ">=22.13"
@@ -35,7 +35,8 @@
     "openapi:check": "node scripts/gen-openapi.mjs --check",
     "consumers": "node scripts/api-consumers.mjs",
     "consumers:check": "node scripts/api-consumers.mjs --check",
-    "eval": "turbo run build --filter=@catalogorosso/eval... && node packages/eval/dist/cli.js"
+    "eval": "turbo run build --filter=@catalogorosso/eval... && node packages/eval/dist/cli.js",
+    "size:check": "pnpm --filter @catalogorosso/widget build:bundle && node scripts/check-bundle-size.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [

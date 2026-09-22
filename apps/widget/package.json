@@ -5,6 +5,14 @@
   "scripts": {
     "build": "tsc --build tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "build:bundle": "vite build"
+  },
+  "devDependencies": {
+    "vite": "^8.2.2"
+  },
+  "type": "module",
+  "dependencies": {
+    "@catalogorosso/api-client": "workspace:*"
   }
 }
