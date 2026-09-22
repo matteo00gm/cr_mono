@@ -29,3 +29,18 @@ export {
   type ModelPrice,
   type TurnCost,
 } from './usage.js';
+
+/**
+ * The monthly plan cap (P2-36).
+ *
+ * The actual cost gate: per-minute limits protect the infrastructure from a
+ * burst, and this is the only thing standing between a runaway tenant and an
+ * unbounded bill.
+ */
+export {
+  checkQuota,
+  OVERAGE_ALLOWANCE,
+  QUOTA_EXCEEDED_MESSAGE,
+  type QuotaDecision,
+  type QuotaQuestion,
+} from './quota.js';

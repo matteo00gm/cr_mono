@@ -1334,7 +1334,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P2-33 | 🔒 PII redaction pre-prompt | regex + fixtures; nothing personal reaches the model | P2-23 |
 | P2-34 | Language detection + reply locale | IT/EN | P2-29 |
 | P2-35 | History + token caps | 6 turns, hard token ceiling | P2-29 |
-| P2-36 | Quota check **before** model call | the actual cost gate | P2-04 |
+| ✅ P2-36 | Quota check **before** model call | the actual cost gate | P2-04 |
 
 ### P3 — Widget client
 
@@ -5566,6 +5566,8 @@ X-Accel-Buffering: no
 
 **Tests.** Integration against a stubbed provider: event sequence is correct; abort stops provider consumption; quota rejection happens with **zero** provider calls (assert the spy); a provider error mid-stream emits an `error` event rather than truncating silently; the response carries the four headers above.
 
+**Carried in from P2-36:** the cap is checked here, before retrieval and before generation, and a refusal answers `QUOTA_EXCEEDED` having made **zero** provider calls — the row's own test, which needs a provider to assert. This route is also where the double count above is closed: once it gates, `planCapCheck` comes out of `widgetLimitChecks` so the month is counted once.
+
 **Carried in from P2-31:** the composition root calls `assertModelPriced` on the configured chat model, so a deploy with an unpriced one fails at startup rather than on a request that has already paid for the model call.
 
 **Carried in from P2-26:** this route consumes `allowlisted(provider.streamPairing(…), candidateIds)` — never the provider's own stream. The adapters yield whatever the model returned, by design, so this is the only place the P2-25 boundary is applied on the chat path. P2-26's stubbed-provider case is asserted at the stream; **repeat it here over HTTP**, where the thing proven is a response with no card rather than a chunk with no item.
@@ -5783,6 +5785,17 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 **Tests.** At cap−1 allowed, at cap+1 rejected with **zero** provider calls; the rejection is recorded as a `security_events`/analytics row so §2.3's banner has data; period rollover resets.
 
 **Files.** `packages/core/src/quota.ts`, route wiring, tests. **~100 lines.**
+
+**As built (2026-09-22).** `checkQuota` in `packages/core/src/quota.ts` exactly where the row puts it, reading a count `apps/api/src/quota.ts` takes from `usage_events`.
+
+- **`readUsage` was a hardcoded nought**, and this row is what makes it real. §2.3's banner told every seller `ok` however much they had spent — the cost control that makes a plan cap meaningful reporting that nothing had been used.
+- **`used < limit`, never `<=`.** The allowance is a count of messages, so a tenant who has sent exactly their cap has had all of them and the next one is the one over. Off by one here is a free month at every tier, every month, with no symptom: the number the seller sees and the number we bill are both one high, consistently.
+- **`inOverage` is reported separately from `allowed`** *(addition)*. A tenant inside an overage allowance is being served *and* needs telling; collapsing the two facts is how a seller first hears about their overage from an invoice.
+- **The overage allowance is nought at launch**, and configurable rather than fixed, because the choice is commercial: serving past the cap means billing for it, and there is no overage billing until P5.
+- **The refusal message names no number and no plan.** A `DomainError`'s message reaches the caller verbatim (P0-55) and §1.3 keeps billing details away from a visitor — which plan a winery pays for is the seller's business, not the shopper's.
+- **The cap is enforced in the chat route rather than here** — P2-29, which now carries that obligation along with the row's "rejected with **zero** provider calls" assertion, since a provider is what that case needs.
+
+**⚠ Open: the plan cap is counted in two places.** P2-04 already spends a monthly `rate_limit_buckets` bucket for `endpoint === 'chat'`, and this row counts billed turns in `usage_events`. They diverge on every chat request that is refused *after* the limiter and before the model — the bucket spends a message that was never billed. The ledger is the number a seller's invoice and §2.3's banner are built from, so it is the one that should decide; the fix is to drop `planCapCheck` from `widgetLimitChecks` once **P2-29**'s gate is enforcing, leaving the limiter to do per-minute protection only. Until then both apply and the stricter wins, which over-refuses slightly — the safe direction, and exactly the "told `ok` by one and refused by the other" failure `planCapCheck`'s own comment warns about.
 
 ---
 
@@ -7210,6 +7223,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Price filtering assumes one currency per tenant | later | P2-21's ceiling is minor units with no currency, and `products.currency` is per row while §2.2 sets one per tenant. A tenant that ever priced two wines in two currencies would have a 30 EUR ceiling silently compared against 30 USD. Closing it means the ceiling carrying a currency and the filter excluding rows priced in another — excluding, not converting, since we hold no rate. Cheap, and not worth the surface until a tenant does it. |
 | Streamed text is not checked for leaked instructions | **P2-32** | `trustedPairing` refuses a parsed reply that quotes the prompt, but adapters stream text deltas before that check runs, so a model echoing its instructions as prose reaches a visitor and no delta can be un-sent. Detail under P2-27's as-built. |
 | Escalation-rate alarm needs a denominator | **P2-31** | P2-28 emits every reason, but a *rate* needs turns to divide by, and those arrive with P2-29's stream and P2-31's `usage_events` row. An alarm on an absolute count would fire on traffic. |
+| The plan cap is counted twice | **P2-29** | P2-04 spends a monthly rate-limit bucket on every chat request; P2-36 counts billed turns in `usage_events`. They diverge on requests refused after the limiter and before the model. Detail under P2-36's as-built. |
 | OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |
 | Branch protection configured | **closed (2026-09-06)** | All five checks required on `main` — `Format, lint, typecheck`, `Test and coverage gates`, `Integration tests (Postgres)`, `Secret scan`, `Dependency audit` — with `enforce_admins: true`, 0 approvals (1 would deadlock a solo maintainer) and `strict: false` (so a stacked chain does not need rebasing between merges). Verified by attempting a direct push to `main` and being refused. See **E4**. |
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |

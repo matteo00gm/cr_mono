@@ -187,6 +187,17 @@ export const widgetLimitChecks = (
 export const isPlanCap = (key: string): boolean =>
   key.startsWith('tenant:') && key.endsWith(PLAN_CAP_SUFFIX);
 
+/**
+ * The tenant a plan-cap key names, or undefined for any other key.
+ *
+ * Here rather than at the call site for `isPlanCap`'s reason: the key's shape
+ * is built above and read in two places, and a second copy of the parsing is a
+ * second chance to disagree with the builder. P2-36 reads the month's usage for
+ * the tenant a check names, and the check is all it is given.
+ */
+export const tenantOfPlanCap = (key: string): string | undefined =>
+  isPlanCap(key) ? key.slice('tenant:'.length, -PLAN_CAP_SUFFIX.length) : undefined;
+
 /** What a visitor's widget is told about the month (P2-10, §1.3). */
 export type QuotaState = 'ok' | 'near' | 'exceeded';
 

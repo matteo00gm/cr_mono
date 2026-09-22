@@ -25,6 +25,7 @@ import {
 
 import { createMembersPort, type MembersPort } from './members.js';
 import { createProductsPort, type ProductsPort } from './products.js';
+import { createQuotaPort, type QuotaPort } from './quota.js';
 import { createRagPort, type RagPort } from './rag.js';
 import { refusalRecorders } from './security-events.js';
 import type { WidgetDependencies } from './surfaces/widget.js';
@@ -172,6 +173,8 @@ export interface Dependencies {
   readonly products: ProductsPort;
   /** The retrieval sandbox (P2-37). */
   readonly rag: RagPort;
+  /** The monthly plan cap (P2-36). Exposed so P2-29's route can gate on it. */
+  readonly quota: QuotaPort;
   /** Records provider delivery events (P0-64b). */
   readonly webhooks: WebhooksPort;
   /** Passed through to `createApp`; absent means the endpoint refuses. */
@@ -218,6 +221,7 @@ const INDEXED_EMBEDDING: IndexedEmbedding = {
 
 export const buildDependencies = (config: RuntimeConfig): Dependencies => {
   const log = logTransport(config.log);
+  const quota = createQuotaPort();
 
   /*
    * The provider is built only when there is a key. Without one the log
@@ -317,6 +321,9 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
      */
     products: createProductsPort(),
 
+    /** The monthly plan cap (P2-36), read from `usage_events` rather than a bucket. */
+    quota,
+
     /*
      * The retrieval sandbox (P2-37), and the first place P2-17's startup check
      * is a real one. `assertQueryProviderMatchesIndex` throws here rather than
@@ -346,7 +353,13 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
     widget: {
       resolve: resolveTenantByKeyAndOrigin,
       limiter: config.rateLimiter ?? memoryRateLimiter(),
-      readUsage: config.readUsage ?? (() => Promise.resolve(0)),
+      /*
+       * The month, read from the ledger (P2-36). Before this it was a hardcoded
+       * nought, so §2.3's banner told every seller `ok` however much they had
+       * spent — the cost control that makes the plan cap meaningful reporting
+       * that nothing had been used.
+       */
+      readUsage: config.readUsage ?? quota.readUsage,
       ipSecret: config.authSecret,
       environment: config.stage === 'unknown' ? 'development' : 'production',
       ...(config.widgetTokenKeys === undefined
