@@ -111,6 +111,27 @@ describe('check-coverage.mjs', () => {
     expect(result.stderr).toContain('packages/db');
   });
 
+  it('still refuses a *non*-exempt package with no files, which is the whole guard', () => {
+    /*
+     * The guard exists to catch a path-normalisation bug that would make every
+     * bar compare against zero. Exempt packages were taken out of it when
+     * `apps/e2e` arrived — Playwright runs that one, so it can never appear in
+     * a Vitest summary — and this is the assertion that taking them out did not
+     * take the guard with them.
+     */
+    const result = gate(summary({ 'apps/api': null }));
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('apps/api');
+  });
+
+  it('passes an exempt package that has no files at all', () => {
+    // `apps/e2e` is never in a Vitest summary and must not fail the gate for it.
+    const result = gate(summary({ 'apps/e2e': null }));
+
+    expect(result.status).toBe(0);
+  });
+
   it('refuses to run with no summary at all', () => {
     const result = gate(undefined);
 

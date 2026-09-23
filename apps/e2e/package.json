@@ -1,0 +1,24 @@
+{
+  "name": "@catalogorosso/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "e2e": "playwright test",
+    "e2e:install": "playwright install chromium"
+  },
+  "type": "module",
+  "dependencies": {
+    "@catalogorosso/api": "workspace:*",
+    "@catalogorosso/api-client": "workspace:*",
+    "@catalogorosso/db": "workspace:*",
+    "@catalogorosso/security": "workspace:*",
+    "@catalogorosso/testing": "workspace:*",
+    "@catalogorosso/widget": "workspace:*"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "@types/node": "^26.4.0"
+  }
+}

@@ -58,12 +58,15 @@ Aggiungi `data-cart="event"` allo script che hai incollato:
 
 ```html
 <script
+  type="module"
   src="https://cdn.catalogorosso.com/loader.js"
   data-key="pk_live_..."
   data-cart="event"
   async
 ></script>
 ```
+
+> `type="module"` serve sempre, non solo per questo modo.
 
 Poi ascolta l'evento e **rispondi**:
 

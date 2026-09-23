@@ -123,6 +123,26 @@ export default tseslint.config(
   },
 
   /*
+   * The one consumer that is downstream of everything (P3-18).
+   *
+   * `apps/e2e` is the browser suite: it stands the API up on a port, serves the
+   * built widget on two origins and drives Chrome at them. Composing the
+   * deployed apps is the whole of what it is, so the rule above — which exists
+   * to keep a *library* from reaching into an application — has nothing to say
+   * about it. It ships nothing: no `build` script, no `dist`, not in the
+   * runtime dependency graph of anything.
+   *
+   * Narrow on purpose. If a second app ever needs this, that is a design
+   * conversation rather than another entry.
+   */
+  {
+    files: ['apps/e2e/**/*.ts'],
+    rules: {
+      'no-restricted-imports': 'off',
+    },
+  },
+
+  /*
    * The highest-value IDOR prevention in the codebase (P0-48).
    *
    * A tenant id read from a request is attacker-controlled; the only

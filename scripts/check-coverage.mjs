@@ -61,6 +61,14 @@ const THRESHOLDS = {
       'Test helpers run inside the suites that consume them, where v8 attributes ' +
       'the coverage to the consuming project. A bar here would measure nothing.',
   },
+
+  'apps/e2e': {
+    exempt:
+      'The browser suite (P3-18). It is run by Playwright rather than Vitest and ' +
+      'ships nothing — no build, no dist, in no runtime dependency graph. A ' +
+      'coverage bar over test code that never appears in a coverage summary ' +
+      'would fail every run for the wrong reason.',
+  },
 };
 
 const die = (msg) => reportDie('coverage gate failed: ' + msg);
@@ -146,8 +154,15 @@ for (const [key, entry] of Object.entries(summary)) {
   }
 }
 
-// The vacuous pass this script exists to prevent.
-const empty = onDisk.filter((p) => acc.get(p).files === 0);
+/*
+ * The vacuous pass this script exists to prevent.
+ *
+ * Exempt packages are outside it, and that costs nothing: the failure this
+ * guards against is a bar comparing against zero, and an exempt package has no
+ * bar to compare. `apps/e2e` is the live case — Playwright runs it, so it never
+ * appears in a Vitest summary and never can.
+ */
+const empty = onDisk.filter((p) => !THRESHOLDS[p].exempt && acc.get(p).files === 0);
 if (empty.length) {
   die(
     'the summary contains no files for:\n    ' +
