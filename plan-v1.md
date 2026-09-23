@@ -1311,7 +1311,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-13 | ⛔ 🔒 Token verify middleware | sig, exp, aud, iss, alg, origin match, jti, **tenant ACTIVE** | P2-12 |
 | P2-37 | RAG diagnostic sandbox | real pipeline + scores, no billing, no analytics; retrieval-only by default | P2-22 |
 | ✅ P2-14 | 🔒 Revocation sweep job | EventBridge, prunes expired `jti` | P0-35 |
-| P2-15 | 🔒 Token test suite | replay, cross-origin, absent Origin, alg confusion | P2-13 |
+| ✅ P2-15 | 🔒 Token test suite | replay, cross-origin, absent Origin, alg confusion | P2-13 |
 | P2-16 | 🔒 `security_events` writer | `UNAUTHORIZED_ORIGIN` etc., counted per `(pk_, origin)` | P0-32 |
 | P2-17 | Query embedding | via `EmbeddingProvider` | P1-36 |
 | P2-18 | Vector search query | `halfvec` cosine, HNSW, explicit tenant predicate + RLS | P1-27 |
@@ -5181,6 +5181,14 @@ What the row left open:
 **How.** The attack table, each its own named test: token replayed from a **different** verified origin → 401; from an unverified origin → 403 from CORS; with **no** `Origin` header → 403 from CORS; after its domain is removed → 403 from CORS *(as built in P2-13: CORS resolves the tenant against verified domains before a token is read)*; with `jti` revoked → 401; after the tenant flips to `DISABLED` → 403 `unavailable` *(P2-13, so the widget renders disabled)*; expired → 401; `alg: none` → 401; HMAC-signed with the public key as secret → 401; wrong `aud` (a dashboard token used on the widget path) → 401; tampered `tid` claim → 401 (signature fails). Plus: every 401 body is byte-identical apart from its request id, and each writes the correct `security_events` type.
 
 **Files.** `apps/api/test/widget-token.spec.ts`. **~200 test lines.**
+
+**As built (2026-09-16).** The table is `apps/api/test/widget-token.test.ts`, named `.test.ts` rather than `.spec.ts` because the runner collects `test/**/*.test.ts` and a `.spec.ts` would sit there unrun — the one failure mode a test suite must not have. It runs through the real guards, mounted as P2-29's chat will mount them. What the row left open:
+
+- **The forgeries are built with `node:crypto`**, not a JWT library. `apps/api` depends on no JWT library, and what an attacker sends is a header and a payload they chose with whatever signature they can produce — which is what `alg: none` and the HMAC confusion are. The HMAC case signs with the verifying key's public half as the secret.
+- **Eleven token attacks, each its own named case**, all answered with one 401: another verified site of the same winery, another winery on the same keyset, a revoked `jti`, expired, expired inside the window only a continuation gets, `alg: none`, HMAC confusion, the dashboard audience, an edited `tid`, an edited `origin`, and a token signed by a key this service does not hold.
+- **The 403 half of the row's table is refused before the token is read**, as P2-13's note recorded: no `Origin`, an unverified origin and a domain removed after minting are all CORS's 403, and a switched-off winery is `unavailable`. Each is its own named case here too.
+- **"Byte-identical" is asserted across every token attack at once**, with only the request id removed — an oracle would be a difference between any two of them.
+- **Open.** The row also asks that each attack write the correct `security_events` type. That writer is P2-16's; this suite asserts the reason the verifier reports for each attack, which is what P2-16 maps to a type.
 
 ---
 
