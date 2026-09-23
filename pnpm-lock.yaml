@@ -158,6 +158,9 @@ importers:
       '@catalogorosso/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
+      '@catalogorosso/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       preact:
         specifier: ^10.29.8
         version: 10.29.8
@@ -165,6 +168,9 @@ importers:
       '@testing-library/preact':
         specifier: ^3.2.4
         version: 3.2.4(preact@10.29.8)
+      axe-core:
+        specifier: ^4.13.0
+        version: 4.13.0
       vite:
         specifier: ^8.2.2
         version: 8.2.2(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.13)(yaml@2.9.0)
@@ -1823,6 +1829,10 @@ packages:
 
   aws4fetch@1.0.18:
     resolution: {integrity: sha512-3Cf+YaUl07p24MoQ46rFwulAmiyCwH2+1zw1ZyPAX5OtJ34Hh185DwB8y/qRLb6cYYYtSFJ9pthyLc0MD4e8sQ==}
+
+  axe-core@4.13.0:
+    resolution: {integrity: sha512-UzGt8zg7Ny8djbYMhxl2zuEevVa7r2gJjYY5Lwr1xM7+XU2nd6CkIWFTVcCIbAP63vSz71NaVyyuSk9lHKcy0A==}
+    engines: {node: '>=4'}
 
   b4a@1.8.1:
     resolution: {integrity: sha512-aiqre1Nr0B/6DgE2N5vwTc+2/oQZ4Wh1t4NznYY4E00y8LCt6NqdRv81so00oo27D8MVKTpUa/MwUUtBLXCoDw==}
@@ -5473,6 +5483,8 @@ snapshots:
       possible-typed-array-names: 1.1.0
 
   aws4fetch@1.0.18: {}
+
+  axe-core@4.13.0: {}
 
   b4a@1.8.1: {}
 

@@ -1,6 +1,9 @@
 import type { WidgetConfigResponse } from '@catalogorosso/api-client';
 import { h, render } from 'preact';
 
+import { readableOn } from '@catalogorosso/core/contrast';
+
+import { trapFocus, type FocusTrap } from './a11y/focus-trap.js';
 import { createCartPort, type CartPort } from './cart/port.js';
 import { resolveCart, type HostPage } from './cart/resolve.js';
 import { Chat, type Asker } from './components/Chat.js';
@@ -38,6 +41,23 @@ const PANEL_STYLE = [
   '  font: 15px/1.5 system-ui, sans-serif;',
   '}',
   '.panel[hidden] { display: none; }',
+  /* The tenant's colour, and a foreground picked for contrast rather than taste
+   * (P3-15). Set as variables so one rule decides it for every control. */
+  '.panel { --accent: #7b1e3c; --on-accent: #fff; }',
+  /*
+   * **A focus ring that a seller's CSS reset cannot remove**, because it is
+   * inside the shadow root and their stylesheet does not reach in (§1.7). It is
+   * written once for everything rather than per control, so a control added
+   * later inherits it.
+   */
+  '.panel :focus-visible {',
+  '  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px;',
+  '}',
+  /* The one animation, and it is off for anybody who asked for that. */
+  '@media (prefers-reduced-motion: no-preference) {',
+  '  .panel { animation: sommelier-open 140ms ease-out; }',
+  '  @keyframes sommelier-open { from { opacity: 0; transform: translateY(8px); } }',
+  '}',
   '.panel-header { padding: 12px 16px; border-bottom: 1px solid #eee; font-weight: 600; }',
   '.panel-body { flex: 1; display: flex; min-height: 0; }',
   /* One stylesheet per shadow root: the chat lives inside the panel, so its rules do too. */
@@ -62,13 +82,13 @@ const PANEL_STYLE = [
   '.card-meta { margin: 4px 0 0; display: flex; gap: 8px; align-items: baseline; }',
   '.card-price { font-weight: 600; }',
   '.card-badge {',
-  '  font-size: 12px; padding: 1px 6px; border-radius: 999px; background: #f0e6e9; color: #7b1e3c;',
+  '  font-size: 12px; padding: 1px 6px; border-radius: 999px; background: #f0e6e9; color: var(--accent);',
   '}',
-  '.card-link { color: #7b1e3c; }',
+  '.card-link { color: var(--accent); }',
   '.card-actions { margin: 6px 0 0; display: flex; gap: 10px; align-items: center; }',
   '.card-add {',
   '  border: 0; border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 13px;',
-  '  background: #7b1e3c; color: #fff; cursor: pointer;',
+  '  background: var(--accent); color: var(--on-accent); cursor: pointer;',
   '}',
   '.card-add:disabled { background: #d8c3ca; cursor: default; }',
   '.card-add[data-state="done"] { background: #2f6f4f; }',
@@ -80,18 +100,18 @@ const PANEL_STYLE = [
   '}',
   '.cart-count {',
   '  position: absolute; top: -2px; right: -4px; min-width: 16px; padding: 0 4px;',
-  '  border-radius: 999px; background: #7b1e3c; color: #fff; font-size: 11px; line-height: 16px;',
+  '  border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 11px; line-height: 16px;',
   '}',
   '.notice {',
   '  display: flex; align-items: center; gap: 8px; justify-content: space-between;',
   '  padding: 8px 16px; background: #fdf3f5; font-size: 14px;',
   '}',
-  '.notice-retry { border: 0; background: none; color: #7b1e3c; font: inherit; cursor: pointer; }',
+  '.notice-retry { border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }',
   '.composer { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid #eee; }',
   '.composer-input { flex: 1; min-width: 0; padding: 8px 10px; font: inherit; }',
   '.composer-input:disabled { background: #f6f6f6; }',
   '.composer-send { border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; }',
-  '.composer-send { background: #7b1e3c; color: #fff; cursor: pointer; }',
+  '.composer-send { background: var(--accent); color: var(--on-accent); cursor: pointer; }',
   '.composer-send:disabled { background: #d8c3ca; cursor: default; }',
   '.visually-hidden {',
   '  position: absolute; width: 1px; height: 1px; overflow: hidden;',
@@ -183,8 +203,21 @@ export const mountPanel = ({
   element.className = 'panel';
   element.hidden = true;
   element.setAttribute('role', 'dialog');
+  /*
+   * **False until the trap is on.** `aria-modal` tells assistive technology the
+   * rest of the page is inert, and that is only true while `Tab` is actually
+   * being held inside (P3-15).
+   */
   element.setAttribute('aria-modal', 'false');
   element.setAttribute('aria-label', config.welcomeMessage);
+
+  /*
+   * The winery's own colour, with a foreground chosen for contrast rather than
+   * assumed (P3-15, §1.7). A seller who picked a pale gold gets black text on
+   * it; one who picked a deep bordeaux gets white, and neither has to know.
+   */
+  element.style.setProperty('--accent', config.theme.primaryColor);
+  element.style.setProperty('--on-accent', readableOn(config.theme.primaryColor));
 
   const header = document_.createElement('div');
 
@@ -224,9 +257,31 @@ export const mountPanel = ({
     body,
   );
 
+  let trap: FocusTrap | undefined;
+
   const setOpen = (open: boolean): void => {
     element.hidden = !open;
+    element.setAttribute('aria-modal', String(open));
     launcher.setAttribute('aria-expanded', String(open));
+
+    if (!open) {
+      trap?.release();
+      trap = undefined;
+
+      return;
+    }
+
+    /*
+     * **Focus moves in, and `Escape` is the way out** (§1.7). A dialog that
+     * opens without taking focus is one a screen-reader user does not know is
+     * there; one that traps with no exit is a shop a keyboard user cannot leave.
+     */
+    trap = trapFocus(element, {
+      onEscape: () => {
+        setOpen(false);
+      },
+      returnTo: launcher,
+    });
   };
 
   return {

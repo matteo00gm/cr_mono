@@ -1354,7 +1354,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P3-12 | Generic adapter contract | `window.__sommelierCart` or `CustomEvent` | P3-10 |
 | ✅ P3-13 | Cart count + host checkout nav | configurable `cartUrl` | P3-11 |
 | ✅ P3-14 | i18n IT/EN | | P3-07 |
-| P3-15 | a11y pass | focus trap, keyboard, reduced motion, AA contrast check | P3-07 |
+| ✅ P3-15 | a11y pass | focus trap, keyboard, reduced motion, AA contrast check | P3-07 |
 | ✅ P3-16 | 🔒 Token in memory, anon id in sessionStorage | no cookies, no `localStorage` | P3-06 |
 | P3-17 | `packages/testing`: fake host pages | two origins (4001 verified / 4002 not), fake Shopify cart | P0-44 |
 | P3-18 | ⛔ 🔒 Cross-origin Playwright suite | real browser proves CORS, not just headers | P3-17,P2-09 |
@@ -6144,6 +6144,17 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 **Tests.** `axe-core` in the Playwright suite with zero violations; keyboard-only traversal reaches every control; focus returns on close.
 
 **Files.** `useFocusTrap.ts`, component updates, tests. **~130 lines.**
+
+**As built (2026-09-24).**
+
+- **A plain function rather than a hook** *(deviation from `useFocusTrap.ts`)*. The panel is imperative DOM built by `panel.ts` — opened and closed by the launcher rather than by a render — and the trap covers the header and the composer alike. A hook would have meant making the frame a component to hold it, which is a larger change than the thing it would hold.
+- **`aria-modal` follows the trap rather than being set once.** It is a claim about the *whole page* being inert, and that is only true while `Tab` is actually being held inside. `Escape` is what makes trapping bearable at all: a widget that captured a shopper's keyboard with no way out would be worse than one with no trap.
+- **⚠ The obvious "is it visible" test was wrong twice over.** `offsetParent !== null` is the conventional way to skip a control in a hidden subtree, and it is null for every `position: fixed` element — which the panel is — *and* JSDOM computes no layout at all, so a suite written against it would have passed while the trap found nothing on a real page. It checks `closest('[hidden]')` instead, which is layout-free and true in both.
+- **Focus lands on the composer, not the first control.** A visitor who opened the chat came to type.
+- **The winery's colour is applied with a foreground chosen for contrast** *(addition)*. The panel ignored `theme.primaryColor` entirely before this; it now sets `--accent` and `--on-accent`, and the second is black or white by WCAG ratio rather than by taste. A seller who picks a pale gold gets black text on it and never has to know that was a decision.
+- **`packages/core/src/a11y/contrast.ts`, reached through a narrow subpath.** The row puts the *warning* in P4's settings screen; the arithmetic ships here so the warning and the rendering cannot disagree when it does. The widget gained `@catalogorosso/core` as a dependency for it — the subpath resolves to one file that imports nothing, so no barrel reaches the bundle.
+- **One animation, inside `prefers-reduced-motion: no-preference`**, and the test pins the *declaration* rather than the keyframes name: moving the animation out of the query while leaving `@keyframes` inside it reads identically otherwise, which mutation testing demonstrated.
+- **axe-core runs over the open panel in JSDOM**, restricted to `wcag2a`/`wcag2aa` with `color-contrast` disabled. JSDOM computes no layout, so those rules cannot run — `runOnly` keeps the result honest instead of passing on rules that were silently skipped. **The full rule set in a real browser is P3-18's**, with the row's Playwright line recorded there.
 
 ---
 
