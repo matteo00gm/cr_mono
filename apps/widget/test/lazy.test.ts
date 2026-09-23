@@ -25,6 +25,10 @@ const config: WidgetConfigResponse = {
   quotaState: 'ok',
 };
 
+/** What the loader captured from the seller's script tag, and passes straight through. */
+const API = 'https://api.example';
+const KEY = 'pk_test_abc';
+
 let shadow: ShadowRoot;
 let launcher: HTMLButtonElement;
 
@@ -72,7 +76,7 @@ describe('before anybody clicks', () => {
      */
     const load = loading();
 
-    lazyPanel({ shadow, launcher, config, load });
+    lazyPanel({ shadow, launcher, config, api: API, key: KEY, load });
 
     expect(load).not.toHaveBeenCalled();
   });
@@ -80,7 +84,7 @@ describe('before anybody clicks', () => {
   it('mounts no panel', () => {
     const load = loading();
 
-    lazyPanel({ shadow, launcher, config, load });
+    lazyPanel({ shadow, launcher, config, api: API, key: KEY, load });
 
     expect(shadow.querySelector('.panel')).toBeNull();
   });
@@ -94,7 +98,7 @@ describe('the panel, once it exists', () => {
      * it should — and would appear at all for a caller that only wanted it
      * built.
      */
-    const panel = mountPanel({ shadow, launcher, config });
+    const panel = mountPanel({ shadow, launcher, config, api: API, key: KEY });
 
     expect(panel.isOpen()).toBe(false);
     expect(panel.element.hasAttribute('hidden')).toBe(true);
@@ -105,7 +109,7 @@ describe('the panel, once it exists', () => {
 describe('the first click', () => {
   it('fetches the bundle and opens the panel', async () => {
     const load = loading();
-    const lazy = lazyPanel({ shadow, launcher, config, load });
+    const lazy = lazyPanel({ shadow, launcher, config, api: API, key: KEY, load });
 
     await lazy.toggle();
 
@@ -120,7 +124,7 @@ describe('the first click', () => {
      * a screen reader reads in the meantime.
      */
     const { promise, release } = deferred();
-    const lazy = lazyPanel({ shadow, launcher, config, load: () => promise });
+    const lazy = lazyPanel({ shadow, launcher, config, api: API, key: KEY, load: () => promise });
 
     const opening = lazy.toggle();
 
@@ -135,7 +139,7 @@ describe('the first click', () => {
   it('tells a screen reader the panel is open', async () => {
     // A launcher that says `aria-expanded="false"` over an open dialog is worse
     // than one that says nothing at all (§1.7).
-    const lazy = lazyPanel({ shadow, launcher, config, load: loading() });
+    const lazy = lazyPanel({ shadow, launcher, config, api: API, key: KEY, load: loading() });
 
     await lazy.toggle();
 
@@ -152,7 +156,7 @@ describe('clicking again', () => {
      */
     const { promise, release } = deferred();
     const load = vi.fn(() => promise);
-    const lazy = lazyPanel({ shadow, launcher, config, load });
+    const lazy = lazyPanel({ shadow, launcher, config, api: API, key: KEY, load });
 
     const first = lazy.toggle();
     const second = lazy.toggle();
@@ -165,7 +169,7 @@ describe('clicking again', () => {
   });
 
   it('closes a panel that is open, and opens it again after', async () => {
-    const lazy = lazyPanel({ shadow, launcher, config, load: loading() });
+    const lazy = lazyPanel({ shadow, launcher, config, api: API, key: KEY, load: loading() });
 
     await lazy.toggle();
     await lazy.toggle();
@@ -179,7 +183,7 @@ describe('clicking again', () => {
   });
 
   it('mounts one panel however many times it is toggled', async () => {
-    const lazy = lazyPanel({ shadow, launcher, config, load: loading() });
+    const lazy = lazyPanel({ shadow, launcher, config, api: API, key: KEY, load: loading() });
 
     await lazy.toggle();
     await lazy.toggle();
@@ -196,6 +200,8 @@ describe('preloading on hover', () => {
       shadow,
       launcher,
       config,
+      api: API,
+      key: KEY,
       load,
       whenIdle: (run) => {
         run();
@@ -214,6 +220,8 @@ describe('preloading on hover', () => {
       shadow,
       launcher,
       config,
+      api: API,
+      key: KEY,
       load,
       whenIdle: (run) => {
         run();
@@ -235,6 +243,8 @@ describe('preloading on hover', () => {
       shadow,
       launcher,
       config,
+      api: API,
+      key: KEY,
       load: () => Promise.reject(new Error('offline')),
       whenIdle: (run) => {
         run();
@@ -257,6 +267,8 @@ describe('preloading on hover', () => {
       shadow,
       launcher,
       config,
+      api: API,
+      key: KEY,
       load,
       whenIdle: (run) => ran.push(run),
     });
@@ -277,6 +289,8 @@ describe('when the bundle does not arrive', () => {
       shadow,
       launcher,
       config,
+      api: API,
+      key: KEY,
       load: () => Promise.reject(new Error('offline')),
     });
 
@@ -297,6 +311,8 @@ describe('when the bundle does not arrive', () => {
       shadow,
       launcher,
       config,
+      api: API,
+      key: KEY,
       load: () => {
         attempts += 1;
 
@@ -324,7 +340,7 @@ describe('the idle callback it uses by default', () => {
 
     const load = loading();
 
-    lazyPanel({ shadow, launcher, config, load }).preload();
+    lazyPanel({ shadow, launcher, config, api: API, key: KEY, load }).preload();
     await Promise.resolve();
 
     expect(idle).toHaveBeenCalledTimes(1);
@@ -345,7 +361,7 @@ describe('the idle callback it uses by default', () => {
 
     const load = loading();
 
-    lazyPanel({ shadow, launcher, config, load }).preload();
+    lazyPanel({ shadow, launcher, config, api: API, key: KEY, load }).preload();
 
     expect(load).not.toHaveBeenCalled();
 

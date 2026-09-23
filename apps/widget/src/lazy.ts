@@ -36,6 +36,11 @@ export interface LazyPanelOptions {
   readonly shadow: ShadowRoot;
   readonly launcher: HTMLButtonElement;
   readonly config: WidgetConfigResponse;
+  /* Two strings, passed straight through. The loader knows where the API is
+   * and what the seller's key is; it must not know how a question is asked, or
+   * the chat ends up in the 5 KB that runs on every page (P3-06). */
+  readonly api: string;
+  readonly key: string;
   readonly load?: LoadWidget | undefined;
   readonly document?: Document | undefined;
   /** Injected so a test can run the idle callback rather than wait for one. */
@@ -86,6 +91,8 @@ export const lazyPanel = ({
   shadow,
   launcher,
   config,
+  api,
+  key,
   load = importWidget,
   document: document_ = document,
   whenIdle = idle,
@@ -137,7 +144,7 @@ export const lazyPanel = ({
       try {
         const module = await fetchModule();
 
-        panel = module.mountPanel({ shadow, launcher, config, document: document_ });
+        panel = module.mountPanel({ shadow, launcher, config, api, key, document: document_ });
         panel.open();
       } catch {
         /*

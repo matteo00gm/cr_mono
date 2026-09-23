@@ -67,6 +67,8 @@ export const run = (deps: Deps = {}): void => {
       shadow: mounted.shadow,
       launcher: mounted.launcher,
       config: state.config,
+      api: sommelier.api,
+      key: sommelier.key,
     });
 
     attach_(mounted.launcher, {
