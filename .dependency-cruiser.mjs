@@ -198,6 +198,12 @@ export default {
           // tenant it goes through withTenant, and without one it writes the
           // unattributed row this table's own WITH CHECK admits by name (P0-32).
           '|^packages/db/src/security-events[.]ts$' +
+          // src/retrieval.ts is exempt from P2-18 on products.ts's terms: it
+          // writes the §4.4 search statements and takes the transaction from
+          // its caller, opening nothing. Its tables are tenant-scoped and under
+          // policy, and the caller is inside withTenant — which is what makes a
+          // whole retrieval one transaction on one connection (P2-20).
+          '|^packages/db/src/retrieval[.]ts$' +
           // src/with-lapsed-revocations.ts is exempt from P2-14, and it is the
           // sixth RLS context — a design change, recorded in ADR 0023. It widens
           // across tenants like with-outbox.ts, and what bounds it is in the

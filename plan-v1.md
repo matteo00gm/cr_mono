@@ -1314,7 +1314,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-15 | 🔒 Token test suite | replay, cross-origin, absent Origin, alg confusion | P2-13 |
 | ✅ P2-16 | 🔒 `security_events` writer | `UNAUTHORIZED_ORIGIN` etc., counted per `(pk_, origin)` | P0-32 |
 | ✅ P2-17 | Query embedding | via `EmbeddingProvider` | P1-36 |
-| P2-18 | Vector search query | `halfvec` cosine, HNSW, explicit tenant predicate + RLS | P1-27 |
+| ✅ P2-18 | Vector search query | `halfvec` cosine, HNSW, explicit tenant predicate + RLS | P1-27 |
 | P2-19 | Lexical search query | `tsvector` italian | P1-07 |
 | P2-20 | RRF fusion + test | | P2-18,19 |
 | P2-21 | Availability + price filters | out-of-stock excluded unless nothing matches | P2-20 |
@@ -5237,6 +5237,15 @@ What the row left open:
 **Tests.** Returns products ordered by similarity; `EXPLAIN` shows an index scan (the assertion that catches a silently unused index); tenant B's context returns none of A's; archived products excluded.
 
 **Files.** `packages/core/src/rag/vector-search.ts`, tests. **~100 lines.**
+
+**As built (2026-09-16).** `vectorSearch` is in `packages/db/src/retrieval.ts`, with a unit suite for the statement and an integration suite against real pgvector. What the row left open:
+
+- **In `packages/db`, not `packages/core/src/rag/`** *(deviation)*. A statement lives where the driver is (P0-09), as the limiter, the audit insert and the security-event writer already do. What is pure about retrieval — fusion, filters, the cap — stays in `core`, and P2-20's single statement will grow out of this one.
+- **The `EXPLAIN` assertion is not written**, exactly as the row's own warning instructs. The suite asserts the *exact* top-k against a hand-computed ranking instead, which catches under-return whatever plan Postgres picks — and under-return is what a seller experiences as "my wine is never recommended".
+- **`hnsw.ef_search` is not set** *(deviation)*. The row's warning shows it raises the budget spent before the tenant filter, so it softens the problem without bounding it and is paid on every query. At §5.0's scale the planner's sequential scan is exact and fast, and the index stays for a corpus that outgrows it.
+- **One row per wine** *(addition)*. `distinct on (product_id)` keeps a bottle stored as several chunks from taking several of the forty places. Today every wine is one chunk (`EMBEDDING_CHUNK`), so this is a guard rather than a fix.
+- **The version filter is applied**, per P1-49's note, so a tenant mid-migration never has two generations ranked against each other.
+- **Both limits are bound parameters**, so P1-46's eval can sweep them without editing SQL.
 
 **Note from P1-49.** Filter the embeddings on `activeEmbeddingVersionFilter('e')` from `packages/db`, which reads the tenant's `embedding_version`. Without it a second embedding generation is mixed into the ranking rather than kept beside it: every wine appears twice, and one model's distances are compared with another's.
 
