@@ -4,7 +4,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
-import { vectorSearch } from '../src/retrieval.js';
+import { lexicalSearch, vectorSearch } from '../src/retrieval.js';
 import { withTenant } from '../src/with-tenant.js';
 import { startPostgres } from './support/postgres.js';
 import { createTenant, useTenant } from './support/tenant.js';
@@ -60,22 +60,28 @@ const addWine = async (
     status = 'ACTIVE',
     version = 1,
     chunks = 1,
+    producer,
+    grapes,
   }: {
     name: string;
     index: number;
     status?: 'ACTIVE' | 'ARCHIVED';
     version?: number;
     chunks?: number;
+    producer?: string;
+    grapes?: string[];
   },
 ): Promise<string> => {
   await useTenant(db, tenant);
 
   const rows = await db.execute(sql`
     insert into products
-      (tenant_id, sku, name, wine_type, price_cents, currency, stock_status, status)
+      (tenant_id, sku, name, producer, grape_varieties, wine_type, price_cents, currency,
+       stock_status, status)
     values (
-      ${tenant}::uuid, ${`sku-${randomUUID()}`}, ${name}, 'red', 1000, 'EUR', 'IN_STOCK',
-      ${status}::product_status
+      ${tenant}::uuid, ${`sku-${randomUUID()}`}, ${name}, ${producer ?? null},
+      ${grapes === undefined ? null : `{${grapes.join(',')}}`}::text[],
+      'red', 1000, 'EUR', 'IN_STOCK', ${status}::product_status
     )
     returning id
   `);
@@ -172,6 +178,122 @@ describe('vector search', () => {
 
     const mine = await search(tenantId);
     const found = await search(other);
+
+    expect(mine.map((candidate) => candidate.productId)).not.toContain(theirs);
+    expect(found.map((candidate) => candidate.productId)).toEqual([theirs]);
+  });
+});
+
+describe('lexical search', () => {
+  const ask = (tenant: string, query: string) =>
+    withTenant(tenant, (tx) => lexicalSearch(tx, { query }), db);
+
+  it('finds a wine by its producer', async () => {
+    const wine = await addWine(tenantId, {
+      name: 'Barolo Bussia',
+      index: 0,
+      producer: 'Poderi Colla',
+    });
+
+    const found = await ask(tenantId, 'Poderi Colla');
+
+    expect(found.map((candidate) => candidate.productId)).toContain(wine);
+    expect(found.every((candidate) => candidate.matched === 'text')).toBe(true);
+  });
+
+  it('finds a wine by grape, which the text column deliberately does not carry', async () => {
+    // P1-07 left `grape_varieties` out of `search_tsv`, and a wine made from
+    // Nebbiolo does not say so in its own description.
+    const wine = await addWine(tenantId, {
+      name: 'Langhe Rosso',
+      index: 0,
+      grapes: ['Nebbiolo', 'Barbera'],
+    });
+
+    const found = await ask(tenantId, 'nebbiolo');
+
+    expect(found.map((candidate) => candidate.productId)).toContain(wine);
+  });
+
+  it('falls back to similarity for a misspelled producer', async () => {
+    // A misspelled producer is a large share of real questions, and the case
+    // where a guess beats nothing.
+    const wine = await addWine(tenantId, {
+      name: 'Dolcetto',
+      index: 0,
+      producer: 'Marchesi Antinori',
+    });
+
+    const found = await ask(tenantId, 'Marchesi Antinnori');
+
+    expect(found.map((candidate) => candidate.productId)).toContain(wine);
+    expect(found.every((candidate) => candidate.matched === 'similar')).toBe(true);
+  });
+
+  it('ranks a wine matched by its words above one matched only by grape', async () => {
+    /*
+     * **The order is the whole signal.** The lexical branch hands RRF a rank,
+     * not a score, so a branch ordered by anything else feeds fusion noise —
+     * and nothing fails, because rows still come back.
+     */
+    const byWords = await addWine(tenantId, {
+      name: 'Nebbiolo delle Langhe',
+      index: 0,
+      producer: 'Rinaldi',
+    });
+    const byGrapeOnly = await addWine(tenantId, {
+      name: 'Vino Anonimo',
+      index: 0,
+      grapes: ['Nebbiolo'],
+    });
+
+    const found = await ask(tenantId, 'nebbiolo');
+    const ids = found.map((candidate) => candidate.productId);
+
+    expect(ids).toContain(byWords);
+    expect(ids).toContain(byGrapeOnly);
+    expect(ids.indexOf(byWords)).toBeLessThan(ids.indexOf(byGrapeOnly));
+  });
+
+  it('does not guess when the words already matched something', async () => {
+    await addWine(tenantId, { name: 'Chianti Classico', index: 0, producer: 'Fontodi' });
+
+    const found = await ask(tenantId, 'Fontodi');
+
+    expect(found).not.toHaveLength(0);
+    expect(found.every((candidate) => candidate.matched === 'text')).toBe(true);
+  });
+
+  it('survives the punctuation a visitor types', async () => {
+    // `to_tsquery` raises a syntax error on all of these; the request would fail.
+    for (const query of ['"barolo" & !nebbiolo', 'rosso | bianco', 'a <-> b', '???', 'vino!!']) {
+      await expect(ask(tenantId, query)).resolves.toBeInstanceOf(Array);
+    }
+  });
+
+  it('offers no wine that was archived', async () => {
+    const archived = await addWine(tenantId, {
+      name: 'Vino Ritirato',
+      index: 0,
+      producer: 'Cantina Chiusa',
+      status: 'ARCHIVED',
+    });
+
+    const found = await ask(tenantId, 'Cantina Chiusa');
+
+    expect(found.map((candidate) => candidate.productId)).not.toContain(archived);
+  });
+
+  it("offers none of another winery's wines", async () => {
+    const other = await createTenant(db, 'lexical-other');
+    const theirs = await addWine(other, {
+      name: 'Loro Rosso',
+      index: 0,
+      producer: 'Cantina Altrui',
+    });
+
+    const mine = await ask(tenantId, 'Cantina Altrui');
+    const found = await ask(other, 'Cantina Altrui');
 
     expect(mine.map((candidate) => candidate.productId)).not.toContain(theirs);
     expect(found.map((candidate) => candidate.productId)).toEqual([theirs]);
