@@ -1308,7 +1308,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-11 | 🔒 Ed25519 key in SSM + in-process sign | no KMS asymmetric on the hot path (§5.7) | P0-15 |
 | ✅ P2-12 | ⛔ 🔒 `POST /v1/widget/session` | mint token with `origin`/`tid`/`jti`, 15 min | P2-11 |
 | ✅ P2-12a | 🔒 Session continuation | re-mint keeping `sid`, **requires the previous token** — never a client-supplied `sid` | P2-12 |
-| P2-13 | ⛔ 🔒 Token verify middleware | sig, exp, aud, iss, alg, origin match, jti, **tenant ACTIVE** | P2-12 |
+| ✅ P2-13 | ⛔ 🔒 Token verify middleware | sig, exp, aud, iss, alg, origin match, jti, **tenant ACTIVE** | P2-12 |
 | P2-37 | RAG diagnostic sandbox | real pipeline + scores, no billing, no analytics; retrieval-only by default | P2-22 |
 | P2-14 | 🔒 Revocation sweep job | EventBridge, prunes expired `jti` | P0-35 |
 | P2-15 | 🔒 Token test suite | replay, cross-origin, absent Origin, alg confusion | P2-13 |
@@ -5129,6 +5129,17 @@ Every rejection returns an identical generic `401` — the reason goes to `secur
 
 **Files.** `apps/api/src/middleware/widget-auth.ts`. **~130 lines.**
 
+**As built (2026-09-15).** `requireWidgetToken` is in `apps/api/src/middleware/widget-auth.ts`. The checks are `checkWidgetToken` in `apps/api/src/widget-token.ts`, which P2-12a's continuation now calls too, so the mint and the verifier cannot check different things. The token constants moved there from `widget-session.ts`. The tests are in `apps/api/test/widget-auth.test.ts`. What the row left open:
+
+- **Checks 3 and 4 are one comparison against CORS.** P2-08 resolved the tenant from `(pk_, Origin)` against verified domains on this very request, uncached. A token passes only if its `origin` is that normalised origin and its `tid` that tenant.
+  - So a domain removed after minting is refused by CORS before the token is read: a 403, not this middleware's 401 *(deviation; P2-15's table is updated)*.
+  - An absent or unverified `Origin` is refused the same way.
+- **A switched-off tenant is 403 `unavailable`, not 401** *(deviation)*. The widget must render a lapsed seller as disabled (P3-21). A tenant's status is already public through config, so this answers no question a caller could not ask anyway. The check runs first, before a key is loaded, as at the mint.
+- **Every token refusal is one 401** with the mint's continuation message. The reason goes to an `onRejected` hook that cannot fail the request: `absent`, `invalid`, `origin_mismatch`, `tenant_mismatch`, `malformed` or `revoked`. The default logs the reason; P2-16 supplies the `security_events` writer.
+- **The context gains `widgetSessionId`, and nothing from the token besides.** The tenant and plan are already there from CORS, read on this request. The token's `plan` claim could be fifteen minutes stale, so it is never read.
+- **No continuation window.** An expired token is `invalid` here; the window is P2-12a's alone.
+- **Not mounted anywhere yet.** The first route that needs a session is P2-29's chat. It mounts `requireWidgetToken` between `widgetCors` and `limitWidgetRequest`, and extends `mountGuarded`, the AGENTS.md order invariant and `widget-route-guards.test.ts` to match.
+
 ---
 
 ### P2-14 · Revocation and bucket sweep 🔒
@@ -5143,7 +5154,7 @@ Every rejection returns an identical generic `401` — the reason goes to `secur
 
 ### P2-15 · Token test suite 🔒
 
-**How.** The attack table, each its own named test: token replayed from a **different** verified origin → 401; from an unverified origin → 401; with **no** `Origin` header → 401; after its domain is removed → 401; with `jti` revoked → 401; after the tenant flips to `DISABLED` → 401; expired → 401; `alg: none` → 401; HMAC-signed with the public key as secret → 401; wrong `aud` (a dashboard token used on the widget path) → 401; tampered `tid` claim → 401 (signature fails). Plus: every rejection body is byte-identical, and each writes the correct `security_events` type.
+**How.** The attack table, each its own named test: token replayed from a **different** verified origin → 401; from an unverified origin → 403 from CORS; with **no** `Origin` header → 403 from CORS; after its domain is removed → 403 from CORS *(as built in P2-13: CORS resolves the tenant against verified domains before a token is read)*; with `jti` revoked → 401; after the tenant flips to `DISABLED` → 403 `unavailable` *(P2-13, so the widget renders disabled)*; expired → 401; `alg: none` → 401; HMAC-signed with the public key as secret → 401; wrong `aud` (a dashboard token used on the widget path) → 401; tampered `tid` claim → 401 (signature fails). Plus: every 401 body is byte-identical apart from its request id, and each writes the correct `security_events` type.
 
 **Files.** `apps/api/test/widget-token.spec.ts`. **~200 test lines.**
 

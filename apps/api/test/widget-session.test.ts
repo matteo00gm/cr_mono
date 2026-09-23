@@ -12,17 +12,19 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/app.js';
 import { WIDGET_SESSION_CACHE_CONTROL, type WidgetDependencies } from '../src/surfaces/widget.js';
+import { WIDGET_UNAVAILABLE } from '../src/widget-config.js';
 import {
-  bearerTokenOf,
   mintWidgetSession,
   WIDGET_SESSION_CONTINUATION_SEC,
   WIDGET_SESSION_MAX_LIFETIME_SEC,
+} from '../src/widget-session.js';
+import {
+  bearerTokenOf,
   WIDGET_TOKEN_AUDIENCE,
   WIDGET_TOKEN_ISSUER,
   WIDGET_TOKEN_REFUSED,
   WIDGET_TOKEN_TTL_SEC,
-  WIDGET_UNAVAILABLE,
-} from '../src/widget-session.js';
+} from '../src/widget-token.js';
 import { fakeAuth, oneMembership } from './support/auth.js';
 
 /**

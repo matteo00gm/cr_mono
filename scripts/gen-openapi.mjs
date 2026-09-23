@@ -40,7 +40,7 @@ const { DASHBOARD_PREFIX, WIDGET_PREFIX } = await import('../apps/api/dist/route
 const { WIDGET_ROUTES } = await import('../apps/api/dist/surfaces/widget.js');
 const { registeredRoutes, routeKey } = await import('../apps/api/dist/middleware/capability.js');
 const { WIDGET_REFUSED } = await import('../apps/api/dist/middleware/cors.js');
-const { WIDGET_TOKEN_REFUSED } = await import('../apps/api/dist/widget-session.js');
+const { WIDGET_TOKEN_REFUSED } = await import('../apps/api/dist/widget-token.js');
 
 /** A stand-in: constructing the real Better Auth would open a connection. */
 const stubAuth = {

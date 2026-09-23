@@ -21,7 +21,8 @@ import { widgetCors, type RejectedWidgetRequest, type WidgetResolver } from '../
 import { limitUnresolvedWidgetRequest, limitWidgetRequest } from '../middleware/rate-limit.js';
 import { WIDGET_PREFIX } from '../routes.js';
 import { widgetConfigFor } from '../widget-config.js';
-import { bearerTokenOf, mintWidgetSession, type TokenRevocationCheck } from '../widget-session.js';
+import { mintWidgetSession } from '../widget-session.js';
+import { bearerTokenOf, type TokenRevocationCheck } from '../widget-token.js';
 import type { RouteDoc } from './dashboard.js';
 
 /**

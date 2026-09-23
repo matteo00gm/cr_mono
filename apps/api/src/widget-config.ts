@@ -26,6 +26,12 @@ const SERVICEABLE: ReadonlySet<WidgetTenant['status']> = new Set(['ACTIVE', 'TRI
 export const isServiceable = (status: WidgetTenant['status']): boolean => SERVICEABLE.has(status);
 
 /**
+ * What a switched-off winery's widget is told, never naming why (§1.3) — by the
+ * session mint (P2-12) and by every call that needs a session (P2-13).
+ */
+export const WIDGET_UNAVAILABLE = 'This widget is not available right now.';
+
+/**
  * The appearance a widget has before a seller has chosen one.
  *
  * **Defaults, because nothing stores a seller's choice yet.** The widget
