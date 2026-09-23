@@ -14,6 +14,7 @@ import type { AppEnv } from '../src/env.js';
 import { widgetCors } from '../src/middleware/cors.js';
 import { errorHandler } from '../src/middleware/error.js';
 import { requestContext } from '../src/middleware/logger.js';
+import { bucketIp } from '../src/middleware/ip-bucket.js';
 import { limitWidgetRequest } from '../src/middleware/rate-limit.js';
 import {
   requireWidgetToken,
@@ -318,5 +319,26 @@ describe('before the token is read', () => {
     );
 
     expect((await send(app)).status).toBe(500);
+  });
+});
+
+describe('what a refusal hands the recorder (P2-16)', () => {
+  it('carries the visitor as a bucket, never as an address', async () => {
+    const ipSecret = randomUUID();
+    const { app, rejected } = await harness({ options: { ipSecret } });
+
+    await send(app);
+
+    expect(rejected[0]?.ipBucket).toBe(bucketIp('203.0.113.7', ipSecret, Date.now()));
+    expect(rejected[0]?.ipBucket).not.toContain('203.0.113.7');
+  });
+
+  it('records no bucket at all when there is no secret to bucket with', async () => {
+    // Restrictive: a refusal without a bucket, never a refusal with an address.
+    const { app, rejected } = await harness();
+
+    await send(app);
+
+    expect(rejected[0]?.ipBucket).toBeUndefined();
   });
 });

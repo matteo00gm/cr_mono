@@ -11,7 +11,8 @@ import {
   type TokenRefusal,
   type TokenRevocationCheck,
 } from '../widget-token.js';
-import { logger } from './logger.js';
+import { bucketIp } from './ip-bucket.js';
+import { clientIp, logger } from './logger.js';
 
 /**
  * The widget token verify middleware (P2-13, §3.4).
@@ -34,6 +35,8 @@ export interface RejectedWidgetToken {
   readonly tenantId: string;
   /** As CORS verified it. The token's own claim is not reported: a forged one is attacker-written. */
   readonly origin: string;
+  /** The visitor's address as P2-04 buckets it, when a secret is configured (P2-16). */
+  readonly ipBucket?: string | undefined;
 }
 
 export interface WidgetAuthOptions {
@@ -43,6 +46,8 @@ export interface WidgetAuthOptions {
   readonly isRevoked: TokenRevocationCheck;
   /** Where refusals go; P2-16 supplies the `security_events` writer. */
   readonly onRejected?: ((event: RejectedWidgetToken) => Promise<void>) | undefined;
+  /** What the daily address salt is derived from (P2-04), for the recorded refusal. */
+  readonly ipSecret?: string | undefined;
   /** Injected so expiry is testable without waiting. */
   readonly now?: (() => Date) | undefined;
 }
@@ -88,6 +93,7 @@ export const requireWidgetToken =
     loadKeys,
     isRevoked,
     onRejected = logRejection,
+    ipSecret,
     now = () => new Date(),
   }: WidgetAuthOptions): MiddlewareHandler<AppEnv> =>
   async (c, next) => {
@@ -109,7 +115,20 @@ export const requireWidgetToken =
     });
 
     if (!check.accepted) {
-      report(onRejected, { reason: check.reason, tenantId: tenant.tenantId, origin });
+      report(onRejected, {
+        reason: check.reason,
+        tenantId: tenant.tenantId,
+        origin,
+        ...(ipSecret === undefined
+          ? {}
+          : {
+              ipBucket: bucketIp(
+                clientIp(c.req.header('x-forwarded-for')).ip,
+                ipSecret,
+                Date.now(),
+              ),
+            }),
+      });
       throw new UnauthenticatedError(WIDGET_TOKEN_REFUSED);
     }
 

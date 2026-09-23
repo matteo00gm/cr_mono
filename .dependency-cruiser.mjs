@@ -191,6 +191,13 @@ export default {
           // withTenant, never through a raw connection, and token_revocations
           // carries the boilerplate tenant policy.
           '|^packages/db/src/token-revocations[.]ts$' +
+          // src/security-events.ts is exempt from P2-16, and unlike most of the
+          // statement modules it opens its own transaction: a refusal is a fact
+          // about an attempt, so the row must not roll back with the request
+          // that caused it. It is not a seventh context and sets no GUC - with a
+          // tenant it goes through withTenant, and without one it writes the
+          // unattributed row this table's own WITH CHECK admits by name (P0-32).
+          '|^packages/db/src/security-events[.]ts$' +
           // src/with-lapsed-revocations.ts is exempt from P2-14, and it is the
           // sixth RLS context — a design change, recorded in ADR 0023. It widens
           // across tenants like with-outbox.ts, and what bounds it is in the

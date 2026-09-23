@@ -163,6 +163,8 @@ const mountGuarded = (
       resolve: widget.resolve,
       onRejected: widget.onRejected,
       environment: widget.environment,
+      // So a recorded refusal carries the visitor's bucket, never the address (P2-16).
+      ipSecret: widget.ipSecret,
     }),
     limitWidgetRequest({ limiter: widget.limiter, endpoint, ipSecret: widget.ipSecret }),
     handler,
