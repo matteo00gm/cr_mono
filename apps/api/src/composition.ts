@@ -13,6 +13,7 @@ import { memoryRateLimiter, type MonthlyCheck, type RateLimiter } from '@catalog
 import { loadWidgetTokenKeys, type WidgetTokenKeys } from '@catalogorosso/security/tokens';
 import {
   isSuppressed,
+  isTokenRevoked,
   readMembershipsForUser,
   resolveTenantByKeyAndOrigin,
   withUser,
@@ -314,6 +315,7 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
       ...(config.widgetTokenKeys === undefined
         ? {}
         : { tokenKeys: keysLoader(config.widgetTokenKeys) }),
+      isTokenRevoked,
     },
 
     ...(config.resendWebhookSecret === undefined

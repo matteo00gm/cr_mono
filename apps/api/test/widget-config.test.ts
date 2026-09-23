@@ -316,7 +316,7 @@ describe('wiring', () => {
     expect(refusals).toEqual({
       [`GET ${WIDGET_PREFIX}`]: [],
       [`GET ${WIDGET_PREFIX}/config`]: [403, 429],
-      [`POST ${WIDGET_PREFIX}/session`]: [403, 429],
+      [`POST ${WIDGET_PREFIX}/session`]: [401, 403, 429],
     });
   });
 });

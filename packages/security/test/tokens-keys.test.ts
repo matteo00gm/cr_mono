@@ -191,6 +191,34 @@ describe('what a verifier refuses', () => {
     });
   });
 
+  it('an expired token, unless a continuation window was asked for and has not closed (P2-12a)', async () => {
+    const keys = await loadFresh('k1');
+    const minted = new Date('2026-09-15T10:00:00Z');
+    const token = await keys.sign({}, { ...OPTIONS, now: minted, ttlSec: 60 });
+    const lapsed = (seconds: number) => new Date(minted.getTime() + (60 + seconds) * 1000);
+    const within = (seconds: number, expiredWithinSec: number) =>
+      keys.verify(token, { ...OPTIONS, now: lapsed(seconds), expiredWithinSec });
+
+    await expect(keys.verify(token, { ...OPTIONS, now: lapsed(600) })).rejects.toThrow();
+    await expect(within(600, 1800)).resolves.toMatchObject({ kid: 'k1' });
+    await expect(within(1799, 1800)).resolves.toMatchObject({ kid: 'k1' });
+    await expect(within(1800, 1800)).rejects.toThrow();
+
+    // A window narrower than the skew does not take the skew away.
+    await expect(within(CLOCK_TOLERANCE_SEC - 1, 1)).resolves.toMatchObject({ kid: 'k1' });
+  });
+
+  it('a continuation window that is not a whole number of seconds', async () => {
+    const keys = await loadFresh('k1');
+    const token = await keys.sign({}, OPTIONS);
+
+    for (const expiredWithinSec of [-1, 1.5, Number.NaN]) {
+      await expect(keys.verify(token, { ...OPTIONS, expiredWithinSec })).rejects.toThrow(
+        RangeError,
+      );
+    }
+  });
+
   it('a token with no expiry, or no issue time', async () => {
     // Signed with the set's own key, so the only thing wrong is the missing claim.
     const jwk = await generateWidgetTokenKey('k1');

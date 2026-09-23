@@ -114,8 +114,9 @@ describe('every operation', () => {
     /*
      * The widget reference is the one sellers' developers read. The marker
      * refuses nothing, and config and the session mint refuse for their key and
-     * origin (403) or their rate (429) — never with a 401, because neither
-     * takes a token.
+     * origin (403) or their rate (429). Only the mint refuses with a 401, for a
+     * previous token that belongs elsewhere or was revoked (P2-12a); config
+     * takes no token at all.
      */
     const refusals = Object.fromEntries(
       operations(doc.widget).map(([path, method, op]) => [
@@ -127,7 +128,7 @@ describe('every operation', () => {
     expect(refusals).toEqual({
       'GET /v1/widget': ['200'],
       'GET /v1/widget/config': ['200', '403', '429'],
-      'POST /v1/widget/session': ['200', '403', '429'],
+      'POST /v1/widget/session': ['200', '401', '403', '429'],
     });
   });
 

@@ -21,7 +21,7 @@ import { widgetCors, type RejectedWidgetRequest, type WidgetResolver } from '../
 import { limitUnresolvedWidgetRequest, limitWidgetRequest } from '../middleware/rate-limit.js';
 import { WIDGET_PREFIX } from '../routes.js';
 import { widgetConfigFor } from '../widget-config.js';
-import { mintWidgetSession } from '../widget-session.js';
+import { bearerTokenOf, mintWidgetSession, type TokenRevocationCheck } from '../widget-session.js';
 import type { RouteDoc } from './dashboard.js';
 
 /**
@@ -66,6 +66,12 @@ export interface WidgetDependencies {
    * minted without a key.
    */
   readonly tokenKeys?: (() => Promise<WidgetTokenKeys>) | undefined;
+  /**
+   * Whether a token was revoked — `isTokenRevoked` (P2-12a). Absent, a previous
+   * token is ignored and every mint starts a fresh session: restrictive, since
+   * continuing without asking could revive a revoked token's conversation.
+   */
+  readonly isTokenRevoked?: TokenRevocationCheck | undefined;
 }
 
 /**
@@ -201,7 +207,8 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
    * **Nothing in the body is read.** The tenant and its status come from the
    * guards, resolved uncached on this request (§5.7), and the origin is the one
    * CORS verified — so a caller cannot pick a tenant, a session id or an origin.
-   * Continuing a session with a previous token is P2-12a's, and the
+   * A previous token in `Authorization` may continue its session (P2-12a); the
+   * session id then comes out of that token, once it is verified. The
    * server-to-server `sk_live_` path is P4-10's, which the row allows deferring.
    */
   mountGuarded(
@@ -215,6 +222,8 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
         loadKeys: tokenKeys ?? (() => Promise.reject(new WidgetTokenKeysNotConfiguredError())),
         tenant: c.get('widgetTenant'),
         origin: c.get('widgetOrigin'),
+        previous: bearerTokenOf(c.req.header('authorization')),
+        isRevoked: widget.isTokenRevoked,
       });
 
       c.header('Cache-Control', WIDGET_SESSION_CACHE_CONTROL);
@@ -283,22 +292,27 @@ export const WIDGET_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, Rout
     routeKey('POST', `${WIDGET_PREFIX}${SESSION_PATH}`),
     {
       access: publicRoute(
-        'Called before a visitor has any identity, so it takes no token and no session. What ' +
-          'gates it is the (pk_, Origin) pair, the tenant being active or trialling - read ' +
-          'uncached on every call - and the per-address, per-tenant and per-endpoint limits, ' +
-          'because it is the cheapest endpoint on the surface to abuse.',
+        'Called before a visitor has any identity, so it requires no token and no session; a ' +
+          'previous token only continues one. What gates it is the (pk_, Origin) pair, the ' +
+          'tenant being active or trialling - read uncached on every call - and the ' +
+          'per-address, per-tenant and per-endpoint limits, because it is the cheapest ' +
+          'endpoint on the surface to abuse.',
       ),
       summary: 'Mint a widget session token',
       description:
         'Mints a 15-minute EdDSA token bound to the request Origin, the tenant the public key ' +
-        'belongs to, and a fresh session id. Nothing in the body is read: the tenant, the ' +
-        'session and the origin all come from the request itself. Refused with 403 and no ' +
-        'CORS headers unless the key and the Origin belong to one tenant, and with 403 and ' +
-        "code 'unavailable' when that tenant's widget is switched off, which the widget " +
-        'renders as disabled. Never cached.',
+        'belongs to, and a session id. Nothing in the body is read: the tenant, the session ' +
+        'and the origin all come from the request itself. To continue a conversation, send ' +
+        'its last token as `Authorization: Bearer <token>`: up to 30 minutes after that ' +
+        "token expired, and 4 hours after the session's first token, the new token keeps " +
+        'the session id. A token that cannot be verified, or is past either limit, starts a ' +
+        'fresh session instead. Refused with 403 and no CORS headers unless the key and the ' +
+        "Origin belong to one tenant; with 403 and code 'unavailable' when that tenant's " +
+        'widget is switched off, which the widget renders as disabled; and with 401 when ' +
+        'the token sent belongs to another site or tenant, or was revoked. Never cached.',
       example: { token: 'header.payload.signature', expiresAt: '2026-09-15T10:15:00.000Z' },
       response: widgetSessionResponse,
-      refusals: [403, 429],
+      refusals: [401, 403, 429],
     },
   ],
 ]);
