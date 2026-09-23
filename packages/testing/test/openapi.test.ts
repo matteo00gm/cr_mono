@@ -113,8 +113,9 @@ describe('every operation', () => {
   it('documents on the widget only the refusals each route gives (review fix)', () => {
     /*
      * The widget reference is the one sellers' developers read. The marker
-     * refuses nothing, and config refuses for its key and origin (403) or its
-     * rate (429) — never for a session, because this surface has none.
+     * refuses nothing, and config and the session mint refuse for their key and
+     * origin (403) or their rate (429) — never with a 401, because neither
+     * takes a token.
      */
     const refusals = Object.fromEntries(
       operations(doc.widget).map(([path, method, op]) => [
@@ -126,6 +127,7 @@ describe('every operation', () => {
     expect(refusals).toEqual({
       'GET /v1/widget': ['200'],
       'GET /v1/widget/config': ['200', '403', '429'],
+      'POST /v1/widget/session': ['200', '403', '429'],
     });
   });
 

@@ -1306,7 +1306,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-09 | 🔒 CORS test suite | exact headers, preflight, 403-with-no-headers, bypass attempts | P2-08 |
 | ✅ P2-10 | `GET /v1/widget/config` | public config only, edge-cache 60 s | P2-08 |
 | ✅ P2-11 | 🔒 Ed25519 key in SSM + in-process sign | no KMS asymmetric on the hot path (§5.7) | P0-15 |
-| P2-12 | ⛔ 🔒 `POST /v1/widget/session` | mint token with `origin`/`tid`/`jti`, 15 min | P2-11 |
+| ✅ P2-12 | ⛔ 🔒 `POST /v1/widget/session` | mint token with `origin`/`tid`/`jti`, 15 min | P2-11 |
 | P2-12a | 🔒 Session continuation | re-mint keeping `sid`, **requires the previous token** — never a client-supplied `sid` | P2-12 |
 | P2-13 | ⛔ 🔒 Token verify middleware | sig, exp, aud, iss, alg, origin match, jti, **tenant ACTIVE** | P2-12 |
 | P2-37 | RAG diagnostic sandbox | real pipeline + scores, no billing, no analytics; retrieval-only by default | P2-22 |
@@ -4837,7 +4837,7 @@ The window start is **computed in SQL from `now()`**, never passed from the appl
   - **The gap.** Every dimension above is counted against a tenant, so it runs after `(pk_, Origin)` is resolved — and resolution is an uncached read. A script cycling through invented keys cost one query apiece with no cap, because CORS refused each only after paying for it.
   - **The fix.** `unresolvedLimitCheck` (`ip:<hmac>:unresolved`, 120 a minute; §3.6 gives the reason) is counted first, by `limitUnresolvedWidgetRequest`, mounted ahead of `widgetCors`. Its refusal carries `Vary: Origin` and `Retry-After`, and no CORS headers.
   - **What it does not do.** The limiter's own upsert is still a write per request, so this bounds the expensive path, not the request rate. The blunt per-address ceiling in front of everything is P4-13's WAF rule.
-  - **Open.** P2-12's session route and P2-29's chat route must mount it first too.
+  - **Open.** P2-29's chat route must mount it first too. P2-12's session route does, through `mountGuarded`, and `widget-route-guards.test.ts` walks every widget route to check it.
 
 **Decided (2026-09-15) — the numbers.** §3.6 named the dimensions and gave no figures, so these were placeholders until now. They are sized for §5.0's ten tenants, and the table in §3.6 gives the reason for each. The monthly caps are P5-01's allowances, 1,500 and 6,000, and the trial's 150; the placeholders had 1,000, 10,000 and 100, which contradicted P5-01. Three things stay open:
 - **The trial's cap is a total, the limiter's window is a month.** The 150-message trial lasts 14 days, and a trial that crosses a month boundary could send 300. P2-36's quota gate owns the trial total.
@@ -5056,7 +5056,7 @@ Browser-level proof is P3-18 — this suite asserts headers, that one asserts th
 **As built (2026-09-15).** The keys are in `packages/security/src/tokens/keys.ts`, on a new `@catalogorosso/security/tokens` subpath, and the tests are in `packages/security/test/tokens-keys.test.ts`. What the row left open:
 
 - **One secret holding the keyset, not a parameter per `kid`** *(deviation)*. `WidgetTokenKeys` is an `sst.Secret`, which SST stores as an SSM `SecureString`, holding `{ "keys": [<Ed25519 private JWK>, …] }`. A rotation is one write, so there is never a moment when the new signing key is set and its predecessor has already gone.
-- **Injected, not fetched at cold start** *(deviation)*. The API receives it as `WIDGET_TOKEN_KEYS`, as it receives `AUTH_SECRET`; either way it is read once per container. Nothing reads it until P2-12.
+- **Injected, not fetched at cold start** *(deviation)*. The API receives it as `WIDGET_TOKEN_KEYS`, as it receives `AUTH_SECRET`; either way it is read once per container. P2-12's session route is the first reader.
 - **No public JWKS parameter** *(deviation)*. The only verifier is this service, which derives the public halves from the same set. A second copy of them would be a second place for a rotation to go half-done.
 - **Rotation.**
   - At most two keys are active. The first signs, and every key in the set verifies.
@@ -5092,6 +5092,19 @@ Also supports the §3.2 layer-3 path: if an `Authorization: Bearer sk_live_...` 
 **Tests.** P2-15.
 
 **Files.** `apps/api/src/routes/widget-session.ts`. **~130 lines.**
+
+**As built (2026-09-15).** Minting is in `apps/api/src/widget-session.ts` and the route in `apps/api/src/surfaces/widget.ts`, beside config; there is no `routes/` directory. The tests are in `apps/api/test/widget-session.test.ts`. What the row left open:
+
+- **A switched-off winery gets its own error kind, `unavailable`** *(addition)*. It is a 403 like `forbidden`, with a different `code`. `forbidden` is already the answer for a key and an Origin that do not match, and the widget has to render a lapsed seller as disabled rather than broken (P3-21). The message names no billing state (§1.3). Adding a kind is a typecheck failure until its status is decided, so `STATUS_BY_KIND` says 403.
+- **Status before keys.** The serviceability check is the same `isServiceable` config uses, and it runs before the keyset is loaded, so a switched-off winery is told so even on a stage with no keyset.
+- **`iss` is the constant `catalogorosso`** *(decision)*. §3.4 names the claim and not its value. The obvious value, `AUTH_BASE_URL`, is an operator-set secret that changes the day a custom domain exists, and an issuer that moves invalidates every live token when it moves.
+- **Nothing is read from the request body.** The tenant, plan and status come from P2-07's uncached resolution. The origin is the one P2-08 normalised and verified, which CORS now puts on the context as `widgetOrigin`, so no handler re-derives it from the raw header.
+- **"Rate-limit hard on `ip` and `pk_`"** is `mountGuarded`: the unresolved-address limit first, then P2-04's per-address (10 a minute), per-tenant and per-endpoint limits (§3.6). There is no bucket per key. A key belongs to one tenant, so the tenant limit covers every key it has.
+- **`Cache-Control: no-store`**, on top of the `/v1/*` behaviour caching nothing.
+- **`expiresAt` is an ISO instant**, equal to the token's `exp`, whole seconds.
+- **No keyset** answers the session route with a wiring error (500), and `index.ts` warns `widget_token_keys_absent` once per deployed container, on the webhook secret's terms: absent is restrictive, and generating the keyset is operator work. The composition root loads the keyset once per container and keeps a failed load failing.
+- **The `sk_live_` branch is deferred to P4-10**, as the row allows. The route does not read `Authorization` at all, so there is no flag to leave on.
+- **Open.** The token is verified by nothing yet: P2-13. The attack table is P2-15's.
 
 ---
 

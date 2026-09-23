@@ -1,4 +1,8 @@
-import { widgetConfigResponse, widgetSurfaceResponse } from '@catalogorosso/api-client';
+import {
+  widgetConfigResponse,
+  widgetSessionResponse,
+  widgetSurfaceResponse,
+} from '@catalogorosso/api-client';
 import {
   planCapCheck,
   publicRoute,
@@ -8,6 +12,7 @@ import {
   type RouteAccess,
   type WidgetEndpoint,
 } from '@catalogorosso/security';
+import type { WidgetTokenKeys } from '@catalogorosso/security/tokens';
 import { Hono, type Handler } from 'hono';
 
 import type { AppEnv } from '../env.js';
@@ -16,6 +21,7 @@ import { widgetCors, type RejectedWidgetRequest, type WidgetResolver } from '../
 import { limitUnresolvedWidgetRequest, limitWidgetRequest } from '../middleware/rate-limit.js';
 import { WIDGET_PREFIX } from '../routes.js';
 import { widgetConfigFor } from '../widget-config.js';
+import { mintWidgetSession } from '../widget-session.js';
 import type { RouteDoc } from './dashboard.js';
 
 /**
@@ -54,6 +60,12 @@ export interface WidgetDependencies {
   readonly environment?: 'production' | 'development' | undefined;
   /** Where refusals go; P2-16 supplies the `security_events` writer. */
   readonly onRejected?: ((event: RejectedWidgetRequest) => Promise<void>) | undefined;
+  /**
+   * The session token keyset, loaded once per container (P2-11, P2-12). Absent,
+   * the session route answers with a wiring error: restrictive, since nothing is
+   * minted without a key.
+   */
+  readonly tokenKeys?: (() => Promise<WidgetTokenKeys>) | undefined;
 }
 
 /**
@@ -74,6 +86,17 @@ export class WidgetNotConfiguredError extends Error {
   }
 }
 
+/** The session route was reached on a stage with no keyset — a wiring or operator gap, never a caller's fault. */
+export class WidgetTokenKeysNotConfiguredError extends Error {
+  constructor() {
+    super(
+      'No widget token keyset was supplied, so no session can be minted. Set WidgetTokenKeys ' +
+        'with `node scripts/widget-token-key.mjs | sst secret set WidgetTokenKeys` (P2-11).',
+    );
+    this.name = 'WidgetTokenKeysNotConfiguredError';
+  }
+}
+
 /**
  * A minute, publicly (P2-10).
  *
@@ -84,6 +107,14 @@ export class WidgetNotConfiguredError extends Error {
 export const WIDGET_CONFIG_CACHE_CONTROL = 'public, max-age=60';
 
 const CONFIG_PATH = '/config';
+const SESSION_PATH = '/session';
+
+/**
+ * A token is never held by a cache between the widget and us (P2-12). The
+ * `/v1/*` behaviour caches nothing already; this says so on the response too,
+ * for every cache that is not ours.
+ */
+export const WIDGET_SESSION_CACHE_CONTROL = 'no-store';
 
 /** A guarded widget route: the methods it answers, where, and which limits it counts against. */
 interface GuardedRoute {
@@ -141,6 +172,9 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
     app.on(['GET', 'OPTIONS'], CONFIG_PATH, () => {
       throw new WidgetNotConfiguredError();
     });
+    app.on(['POST', 'OPTIONS'], SESSION_PATH, () => {
+      throw new WidgetNotConfiguredError();
+    });
 
     return app;
   }
@@ -158,6 +192,34 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
       c.header('Cache-Control', WIDGET_CONFIG_CACHE_CONTROL);
 
       return c.json(widgetConfigFor(tenant, quotaStateOf(used, cap.limit)));
+    },
+  );
+
+  /**
+   * Mints an origin-bound session token (P2-12, §3.2 layer 2).
+   *
+   * **Nothing in the body is read.** The tenant and its status come from the
+   * guards, resolved uncached on this request (§5.7), and the origin is the one
+   * CORS verified — so a caller cannot pick a tenant, a session id or an origin.
+   * Continuing a session with a previous token is P2-12a's, and the
+   * server-to-server `sk_live_` path is P4-10's, which the row allows deferring.
+   */
+  mountGuarded(
+    app,
+    widget,
+    { methods: ['POST', 'OPTIONS'], path: SESSION_PATH, endpoint: 'session' },
+    async (c) => {
+      const { tokenKeys } = widget;
+
+      const session = await mintWidgetSession({
+        loadKeys: tokenKeys ?? (() => Promise.reject(new WidgetTokenKeysNotConfiguredError())),
+        tenant: c.get('widgetTenant'),
+        origin: c.get('widgetOrigin'),
+      });
+
+      c.header('Cache-Control', WIDGET_SESSION_CACHE_CONTROL);
+
+      return c.json(session);
     },
   );
 
@@ -217,11 +279,33 @@ export const WIDGET_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, Rout
       refusals: [403, 429],
     },
   ],
+  [
+    routeKey('POST', `${WIDGET_PREFIX}${SESSION_PATH}`),
+    {
+      access: publicRoute(
+        'Called before a visitor has any identity, so it takes no token and no session. What ' +
+          'gates it is the (pk_, Origin) pair, the tenant being active or trialling - read ' +
+          'uncached on every call - and the per-address, per-tenant and per-endpoint limits, ' +
+          'because it is the cheapest endpoint on the surface to abuse.',
+      ),
+      summary: 'Mint a widget session token',
+      description:
+        'Mints a 15-minute EdDSA token bound to the request Origin, the tenant the public key ' +
+        'belongs to, and a fresh session id. Nothing in the body is read: the tenant, the ' +
+        'session and the origin all come from the request itself. Refused with 403 and no ' +
+        'CORS headers unless the key and the Origin belong to one tenant, and with 403 and ' +
+        "code 'unavailable' when that tenant's widget is switched off, which the widget " +
+        'renders as disabled. Never cached.',
+      example: { token: 'header.payload.signature', expiresAt: '2026-09-15T10:15:00.000Z' },
+      response: widgetSessionResponse,
+      refusals: [403, 429],
+    },
+  ],
 ]);
 
 /**
- * Access for the widget surface (P0-49): every documented route, and the
- * config route's CORS preflight.
+ * Access for the widget surface (P0-49): every documented route, and each
+ * guarded route's CORS preflight.
  *
  * The preflight is declared and not documented. It is answered by the identical
  * resolution as the request it precedes, and a reference entry for it would be
@@ -234,6 +318,13 @@ export const WIDGET_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map<str
     publicRoute(
       'The CORS preflight for the config route. Answered by the same (pk_, Origin) ' +
         'resolution as the request it precedes, with no body and nothing else.',
+    ),
+  ],
+  [
+    routeKey('OPTIONS', `${WIDGET_PREFIX}${SESSION_PATH}`),
+    publicRoute(
+      'The CORS preflight for the session route. Answered by the same (pk_, Origin) ' +
+        'resolution as the mint it precedes, with no body and no token.',
     ),
   ],
 ]);
