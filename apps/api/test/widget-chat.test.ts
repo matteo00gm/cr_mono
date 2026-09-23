@@ -174,6 +174,7 @@ describe('the stream', () => {
                   imageUrl: null,
                   productUrl: null,
                   stockStatus: 'IN_STOCK',
+                  variantId: '45123456789',
                 },
               },
             ],

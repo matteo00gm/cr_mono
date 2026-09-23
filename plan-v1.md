@@ -1349,10 +1349,10 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P3-07 | Five states | ACTIVE / DISABLED / QUOTA / RATE_LIMITED / ERROR | P3-06 |
 | ✅ P3-08 | 🔒 Product card component | **text nodes only**, no `innerHTML`, server-sourced fields | P3-06 |
 | ✅ P3-09 | 🔒 XSS test suite | markup in every tenant- and model-derived field | P3-08 |
-| P3-10 | Cart adapter resolution fn | pure, per-branch unit tests | P3-08 |
-| P3-11 | Shopify `/cart/add.js` adapter | variant id + `_somm_session` line-item property | P3-10 |
-| P3-12 | Generic adapter contract | `window.__sommelierCart` or `CustomEvent` | P3-10 |
-| P3-13 | Cart count + host checkout nav | configurable `cartUrl` | P3-11 |
+| ✅ P3-10 | Cart adapter resolution fn | pure, per-branch unit tests | P3-08 |
+| ✅ P3-11 | Shopify `/cart/add.js` adapter | variant id + `_somm_session` line-item property | P3-10 |
+| ✅ P3-12 | Generic adapter contract | `window.__sommelierCart` or `CustomEvent` | P3-10 |
+| ✅ P3-13 | Cart count + host checkout nav | configurable `cartUrl` | P3-11 |
 | ✅ P3-14 | i18n IT/EN | | P3-07 |
 | P3-15 | a11y pass | focus trap, keyboard, reduced motion, AA contrast check | P3-07 |
 | ✅ P3-16 | 🔒 Token in memory, anon id in sessionStorage | no cookies, no `localStorage` | P3-06 |
@@ -5573,6 +5573,7 @@ X-Accel-Buffering: no
 - **The port is composition and owns nothing.** `embedQuery`, `fusedSearch`, `applyFilters`, `capCandidates`, `buildPairingPrompt`, `withSchemaRepair`, `allowlisted`, `escalationsFor`, `recordTurn`, `recordUsage` — every one already existed and is tested where it lives. `src/retrieval.ts` is the P2-17→P2-22 path extracted so the sandbox (P2-37) and the widget run *the same function*, which is that endpoint's only real claim.
 - **A second Lambda, not a second route** (`apps/api/src/streaming.ts`, `infra/api.ts`'s `Chat`). `RESPONSE_STREAM` is a property of the function; the API is buffered on purpose, every other route answering with a small JSON body. Sixty seconds, matching the CloudFront origin's `originReadTimeout` — P0-17a said this row would need a second origin, and it does, because a read timeout is an origin property and a behaviour cannot raise it.
 - **The four headers are set *after* `streamSSE`**, which writes its own `Cache-Control: no-cache` and would otherwise drop `no-transform` — the one that stops CloudFront compressing, and compression is a buffering step. Found by the test, not by reading.
+- **Amended by P3-11 (2026-09-23): the card carries `variantId`.** Public by nature — it is in the seller's own storefront HTML on every product page — and the widget cannot add a wine to a Shopify cart without it.
 - **Amended by P3-08 (2026-09-23): a `recommendations` item now carries its card.** As shipped here the event held `{productId, reason, confidence}` and nothing else, which left §1.5's card with no fields and no endpoint to fetch them from. The server fills `product` from the rows it already has, after `allowlisted` has refused any id outside the request's candidates — so the model still supplies only an id and a sentence.
 - **A failure after the first event is an event, not a status**, carrying a code of ours: the provider's own words could hold a connection string (P0-55). `done` is always last, because a finished answer and a dropped connection are otherwise identical.
 - **The turn is written in a `finally`**, so a visitor who closed the tab still has what was generated recorded — what was generated was paid for.
@@ -6046,6 +6047,14 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 
 **Files.** `cart/resolve.ts`, tests. **~80 lines.**
 
+**As built (2026-09-23).** Shipped with **P3-11 → P3-13**, which are the three things the resolution decides between.
+
+- **⚠ An event listener cannot be detected** *(deviation from §1.6)*. There is no API that answers "does anything listen for this event", so a widget claiming to detect the event contract would be dispatching one and waiting — a side effect, in a resolver this row requires to be pure, on a page that may have no listener at all. The event contract is therefore **declared**, as `data-cart="event"` on the script tag beside `data-key`. It is the same seller making the same kind of choice, and it is one line in the documentation.
+- **`data-cart` also settles a headless Shopify storefront**, which sets no `window.Shopify` and still has `/cart/add.js`. Detection cannot see that either.
+- **The `/cart.js` probe the row suggests is not done**, for the same purity reason: a fetch is not a pure function, and `window.Shopify` is set by every Shopify *theme*. The declaration covers the headless case the probe was for.
+- **A declared `generic` does nothing, and the branch for it was removed** *(found by mutation)*. If the object is on `window` the detection step finds it; if it is not, declaring it cannot conjure one. The branch read as a decision and changed no outcome — mutation testing is what showed that. The value is still accepted, and the seller documentation says it is redundant.
+- **A half-implemented contract degrades rather than throwing.** A seller's `addToCart` they meant to write, or a `getCount` they renamed, gives a card with "Vedi prodotto" — never an exception inside their own page with our name on the stack trace.
+
 ---
 
 ### P3-11 · Shopify cart adapter
@@ -6060,6 +6069,16 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 
 **Files.** `cart/shopify.ts`, `packages/core/src/shopify/variant-id.ts`, tests. **~120 lines.**
 
+**As built (2026-09-23).**
+
+- **`credentials: 'same-origin'`, and it is the one request in the widget that carries a cookie.** Shopify's cart *is* the host page's session; a request without it creates a cart the shopper will never see. Our own surface is the exact opposite and says so (P2-08), which is why this is worth a line.
+- **The `_somm_session` property ships now, though nothing reads it.** P6-07's attribution cannot be reconstructed after the fact: an order placed today without the property is one we can never claim, so the cost of shipping it early is nothing and the cost of shipping it late is every sale in between. It carries the **anonymous per-tab id** (P3-16) rather than the token's session claim — the token is held in a closure and deliberately hands nothing out.
+- **The count is read back from `/cart.js`, never counted up.** A shopper may have added wines in another tab or emptied the cart in the shop's own drawer, so a number we incremented would drift and be wrong in a way nobody could explain. A failure answers nothing: the badge is a nicety.
+- **Shopify's own 422 wording reaches the shopper.** It is written for a shopper, in the shop's language, and is far better than anything we would invent.
+- **`readVariantId` lives in `packages/core/src/shopify/variant-id.ts` and is reached through a narrow subpath** (`@catalogorosso/core/variant-id`). The package barrel is banned from browser bundles by the boundary rules — it pulls `drizzle-orm` and Better Auth — and the dashboard form needs this function.
+- **It is applied at both writes**: the P1-01 form and the API's row parsing, which is the single funnel for the P1-24 import *and* the single-product create. `packages/db` cannot import `packages/core` (core depends on db), so the route is the right place rather than the upsert itself.
+- **A wine with no variant id disables its button before it is pressed**, rather than failing on click: a seller left a column blank, and a button that failed on click would look like our bug rather than their setup.
+
 ---
 
 ### P3-12 · Generic adapter contract
@@ -6070,6 +6089,14 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 
 **Files.** `cart/generic.ts`, docs page, tests. **~110 lines.**
 
+**As built (2026-09-23).** `docs/api/cart-adapter.md` is the seller-facing page, written in Italian like the rest of the console.
+
+- **Both shapes are bounded by the same timeout.** A seller's implementation may throw synchronously, reject, or never settle — an endpoint that is down, an `await` on something that never resolves — and all three have to look the same to the caller: a shopper told we could not add the wine.
+- **The ack is what makes the event form a contract rather than a hope.** Without one every add looks like a success and a shopper watches a button say "aggiunto" over a cart that never changed, discovering it at checkout. A seller who listens and never acks gets the timeout, which is the right answer: from here, that and nobody listening are the same thing.
+- **`ok: false` is told apart from silence.** One is their cart saying no; the other is their page saying nothing.
+- **⚠ The ack listener outlived the timeout** *(found by mutation)*. A seller who never acks would have collected one listener per add on their `document`, each holding a promise nobody would settle, for as long as the visitor stayed on the page. It is now removed in a `finally`, on every path.
+- **No count for the event contract, deliberately.** Reading one needs a second round trip of events and a second timeout; the badge is a nicety, and the object contract is there for a seller who wants it.
+
 ---
 
 ### P3-13 · Cart count and checkout navigation
@@ -6079,6 +6106,13 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 **Tests.** Count updates after add; navigation uses the configured path; an off-origin `cartUrl` is refused.
 
 **Files.** `CartButton.tsx`, tests. **~80 lines.**
+
+**As built (2026-09-23).**
+
+- **`safeCartUrl` resolves before it compares**, rather than testing the string. `//evil.example/cart` is a protocol-relative absolute URL that *reads* as a path, and a check written with `startsWith('/')` lets it straight through — so the test is what the URL parser says the origin is. Anything refused falls back to `/cart`: a shopper pressing a cart button should reach *a* cart, and the misconfiguration is ours to notice rather than theirs to suffer.
+- **The payload in that test had to differ from the fallback** *(found by mutation)*. `//evil.example/cart` resolves to `/cart`, which is also the refusal's answer — so the exploit and the refusal produced the same string and no assertion could tell them apart. The case now uses a path the default does not share.
+- **`window.top`, falling back to our own window.** The widget may be inside an iframe a seller put it in, and the *shopper's* page is the one that has to move.
+- **⚠ A late count could overwrite a fresher one** *(found by mutation)*. The badge refetches whenever an add lands, so two reads can be in flight at once; without the liveness flag the slower one wins and a shopper who just added a wine watches the count go back down.
 
 ---
 

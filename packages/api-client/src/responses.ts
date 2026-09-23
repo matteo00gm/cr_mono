@@ -648,6 +648,14 @@ export const widgetProduct = z.strictObject({
   imageUrl: z.string().nullable(),
   productUrl: z.string().nullable(),
   stockStatus: z.enum(['IN_STOCK', 'OUT_OF_STOCK', 'PREORDER']),
+  /**
+   * The Shopify variant id, normalised to its numeric form (P3-11).
+   *
+   * Public by nature — it is in the seller's own storefront HTML on every
+   * product page — and the widget cannot add a wine to a Shopify cart without
+   * it. `null` for a catalogue that is not on Shopify, which is most of them.
+   */
+  variantId: z.string().nullable(),
 });
 
 export type WidgetProduct = z.infer<typeof widgetProduct>;

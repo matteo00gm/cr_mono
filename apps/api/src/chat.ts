@@ -162,6 +162,7 @@ const asCard = (row: ProductRow): WidgetProduct => ({
   imageUrl: row.imageUrl,
   productUrl: row.productUrl,
   stockStatus: row.stockStatus,
+  variantId: row.externalVariantId,
 });
 
 const asCandidate = (row: ProductRow): CandidateProduct => ({

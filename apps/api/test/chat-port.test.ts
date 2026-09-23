@@ -97,6 +97,7 @@ const wine = (id: string) => ({
   imageUrl: 'https://cdn.example/monfortino.jpg',
   productUrl: 'https://conterno.example/monfortino',
   stockStatus: 'IN_STOCK',
+  externalVariantId: '45123456789',
 });
 
 const ask = async (
@@ -422,6 +423,7 @@ describe('the card a visitor is shown', () => {
       imageUrl: 'https://cdn.example/monfortino.jpg',
       productUrl: 'https://conterno.example/monfortino',
       stockStatus: 'IN_STOCK',
+      variantId: '45123456789',
     });
   });
 
@@ -452,6 +454,7 @@ describe('the card a visitor is shown', () => {
       'producer',
       'productUrl',
       'stockStatus',
+      'variantId',
       'vintage',
     ]);
   });

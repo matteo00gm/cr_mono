@@ -68,6 +68,7 @@ const WINE: WidgetProduct = {
   imageUrl: null,
   productUrl: null,
   stockStatus: 'IN_STOCK',
+  variantId: '45123456789',
 };
 
 const show = (product: Partial<WidgetProduct>, reason = 'tannino deciso') =>
