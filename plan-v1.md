@@ -1347,8 +1347,8 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P3-05 | CI: widget size budget | ≤ 60 KB gz | P3-04 |
 | ✅ P3-06 | Chat UI + SSE consumption | streaming into an ARIA live region | P2-29,P3-04 |
 | ✅ P3-07 | Five states | ACTIVE / DISABLED / QUOTA / RATE_LIMITED / ERROR | P3-06 |
-| P3-08 | 🔒 Product card component | **text nodes only**, no `innerHTML`, server-sourced fields | P3-06 |
-| P3-09 | 🔒 XSS test suite | markup in every tenant- and model-derived field | P3-08 |
+| ✅ P3-08 | 🔒 Product card component | **text nodes only**, no `innerHTML`, server-sourced fields | P3-06 |
+| ✅ P3-09 | 🔒 XSS test suite | markup in every tenant- and model-derived field | P3-08 |
 | P3-10 | Cart adapter resolution fn | pure, per-branch unit tests | P3-08 |
 | P3-11 | Shopify `/cart/add.js` adapter | variant id + `_somm_session` line-item property | P3-10 |
 | P3-12 | Generic adapter contract | `window.__sommelierCart` or `CustomEvent` | P3-10 |
@@ -5573,6 +5573,7 @@ X-Accel-Buffering: no
 - **The port is composition and owns nothing.** `embedQuery`, `fusedSearch`, `applyFilters`, `capCandidates`, `buildPairingPrompt`, `withSchemaRepair`, `allowlisted`, `escalationsFor`, `recordTurn`, `recordUsage` — every one already existed and is tested where it lives. `src/retrieval.ts` is the P2-17→P2-22 path extracted so the sandbox (P2-37) and the widget run *the same function*, which is that endpoint's only real claim.
 - **A second Lambda, not a second route** (`apps/api/src/streaming.ts`, `infra/api.ts`'s `Chat`). `RESPONSE_STREAM` is a property of the function; the API is buffered on purpose, every other route answering with a small JSON body. Sixty seconds, matching the CloudFront origin's `originReadTimeout` — P0-17a said this row would need a second origin, and it does, because a read timeout is an origin property and a behaviour cannot raise it.
 - **The four headers are set *after* `streamSSE`**, which writes its own `Cache-Control: no-cache` and would otherwise drop `no-transform` — the one that stops CloudFront compressing, and compression is a buffering step. Found by the test, not by reading.
+- **Amended by P3-08 (2026-09-23): a `recommendations` item now carries its card.** As shipped here the event held `{productId, reason, confidence}` and nothing else, which left §1.5's card with no fields and no endpoint to fetch them from. The server fills `product` from the rows it already has, after `allowlisted` has refused any id outside the request's candidates — so the model still supplies only an id and a sentence.
 - **A failure after the first event is an event, not a status**, carrying a code of ours: the provider's own words could hold a connection string (P0-55). `done` is always last, because a finished answer and a dropped connection are otherwise identical.
 - **The turn is written in a `finally`**, so a visitor who closed the tab still has what was generated recorded — what was generated was paid for.
 - **Providers are factories, not instances.** Tokens are reported per construction (P1-42's `onUsage`) and the bill is per turn; the SDK client is the expensive part and is built once at the composition root.
@@ -6005,6 +6006,18 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 
 **Files.** `ProductCard.tsx`. **~120 lines.**
 
+**As built (2026-09-23).** Shipped with **P3-09**, which is the row's own "Tests" entry.
+
+- **⚠ The card had no fields to render, and the gap was in the wire contract** *(deviation, and the substance of this row)*. §1.5 says every displayed field but `reason` comes from our database, looked up by product id — and P2-29's `recommendations` event carried only `{productId, reason, confidence}`. There was no widget product endpoint and no field on the event, so the card as specified could not be built at all. Rather than add a second round-trip per answer (latency, and another counted request against P2-04's limiter), **the event now carries the card**: `widgetProduct` on each item, filled by the server from the rows it already holds.
+- **The attachment happens after `allowlisted`, in `chat.ts`.** The model names an id and writes a sentence; the server *replaces* everything else from `byId` before the event is sent. So §3.7's control is not a convention the widget follows — a card carrying a name, a price or a URL the model wrote is not representable.
+- **`widgetProduct` is strict and narrower than the seller's own record.** No `sku`, no indexing state, and above all no `stockQty`: this payload is world-readable on a storefront, and a stock level is a winery's inventory published to anyone who asks. `packages/api-client/test/widget-contract.test.ts` pins that, because nothing re-validates outbound at runtime and `additionalProperties: false` is what a widget author reads in `openapi.json`.
+- **`sanitise.ts` handles what escaping does not** *(addition)*. Preact escapes a text node, which stops markup; it does nothing about a `javascript:` URL in an `href`, a hundred-kilobyte `reason`, or a `U+202E` that reverses the line around it. Three pure functions, so P3-09 can hit them directly as well as through a rendering.
+- **URL safety is an allowlist of two schemes, not a search for `javascript:`.** A blocklist loses to `jAvAsCrIpT:`, to a leading tab that a browser strips before parsing, and to `data:text/html`. Handing the string to the URL parser and asking what scheme it *actually* is has none of those holes — and an unparseable value returns nothing rather than throwing into a shopper's storefront.
+- **`Intl` is wrapped, because `currency` comes from a spreadsheet.** It throws on anything that is not a well-formed code, so a seller who typed `EURO` into a column would otherwise take every card on their own site down.
+- **`rel="noopener noreferrer"` on the product link** *(addition)*. Without `noopener` the opened page gets `window.opener` and can navigate the seller's own tab somewhere else — a tab the shopper believes is the shop.
+- **The image has an `onerror` fallback, and the missing case renders the same thing.** A broken image on a wine card looks like a broken shop, so there is always a placeholder in its place; `loading="lazy"` because most cards are below the fold, and `referrerPolicy="no-referrer"` so the shop page does not reach the image host's logs.
+- **The badge is three-valued.** `PREORDER` is neither in stock nor out, and flattening it to a boolean would have been an invented mapping in a security-adjacent contract.
+
 ---
 
 ### P3-09 · XSS test suite 🔒
@@ -6012,6 +6025,14 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 **How.** Render cards where every tenant- and model-derived field carries a payload: `<img src=x onerror=alert(1)>`, `<script>`, `javascript:` in `product_url`, `"><svg onload=`, a data-URI image, unicode direction-override characters, and 100 KB of text in `reason`. Assert: no `<script>` element exists in the shadow root, no inline handler attributes, `javascript:` hrefs are neutralised or dropped, and text is truncated. Then a Playwright case asserting no dialog fires and no console error, since JSDOM will not execute what a browser would.
 
 **Files.** `apps/widget/test/xss.spec.tsx` + a Playwright case. **~150 test lines.**
+
+**As built (2026-09-23).** 53 cases in `apps/widget/test/xss.test.tsx`; the Playwright half is deferred to **P3-18**, which is where a real browser exists.
+
+- **Every payload goes through every field**, via `it.each`. A control applied to `name` and forgotten on `producer` is the normal way this breaks, and a suite that hand-picks one field per payload cannot see it.
+- **The assertion about attributes is over *every* attribute**, not the ones we expected: the card's whole tree is walked and nothing may be named `on*`. Same for `src` and `href`, which must match `https?:` whatever was fed in.
+- **What this suite can and cannot prove.** JSDOM parses and does not execute, so "no dialog fires" is not a thing it can tell you. What it *can* tell you is that no element, no attribute and no URL scheme capable of firing one ever reaches the DOM — which is the property the code is written to have. The execution half is P3-18's, and the row's own Playwright line is recorded there.
+- **The payload characters are built at runtime** *(and this cost a cycle)*. A source file carrying a raw `U+202E` renders wrong in a review, and one carrying a NUL gets rewritten by a formatter — both happened here before `String.fromCharCode` replaced the literals. The same problem forced `NOT_TEXT` to be built from a string rather than written as a regex literal, which is also what `no-control-regex` is warning about when it fires.
+- **Two survivors from the first mutation run were missing cases**: nothing used a plain `http://` link (refusing it along with the dangerous schemes would silently drop every "Dettagli" link on a shop that has not moved to https), and nothing fed in a URL the parser cannot read at all.
 
 ---
 

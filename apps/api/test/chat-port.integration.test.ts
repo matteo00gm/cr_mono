@@ -1,12 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import process from 'node:process';
 
-import type {
-  EmbeddingProvider,
-  LlmProvider,
-  PairingChunk,
-  Recommendation,
-} from '@catalogorosso/core';
+import type { WidgetChatEvent } from '@catalogorosso/api-client';
+import type { EmbeddingProvider, LlmProvider, PairingChunk } from '@catalogorosso/core';
 import { startTestDatabase, type TestDatabase } from '@catalogorosso/testing';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -113,8 +109,8 @@ const ask = async (
   port: ChatPort,
   id: string,
   sessionId = `sess-${randomUUID()}`,
-): Promise<{ chunks: PairingChunk[]; report: TurnReport | undefined }> => {
-  const chunks: PairingChunk[] = [];
+): Promise<{ chunks: WidgetChatEvent[]; report: TurnReport | undefined }> => {
+  const chunks: WidgetChatEvent[] = [];
   let report: TurnReport | undefined;
 
   for await (const chunk of port.answer(
@@ -136,7 +132,9 @@ const ask = async (
   return { chunks, report };
 };
 
-const cardsIn = (chunks: readonly PairingChunk[]): readonly Recommendation[] =>
+type WidgetCard = Extract<WidgetChatEvent, { type: 'recommendations' }>['items'][number];
+
+const cardsIn = (chunks: readonly WidgetChatEvent[]): readonly WidgetCard[] =>
   chunks.flatMap((chunk) => (chunk.type === 'recommendations' ? [...chunk.items] : []));
 
 beforeAll(async () => {

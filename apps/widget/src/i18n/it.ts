@@ -26,6 +26,11 @@ export const it = {
   rateLimitedReady: 'Ci siamo. Puoi riprovare.',
   errorProvider: 'Non riesco a rispondere in questo momento.',
   errorNetwork: 'Connessione interrotta.',
+
+  /* The card (P3-08, §1.5). */
+  details: 'Dettagli',
+  outOfStock: 'Non disponibile',
+  preorder: 'Su ordinazione',
 } as const;
 
 /**

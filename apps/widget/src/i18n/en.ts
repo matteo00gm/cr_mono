@@ -20,4 +20,8 @@ export const en: Messages = {
   rateLimitedReady: 'Ready. You can try again.',
   errorProvider: 'I cannot answer right now.',
   errorNetwork: 'The connection dropped.',
+
+  details: 'Details',
+  outOfStock: 'Out of stock',
+  preorder: 'Pre-order',
 };

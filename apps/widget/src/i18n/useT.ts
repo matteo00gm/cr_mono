@@ -1,7 +1,7 @@
 import { createContext } from 'preact';
 import { useContext } from 'preact/hooks';
 
-import { catalogues, DEFAULT_LOCALE, format, type Messages } from './index.js';
+import { catalogues, DEFAULT_LOCALE, format, type Locale, type Messages } from './index.js';
 
 /**
  * Reaching the catalogue from a component (P3-14).
@@ -17,6 +17,16 @@ import { catalogues, DEFAULT_LOCALE, format, type Messages } from './index.js';
  * an exception.
  */
 export const MessagesContext = createContext<Messages>(catalogues[DEFAULT_LOCALE]);
+
+/**
+ * The locale tag itself, for the things a catalogue cannot hold.
+ *
+ * `Intl.NumberFormat` needs a language tag rather than a sentence, and a price
+ * is the one string on a card that is formatted rather than translated (P3-08).
+ */
+export const LocaleContext = createContext<Locale>(DEFAULT_LOCALE);
+
+export const useLocale = (): Locale => useContext(LocaleContext);
 
 export type Translate = (
   key: keyof Messages,

@@ -2996,12 +2996,78 @@
                                   "type": "number",
                                   "minimum": 0,
                                   "maximum": 1
+                                },
+                                "product": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "producer": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "vintage": {
+                                      "anyOf": [
+                                        {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "priceCents": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "currency": {
+                                      "type": "string"
+                                    },
+                                    "imageUrl": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "productUrl": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "stockStatus": {
+                                      "type": "string",
+                                      "enum": [
+                                        "IN_STOCK",
+                                        "OUT_OF_STOCK",
+                                        "PREORDER"
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "name",
+                                    "producer",
+                                    "vintage",
+                                    "priceCents",
+                                    "currency",
+                                    "imageUrl",
+                                    "productUrl",
+                                    "stockStatus"
+                                  ],
+                                  "additionalProperties": false
                                 }
                               },
                               "required": [
                                 "productId",
                                 "reason",
-                                "confidence"
+                                "confidence",
+                                "product"
                               ],
                               "additionalProperties": false
                             }

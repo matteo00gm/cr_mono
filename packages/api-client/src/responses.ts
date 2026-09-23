@@ -625,6 +625,34 @@ export const widgetSessionResponse = z.strictObject({
 export type WidgetSessionResponse = z.infer<typeof widgetSessionResponse>;
 
 /**
+ * A wine as a shopper sees it (P3-08, §1.5).
+ *
+ * **Every field here comes from our own row, and the model supplies none of
+ * them.** The model names a `productId` and writes a `reason`; the server
+ * replaces the rest from the catalogue before the event is sent. That is the
+ * §3.7 control the widget's card rests on — a card built from model output is
+ * a card an injected catalogue entry can write.
+ *
+ * **Strict, and narrower than the seller's own record.** This is world-readable
+ * on a storefront: no `sku`, no `stockQty` (which would publish a winery's
+ * inventory levels to anyone who asks), no indexing state. A field added on the
+ * server that this does not name fails the route's own test rather than quietly
+ * reaching every visitor.
+ */
+export const widgetProduct = z.strictObject({
+  name: z.string(),
+  producer: z.string().nullable(),
+  vintage: z.number().int().nullable(),
+  priceCents: z.number().int(),
+  currency: z.string(),
+  imageUrl: z.string().nullable(),
+  productUrl: z.string().nullable(),
+  stockStatus: z.enum(['IN_STOCK', 'OUT_OF_STOCK', 'PREORDER']),
+});
+
+export type WidgetProduct = z.infer<typeof widgetProduct>;
+
+/**
  * One event on the chat stream (P2-29, §4.5).
  *
  * **Not a body — the shape of one `data:` payload.** The response is
@@ -644,6 +672,7 @@ export const widgetChatEvent = z.discriminatedUnion('type', [
         productId: z.string(),
         reason: z.string(),
         confidence: z.number().min(0).max(1),
+        product: widgetProduct,
       }),
     ),
   }),

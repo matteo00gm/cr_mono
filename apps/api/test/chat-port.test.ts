@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { MAX_HISTORY_TURNS } from '@catalogorosso/core';
+import type { WidgetChatEvent } from '@catalogorosso/api-client';
 import type { EmbeddingProvider, LlmProvider, PairingChunk } from '@catalogorosso/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -91,13 +92,18 @@ const wine = (id: string) => ({
   foodPairings: ['brasato'],
   alcoholPct: '14.50',
   priceCents: 2000,
+  /* The card fields (P3-08). Not in the prompt; read straight onto the wire. */
+  currency: 'EUR',
+  imageUrl: 'https://cdn.example/monfortino.jpg',
+  productUrl: 'https://conterno.example/monfortino',
+  stockStatus: 'IN_STOCK',
 });
 
 const ask = async (
   port: ReturnType<typeof createChatPort>,
   message = 'qualcosa per una bistecca',
 ) => {
-  const chunks: PairingChunk[] = [];
+  const chunks: WidgetChatEvent[] = [];
   let report: TurnReport | undefined;
 
   for await (const chunk of port.answer(
@@ -367,5 +373,96 @@ describe('which language, and how much history', () => {
 
     expect(seen[0]).toBeLessThanOrEqual(MAX_HISTORY_TURNS);
     expect(report?.historyDropped).toBeGreaterThan(0);
+  });
+});
+
+describe('the card a visitor is shown', () => {
+  /*
+   * **§1.5 and §3.7's control, as an assertion.** The model names an id and
+   * writes a reason; every other field on the card is read out of our own row.
+   * A card built from model output is a card a seeded tasting note can write.
+   */
+  const recommending = (items: readonly Record<string, unknown>[]) =>
+    speaking({ type: 'recommendations', items } as unknown as PairingChunk);
+
+  const cardsFrom = (chunks: readonly WidgetChatEvent[]) =>
+    chunks.flatMap((chunk) => (chunk.type === 'recommendations' ? [...chunk.items] : []));
+
+  it('fills the card from the catalogue, not from what the model said', async () => {
+    const id = String(recorded.rows[0]?.id);
+    const { chunks } = await ask(
+      portWith(
+        recommending([
+          {
+            productId: id,
+            reason: 'tannino deciso',
+            confidence: 0.9,
+            /* Everything a model might try to dictate. None of it survives. */
+            product: {
+              name: 'Chateau Attaccante',
+              producer: 'Evil Inc',
+              priceCents: 1,
+              currency: 'XXX',
+              imageUrl: 'javascript:alert(1)',
+              productUrl: 'https://evil.example',
+              stockStatus: 'OUT_OF_STOCK',
+              vintage: 1900,
+            },
+          },
+        ]),
+      ),
+    );
+
+    expect(cardsFrom(chunks)[0]?.product).toEqual({
+      name: 'Barolo Monfortino',
+      producer: 'Giacomo Conterno',
+      vintage: 2019,
+      priceCents: 2000,
+      currency: 'EUR',
+      imageUrl: 'https://cdn.example/monfortino.jpg',
+      productUrl: 'https://conterno.example/monfortino',
+      stockStatus: 'IN_STOCK',
+    });
+  });
+
+  it('keeps the reason, which is the one thing the model does supply', async () => {
+    const id = String(recorded.rows[0]?.id);
+    const { chunks } = await ask(
+      portWith(recommending([{ productId: id, reason: 'tannino deciso', confidence: 0.9 }])),
+    );
+
+    expect(cardsFrom(chunks)[0]?.reason).toBe('tannino deciso');
+  });
+
+  it('sends no field a shopper has no business seeing', async () => {
+    /*
+     * World-readable on a storefront. `stockQty` in particular would publish a
+     * winery's inventory levels to anybody who asked.
+     */
+    const id = String(recorded.rows[0]?.id);
+    const { chunks } = await ask(
+      portWith(recommending([{ productId: id, reason: 'tannino', confidence: 0.9 }])),
+    );
+
+    expect(Object.keys(cardsFrom(chunks)[0]?.product ?? {}).sort()).toEqual([
+      'currency',
+      'imageUrl',
+      'name',
+      'priceCents',
+      'producer',
+      'productUrl',
+      'stockStatus',
+      'vintage',
+    ]);
+  });
+
+  it('drops a recommendation for an id this request never retrieved', async () => {
+    /* `allowlisted` (P2-25) refuses it before this point; the card attachment
+     * drops rather than invents, so the two agree even if one changes. */
+    const { chunks } = await ask(
+      portWith(recommending([{ productId: randomUUID(), reason: 'inventato', confidence: 1 }])),
+    );
+
+    expect(cardsFrom(chunks)).toEqual([]);
   });
 });
