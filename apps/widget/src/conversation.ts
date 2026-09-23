@@ -30,12 +30,20 @@ export interface Turn {
 /**
  * Why an answer stopped, when it did.
  *
- * **Three, not one.** A visitor whose month is spent should not be told to try
- * again, and one whose network dropped should not be told the shop is busy —
- * the retry a widget offers is only useful if it is offered for the right
+ * **Three shapes, not one string.** A visitor whose month is spent should not
+ * be told to try again, one whose network dropped should not be told the shop
+ * is busy, and one who is simply going too fast should be told how long to wait
+ * — the retry a widget offers is only useful if it is offered for the right
  * reason (§1.3).
+ *
+ * These are also three of P3-07's five states, on purpose: `states.ts` adds
+ * `active` and `disabled` and nothing else. Two unions describing one screen is
+ * how a case gets handled in one and forgotten in the other.
  */
-export type ChatFailure = 'provider' | 'quota' | 'network';
+export type ChatFailure =
+  | { readonly k: 'quota' }
+  | { readonly k: 'rateLimited'; readonly retryAfter: number }
+  | { readonly k: 'error'; readonly cause: 'provider' | 'network' };
 
 export interface Conversation {
   readonly turns: readonly Turn[];
@@ -72,7 +80,7 @@ const amend = (conversation: Conversation, change: (turn: Turn) => Turn): Conver
 type ErrorCode = Extract<WidgetChatEvent, { type: 'error' }>['code'];
 
 const failureOf = (code: ErrorCode): ChatFailure =>
-  code === 'quota_exceeded' ? 'quota' : 'provider';
+  code === 'quota_exceeded' ? { k: 'quota' } : { k: 'error', cause: 'provider' };
 
 /**
  * The answer stopped, for a reason the visitor is about to be given.

@@ -1,6 +1,6 @@
 import { readConfig } from './bootstrap.js';
 import { lazyPanel } from './lazy.js';
-import { attach, start } from './loader.js';
+import { attach, DISABLED_LABEL, start } from './loader.js';
 
 /**
  * The script a seller pastes, as it actually runs (P3-01 → P3-04).
@@ -59,6 +59,9 @@ export const run = (deps: Deps = {}): void => {
      */
     if (state.kind !== 'active') {
       mounted.launcher.setAttribute('aria-disabled', 'true');
+      /* §1.3's disabled state, as much of it as exists before a bundle does. */
+      mounted.launcher.setAttribute('aria-label', DISABLED_LABEL);
+      mounted.launcher.title = DISABLED_LABEL;
 
       return;
     }

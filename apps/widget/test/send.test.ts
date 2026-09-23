@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { ask, ChatRefused, CHAT_PATH, failureOf } from '../src/send.js';
+import { ask, ChatRefused, CHAT_PATH, failureOf, FALLBACK_RETRY_AFTER } from '../src/send.js';
 import type { StreamEvent } from '../src/sse.js';
 
 /**
@@ -193,7 +193,7 @@ describe('a refusal', () => {
 
 describe('what a visitor is told', () => {
   it('treats a refusal as the shop being unable to answer', () => {
-    expect(failureOf(new ChatRefused(503))).toBe('provider');
+    expect(failureOf(new ChatRefused(503))).toEqual({ k: 'error', cause: 'provider' });
   });
 
   it('does not call a burst limit a spent month', () => {
@@ -203,10 +203,53 @@ describe('what a visitor is told', () => {
      * status is the burst limiter (P2-04) — a wait, not a wall — and telling a
      * visitor their month is over would be wrong and unhelpful at once.
      */
-    expect(failureOf(new ChatRefused(429))).not.toBe('quota');
+    expect(failureOf(new ChatRefused(429, 12))).toEqual({ k: 'rateLimited', retryAfter: 12 });
   });
 
   it('treats anything that is not a refusal as the connection', () => {
-    expect(failureOf(new TypeError('Failed to fetch'))).toBe('network');
+    expect(failureOf(new TypeError('Failed to fetch'))).toEqual({ k: 'error', cause: 'network' });
+  });
+
+  it('waits a sensible default when Retry-After never arrived', () => {
+    /* Cross-origin the header is readable only because CORS exposes it (P2-08).
+     * A deployment that stopped would otherwise produce a countdown from NaN. */
+    expect(failureOf(new ChatRefused(429))).toEqual({
+      k: 'rateLimited',
+      retryAfter: FALLBACK_RETRY_AFTER,
+    });
+  });
+});
+
+describe('how long to wait', () => {
+  const refusalFrom = async (headers: Record<string, string>): Promise<ChatRefused> => {
+    const fetch_ = responding(body(), { status: 429, headers });
+
+    try {
+      await drain(asking(fetch_ as unknown as typeof globalThis.fetch));
+    } catch (error) {
+      return error as ChatRefused;
+    }
+
+    throw new Error('The refusal did not throw.');
+  };
+
+  it('reads Retry-After from the response', async () => {
+    expect((await refusalFrom({ 'retry-after': '17' })).retryAfter).toBe(17);
+  });
+
+  it('rounds a fractional wait up, because waiting too little is another 429', async () => {
+    expect((await refusalFrom({ 'retry-after': '2.2' })).retryAfter).toBe(3);
+  });
+
+  it('falls back when the header is an HTTP date it will not guess at', async () => {
+    /* Our limiter sends seconds (P2-04). Parsing a date against a visitor's own
+     * clock is how a countdown ends up at minus four hours. */
+    expect((await refusalFrom({ 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' })).retryAfter).toBe(
+      FALLBACK_RETRY_AFTER,
+    );
+  });
+
+  it('falls back when the header is missing entirely', async () => {
+    expect((await refusalFrom({})).retryAfter).toBe(FALLBACK_RETRY_AFTER);
   });
 });

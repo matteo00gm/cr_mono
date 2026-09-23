@@ -2,7 +2,8 @@ import type { WidgetConfigResponse } from '@catalogorosso/api-client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { run } from '../src/main.js';
-import type { Mounted } from '../src/loader.js';
+import { DISABLED_LABEL, type Mounted } from '../src/loader.js';
+import { it as italian } from '../src/i18n/it.js';
 
 /**
  * The script as it actually runs (P3-01 -> P3-04).
@@ -136,6 +137,20 @@ describe('a tenant who switched the widget off', () => {
     await Promise.resolve();
 
     expect(mounted.launcher.getAttribute('aria-disabled')).toBe('true');
+    /* §1.3: greyed, with a short notice. This is all of the notice that exists
+     * before a bundle does, and P3-03 makes sure one never arrives. */
+    expect(mounted.launcher.getAttribute('aria-label')).toBe(DISABLED_LABEL);
+    expect(mounted.launcher.title).toBe(DISABLED_LABEL);
+  });
+
+  it('says the same thing the widget would have said', () => {
+    /*
+     * The sentence is written out twice on purpose: the loader cannot import
+     * the catalogue without putting it in both bundles, which Rollup answers
+     * with a shared chunk and P3-05's budget check refuses. This is the pin
+     * that keeps the two copies from drifting apart.
+     */
+    expect(DISABLED_LABEL).toBe(italian.disabled);
   });
 
   it('treats a config that could not be read the same way', async () => {

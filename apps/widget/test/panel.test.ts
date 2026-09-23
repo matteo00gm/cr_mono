@@ -1,7 +1,9 @@
 import type { WidgetConfigResponse } from '@catalogorosso/api-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { COPY, type Asker } from '../src/components/Chat.js';
+import type { Asker } from '../src/components/Chat.js';
+import { en } from '../src/i18n/en.js';
+import { it as COPY } from '../src/i18n/it.js';
 import { mountPanel } from '../src/panel.js';
 
 /**
@@ -74,7 +76,8 @@ describe('what is inside the panel', () => {
   it('labels the composer, so it is not an unnamed box in a dialog', () => {
     const label = mount().body.querySelector('label');
 
-    expect(label?.textContent).toBe(COPY.label);
+    /* jsdom reports `en-US`, so this is the English catalogue by design. */
+    expect(label?.textContent).toBe(en.composerLabel);
   });
 
   it('mounts without a request of any kind, not even a session', () => {
@@ -104,6 +107,54 @@ describe('what is inside the panel', () => {
     mount(ask);
 
     expect(ask).not.toHaveBeenCalled();
+  });
+});
+
+describe('which language it speaks', () => {
+  /*
+   * §1.3's copy is Italian first, and the shop's own setting is where it comes
+   * from. A visitor whose browser has been asking for English all day is the
+   * case the tenant default gets wrong (P3-14).
+   */
+  const speaking = (language: string) => {
+    /* A stand-in rather than a spread: `navigator` is a class instance and
+     * spreading it would drop its prototype along with everything on it. */
+    vi.stubGlobal('navigator', { language });
+
+    return mount().body;
+  };
+
+  it('follows the visitor browser when we have the catalogue', () => {
+    expect(speaking('en-GB').querySelector('label')?.textContent).toBe(en.composerLabel);
+  });
+
+  it('falls back to the winery setting for a language we do not have', () => {
+    expect(speaking('de-DE').querySelector('label')?.textContent).toBe(COPY.composerLabel);
+  });
+
+  it('reads a region-tagged Italian browser as Italian', () => {
+    expect(speaking('it-CH').querySelector('label')?.textContent).toBe(COPY.composerLabel);
+  });
+});
+
+describe('a winery that is not serving', () => {
+  it('says so, and takes no questions', () => {
+    /*
+     * P3-03 normally stops long before here. This is the seller who lapses
+     * *mid-session*, with the chat already open on a visitor's screen.
+     */
+    const panel = mountPanel({
+      shadow,
+      launcher,
+      config: { ...config, status: 'DISABLED' },
+      api: API,
+      key: KEY,
+      ask: silent,
+    });
+
+    expect(panel.body.querySelector('.notice-text')?.textContent).toBe(en.disabled);
+    expect(panel.body.querySelector<HTMLInputElement>('.composer-input')?.disabled).toBe(true);
+    expect(panel.body.querySelector('.notice-retry')).toBeNull();
   });
 });
 

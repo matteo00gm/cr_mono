@@ -8,11 +8,13 @@ import {
   lastQuestion,
   retried,
   stopped,
-  type ChatFailure,
   type Conversation,
 } from '../conversation.js';
+import { useT } from '../i18n/useT.js';
 import { failureOf } from '../send.js';
 import type { StreamEvent } from '../sse.js';
+import { acceptsQuestions, stateFor } from '../states.js';
+import { Notice } from './Notice.js';
 
 /**
  * The chat (P3-06, §1.4, §1.7).
@@ -29,6 +31,10 @@ import type { StreamEvent } from '../sse.js';
  * **One live region, polite.** The answer arrives a few characters at a time,
  * so an assertive region would interrupt a screen reader on every delta and an
  * absent one would leave the answer unannounced entirely (§1.7).
+ *
+ * **What is *not* working is one union** (P3-07). The notice, whether the
+ * composer takes a question and whether a retry is offered all read from
+ * `stateFor`, so a state added and not handled is a type error.
  */
 
 /** How a message is sent. Injected, so the component is testable without a network. */
@@ -36,41 +42,12 @@ export type Asker = (message: string, signal: AbortSignal) => AsyncIterable<Stre
 
 export interface ChatProps {
   readonly ask: Asker;
+  /** The tenant's own status, so a winery that lapses mid-session says so (§1.3). */
+  readonly status?: 'ACTIVE' | 'DISABLED' | undefined;
 }
 
-/**
- * Italian, inline, for exactly one row longer.
- *
- * P3-14 moves these behind a locale and P3-07 gives the five states their own
- * copy. What matters now is what §1.3 forbids and is already true here: no
- * plan, no counts, nothing about billing reaches a shopper.
- */
-export const COPY = {
-  label: 'Scrivi al sommelier',
-  placeholder: 'Che vino mi consigli?',
-  send: 'Invia',
-  retry: 'Riprova',
-  provider: 'Non riesco a rispondere in questo momento.',
-  network: 'Connessione interrotta.',
-  quota: 'Il sommelier si riposa. Torna presto!',
-} as const;
-
-const NOTICE: Record<ChatFailure, string> = {
-  provider: COPY.provider,
-  network: COPY.network,
-  quota: COPY.quota,
-};
-
-/**
- * A retry is offered for what a retry can fix.
- *
- * The shop being busy and a connection that dropped are both worth another go.
- * A spent month is not, and a button that says otherwise wastes a visitor's
- * time to tell them the same thing again (§1.3).
- */
-const isRetryable = (failure: ChatFailure): boolean => failure !== 'quota';
-
-export const Chat = ({ ask }: ChatProps) => {
+export const Chat = ({ ask, status = 'ACTIVE' }: ChatProps) => {
+  const t = useT();
   const [conversation, setConversation] = useState<Conversation>(empty);
   const [draft, setDraft] = useState('');
   const flight = useRef<AbortController | undefined>(undefined);
@@ -113,7 +90,9 @@ export const Chat = ({ ask }: ChatProps) => {
          * mid-answer. Left alone the panel would sit there streaming forever,
          * which to a visitor is indistinguishable from a slow model.
          */
-        setConversation((current) => (current.streaming ? stopped(current, 'network') : current));
+        setConversation((current) =>
+          current.streaming ? stopped(current, { k: 'error', cause: 'network' }) : current,
+        );
       } catch (error) {
         /*
          * An abort is us, not a failure: the visitor asked for this to stop.
@@ -133,18 +112,21 @@ export const Chat = ({ ask }: ChatProps) => {
     [ask],
   );
 
+  const state = stateFor(status, conversation.failure);
+  const open = acceptsQuestions(state);
+
   const submit = useCallback(
     (event: Event): void => {
       event.preventDefault();
 
       const text = draft.trim();
 
-      if (text === '' || conversation.streaming) return;
+      if (text === '' || conversation.streaming || !open) return;
 
       setDraft('');
       void run(text, (current) => asked(current, text));
     },
-    [conversation.streaming, draft, run],
+    [conversation.streaming, draft, open, run],
   );
 
   const retry = useCallback((): void => {
@@ -154,8 +136,6 @@ export const Chat = ({ ask }: ChatProps) => {
 
     void run(text, retried);
   }, [conversation, run]);
-
-  const { failure } = conversation;
 
   return (
     <div class="chat">
@@ -190,20 +170,11 @@ export const Chat = ({ ask }: ChatProps) => {
         )}
       </div>
 
-      {failure !== undefined && (
-        <div class="notice" role="status">
-          <span class="notice-text">{NOTICE[failure]}</span>
-          {isRetryable(failure) && (
-            <button type="button" class="notice-retry" onClick={retry}>
-              {COPY.retry}
-            </button>
-          )}
-        </div>
-      )}
+      <Notice state={state} onRetry={retry} />
 
       <form class="composer" onSubmit={submit}>
         <label class="visually-hidden" for="chat-message">
-          {COPY.label}
+          {t('composerLabel')}
         </label>
         <input
           id="chat-message"
@@ -212,8 +183,8 @@ export const Chat = ({ ask }: ChatProps) => {
           type="text"
           autocomplete="off"
           value={draft}
-          placeholder={COPY.placeholder}
-          disabled={conversation.streaming || failure === 'quota'}
+          placeholder={t('composerPlaceholder')}
+          disabled={conversation.streaming || !open}
           onInput={(event) => {
             setDraft(event.currentTarget.value);
           }}
@@ -221,9 +192,9 @@ export const Chat = ({ ask }: ChatProps) => {
         <button
           type="submit"
           class="composer-send"
-          disabled={conversation.streaming || failure === 'quota' || draft.trim() === ''}
+          disabled={conversation.streaming || !open || draft.trim() === ''}
         >
-          {COPY.send}
+          {t('send')}
         </button>
       </form>
     </div>

@@ -32,11 +32,36 @@ export interface AskOptions {
 
 /** A refusal the caller has to tell apart, because the visitor is told something different. */
 export class ChatRefused extends Error {
-  constructor(readonly status: number) {
+  constructor(
+    readonly status: number,
+    /** Seconds, from `Retry-After`. Present on a 429, which is the one the visitor waits out. */
+    readonly retryAfter?: number,
+  ) {
     super(`The chat endpoint refused with ${String(status)}.`);
     this.name = 'ChatRefused';
   }
 }
+
+/** The default wait when a 429 arrives without a readable `Retry-After`. */
+export const FALLBACK_RETRY_AFTER = 30;
+
+/**
+ * Reads `Retry-After` as seconds.
+ *
+ * **Cross-origin, this header is readable only because CORS says so** — the
+ * widget surface names it in `Access-Control-Expose-Headers` (P2-08). A
+ * deployment that stopped exposing it would leave this `undefined` rather than
+ * throwing, which is why there is a fallback rather than an assumption.
+ *
+ * The HTTP-date form of the header is not parsed. Our limiter sends seconds
+ * (P2-04), and guessing at a date against a visitor's own clock would produce
+ * countdowns of minus four hours.
+ */
+const retryAfterIn = (header: string | null): number => {
+  const seconds = Number(header);
+
+  return Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : FALLBACK_RETRY_AFTER;
+};
 
 /**
  * What a visitor is told when the answer never started.
@@ -44,13 +69,19 @@ export class ChatRefused extends Error {
  * **A 429 is not the monthly cap.** The cap is checked inside the port, after
  * the response has begun, so it arrives as an `error` event with
  * `quota_exceeded` (P2-31) — a status of 429 is the burst limiter instead
- * (P2-04), which is a wait rather than a wall. Both are worth retrying and
- * neither is worth naming to a shopper (§1.3), so both read as `provider`
- * here; P3-07 gives the burst limit its own state and counts down
- * `Retry-After`.
+ * (P2-04), which is a wait rather than a wall. It gets P3-07's `rateLimited`
+ * state and a countdown; every other refusal is the shop being unable to
+ * answer, and anything that is not a refusal never reached the shop at all.
  */
-export const failureOf = (error: unknown): ChatFailure =>
-  error instanceof ChatRefused ? 'provider' : 'network';
+export const failureOf = (error: unknown): ChatFailure => {
+  if (!(error instanceof ChatRefused)) return { k: 'error', cause: 'network' };
+
+  if (error.status === 429) {
+    return { k: 'rateLimited', retryAfter: error.retryAfter ?? FALLBACK_RETRY_AFTER };
+  }
+
+  return { k: 'error', cause: 'provider' };
+};
 
 /**
  * Sends one message and yields the answer as it arrives.
@@ -81,7 +112,9 @@ export const ask = async function* ({
     body: JSON.stringify({ message }),
   });
 
-  if (!response.ok) throw new ChatRefused(response.status);
+  if (!response.ok) {
+    throw new ChatRefused(response.status, retryAfterIn(response.headers.get('retry-after')));
+  }
 
   /*
    * A 200 with no body is not something the endpoint does, and a widget that

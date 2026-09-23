@@ -97,6 +97,20 @@ const LAUNCHER_STYLE = [
   'button:hover { transform: scale(1.05); }',
 ].join('\n');
 
+/**
+ * What a switched-off winery says on the launcher (P3-07, §1.3).
+ *
+ * **Written out here rather than read from the catalogue**, and that is a
+ * deliberate duplication. P3-03 stops before the widget bundle is ever
+ * requested, so there is no catalogue on the page to read — and importing one
+ * would put it in both entries, which Rollup answers with a shared chunk the
+ * loader statically imports. That is exactly the collapse P3-05's budget check
+ * refuses. One sentence in two places is cheaper than 5 KB on every page view
+ * of every storefront, and `loader.test.ts` pins the two together so they
+ * cannot drift.
+ */
+export const DISABLED_LABEL = 'Il sommelier AI non è attivo al momento.';
+
 export interface MountOptions {
   readonly document?: Document | undefined;
   /** What the launcher announces to a screen reader. Italian, like the shop. */
