@@ -1310,7 +1310,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-12a | 🔒 Session continuation | re-mint keeping `sid`, **requires the previous token** — never a client-supplied `sid` | P2-12 |
 | ✅ P2-13 | ⛔ 🔒 Token verify middleware | sig, exp, aud, iss, alg, origin match, jti, **tenant ACTIVE** | P2-12 |
 | P2-37 | RAG diagnostic sandbox | real pipeline + scores, no billing, no analytics; retrieval-only by default | P2-22 |
-| P2-14 | 🔒 Revocation sweep job | EventBridge, prunes expired `jti` | P0-35 |
+| ✅ P2-14 | 🔒 Revocation sweep job | EventBridge, prunes expired `jti` | P0-35 |
 | P2-15 | 🔒 Token test suite | replay, cross-origin, absent Origin, alg confusion | P2-13 |
 | P2-16 | 🔒 `security_events` writer | `UNAUTHORIZED_ORIGIN` etc., counted per `(pk_, origin)` | P0-32 |
 | P2-17 | Query embedding | via `EmbeddingProvider` | P1-36 |
@@ -5150,6 +5150,30 @@ Every rejection returns an identical generic `401` — the reason goes to `secur
 
 **Files.** `apps/worker/src/sweep.ts`, `infra/schedules.ts`, tests. **~90 lines.**
 
+**As built (2026-09-15).** Where things are:
+- **The handler** is `apps/worker/src/sweep.ts`.
+- **The statements** are `pruneLapsedRevocations` in `packages/db/src/token-revocations.ts` and `pruneClosedWindows` in `packages/db/src/rate-limit.ts`.
+- **The schedule and alarm** are `infra/schedules.ts`, with their numbers in `infra/sweep-config.ts`.
+
+What the row left open:
+
+- **A sixth RLS scope, `withLapsedRevocations`** *(design change, ADR 0023)*.
+  - `token_revocations` is under forced RLS, so a sweep on a connection with no tenant deletes nothing and reports success.
+  - Migration `0043` gives the table's policy a branch for `app.revocation_sweeper`. The branch carries its own predicate: a revocation is admitted only once its token lapsed more than `REVOCATION_SWEEP_GRACE_SEC` (30 minutes) ago.
+  - So the flag cannot see or delete a revocation a continuing session could still need, and `WITH CHECK` stays tenant-only. `app_rw` keeps DELETE on the table, because the flag admits only rows that are safe to delete.
+- **Revocations outlive their token by P2-12a's window**, as P2-12a's note asked. A test in `apps/api` holds the grace to at least the continuation window.
+- **`pruneClosedWindows` had a bug that this row would have released** *(fix)*.
+  - **The bug.** It deleted every bucket an hour old. A month's plan-cap bucket is an hour old an hour into the month, so once scheduled it would have reset every tenant's month every quarter of an hour.
+  - **The fix.** It now deletes a fixed window an hour after it starts, and never the current month's window. `consumeBuckets` refuses a fixed window longer than an hour (`MAX_FIXED_WINDOW_SEC`), so the rule cannot go stale.
+  - "The longest window" in the row is therefore an hour for fixed windows, and the month for plan caps.
+- **Batched, as the row asks.** Each statement is `LIMIT 1,000` inside a keyed subselect, with at most 50 batches per table per run. If one table fails, the other is still swept, and the run still fails.
+- **The alarm reads a metric the run writes.** The metric is `Catalogorosso/Sweep` `DeletedRows` by stage, in Embedded Metric Format, so there is no metric filter to wire.
+  - It alarms when a day's sum is zero or missing, so a run that never reports counts as nothing deleted.
+  - A stage with no traffic for a day alarms too. That is the row's threshold, and it is kept.
+- **The counts are logged** in the same line, per table, with whether the run drained it.
+- **The connection budget is unchanged.** A run holds one connection, inside the headroom `queue-config.ts` already leaves for sweep jobs.
+- **Not deployed.** Nothing here has run against AWS.
+
 ---
 
 ### P2-15 · Token test suite 🔒
@@ -5505,7 +5529,7 @@ Continuation is rate-limited on the cheap tier and **does not count as a message
 - **Rate limiting.** Continuing is the same route, so it spends the session budget (10 a minute per address) and never the month. There is no per-`sid` bucket on the mint, because the guards run before the token is read.
 - **A switched-off winery** is `unavailable` before any token is looked at.
 - **Open.**
-  - **P2-14's sweep** must keep a revocation until `expires_at` plus the continuation window. Otherwise a revoked token continues its session for what is left of the window.
+  - **P2-14's sweep** keeps a revocation until `expires_at` plus the continuation window. Done in P2-14, where the table's own policy enforces it (ADR 0023).
   - **P2-16** records the three refusals.
   - **P3-21** sends the last token when it mints again, and drops it on a 401.
 

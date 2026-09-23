@@ -4,6 +4,7 @@ import {
   BucketsExceeded,
   consumeBuckets,
   createRateLimiter,
+  MAX_FIXED_WINDOW_SEC,
   pruneClosedWindows,
 } from '../src/rate-limit.js';
 import type { DbTransaction } from '../src/with-tenant.js';
@@ -245,12 +246,44 @@ describe('the decision', () => {
 });
 
 describe('pruneClosedWindows', () => {
-  it('deletes by window age and reports how many went', async () => {
+  it('deletes a batch of closed windows and reports how many went', async () => {
     const { tx, statements } = capturing([{}, {}, {}]);
 
-    expect(await pruneClosedWindows(tx, 3600)).toBe(3);
+    expect(await pruneClosedWindows(500, tx)).toBe(3);
     expect(text(statements[0])).toContain('DELETE FROM rate_limit_buckets');
-    expect(text(statements[0])).toContain('window_start <');
+    expect(text(statements[0])).toContain('LIMIT');
+  });
+
+  it("never deletes the current month's window, which a plan cap is still counting (P2-14)", async () => {
+    // An hour-old month bucket is this month's plan cap; deleting it resets every tenant's month.
+    const { tx, statements } = capturing([]);
+
+    await pruneClosedWindows(500, tx);
+
+    expect(text(statements[0])).toContain(
+      "AND window_start <> date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'",
+    );
+  });
+});
+
+describe('the fixed windows the sweep can see the end of (P2-14)', () => {
+  it('refuses a fixed window longer than the sweep assumes, and a window that is not one', async () => {
+    for (const windowSec of [MAX_FIXED_WINDOW_SEC + 1, 0, -60, 1.5]) {
+      const { tx, execute } = capturing([row(1, nowWindow())]);
+
+      await expect(consumeBuckets(tx, [{ key: 'k', limit: 5, windowSec }])).rejects.toThrow(
+        /fixed window is a whole number of seconds/,
+      );
+      expect(execute).not.toHaveBeenCalled();
+    }
+  });
+
+  it('counts a window exactly as long as the sweep allows', async () => {
+    const { tx } = capturing([row(1, nowWindow())]);
+
+    await expect(
+      consumeBuckets(tx, [{ key: 'k', limit: 5, windowSec: MAX_FIXED_WINDOW_SEC }]),
+    ).resolves.toMatchObject({ allowed: true });
   });
 });
 

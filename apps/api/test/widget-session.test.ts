@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { widgetSessionResponse } from '@catalogorosso/api-client';
-import type { WidgetResolution } from '@catalogorosso/db';
+import { REVOCATION_SWEEP_GRACE_SEC, type WidgetResolution } from '@catalogorosso/db';
 import { memoryRateLimiter, WIDGET_LIMITS, type RateLimiter } from '@catalogorosso/security';
 import {
   generateWidgetTokenKey,
@@ -432,6 +432,11 @@ describe('continuing a session (P2-12a)', () => {
     // As numbers, not through the constants: the boundary tests move with a constant that moves.
     expect(WIDGET_SESSION_CONTINUATION_SEC).toBe(1_800);
     expect(WIDGET_SESSION_MAX_LIFETIME_SEC).toBe(14_400);
+  });
+
+  it('keeps a revocation for as long as a continuation could still present its token (P2-14)', () => {
+    // The sweep deletes a revocation once this grace has passed; a shorter one revives a revoked session.
+    expect(REVOCATION_SWEEP_GRACE_SEC).toBeGreaterThanOrEqual(WIDGET_SESSION_CONTINUATION_SEC);
   });
 
   it('starts afresh from a token we signed that names no session start', async () => {
