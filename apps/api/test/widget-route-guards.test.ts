@@ -1,11 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import type { WidgetResolution } from '@catalogorosso/db';
 import { memoryRateLimiter, type RateLimiter } from '@catalogorosso/security';
-import { describe, expect, it } from 'vitest';
+import {
+  generateWidgetTokenKey,
+  loadWidgetTokenKeys,
+  type WidgetTokenKeys,
+} from '@catalogorosso/security/tokens';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/app.js';
 import { routeKey } from '../src/middleware/capability.js';
 import { WIDGET_PREFIX } from '../src/routes.js';
+import {
+  WIDGET_TOKEN_AUDIENCE,
+  WIDGET_TOKEN_ISSUER,
+  WIDGET_TOKEN_TTL_SEC,
+} from '../src/widget-token.js';
 import { WIDGET_ROUTE_ACCESS, type WidgetDependencies } from '../src/surfaces/widget.js';
 import { fakeAuth, oneMembership } from './support/auth.js';
 
@@ -63,6 +73,36 @@ const limiterRefusing = (refuses: (key: string) => boolean) => {
   return { asked, limiter };
 };
 
+/**
+ * A keyset and a token, for the routes that need a session (P2-13).
+ *
+ * **Without one, chat refuses at the token guard and never reaches the tenant's
+ * limits** — which is correct, and would make the last case below assert
+ * nothing. The token is what lets each guarded route be walked past the layer
+ * in front of the one under test.
+ */
+let keys: WidgetTokenKeys;
+let token: string;
+
+beforeAll(async () => {
+  keys = await loadWidgetTokenKeys(JSON.stringify({ keys: [await generateWidgetTokenKey('k1')] }));
+  token = await keys.sign(
+    {
+      tid: TENANT,
+      sid: randomUUID(),
+      origin: ORIGIN,
+      plan: 'CANTINA',
+      jti: randomUUID(),
+      iat_original: Math.floor(Date.now() / 1000),
+    },
+    {
+      issuer: WIDGET_TOKEN_ISSUER,
+      audience: WIDGET_TOKEN_AUDIENCE,
+      ttlSec: WIDGET_TOKEN_TTL_SEC,
+    },
+  );
+});
+
 const appWith = (overrides: Partial<WidgetDependencies>) =>
   createApp({
     auth: fakeAuth(),
@@ -72,6 +112,16 @@ const appWith = (overrides: Partial<WidgetDependencies>) =>
       limiter: memoryRateLimiter(),
       readUsage: () => Promise.resolve(0),
       ipSecret: randomUUID(),
+      tokenKeys: () => Promise.resolve(keys),
+      isTokenRevoked: () => Promise.resolve(false),
+      /* Answers nothing: these cases are about the guards in front of it. */
+      chat: {
+        answer: () => ({
+          [Symbol.asyncIterator]: () => ({
+            next: () => Promise.resolve({ done: true as const, value: undefined }),
+          }),
+        }),
+      },
       ...overrides,
     },
   });
@@ -92,7 +142,18 @@ describe.each(GUARDED)('%s', (key) => {
   const send = (built: ReturnType<typeof appWith>) =>
     built.request(`${path}?key=${encodeURIComponent(KEY)}`, {
       method,
-      headers: { origin: ORIGIN, 'x-forwarded-for': '203.0.113.7' },
+      headers: {
+        origin: ORIGIN,
+        'x-forwarded-for': '203.0.113.7',
+        'content-type': 'application/json',
+        /*
+         * Sent on every route, ignored by the ones that do not read it. A route
+         * behind `requireWidgetToken` refuses without it long before the tenant's
+         * limits, so the case that asserts those limits would assert nothing.
+         */
+        authorization: `Bearer ${token}`,
+      },
+      ...(method === 'POST' ? { body: JSON.stringify({ message: 'un rosso' }) } : {}),
     });
 
   it('refuses an exhausted address before resolving the key', async () => {

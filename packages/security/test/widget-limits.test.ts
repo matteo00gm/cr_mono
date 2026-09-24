@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isPlanCap,
+  tenantOfPlanCap,
   planCapCheck,
   QUOTA_NEAR_SHARE,
   quotaStateOf,
@@ -167,6 +168,26 @@ describe('isPlanCap', () => {
     [`endpoint:chat:${TENANT}`, false],
   ])('%s → %s', (key, expected) => {
     expect(isPlanCap(key)).toBe(expected);
+  });
+});
+
+describe('tenantOfPlanCap (P2-36)', () => {
+  it('reads the tenant out of the key planCapCheck built', () => {
+    expect(tenantOfPlanCap(planCapCheck(TENANT, 'CANTINA').key)).toBe(TENANT);
+  });
+
+  it.each([
+    [`tenant:${TENANT}:min`],
+    ['session:sid-1:month'],
+    ['ip:bucket:unresolved'],
+    [`endpoint:chat:${TENANT}`],
+  ])('has no tenant to read out of %s', (key) => {
+    /*
+     * The guard is the point. Slicing without it turns `ip:bucket:unresolved`
+     * into `bucket:unreso` — a string shaped like nothing, handed to a scope
+     * that expects a tenant id. Undefined is the only honest answer.
+     */
+    expect(tenantOfPlanCap(key)).toBeUndefined();
   });
 });
 

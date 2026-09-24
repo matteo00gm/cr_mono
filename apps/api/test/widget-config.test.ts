@@ -341,6 +341,12 @@ describe('wiring', () => {
       [`GET ${WIDGET_PREFIX}`]: [],
       [`GET ${WIDGET_PREFIX}/config`]: [403, 429],
       [`POST ${WIDGET_PREFIX}/session`]: [401, 403, 429],
+      /*
+       * Chat adds 422 to the session route's three: it is the only widget route
+       * with a body, and a body that does not parse is the one refusal the
+       * others have no way to give.
+       */
+      [`POST ${WIDGET_PREFIX}/chat`]: [401, 403, 422, 429],
     });
   });
 });

@@ -4,7 +4,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
-import { lexicalSearch, vectorSearch } from '../src/retrieval.js';
+import { fusedSearch, lexicalSearch, vectorSearch } from '../src/retrieval.js';
 import { withTenant } from '../src/with-tenant.js';
 import { startPostgres } from './support/postgres.js';
 import { createTenant, useTenant } from './support/tenant.js';
@@ -62,6 +62,9 @@ const addWine = async (
     chunks = 1,
     producer,
     grapes,
+    embed = true,
+    stock = 'IN_STOCK',
+    priceCents = 1000,
   }: {
     name: string;
     index: number;
@@ -70,6 +73,10 @@ const addWine = async (
     chunks?: number;
     producer?: string;
     grapes?: string[];
+    /** False for a wine the vector branch cannot see, so fusion has one side only. */
+    embed?: boolean;
+    stock?: 'IN_STOCK' | 'OUT_OF_STOCK' | 'PREORDER';
+    priceCents?: number;
   },
 ): Promise<string> => {
   await useTenant(db, tenant);
@@ -81,13 +88,13 @@ const addWine = async (
     values (
       ${tenant}::uuid, ${`sku-${randomUUID()}`}, ${name}, ${producer ?? null},
       ${grapes === undefined ? null : `{${grapes.join(',')}}`}::text[],
-      'red', 1000, 'EUR', 'IN_STOCK', ${status}::product_status
+      'red', ${priceCents}, 'EUR', ${stock}::product_stock_status, ${status}::product_status
     )
     returning id
   `);
   const productId = ([...rows][0] as { id: string }).id;
 
-  for (let chunk = 0; chunk < chunks; chunk += 1) {
+  for (let chunk = 0; embed && chunk < chunks; chunk += 1) {
     await db.execute(sql`
       insert into product_embeddings
         (tenant_id, product_id, chunk_idx, content_hash, embedding, model, version)
@@ -297,5 +304,149 @@ describe('lexical search', () => {
 
     expect(mine.map((candidate) => candidate.productId)).not.toContain(theirs);
     expect(found.map((candidate) => candidate.productId)).toEqual([theirs]);
+  });
+});
+
+describe('fused retrieval (P2-20)', () => {
+  const QUESTION = 'Barolo Giacomo Conterno';
+
+  let fusedTenant: string;
+  let both: string;
+  let vectorOnly: string;
+  let lexicalOnly: string;
+
+  const fuse = (tenant: string, query = QUESTION) =>
+    withTenant(tenant, (tx) => fusedSearch(tx, { vector: QUERY, query }), db);
+
+  beforeAll(async () => {
+    // A tenant of its own, so the wines seeded above cannot crowd the ranking.
+    fusedTenant = await createTenant(db, 'fusion');
+
+    /*
+     * The wine both branches find is deliberately the *second* nearest, so the
+     * sum is what puts it first. Were it nearest as well, dropping either term
+     * of the score would leave the order unchanged and the test would prove
+     * nothing about fusion.
+     */
+    both = await addWine(fusedTenant, {
+      name: 'Barolo Monfortino',
+      index: 1,
+      producer: 'Giacomo Conterno',
+    });
+    vectorOnly = await addWine(fusedTenant, { name: 'Vino Silenzioso', index: 0 });
+    lexicalOnly = await addWine(fusedTenant, {
+      name: 'Barolo Cannubi',
+      index: 0,
+      producer: 'Giacomo Conterno',
+      embed: false,
+    });
+  }, 120_000);
+
+  it('ranks a wine both branches found above one only a single branch found', async () => {
+    const found = await fuse(fusedTenant);
+    const score = (id: string) => found.find((candidate) => candidate.productId === id)?.score ?? 0;
+
+    expect(found[0]?.productId).toBe(both);
+    expect(score(both)).toBeGreaterThan(score(vectorOnly));
+    expect(score(both)).toBeGreaterThan(score(lexicalOnly));
+  });
+
+  it('keeps a wine that only one branch found, with the other side left empty', async () => {
+    // The FULL OUTER JOIN, which is why neither branch needs a special case.
+    const found = await fuse(fusedTenant);
+    const at = (id: string) => found.find((candidate) => candidate.productId === id);
+
+    expect(at(vectorOnly)?.lexicalRank).toBeNull();
+    expect(at(vectorOnly)?.vectorRank).not.toBeNull();
+    expect(at(lexicalOnly)?.vectorRank).toBeNull();
+    expect(at(lexicalOnly)?.lexicalRank).not.toBeNull();
+
+    // Each still scores: a branch that misses contributes nothing, not a zero total.
+    expect(at(vectorOnly)?.score ?? 0).toBeGreaterThan(0);
+    expect(at(lexicalOnly)?.score ?? 0).toBeGreaterThan(0);
+  });
+
+  it('never returns a wine on a generation the tenant moved off', async () => {
+    // The fused query carries P1-49's filter too, and its own copy of it would
+    // be the copy that goes missing.
+    const stale = await addWine(fusedTenant, {
+      name: 'Barolo Vecchia Generazione',
+      index: 0,
+      producer: 'Giacomo Conterno',
+      version: 2,
+    });
+
+    const found = await fuse(fusedTenant);
+    const at = found.find((candidate) => candidate.productId === stale);
+
+    // Its words still match, so it may appear — but never through the vector branch.
+    expect(at?.vectorRank ?? null).toBeNull();
+  });
+
+  it('answers the same way twice for the same question', async () => {
+    // Fusion feeds a model; an unstable order would make every answer unrepeatable.
+    const [first, second] = [await fuse(fusedTenant), await fuse(fusedTenant)];
+
+    expect(second).toEqual(first);
+  });
+
+  it('returns nothing when neither branch found anything', async () => {
+    const barren = await createTenant(db, 'fusion-empty');
+
+    await expect(fuse(barren)).resolves.toEqual([]);
+  });
+
+  it('never returns an archived wine, through the function retrieval uses (P1-05)', async () => {
+    const archived = await addWine(fusedTenant, {
+      name: 'Barolo Ritirato',
+      index: 0,
+      producer: 'Giacomo Conterno',
+      status: 'ARCHIVED',
+    });
+
+    const found = await fuse(fusedTenant);
+
+    expect(found.map((candidate) => candidate.productId)).not.toContain(archived);
+  });
+
+  it('reaches the trigram fallback when the words match nothing', async () => {
+    const misspelled = await addWine(fusedTenant, {
+      name: 'Dolcetto Comune',
+      index: 3,
+      producer: 'Marchesi Antinori',
+    });
+
+    const found = await fuse(fusedTenant, 'Marchesi Antinnori');
+    const at = found.find((candidate) => candidate.productId === misspelled);
+
+    expect(at?.lexicalRank).not.toBeNull();
+  });
+
+  it('reports the stock status and price P2-21 filters on, per wine (P2-21)', async () => {
+    const soldOut = await addWine(fusedTenant, {
+      name: 'Barolo Esaurito',
+      index: 4,
+      producer: 'Giacomo Conterno',
+      stock: 'OUT_OF_STOCK',
+      priceCents: 4500,
+    });
+
+    const found = await fuse(fusedTenant);
+    const gone = found.find((candidate) => candidate.productId === soldOut);
+    const stocked = found.find((candidate) => candidate.productId === both);
+
+    expect(gone).toMatchObject({ stockStatus: 'OUT_OF_STOCK', priceCents: 4500 });
+    expect(stocked).toMatchObject({ stockStatus: 'IN_STOCK', priceCents: 1000 });
+  });
+
+  it('completes on a pool of one connection, which two transactions could not', async () => {
+    /*
+     * **The regression the row's correction exists to prevent.** This client is
+     * `max: 1`. A retrieval that opened a second transaction would hold the only
+     * connection while waiting for one that only it could release, and this test
+     * would hang rather than fail — which is why the single statement is also
+     * asserted in the unit suite, where it can be counted.
+     */
+    await expect(fuse(fusedTenant)).resolves.not.toHaveLength(0);
   });
 });

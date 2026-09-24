@@ -171,6 +171,14 @@ export const widgetLimitChecks = (
    * Only chat counts against the month. A message is what a plan sells, and
    * counting config would spend a winery's allowance on every page view by a
    * visitor who never opened the widget.
+   *
+   * **This is the second of two counters for one cap, and ADR 0024 explains
+   * why both stay.** P2-36 counts billed turns in `usage_events`, which is what
+   * an invoice and §2.3's banner are built from; this bucket is atomic, so
+   * concurrent requests cannot both pass it at the cap. They diverge on a
+   * request refused *after* this check and before the model — this spends a
+   * message that was never billed. The stricter wins, which over-refuses by
+   * that margin: the safe direction, and bounded by the error rate.
    */
   if (endpoint === 'chat') checks.push(planCapCheck(tenantId, request.plan, limits));
 
@@ -186,6 +194,17 @@ export const widgetLimitChecks = (
  */
 export const isPlanCap = (key: string): boolean =>
   key.startsWith('tenant:') && key.endsWith(PLAN_CAP_SUFFIX);
+
+/**
+ * The tenant a plan-cap key names, or undefined for any other key.
+ *
+ * Here rather than at the call site for `isPlanCap`'s reason: the key's shape
+ * is built above and read in two places, and a second copy of the parsing is a
+ * second chance to disagree with the builder. P2-36 reads the month's usage for
+ * the tenant a check names, and the check is all it is given.
+ */
+export const tenantOfPlanCap = (key: string): string | undefined =>
+  isPlanCap(key) ? key.slice('tenant:'.length, -PLAN_CAP_SUFFIX.length) : undefined;
 
 /** What a visitor's widget is told about the month (P2-10, §1.3). */
 export type QuotaState = 'ok' | 'near' | 'exceeded';

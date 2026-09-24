@@ -77,6 +77,9 @@ importers:
       '@catalogorosso/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@catalogorosso/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
       '@catalogorosso/security':
         specifier: workspace:*
         version: link:../../packages/security
@@ -154,9 +157,6 @@ importers:
 
   apps/worker:
     dependencies:
-      '@aws-sdk/client-bedrock-runtime':
-        specifier: ^3.1127.0
-        version: 3.1127.0
       '@aws-sdk/client-sqs':
         specifier: ^3.1128.0
         version: 3.1128.0
@@ -166,6 +166,9 @@ importers:
       '@catalogorosso/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@catalogorosso/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
     devDependencies:
       '@types/node':
         specifier: ^26.4.0

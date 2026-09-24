@@ -500,6 +500,54 @@ export type ImportPreviewResponse = z.infer<typeof importPreviewResponse>;
  * The client's `request()` is typed off this, so calling an endpoint returns
  * the right shape without a cast and a typo in the path is a compile error.
  */
+/**
+ * One candidate, as the retrieval sandbox explains it (P2-37).
+ *
+ * Every number here came from the statement that produced the ranking, not from
+ * a second one run to describe it. `excludedBy` is why the wine did not reach
+ * the prompt: the cap cut it, the price ceiling refused it, or it is sold out.
+ */
+export const simulatedCandidate = z.object({
+  productId: z.string(),
+  name: z.string(),
+  vectorRank: z.number().int().positive().nullable(),
+  /** Cosine similarity: one is identical, nought unrelated. Null where the vector branch missed it. */
+  vectorScore: z.number().nullable(),
+  lexicalRank: z.number().int().positive().nullable(),
+  rrfScore: z.number(),
+  /** `completenessOf`, as the catalogue grid shows it: a thin wine ranks badly for a reason. */
+  completeness: z.object({
+    score: z.number().int().min(0).max(100),
+    missing: z.array(z.string()),
+    topSuggestion: z.string().optional(),
+  }),
+  /** Restated rather than imported, like every other enum here: this package depends on zod alone. */
+  stockStatus: z.enum(['IN_STOCK', 'OUT_OF_STOCK', 'PREORDER']),
+  priceCents: z.number().int().nonnegative(),
+  included: z.boolean(),
+  excludedBy: z.enum(['stock', 'price', 'cap']).nullable(),
+});
+
+/**
+ * What a simulation reports (P2-37).
+ *
+ * **No prompt.** `systemPromptHash` identifies the instruction prefix that
+ * would have been sent without disclosing it — returning the assembled prompt
+ * would publish our instructions to every tenant (§3.7).
+ *
+ * **No generation.** The row keeps an LLM call behind an opt-in flag; until
+ * P2-31 can bill one, there is nothing here to opt into, so a simulation makes
+ * no provider call beyond the one embedding it needs.
+ */
+export const ragSimulationResponse = z.object({
+  candidates: z.array(simulatedCandidate),
+  /** How many survived filtering before the cap. Tells a weak match from no match. */
+  preCapCount: z.number().int().nonnegative(),
+  zeroResultKind: z.enum(['no_matches', 'filtered_out', 'out_of_stock_only']).nullable(),
+  timings: z.object({ embedMs: z.number(), searchMs: z.number() }),
+  systemPromptHash: z.string(),
+});
+
 export const DASHBOARD_RESPONSES = {
   'GET /v1/dashboard': surfaceResponse,
   'GET /v1/dashboard/me': meResponse,
@@ -519,6 +567,7 @@ export const DASHBOARD_RESPONSES = {
   'POST /v1/dashboard/products/:id/reindex': productReindexedResponse,
   'POST /v1/dashboard/products/import': productsImportedResponse,
   'POST /v1/dashboard/products/import/preview': importPreviewResponse,
+  'POST /v1/dashboard/rag/simulate': ragSimulationResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;
@@ -574,3 +623,34 @@ export const widgetSessionResponse = z.strictObject({
 });
 
 export type WidgetSessionResponse = z.infer<typeof widgetSessionResponse>;
+
+/**
+ * One event on the chat stream (P2-29, §4.5).
+ *
+ * **Not a body — the shape of one `data:` payload.** The response is
+ * `text/event-stream`, so what a client compiles against is the union of what
+ * an event can carry, and the SSE `event:` field names which member arrived.
+ *
+ * `error` carries a code and never a message: the provider's own words could
+ * hold anything, and a `DomainError`'s reach a caller verbatim (P0-55), so
+ * neither is forwarded. `done` is empty and always last.
+ */
+export const widgetChatEvent = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('text'), delta: z.string() }),
+  z.object({
+    type: z.literal('recommendations'),
+    items: z.array(
+      z.object({
+        productId: z.string(),
+        reason: z.string(),
+        confidence: z.number().min(0).max(1),
+      }),
+    ),
+  }),
+  z.object({
+    type: z.literal('error'),
+    code: z.enum(['schema_invalid', 'refusal', 'provider_error', 'quota_exceeded']),
+  }),
+]);
+
+export type WidgetChatEvent = z.infer<typeof widgetChatEvent>;

@@ -262,10 +262,28 @@ describe('the widget surface (P2-10)', () => {
     expect(buildDependencies({ ...config, readUsage }).widget.readUsage).toBe(readUsage);
   });
 
-  it('falls back to an untouched month when there is nothing to read', async () => {
+  it('reads the month from the ledger by default, not from a constant (P2-36)', async () => {
+    /*
+     * It used to answer nought for every key, which meant §2.3's banner told
+     * every seller `ok` however much they had spent. It now asks
+     * `usage_events` for the tenant the key names — so a key naming something
+     * that is not a tenant id is a bug, and is refused rather than answered.
+     */
     await expect(
       buildDependencies(config).widget.readUsage({
-        key: 'tenant:t:month',
+        key: 'tenant:not-a-uuid:month',
+        limit: 100,
+        window: 'month',
+      }),
+    ).rejects.toThrow(/tenant/i);
+  });
+
+  it('answers nought for a key that names no month to read', async () => {
+    // The banner is the only caller, and a banner is not worth failing a
+    // request over. The gate never takes this path: it builds the key itself.
+    await expect(
+      buildDependencies(config).widget.readUsage({
+        key: 'ip:bucket:unresolved',
         limit: 100,
         window: 'month',
       }),

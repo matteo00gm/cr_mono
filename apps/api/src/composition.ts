@@ -2,13 +2,16 @@ import {
   betterAuthRateLimitStorage,
   chooseTransport,
   createAuth,
+  assertQueryProviderMatchesIndex,
   createSendEmail,
   logTransport,
   resendTransport,
+  type IndexedEmbedding,
   type MembershipReader,
   type ResetPasswordEmail,
   type SuppressionCheck,
 } from '@catalogorosso/core';
+import { bedrockNovaProvider, titanEmbeddingProvider } from '@catalogorosso/llm';
 import { memoryRateLimiter, type MonthlyCheck, type RateLimiter } from '@catalogorosso/security';
 import { loadWidgetTokenKeys, type WidgetTokenKeys } from '@catalogorosso/security/tokens';
 import {
@@ -22,6 +25,9 @@ import {
 
 import { createMembersPort, type MembersPort } from './members.js';
 import { createProductsPort, type ProductsPort } from './products.js';
+import { createChatPort, type ChatPort } from './chat.js';
+import { createQuotaPort, type QuotaPort } from './quota.js';
+import { createRagPort, type RagPort } from './rag.js';
 import { refusalRecorders } from './security-events.js';
 import type { WidgetDependencies } from './surfaces/widget.js';
 import { createWebhooksPort, type WebhooksPort } from './webhooks.js';
@@ -166,6 +172,12 @@ export interface Dependencies {
   readonly members: MembersPort;
   /** The catalogue (P1-02). */
   readonly products: ProductsPort;
+  /** The retrieval sandbox (P2-37). */
+  readonly rag: RagPort;
+  /** The monthly plan cap (P2-36). Exposed so P2-29's route can gate on it. */
+  readonly quota: QuotaPort;
+  /** Answers one question (P2-29). */
+  readonly chat: ChatPort;
   /** Records provider delivery events (P0-64b). */
   readonly webhooks: WebhooksPort;
   /** Passed through to `createApp`; absent means the endpoint refuses. */
@@ -191,8 +203,58 @@ const suppressionForUser = (userId: string): SuppressionCheck => ({
   isSuppressed: (address) => withUser(userId, (tx) => isSuppressed(tx, address)),
 });
 
+/**
+ * What the catalogue's vectors were produced by (P2-17).
+ *
+ * **Written out rather than imported from the adapter**, which looks like the
+ * duplication P0-42 forbids and is the opposite of it. These two values
+ * describe rows already in `product_embeddings`; the adapter describes what the
+ * next call will produce. Taking both from the same constant would compare a
+ * value with itself, and the check exists precisely for the deployment that
+ * changes one of them — P1-47's bake-off is a configuration change away from
+ * being that deployment.
+ *
+ * Changing the indexed model means re-embedding every wine under a new
+ * `version` (P1-49) and moving this line with it.
+ */
+const INDEXED_EMBEDDING: IndexedEmbedding = {
+  model: 'amazon.titan-embed-text-v2:0',
+  dim: 1024,
+};
+
+/**
+ * The two tiers a question can be answered by (§5.3, P2-28).
+ *
+ * **Written out rather than read from the environment.** Which model answers is
+ * a decision with a price attached, and a deployment that could change it from
+ * a variable is a deployment that could change the bill without a commit.
+ * P1-47's bake-off moves these lines; it does not set a variable.
+ */
+const CHAT_MODELS = {
+  base: 'amazon.nova-lite-v1:0',
+  strong: 'amazon.nova-2-lite-v1:0',
+} as const;
+
 export const buildDependencies = (config: RuntimeConfig): Dependencies => {
   const log = logTransport(config.log);
+  const quota = createQuotaPort();
+
+  /*
+   * Answering a question (P2-29). The providers are factories rather than
+   * instances because tokens are reported per construction (P1-42's `onUsage`)
+   * and the bill is per turn — the SDK client is the expensive part, and
+   * `bedrockNovaProvider` builds one per call unless given one, so this is the
+   * place that keeps that cost in check.
+   */
+  const chat = createChatPort({
+    embeddings: assertQueryProviderMatchesIndex(titanEmbeddingProvider(), INDEXED_EMBEDDING),
+    providers: {
+      base: (onUsage) => bedrockNovaProvider({ modelId: CHAT_MODELS.base, onUsage }),
+      strong: (onUsage) => bedrockNovaProvider({ modelId: CHAT_MODELS.strong, onUsage }),
+    },
+    models: CHAT_MODELS,
+    quota,
+  });
 
   /*
    * The provider is built only when there is a key. Without one the log
@@ -292,6 +354,27 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
      */
     products: createProductsPort(),
 
+    /** The monthly plan cap (P2-36), read from `usage_events` rather than a bucket. */
+    quota,
+
+    /*
+     * Answering a question (P2-29). The providers are factories rather than
+     * instances because tokens are reported per construction (P1-42's
+     * `onUsage`), and the bill is per turn — the SDK client is the expensive
+     * part and it is built once, here.
+     */
+    chat,
+
+    /*
+     * The retrieval sandbox (P2-37), and the first place P2-17's startup check
+     * is a real one. `assertQueryProviderMatchesIndex` throws here rather than
+     * on a request, so a provider that cannot read this catalogue's vectors
+     * fails the deployment and the previous version keeps answering.
+     */
+    rag: createRagPort({
+      provider: assertQueryProviderMatchesIndex(titanEmbeddingProvider(), INDEXED_EMBEDDING),
+    }),
+
     /*
      * Built unconditionally, unlike the secret beside it. The port is what
      * records a bounce once one is verified, and there is no configuration that
@@ -311,7 +394,13 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
     widget: {
       resolve: resolveTenantByKeyAndOrigin,
       limiter: config.rateLimiter ?? memoryRateLimiter(),
-      readUsage: config.readUsage ?? (() => Promise.resolve(0)),
+      /*
+       * The month, read from the ledger (P2-36). Before this it was a hardcoded
+       * nought, so §2.3's banner told every seller `ok` however much they had
+       * spent — the cost control that makes the plan cap meaningful reporting
+       * that nothing had been used.
+       */
+      readUsage: config.readUsage ?? quota.readUsage,
       ipSecret: config.authSecret,
       environment: config.stage === 'unknown' ? 'development' : 'production',
       ...(config.widgetTokenKeys === undefined
@@ -324,6 +413,11 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
        * a database refusing writes cannot become a way to refuse service.
        */
       onRejected: refusalRecorders(insertSecurityEvent).onRejected,
+
+      /** A refused *token* (P2-16), which is a different fact from a refused origin. */
+      onTokenRejected: refusalRecorders(insertSecurityEvent).onTokenRejected,
+
+      chat,
     },
 
     ...(config.resendWebhookSecret === undefined

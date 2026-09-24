@@ -19,7 +19,7 @@ import {
   type EmbeddableRow,
 } from '@catalogorosso/db';
 
-import { titanEmbeddingProvider, TITAN_PROVENANCE } from './providers/titan.js';
+import { titanEmbeddingProvider, TITAN_PROVENANCE } from '@catalogorosso/llm';
 import type { EmbeddingMessage } from './outbox-poller.js';
 
 /**

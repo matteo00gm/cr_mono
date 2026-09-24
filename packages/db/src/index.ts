@@ -327,6 +327,7 @@ export {
   isSortField,
   listProducts,
   MAX_LIMIT,
+  productsByIds,
   SORTABLE,
   STOCK_STATUSES,
   type EmbeddingState,
@@ -408,6 +409,31 @@ export {
 } from './embeddings.js';
 
 /**
+ * The usage ledger (P2-31, P0-30).
+ *
+ * The statements only: the price table, the cost and the period are pure and
+ * live in `packages/core/src/usage.ts`. `recordUsage` takes the caller's
+ * transaction so the bill and P2-30's turn are one write.
+ */
+export { countUsage, recordUsage, type UsageToRecord } from './usage.js';
+
+/**
+ * Recording a turn (P2-30).
+ *
+ * Here rather than in `packages/core/src/conversations.ts` where the row puts
+ * it, for the reason every statement module is here: queries live where the
+ * driver is (P0-09). It takes the caller's transaction so the turn and P2-31's
+ * `usage_events` row are one write.
+ */
+export {
+  readConversation,
+  recordTurn,
+  type RecordedMessage,
+  type RecordedTurn,
+  type TurnToRecord,
+} from './conversations.js';
+
+/**
  * Retrieval against the catalogue (P2-18, §4.4).
  *
  * Here rather than in `packages/core/src/rag/` where the row puts it, for the
@@ -417,10 +443,15 @@ export {
  * a whole retrieval is one `withTenant` on one connection.
  */
 export {
+  fusedSearch,
+  FUSED_CANDIDATE_LIMIT,
   lexicalSearch,
   LEXICAL_CANDIDATE_LIMIT,
+  RRF_K,
   vectorSearch,
   VECTOR_CANDIDATE_LIMIT,
+  type FusedCandidate,
+  type FusedSearchRequest,
   type LexicalCandidate,
   type LexicalSearchRequest,
   type VectorCandidate,

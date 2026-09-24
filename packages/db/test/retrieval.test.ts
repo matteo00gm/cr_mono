@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  fusedSearch,
   lexicalSearch,
   LEXICAL_CANDIDATE_LIMIT,
+  RRF_K,
   vectorSearch,
   VECTOR_CANDIDATE_LIMIT,
 } from '../src/retrieval.js';
@@ -133,7 +135,7 @@ describe('the lexical search statement', () => {
      * `websearch_to_tsquery` reads the same input the way a search box does and
      * never throws.
      */
-    const { statements, tx } = capturing([{ product_id: 'p1', rank: 1 }]);
+    const { statements, tx } = capturing([{ product_id: 'p1', rank_score: 1 }]);
 
     await lexicalSearch(tx, { query });
 
@@ -145,7 +147,7 @@ describe('the lexical search statement', () => {
     // P1-07 left `grape_varieties` out of `search_tsv`: a wine made from
     // Nebbiolo does not say so in its description, and the row asks lexical
     // search to find by grape.
-    const { statements, tx } = capturing([{ product_id: 'p1', rank: 1 }]);
+    const { statements, tx } = capturing([{ product_id: 'p1', rank_score: 1 }]);
 
     await lexicalSearch(tx, { query });
 
@@ -154,7 +156,7 @@ describe('the lexical search statement', () => {
   });
 
   it('writes the tenant predicate out and offers only wines still listed', async () => {
-    const { statements, tx } = capturing([{ product_id: 'p1', rank: 1 }]);
+    const { statements, tx } = capturing([{ product_id: 'p1', rank_score: 1 }]);
 
     await lexicalSearch(tx, { query });
 
@@ -170,8 +172,8 @@ describe('the lexical search statement', () => {
      * would add wines that merely look like the words. A guess is better than
      * nothing, and worse than an answer.
      */
-    const matched = capturing([{ product_id: 'p1', rank: 2 }]);
-    const nothing = capturing([], [{ product_id: 'p2', rank: 0.4 }]);
+    const matched = capturing([{ product_id: 'p1', rank_score: 2 }]);
+    const nothing = capturing([], [{ product_id: 'p2', rank_score: 0.4 }]);
 
     const found = await lexicalSearch(matched.tx, { query });
     const guessed = await lexicalSearch(nothing.tx, { query });
@@ -185,7 +187,7 @@ describe('the lexical search statement', () => {
   });
 
   it('reads a rank back as a number, whatever the driver decoded it as', async () => {
-    const { tx } = capturing([{ product_id: 'p1', rank: '0.75' }]);
+    const { tx } = capturing([{ product_id: 'p1', rank_score: '0.75' }]);
 
     await expect(lexicalSearch(tx, { query })).resolves.toEqual([
       { productId: 'p1', rank: 0.75, matched: 'text' },
@@ -194,5 +196,98 @@ describe('the lexical search statement', () => {
 
   it('offers forty wines by default, as the vector branch does', () => {
     expect(LEXICAL_CANDIDATE_LIMIT).toBe(40);
+  });
+});
+
+describe('the fused statement', () => {
+  const query = 'Barolo Giacomo Conterno';
+
+  it('is one statement, which is the regression the correction exists to prevent', async () => {
+    /*
+     * **Counted here because only a unit test can count it.** Two queries under
+     * `Promise.all` would look parallel and serialise on the one connection;
+     * made genuinely parallel they would need two transactions per chat request
+     * against a pool of one or two, and at a pool of one they deadlock. The
+     * integration suite proves a retrieval completes on one connection; this
+     * proves there is only ever one statement to complete.
+     */
+    const { statements, tx } = capturing([]);
+
+    await fusedSearch(tx, { vector, query });
+
+    expect(statements).toHaveLength(1);
+  });
+
+  it('scores by reciprocal rank, with the constant bound rather than written in', async () => {
+    const { statements, tx } = capturing([]);
+
+    await fusedSearch(tx, { vector, query });
+
+    const statement = text(statements[0]);
+
+    expect(statement).toContain('coalesce(1.0 / (');
+    // Bound, so P1-46 can sweep it without editing SQL.
+    expect(statement).not.toContain('60');
+    expect(RRF_K).toBe(60);
+  });
+
+  it('joins the branches so a wine either one found keeps its place', async () => {
+    const { statements, tx } = capturing([]);
+
+    await fusedSearch(tx, { vector, query });
+
+    expect(text(statements[0])).toContain('full outer join lex using (product_id)');
+  });
+
+  it('offers the trigram fallback only when the words matched nothing', async () => {
+    const { statements, tx } = capturing([]);
+
+    await fusedSearch(tx, { vector, query });
+
+    expect(text(statements[0])).toContain('not exists (select 1 from words)');
+  });
+
+  it('reads ranks back as numbers, and a branch that missed as null', async () => {
+    const { tx } = capturing([
+      {
+        product_id: 'p1',
+        vector_rank: '1',
+        lexical_rank: null,
+        stock_status: 'IN_STOCK',
+        // `integer` arrives as a number, `bigint` and `numeric` as strings.
+        price_cents: 2400,
+        score: '0.0163',
+      },
+    ]);
+
+    await expect(fusedSearch(tx, { vector, query })).resolves.toEqual([
+      {
+        productId: 'p1',
+        score: 0.0163,
+        vectorRank: 1,
+        lexicalRank: null,
+        stockStatus: 'IN_STOCK',
+        priceCents: 2400,
+      },
+    ]);
+  });
+
+  it('carries what P2-21 filters on, from the tenant the setting names', async () => {
+    /*
+     * The join is scoped explicitly as well as by RLS. A candidate is only ever
+     * a product one of the branches found, so the join cannot widen the set —
+     * but a predicate written once in each branch and nowhere here is how the
+     * one place that lacks it becomes the place a wine crosses a tenant.
+     */
+    const { statements, tx } = capturing([]);
+
+    await fusedSearch(tx, { vector, query });
+
+    const statement = text(statements[0]);
+
+    expect(statement).toContain('p.stock_status');
+    expect(statement).toContain('p.price_cents');
+    expect(statement).toContain('join products p on p.id = product_id and p.tenant_id =');
+    expect(statement).toContain("current_setting('app.tenant_id'");
   });
 });

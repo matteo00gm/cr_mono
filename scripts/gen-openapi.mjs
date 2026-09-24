@@ -41,6 +41,7 @@ const { WIDGET_ROUTES } = await import('../apps/api/dist/surfaces/widget.js');
 const { registeredRoutes, routeKey } = await import('../apps/api/dist/middleware/capability.js');
 const { WIDGET_REFUSED } = await import('../apps/api/dist/middleware/cors.js');
 const { WIDGET_TOKEN_REFUSED } = await import('../apps/api/dist/widget-token.js');
+const { CHAT_BODY_EXPECTED } = await import('../apps/api/dist/surfaces/widget.js');
 
 /** A stand-in: constructing the real Better Auth would open a connection. */
 const stubAuth = {
@@ -176,8 +177,17 @@ const WIDGET_ERRORS = {
     'forbidden',
     WIDGET_REFUSED,
   ),
+  422: widgetError(
+    'The body did not match what the route accepts. Chat is the only widget route with one, ' +
+      'and it reads nothing but the message: the tenant, the Origin and the session all come ' +
+      'from the key, the Origin and the token.',
+    'invalid_request',
+    CHAT_BODY_EXPECTED,
+  ),
   429: widgetError(
-    'A rate limit refused the request. `Retry-After` says when to try again.',
+    'A rate limit or the month refused the request. `Retry-After` says when to try again; a ' +
+      'month says nothing about the plan, which is the seller business rather than the ' +
+      'visitor.',
     'rate_limited',
     'Too many requests. Try again shortly.',
   ),

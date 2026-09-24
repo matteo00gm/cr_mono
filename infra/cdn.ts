@@ -1,6 +1,6 @@
 /// <reference path="../.sst/platform/config.d.ts" />
 
-import { api } from './api';
+import { api, chat } from './api';
 import { originSecret } from './config';
 import { checkedBehaviourOrder } from './behaviour-order';
 import { SPA_REWRITE_CODE, VIEWER_IP_CODE } from './edge-functions';
@@ -151,6 +151,19 @@ const viewerIp = cloudfrontFunction(
 const apiOriginId = 'api-lambda';
 const apiOriginDomain = api.url.apply((url) => new URL(url).hostname);
 
+/**
+ * The streaming origin (P2-29), which P0-17a said this behaviour would need.
+ *
+ * **A separate origin because `originReadTimeout` is an origin property.** A
+ * behaviour cannot raise it, so `/v1/widget/chat` could not have a longer
+ * ceiling than every other API path while they shared one — and a generated
+ * answer legitimately takes longer than a JSON read does. It is a separate
+ * Function URL anyway, the `RESPONSE_STREAM` function being a separate
+ * function (§5.1).
+ */
+const chatOriginId = 'chat-lambda';
+const chatOriginDomain = chat.url.apply((url) => new URL(url).hostname);
+
 /** Shared by both API behaviours; they differ only in caching and timeout. */
 const apiBehaviourBase = {
   targetOriginId: apiOriginId,
@@ -190,6 +203,30 @@ export const distribution = new aws.cloudfront.Distribution('Cdn', {
       originId: 'dashboard-s3',
       domainName: dashboardBucket.bucketRegionalDomainName,
       originAccessControlId: dashboardOac.id,
+    },
+    {
+      originId: chatOriginId,
+      domainName: chatOriginDomain,
+
+      /* The same origin secret: the API refuses any request without it (A2). */
+      customHeaders: [{ name: 'x-origin-secret', value: originSecret }],
+
+      customOriginConfig: {
+        httpPort: 80,
+        httpsPort: 443,
+        originProtocolPolicy: 'https-only',
+        originSslProtocols: ['TLSv1.2'],
+
+        /*
+         * Sixty seconds, the ceiling without a quota increase, and the figure
+         * the streaming function's own timeout is set to. They are deliberately
+         * equal: a handler allowed to run longer than the edge will wait would
+         * have its answer cut off by CloudFront as a 504 arriving mid-stream,
+         * which a client cannot tell from a network fault.
+         */
+        originReadTimeout: 60,
+        originKeepaliveTimeout: 60,
+      },
     },
     {
       originId: apiOriginId,
@@ -265,6 +302,9 @@ export const distribution = new aws.cloudfront.Distribution('Cdn', {
        */
       ...apiBehaviourBase,
       pathPattern: '/v1/widget/chat',
+
+      /* The streaming function, and the reason this origin exists (P2-29). */
+      targetOriginId: chatOriginId,
 
       // Compression also buffers: gzip needs the body to compress it.
       compress: false,
