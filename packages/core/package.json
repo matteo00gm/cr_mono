@@ -28,6 +28,10 @@
     "./variant-id": {
       "types": "./dist/shopify/variant-id.d.ts",
       "default": "./dist/shopify/variant-id.js"
+    },
+    "./contrast": {
+      "types": "./dist/a11y/contrast.d.ts",
+      "default": "./dist/a11y/contrast.js"
     }
   },
   "files": [

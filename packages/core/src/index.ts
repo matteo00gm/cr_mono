@@ -52,3 +52,20 @@ export {
  * prevents happens on a visitor's screen and is invisible in the console.
  */
 export { readVariantId, VARIANT_ID_EXPECTED, type VariantId } from './shopify/variant-id.js';
+
+/**
+ * Colour contrast (P3-15).
+ *
+ * Computed in one place because two clients need it: the widget picks a
+ * readable foreground for a tenant's colour, and the console warns at
+ * configuration time — and those two must not disagree.
+ */
+export {
+  AA_LARGE,
+  AA_NORMAL,
+  channelsOf,
+  contrastRatio,
+  luminanceOf,
+  meetsAA,
+  readableOn,
+} from './a11y/contrast.js';
