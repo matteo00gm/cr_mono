@@ -1343,8 +1343,8 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P3-01 | Loader `w.js` | custom element, Shadow DOM, launcher only | P2-10 |
 | ✅ P3-02 | CI: loader size budget | ≤ 5 KB gz, build fails over | P3-01 |
 | ✅ P3-03 | Config fetch + DISABLED short-circuit | no session, no bundle, no model call | P3-01 |
-| P3-04 | Lazy-load main bundle on click | | P3-03 |
-| P3-05 | CI: widget size budget | ≤ 60 KB gz | P3-04 |
+| ✅ P3-04 | Lazy-load main bundle on click | | P3-03 |
+| ✅ P3-05 | CI: widget size budget | ≤ 60 KB gz | P3-04 |
 | P3-06 | Chat UI + SSE consumption | streaming into an ARIA live region | P2-29,P3-04 |
 | P3-07 | Five states | ACTIVE / DISABLED / QUOTA / RATE_LIMITED / ERROR | P3-06 |
 | P3-08 | 🔒 Product card component | **text nodes only**, no `innerHTML`, server-sourced fields | P3-06 |
@@ -5918,6 +5918,15 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 
 **Files.** `loader.ts` change, tests. **~70 lines.**
 
+**As built (2026-09-23).** `src/lazy.ts` and `src/main.ts`; the loader itself keeps no reference to the widget at all.
+
+- **The *promise* is cached, not the module.** A second click arriving before the first request resolves finds the same promise and awaits it — which is the common case on a slow connection, and exactly the one a resolved-module cache misses.
+- **A failed load is not cached** *(addition)*. A cached rejection makes every later click fail without a request, so a visitor who reconnects still cannot open the widget and nothing says why. The next click is a fresh attempt.
+- **`aria-busy` while the bundle arrives**, because a button that does nothing for three hundred milliseconds is a button a visitor presses again.
+- **The launcher is wired by a callback, not an import** *(decision)*. `loader.ts` takes an `onPress`, so it holds no reference — not even a type-only one — to the widget bundle. A type import is erased by a bundler today and is one refactor from being a real edge.
+- **The preload is a nicety and is written as one**: idle-scheduled, failure swallowed, and never the thing that makes the widget work — on a browser with neither `requestIdleCallback` nor the preload, the click still opens the panel.
+- **`main.ts` publishes as `loader.js`** and is the only module with side effects, so every other piece is testable without a page. Its steps are injectable, which is how §1.2's *order* is asserted rather than assumed.
+
 ---
 
 ### P3-05 · CI: widget bundle budget
@@ -5925,6 +5934,12 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 **How.** Same mechanism as P3-02 with the ≤60 KB gzipped ceiling from §1.1. Also assert the **loader chunk does not contain** the Preact runtime — that check catches the most likely regression, a refactor that collapses the two entries.
 
 **Files.** `.size-limit.json`. **~25 lines.**
+
+**As built (2026-09-23).** The P3-02 script gains the 60 KB ceiling and a check the row asks for in a stronger form.
+
+- **The row wants "the loader chunk does not contain the Preact runtime".** What is checked instead is that **`loader.js` has no static import at all**, which catches that and more — including the case that actually happened here.
+- **⚠ The first version of this check looked for marker strings inside `loader.js`, and passed on a real collapse.** Turning the dynamic import into a static one does not move the widget *into* the loader: Rollup emits a **shared chunk** and the loader imports it at the top. Both budgets still pass, because the shared chunk is charged to neither — while every visitor downloads the widget before the page is interactive. Proved by collapsing the entries and watching the marker check report success.
+- **Both directions are tested**: a loader with a static import fails, one with a dynamic import passes, and `import.meta` does not trip it.
 
 ---
 

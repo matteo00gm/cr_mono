@@ -110,6 +110,40 @@ export interface Mounted {
 }
 
 /**
+ * What a launcher does when it is pressed (P3-04).
+ *
+ * **Handed in rather than imported**, so this file keeps no reference to the
+ * widget bundle at all. An import here — even a type-only one that a bundler
+ * usually erases — is one refactor away from becoming a real edge, and the
+ * whole promise of §1.1 is that the two entries share no chunk.
+ */
+export interface LauncherBehaviour {
+  readonly onPress: () => void;
+  readonly onHover?: (() => void) | undefined;
+}
+
+/**
+ * Wires a launcher to what should happen when somebody uses it.
+ *
+ * `pointerenter` is a hint and `click` is the request. The hint is separate
+ * because a visitor who hovers has not asked for anything, and P3-04's preload
+ * must never be what makes the widget work.
+ */
+export const attach = (launcher: HTMLButtonElement, behaviour: LauncherBehaviour): void => {
+  launcher.addEventListener('click', () => {
+    behaviour.onPress();
+  });
+
+  if (behaviour.onHover !== undefined) {
+    const hover = behaviour.onHover;
+
+    launcher.addEventListener('pointerenter', () => {
+      hover();
+    });
+  }
+};
+
+/**
  * Creates the host element and its launcher.
  *
  * **An *open* shadow root.** Closed buys no security worth having — the page

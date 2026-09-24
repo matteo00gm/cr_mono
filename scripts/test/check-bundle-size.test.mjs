@@ -31,6 +31,9 @@ afterAll(() => {
 
 let made = 0;
 
+/** A real newline, kept out of the literals below so nothing has to escape one. */
+const NEWLINE = String.fromCharCode(10);
+
 /**
  * A directory holding a `loader.js` of roughly the gzipped size asked for.
  *
@@ -38,7 +41,7 @@ let made = 0;
  * gzips to almost nothing, and a fixture built that way could not be made to
  * exceed any budget worth setting.
  */
-const bundleOf = (gzippedBytes) => {
+const bundleOf = (gzippedBytes, loaderPrefix = '') => {
   const dir = join(scratch, `case-${String((made += 1))}`);
 
   mkdirSync(dir, { recursive: true });
@@ -52,7 +55,9 @@ const bundleOf = (gzippedBytes) => {
     ]);
   }
 
-  writeFileSync(join(dir, 'loader.js'), body);
+  writeFileSync(join(dir, 'loader.js'), Buffer.concat([Buffer.from(loaderPrefix), body]));
+  /* Every budgeted bundle must exist, or the gate fails for that reason instead. */
+  writeFileSync(join(dir, 'widget.js'), 'export const mountPanel = () => {};');
 
   return dir;
 };
@@ -66,6 +71,37 @@ describe('a bundle inside its budget', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('loader.js');
     expect(result.stdout).toContain('pass');
+  });
+});
+
+describe('the widget bundle', () => {
+  it('is budgeted too, and its ceiling is the larger one', () => {
+    /*
+     * Twelve times the loader's, and the ratio is the argument for the split:
+     * this is paid once by the visitors who open the widget, and the loader is
+     * paid by everybody else.
+     */
+    const dir = join(scratch, 'widget-over');
+
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'loader.js'), 'const a=1;');
+
+    let body = Buffer.alloc(0);
+
+    while (gzipSync(body, { level: 9 }).length < 61 * 1024) {
+      body = Buffer.concat([
+        body,
+        Buffer.from(Array.from({ length: 4096 }, () => Math.random() * 256)),
+      ]);
+    }
+
+    writeFileSync(join(dir, 'widget.js'), body);
+
+    const result = check(dir);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('widget.js');
+    expect(result.stderr).toContain('60 KB budget');
   });
 });
 
@@ -114,6 +150,36 @@ describe('no build at all', () => {
   });
 });
 
+describe('the two entries collapsing into one', () => {
+  it('fails on a loader with a static import, though both budgets pass', () => {
+    /*
+     * **The regression the budgets cannot see, and the reason this check is
+     * not a size threshold.** A refactor that turns the dynamic import into a
+     * static one makes Rollup emit a shared chunk, which the loader then
+     * imports at the top: the loader is still small, the widget entry is still
+     * small, and the shared chunk carrying the widget is charged to neither —
+     * while every visitor downloads it before the page is interactive.
+     *
+     * The first version of this check looked for marker strings inside
+     * `loader.js` and passed, because the code had moved to a third file.
+     */
+    const result = check(bundleOf(1024, 'import{a}from"./panel.js";' + NEWLINE));
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('static import');
+  });
+
+  it('allows the dynamic import that is the whole design', () => {
+    const result = check(bundleOf(1024, 'const m=()=>import("./widget.js");' + NEWLINE));
+
+    expect(result.status).toBe(0);
+  });
+
+  it('is not tripped by import.meta', () => {
+    expect(check(bundleOf(1024, 'const u=import.meta.url;' + NEWLINE)).status).toBe(0);
+  });
+});
+
 describe('what it measures', () => {
   it('measures gzipped bytes, not raw', () => {
     /*
@@ -127,6 +193,7 @@ describe('what it measures', () => {
     mkdirSync(dir, { recursive: true });
     // Repeated bytes: far over the budget raw, far under it gzipped.
     writeFileSync(join(dir, 'loader.js'), 'x'.repeat(raw * 4));
+    writeFileSync(join(dir, 'widget.js'), 'export const mountPanel = () => {};');
 
     expect(check(dir).status).toBe(0);
   });
