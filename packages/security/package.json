@@ -16,6 +16,10 @@
     "./tokens": {
       "types": "./dist/tokens/keys.d.ts",
       "default": "./dist/tokens/keys.js"
+    },
+    "./net": {
+      "types": "./dist/net/index.d.ts",
+      "default": "./dist/net/index.js"
     }
   },
   "files": [

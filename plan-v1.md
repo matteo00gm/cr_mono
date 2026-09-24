@@ -1370,7 +1370,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 |---|---|---|---|
 | P4-01 | 🔒 Domain add endpoint | normalize, PSL-validate, reduce to registrable domain | P2-05 |
 | P4-02 | 🔒 DNS TXT verification | `_somm-verify.<domain>`, single-use nonce | P4-01 |
-| P4-03a | 🔒 `guardedFetch` (SSRF-safe agent) | validates the address **at socket connect**, defeating DNS rebinding; reused by every outbound fetch | P0-54 |
+| ✅ P4-03a | 🔒 `guardedFetch` (SSRF-safe agent) | validates the address **at socket connect**, defeating DNS rebinding; reused by every outbound fetch | P0-54 |
 | P4-03 | 🔒 Well-known file verification | `/.well-known/somm-verify-<nonce>.txt` via `guardedFetch` | P4-03a |
 | P4-04 | 🔒 Verification token expiry | 7 days, single-use, rate-limited retries | P4-02 |
 | P4-05 | 🔒 Apex + www dual entry | two visible removable entries; probe which responds | P4-02 |
@@ -6333,6 +6333,18 @@ Then the rest: **redirects disabled entirely** (a 302 to an internal address is 
 **Tests.** Valid file verifies. A 302 to any host is refused. A host resolving to `127.0.0.1`, `169.254.169.254`, `10.0.0.1`, `::1`, or `::ffff:169.254.169.254` is refused. **A rebinding simulation** — a stub `lookup` returning a public address on first call and a private one on second — is refused, proving the check happens at connect time rather than before it. A multi-record response mixing public and private addresses is refused. An oversized body fails without buffering it all. A slow host times out.
 
 **Files.** `packages/security/src/net/guarded-fetch.ts`, `verify-wellknown.ts`, tests. **~170 lines.** *Split: `guardedFetch` and its address-validation table tests are their own PR (`P4-03a`) — it is reusable and deserves isolated 100%-branch coverage.*
+
+**As built (P4-03a).** The split landed on its own; `verify-wellknown.ts` is still P4-03's.
+
+- **It is on a subpath, `@catalogorosso/security/net`, not the package barrel** *(addition; the Files line implied the barrel)*. The barrel is bundled into the dashboard, and a browser build that has to resolve `node:dns` fails — so the import that breaks it would have arrived in whichever PR next touched the dashboard rather than in this one. `./tokens` already sets the precedent. The package description in `CLAUDE.md`, `AGENTS.md` and the barrel said "no HTTP"; all three now say what is actually true, because a rule that the code contradicts teaches the next reader to ignore the rules.
+- **A response with no `statusCode` is refused as `network`** *(addition)*. `statusCode` is optional on an `IncomingMessage`, and the obvious `?? 0` turns a response nothing can be decided from into one a caller reads as a non-2xx — or, one refactor later, as a 200.
+- **`systemResolveAll` normalises Node's missing answer** *(defect found while writing the test that covers it)*. `dns.lookup` calls back with **no addresses argument at all** on failure, whatever the types say, so destructuring it threw a `TypeError` inside a callback nothing was there to catch. The first version of this row shipped that bug; the test that resolves `a..b` — an empty label, which `getaddrinfo` rejects locally in milliseconds and without a network — is what found it and is what keeps it fixed.
+- **The port check compares against `''` alone** *(deviation from the obvious form)*. `new URL()` drops a scheme's default port, so `https://host:443/` never arrives here as `'443'` and the second comparison every implementation writes is unreachable. The mutation run is what proved it: the mutant that deleted it survived.
+- **The 5 s timeout and the 1 KB cap are exported constants**, asserted against the row rather than left as literals a later edit could quietly widen.
+
+**Verified.** 123 cases across the two files, `packages/security` at 100% lines, statements, functions and branches — the bar this package is held to. A mutation run of 47 mutants killed 47, after three survivors were each fixed rather than explained away: an octet above 255 outside the leading position was reachable (the leading-position case was caught by the multicast rule and hid it), a resolver that reported an error *and* returned records was trusted, and the dead port comparison above.
+
+**What the tests are actually for.** Every request case injects the client, so the guarded `lookup` is never invoked by them — which means a `guardedFetch` that simply forgot to wire the lookup in would pass all of them. Two cases assert the options the client is handed: that `lookup` is there, and that driving it with a private answer refuses. Those are what make the rest mean anything, and the mutant that deleted the `lookup:` line is what showed they were missing.
 
 ---
 
