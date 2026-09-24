@@ -9,10 +9,12 @@
     "build:bundle": "vite build"
   },
   "devDependencies": {
+    "@testing-library/preact": "^3.2.4",
     "vite": "^8.2.2"
   },
   "type": "module",
   "dependencies": {
-    "@catalogorosso/api-client": "workspace:*"
+    "@catalogorosso/api-client": "workspace:*",
+    "preact": "^10.29.8"
   }
 }

@@ -158,7 +158,13 @@ importers:
       '@catalogorosso/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
+      preact:
+        specifier: ^10.29.8
+        version: 10.29.8
     devDependencies:
+      '@testing-library/preact':
+        specifier: ^3.2.4
+        version: 3.2.4(preact@10.29.8)
       vite:
         specifier: ^8.2.2
         version: 8.2.2(@types/node@26.4.0)(esbuild@0.28.2)(jiti@2.6.1)(tsx@4.23.13)(yaml@2.9.0)

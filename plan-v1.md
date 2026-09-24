@@ -1345,7 +1345,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P3-03 | Config fetch + DISABLED short-circuit | no session, no bundle, no model call | P3-01 |
 | ✅ P3-04 | Lazy-load main bundle on click | | P3-03 |
 | ✅ P3-05 | CI: widget size budget | ≤ 60 KB gz | P3-04 |
-| P3-06 | Chat UI + SSE consumption | streaming into an ARIA live region | P2-29,P3-04 |
+| ✅ P3-06 | Chat UI + SSE consumption | streaming into an ARIA live region | P2-29,P3-04 |
 | P3-07 | Five states | ACTIVE / DISABLED / QUOTA / RATE_LIMITED / ERROR | P3-06 |
 | P3-08 | 🔒 Product card component | **text nodes only**, no `innerHTML`, server-sourced fields | P3-06 |
 | P3-09 | 🔒 XSS test suite | markup in every tenant- and model-derived field | P3-08 |
@@ -1355,7 +1355,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P3-13 | Cart count + host checkout nav | configurable `cartUrl` | P3-11 |
 | P3-14 | i18n IT/EN | | P3-07 |
 | P3-15 | a11y pass | focus trap, keyboard, reduced motion, AA contrast check | P3-07 |
-| P3-16 | 🔒 Token in memory, anon id in sessionStorage | no cookies, no `localStorage` | P3-06 |
+| ✅ P3-16 | 🔒 Token in memory, anon id in sessionStorage | no cookies, no `localStorage` | P3-06 |
 | P3-17 | `packages/testing`: fake host pages | two origins (4001 verified / 4002 not), fake Shopify cart | P0-44 |
 | P3-18 | ⛔ 🔒 Cross-origin Playwright suite | real browser proves CORS, not just headers | P3-17,P2-09 |
 | P3-19 | Visual regression per state per locale | | P3-14 |
@@ -5951,6 +5951,21 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 
 **Files.** `apps/widget/src/components/Chat.tsx`, `sse.ts`, tests. **~180 lines.** *Split: SSE parser separately from the component.*
 
+**As built (2026-09-23).** Shipped with **P3-16**, because a chat with no session token is a component nobody can mount, and "unmount aborts the fetch" is an assertion only when something mounts it. Four modules rather than two, split along the lines the row suggests.
+
+- **`sse.ts` is an incremental parser, and the cases that matter are the boundaries.** A network read splits wherever it likes — mid-line, mid-field, mid-character — so the decoder is streaming (`stream: true`) and the buffer keeps whatever has not yet ended in a blank line. A record split across two reads, and `perché` split between the two bytes of its accent, both have tests: without them the parser works perfectly against a fast local server and fails intermittently for visitors on slow connections.
+- **An unrecognised event is dropped, not rendered** *(decision)*. Server and widget are built from one schema (P0-63), so an event neither knows is a version skew — an older widget against a newer API — and guessing at it would render a shape nobody designed.
+- **A last record the server did not terminate is still read.** The route always sends `done` last and always terminates it; a proxy that trimmed the trailing newline would otherwise lose the only event that says the answer finished.
+- **`conversation.ts` is a pure reducer** *(addition)*. What a visitor has read is a value, so the row's own promise — a failure mid-stream shows a retry *and preserves history* — is a property with plain assertions behind it rather than a rendering to inspect. Five mutants aimed at exactly that promise; all killed.
+- **A retry clears the failed answer and nothing above it** *(decision the row does not settle)*. The model starts over, so keeping the half-written reply would show a visitor the first paragraph twice. The visitor's question is not repeated on screen either: the retry re-sends it, it does not re-ask it.
+- **A stream that simply stops is a third failure, and it needed inventing.** No `done`, no `error` — the connection went away mid-answer. Untreated, the composer stays disabled and the panel is indistinguishable from a slow model, forever. It reads as `network`, which is the one failure whose honest advice is "try again now".
+- **A `429` is *not* reported as a spent month** *(correction to the obvious mapping)*. The monthly cap is checked inside the chat port, after the response has begun, so it arrives as an `error` event with `quota_exceeded` (P2-31); a 429 **status** is the burst limiter (P2-04), which is a wait rather than a wall. P3-07 gives it its own state and counts down `Retry-After`.
+- **`panel.close()` does not unmount the chat** *(decision)*. §1.3 asks that a conversation survive in memory. What unmounts is the page going away, and that is exactly when an answer nobody will read should stop being paid for — the route forwards the request signal into generation (P2-29), so the abort stops the model mid-token.
+- **The real asker is composed inside `panel.ts`, not in the loader.** `lazy.ts` forwards two strings and nothing else, which is what keeps `send.ts`, `session.ts` and Preact out of the 5 KB that runs on every page. Measured after: **loader 2.08 KB of 5 KB** (unchanged), **widget 8.27 KB of 60 KB**.
+- **Mounting the panel costs no request — not even a session.** Asserted with `fetch` stubbed and *no* injected asker, so the real composition is what is measured.
+- **Preact and `@testing-library/preact` added to `apps/widget`.** Both tsconfigs already carried `jsx: react-jsx` and `jsxImportSource: preact` from P3-01; nothing else changed.
+- **⚠ One mutant survives and is equivalent today.** Removing `if (controller.signal.aborted) return` from the catch changes nothing observable: the only abort today comes from unmount, and a Preact state update on an unmounted component is a no-op. The line stays because it is the difference between correct and accidentally harmless, and it becomes observable the moment a second question can supersede one in flight. Recorded in the source beside the guard.
+
 ---
 
 ### P3-07 · The five states
@@ -6068,6 +6083,14 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 
 **Files.** `session.ts`, tests. **~70 lines.**
 
+**As built (2026-09-23).** Shipped with **P3-06**, which cannot ask anything without it.
+
+- **A closure rather than a module-level `let`** *(deviation)*. The guarantee the row wants is "nothing writes it anywhere durable", and a closure keeps that while being the version a test can assert about: each case gets its own. A module global is shared between cases, so "neither storage holds it" would be proving something about the previous test's leftovers.
+- **The absence is asserted as an absence.** Not "the key we would have used is empty" — no value anywhere in either storage is the token, whatever somebody decided to call it, and not in a cookie either. Three mutants that persist the token "for convenience" are all killed.
+- **The promise is cached, not the token** *(addition)*. Two questions in the same second must not mint two sessions, and the case a resolved-value cache misses is the second caller arriving *before* the first request returns — which is the common one for a visitor who opens the panel and types. Same reasoning as P3-04's module cache; a failed mint is likewise not cached.
+- **`write` reports whether the value was actually stored** *(correction found by mutation)*. The first version cached the anonymous id in memory unconditionally, which is a cache that outlives what it caches: another script on the seller's page calling `sessionStorage.clear()` left the widget handing out an id no longer written anywhere. Storage is now the source of truth and the memory copy is only the fallback for a browser that refuses.
+- **⚠ The anonymous id has no consumer on the wire yet** *(open item)*. The row's purpose for it is conversation continuity across a reload, and the session route reads nothing from the body or the query (P2-12) — continuity comes from a previous token in `Authorization` (P2-12a), and the token dies with the page. So a reload today mints a fresh session and starts a fresh conversation. Closing that needs a server-side change and belongs with **P3-21**, which is the row that already holds the token's lifecycle; `forget()` is the seam it will call.
+
 ---
 
 ### P3-17 · Fake host pages for testing
@@ -6117,7 +6140,7 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 **Why.** The client half of P2-12a. A shopper who tabs away for 20 minutes and returns must be able to send a follow-up without the widget resetting.
 
 **How.** Two triggers, one path:
-- **Proactive:** before each send, if `exp - now() < 60s`, refresh first. Read `exp` from the token held in memory (P3-16) — decode without verifying, since the server verifies and the client only needs the timestamp.
+- **Proactive:** before each send, if `exp - now() < 60s`, refresh first. Read `exp` from the token held in memory — `createSession(…).forget()` (P3-16) is the seam that drops it — decode without verifying, since the server verifies and the client only needs the timestamp.
 - **Reactive:** on any `401`, refresh once and replay the request.
 
 Three details that decide whether this is robust or a bug factory:
