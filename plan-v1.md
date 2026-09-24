@@ -1346,14 +1346,14 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P3-04 | Lazy-load main bundle on click | | P3-03 |
 | ✅ P3-05 | CI: widget size budget | ≤ 60 KB gz | P3-04 |
 | ✅ P3-06 | Chat UI + SSE consumption | streaming into an ARIA live region | P2-29,P3-04 |
-| P3-07 | Five states | ACTIVE / DISABLED / QUOTA / RATE_LIMITED / ERROR | P3-06 |
+| ✅ P3-07 | Five states | ACTIVE / DISABLED / QUOTA / RATE_LIMITED / ERROR | P3-06 |
 | P3-08 | 🔒 Product card component | **text nodes only**, no `innerHTML`, server-sourced fields | P3-06 |
 | P3-09 | 🔒 XSS test suite | markup in every tenant- and model-derived field | P3-08 |
 | P3-10 | Cart adapter resolution fn | pure, per-branch unit tests | P3-08 |
 | P3-11 | Shopify `/cart/add.js` adapter | variant id + `_somm_session` line-item property | P3-10 |
 | P3-12 | Generic adapter contract | `window.__sommelierCart` or `CustomEvent` | P3-10 |
 | P3-13 | Cart count + host checkout nav | configurable `cartUrl` | P3-11 |
-| P3-14 | i18n IT/EN | | P3-07 |
+| ✅ P3-14 | i18n IT/EN | | P3-07 |
 | P3-15 | a11y pass | focus trap, keyboard, reduced motion, AA contrast check | P3-07 |
 | ✅ P3-16 | 🔒 Token in memory, anon id in sessionStorage | no cookies, no `localStorage` | P3-06 |
 | P3-17 | `packages/testing`: fake host pages | two origins (4001 verified / 4002 not), fake Shopify cart | P0-44 |
@@ -5983,6 +5983,16 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 
 **Files.** `states.ts`, components, tests. **~130 lines.**
 
+**As built (2026-09-23).** Shipped with **P3-14**, because a state's whole deliverable is the sentence it shows and §1.3 asks for that sentence in two languages.
+
+- **The union is `active`, `disabled` and the three ways a conversation stops** *(deviation in shape, not in content)*. `ChatFailure` (P3-06) *is* `quota | rateLimited | error`, and `WidgetState` adds the other two. Two unions describing one screen is how a case gets handled in one and forgotten in the other — so there is one, and `stateFor(status, failure)` is the only way to build it.
+- **`error` carries its cause** *(refinement)*. §1.3 groups `ERROR / OFFLINE` into one row, and the trigger column already distinguishes "5xx or network". The union keeps that distinction as `cause: 'provider' | 'network'`, because the advice differs: try again now, versus try again later.
+- **The retry is a prop, not a field on the state** *(deviation)*. The row's sketch has `{ k: 'error'; retry: () => void }`. A state carrying a closure cannot be compared, listed in a test fixture or logged — and the callback never varies by state. `isRetryable(state)` decides whether the button appears; the component supplies what it does.
+- **A switched-off winery outranks a failure.** P3-03 normally stops long before the bundle exists, but a seller can lapse *mid-session*, and then the API starts refusing a page that already has the chat open. The visitor is told the shop is not serving rather than that we are broken.
+- **A `429` is the burst limiter and gets the countdown; the monthly cap never produces one.** The cap is checked inside the chat port, after the response has begun, so it arrives as an `error` event with `quota_exceeded` (P2-31). `Retry-After` is read off the 429 — readable cross-origin only because P2-08 exposes it — with a 30 s fallback rather than an assumption, and the HTTP-date form is deliberately not parsed: our limiter sends seconds, and guessing at a date against a visitor's own clock produces countdowns of minus four hours.
+- **⚠ The countdown stopped at zero on screen and went on ticking forever underneath** *(found by mutation)*. The notice reads the same at zero as it does at minus four hundred, so nothing could see it: a wakeup a second, for as long as the panel stays open, on somebody else's storefront. The interval now clears itself on the tick that reaches zero, and `vi.getTimerCount()` is asserted after the wait is out as well as after unmount.
+- **The disabled sentence is written out twice, deliberately.** P3-03 stops before the widget bundle is ever requested, so there is no catalogue on the page to read — and importing one would put it in both entries, which Rollup answers with a shared chunk the loader statically imports, which is exactly the collapse P3-05's budget refuses. `main.test.ts` pins `DISABLED_LABEL` to `it.disabled` so the two copies cannot drift.
+
 ---
 
 ### P3-08 · Product card component 🔒
@@ -6058,6 +6068,15 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 **Tests.** Every key exists in both catalogs (a test that fails on a missing translation); interpolation escapes correctly.
 
 **Files.** `i18n/{it,en}.ts`, `useT.ts`, tests. **~110 lines.**
+
+**As built (2026-09-23).** Shipped with **P3-07**, whose five states are most of what there is to translate.
+
+- **`Messages` is derived from `it.ts` rather than declared.** Italian is where the copy is authored and reviewed, so a key added there and forgotten in `en.ts` is a typecheck failure — and a key declared in the abstract that nobody wrote Italian for is not expressible at all. The suite checks the same thing at runtime, because a type is only as good as the next person's willingness not to reach for `as`.
+- **Placeholders are checked across catalogues** *(addition)*. A translation that drops `{seconds}` renders a countdown that never counts, and one that invents `{minutes}` renders the placeholder itself. Both are a test rather than a review.
+- **§1.3's prohibition is a test, in both languages, at both levels**: against the catalogue and against what a state actually renders. No plan name, no price, no message count — and no digit at all outside the one countdown §1.3 asks for.
+- **`format` deliberately does not escape.** It returns a string and the caller renders a text node, which is where Preact escapes. Escaping here would mean every caller trusting that it happened, and one that did not would be an `innerHTML` away from what §3.7 exists to prevent. `notice.test.tsx` renders a message carrying `<img src=x onerror=…>` and asserts no element appears.
+- **The visitor's browser outranks the tenant's setting** *(deviation)*. The row says "overridable by detected message language". That detection is P2-34's, it runs on the server, and it runs on a message that does not exist until the visitor has already read the composer — so it cannot label the button they are about to press. `navigator.language` is known at mount, costs nothing, and is right more often for a foreign visitor than the shop's default. The answer still comes back in the language of the question, which is the part that was ever in doubt.
+- **No library, and the reason is the budget.** Plural rules, date formats and lazy catalogue loading are what an i18n library sells; none are needed for two languages and ten sentences, and all are paid for in a bundle that runs on somebody else's storefront. **Widget 9.30 KB of 60 KB after this; loader unchanged at 2.13 KB of 5 KB.**
 
 ---
 

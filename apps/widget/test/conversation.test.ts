@@ -38,7 +38,7 @@ describe('asking', () => {
   });
 
   it('clears the previous failure, because asking again is the retry', () => {
-    const failed = stopped(answer('Un '), 'network');
+    const failed = stopped(answer('Un '), { k: 'error', cause: 'network' });
 
     expect(asked(failed, 'Ancora?').failure).toBeUndefined();
   });
@@ -94,13 +94,17 @@ describe('applying events', () => {
 
   it('tells a spent month apart from a shop that is busy', () => {
     // The visitor is told something different, and offered something different.
-    expect(apply(answer('Un '), { type: 'error', code: 'quota_exceeded' }).failure).toBe('quota');
-    expect(apply(answer('Un '), { type: 'error', code: 'provider_error' }).failure).toBe(
-      'provider',
+    const provider = { k: 'error', cause: 'provider' };
+
+    expect(apply(answer('Un '), { type: 'error', code: 'quota_exceeded' }).failure).toEqual({
+      k: 'quota',
+    });
+    expect(apply(answer('Un '), { type: 'error', code: 'provider_error' }).failure).toEqual(
+      provider,
     );
-    expect(apply(answer('Un '), { type: 'error', code: 'refusal' }).failure).toBe('provider');
-    expect(apply(answer('Un '), { type: 'error', code: 'schema_invalid' }).failure).toBe(
-      'provider',
+    expect(apply(answer('Un '), { type: 'error', code: 'refusal' }).failure).toEqual(provider);
+    expect(apply(answer('Un '), { type: 'error', code: 'schema_invalid' }).failure).toEqual(
+      provider,
     );
   });
 });
@@ -134,20 +138,22 @@ describe('an error preserves the conversation', () => {
   });
 
   it('says why, so the notice can say the right thing', () => {
-    expect(failed.failure).toBe('provider');
+    expect(failed.failure).toEqual({ k: 'error', cause: 'provider' });
   });
 });
 
 describe('stopping for a reason the stream never gave', () => {
   it('records a refusal before the first event', () => {
-    expect(stopped(asked(empty, 'Che vino?'), 'provider')).toMatchObject({
+    expect(stopped(asked(empty, 'Che vino?'), { k: 'error', cause: 'provider' })).toMatchObject({
       streaming: false,
-      failure: 'provider',
+      failure: { k: 'error', cause: 'provider' },
     });
   });
 
   it('keeps what was read when the connection goes away mid-answer', () => {
-    expect(stopped(answer('Un Bar'), 'network').turns.at(-1)?.text).toBe('Un Bar');
+    expect(stopped(answer('Un Bar'), { k: 'error', cause: 'network' }).turns.at(-1)?.text).toBe(
+      'Un Bar',
+    );
   });
 });
 

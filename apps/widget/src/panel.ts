@@ -2,6 +2,8 @@ import type { WidgetConfigResponse } from '@catalogorosso/api-client';
 import { h, render } from 'preact';
 
 import { Chat, type Asker } from './components/Chat.js';
+import { catalogues, localeFor } from './i18n/index.js';
+import { MessagesContext } from './i18n/useT.js';
 import { ask } from './send.js';
 import { createSession } from './session.js';
 
@@ -137,7 +139,21 @@ export const mountPanel = ({
   element.append(header, body);
   shadow.append(style, element);
 
-  render(h(Chat, { ask: ask_ ?? asker(api, key) }), body);
+  /*
+   * The locale is decided once, here: the tenant's setting, overridden by the
+   * visitor's own browser when we have a catalogue for it (P3-14). Everything
+   * below reads it from the context rather than being handed it four times.
+   */
+  const locale = localeFor(config.locale, navigator.language);
+
+  render(
+    h(
+      MessagesContext.Provider,
+      { value: catalogues[locale] },
+      h(Chat, { ask: ask_ ?? asker(api, key), status: config.status }),
+    ),
+    body,
+  );
 
   const setOpen = (open: boolean): void => {
     element.hidden = !open;

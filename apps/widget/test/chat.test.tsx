@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { Chat, COPY, type Asker } from '../src/components/Chat.js';
+import { Chat, type Asker } from '../src/components/Chat.js';
+import { it as COPY } from '../src/i18n/it.js';
 import { ChatRefused } from '../src/send.js';
 import type { StreamEvent } from '../src/sse.js';
 
@@ -43,7 +44,7 @@ const ITEMS = [
 ];
 
 const log = (): HTMLElement => screen.getByTestId('chat-log');
-const box = (): HTMLInputElement => screen.getByLabelText<HTMLInputElement>(COPY.label);
+const box = (): HTMLInputElement => screen.getByLabelText<HTMLInputElement>(COPY.composerLabel);
 const sendButton = (): HTMLButtonElement =>
   screen.getByRole<HTMLButtonElement>('button', { name: COPY.send });
 const form = (): HTMLFormElement => {
@@ -265,7 +266,7 @@ describe('when an answer stops early', () => {
     await askAbout();
 
     await waitFor(() => {
-      expect(screen.getByText(COPY.provider)).toBeDefined();
+      expect(screen.getByText(COPY.errorProvider)).toBeDefined();
     });
 
     expect(screen.getByRole('button', { name: COPY.retry })).toBeDefined();
@@ -315,14 +316,14 @@ describe('when an answer stops early', () => {
 
   it('calls a refusal before the first byte what it is', async () => {
     const ask: Asker = () => {
-      throw new ChatRefused(429);
+      throw new ChatRefused(503);
     };
 
     render(<Chat ask={ask} />);
     await askAbout();
 
     await waitFor(() => {
-      expect(screen.getByText(COPY.provider)).toBeDefined();
+      expect(screen.getByText(COPY.errorProvider)).toBeDefined();
     });
   });
 
@@ -335,7 +336,7 @@ describe('when an answer stops early', () => {
     await askAbout();
 
     await waitFor(() => {
-      expect(screen.getByText(COPY.network)).toBeDefined();
+      expect(screen.getByText(COPY.errorNetwork)).toBeDefined();
     });
   });
 
@@ -349,7 +350,7 @@ describe('when an answer stops early', () => {
     await askAbout();
 
     await waitFor(() => {
-      expect(screen.getByText(COPY.network)).toBeDefined();
+      expect(screen.getByText(COPY.errorNetwork)).toBeDefined();
     });
 
     expect(log().textContent).toContain('Un Bar');
@@ -412,6 +413,6 @@ describe('leaving', () => {
     view.unmount();
     await settle();
 
-    expect(screen.queryByText(COPY.network)).toBeNull();
+    expect(screen.queryByText(COPY.errorNetwork)).toBeNull();
   });
 });
