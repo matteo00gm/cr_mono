@@ -1,11 +1,13 @@
 import type { WidgetConfigResponse } from '@catalogorosso/api-client';
 import { h, render } from 'preact';
 
+import { createCartPort, type CartPort } from './cart/port.js';
+import { resolveCart, type HostPage } from './cart/resolve.js';
 import { Chat, type Asker } from './components/Chat.js';
 import { catalogues, localeFor } from './i18n/index.js';
 import { LocaleContext, MessagesContext } from './i18n/useT.js';
 import { ask } from './send.js';
-import { createSession } from './session.js';
+import { anonId, createSession } from './session.js';
 
 /**
  * The widget itself — everything the loader does *not* carry (P3-04).
@@ -63,6 +65,23 @@ const PANEL_STYLE = [
   '  font-size: 12px; padding: 1px 6px; border-radius: 999px; background: #f0e6e9; color: #7b1e3c;',
   '}',
   '.card-link { color: #7b1e3c; }',
+  '.card-actions { margin: 6px 0 0; display: flex; gap: 10px; align-items: center; }',
+  '.card-add {',
+  '  border: 0; border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 13px;',
+  '  background: #7b1e3c; color: #fff; cursor: pointer;',
+  '}',
+  '.card-add:disabled { background: #d8c3ca; cursor: default; }',
+  '.card-add[data-state="done"] { background: #2f6f4f; }',
+  '.card-add[data-state="failed"] { background: #8a4b00; }',
+  '.chat-tools { display: flex; justify-content: flex-end; padding: 6px 12px 0; }',
+  '.cart-button {',
+  '  position: relative; border: 0; background: none; font: inherit; font-size: 20px;',
+  '  cursor: pointer; line-height: 1; padding: 4px;',
+  '}',
+  '.cart-count {',
+  '  position: absolute; top: -2px; right: -4px; min-width: 16px; padding: 0 4px;',
+  '  border-radius: 999px; background: #7b1e3c; color: #fff; font-size: 11px; line-height: 16px;',
+  '}',
   '.notice {',
   '  display: flex; align-items: center; gap: 8px; justify-content: space-between;',
   '  padding: 8px 16px; background: #fdf3f5; font-size: 14px;',
@@ -88,6 +107,11 @@ export interface PanelOptions {
   readonly api: string;
   /** The seller's public key, likewise. */
   readonly key: string;
+  /** `data-cart` from the script tag, when the seller settled it themselves (P3-10). */
+  readonly cart?: string | undefined;
+  /** Injected by tests; the default resolves the host page's own cart. */
+  readonly cartPort?: CartPort | undefined;
+  readonly navigate?: ((url: string) => void) | undefined;
   /** Injected by tests; the default is a real session and a real stream. */
   readonly ask?: Asker | undefined;
   readonly document?: Document | undefined;
@@ -117,6 +141,21 @@ const asker = (api: string, key: string): Asker => {
 };
 
 /**
+ * The storefront's own cart, decided on the page we are standing on (§1.6).
+ *
+ * **The session id is the widget session, and it is not available here.** P3-16
+ * holds the token in a closure and deliberately hands nothing out; what the
+ * Shopify line needs is an identifier that ties an order to a conversation, and
+ * an anonymous per-tab id is exactly that — so `anonId()` is what ships in
+ * `_somm_session` rather than the token's own session claim.
+ */
+const cartFor = (declared: string | undefined): CartPort =>
+  createCartPort({
+    adapter: resolveCart({ host: globalThis as HostPage, declared }),
+    sessionId: anonId(),
+  });
+
+/**
  * Mounts the panel beside the launcher and wires the two together.
  *
  * **`aria-expanded` moves with the panel**, because the launcher is the thing a
@@ -129,6 +168,9 @@ export const mountPanel = ({
   config,
   api,
   key,
+  cart,
+  cartPort,
+  navigate,
   ask: ask_,
   document: document_ = document,
 }: PanelOptions): Panel => {
@@ -170,7 +212,13 @@ export const mountPanel = ({
       h(
         MessagesContext.Provider,
         { value: catalogues[locale] },
-        h(Chat, { ask: ask_ ?? asker(api, key), status: config.status }),
+        h(Chat, {
+          ask: ask_ ?? asker(api, key),
+          status: config.status,
+          cart: cartPort ?? cartFor(cart),
+          cartUrl: config.cartUrl,
+          navigate,
+        }),
       ),
     ),
     body,

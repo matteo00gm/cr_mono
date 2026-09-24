@@ -31,6 +31,14 @@ export interface SommelierGlobal {
   readonly key: string;
   /** Where the API is, for the bundle that comes later. Overridable for a staging site. */
   readonly api: string;
+  /**
+   * Which cart this storefront has, when the seller said (`data-cart`).
+   *
+   * Only needed when detection cannot answer: an event-contract cart (P3-12)
+   * cannot be detected at all — there is no API for "does anything listen for
+   * this event" — and a headless Shopify storefront sets no `window.Shopify`.
+   */
+  readonly cart?: string | undefined;
   /** Set once mounted, so a double inclusion is a no-op rather than a second launcher. */
   mounted: boolean;
 }
@@ -208,7 +216,12 @@ export const start = (options: MountOptions = {}): Mounted | undefined => {
 
     if (key === undefined || key === '') return undefined;
 
-    globalThis.__sommelier ??= { key, api: scriptAttribute('api') ?? DEFAULT_API, mounted: false };
+    globalThis.__sommelier ??= {
+      key,
+      api: scriptAttribute('api') ?? DEFAULT_API,
+      cart: scriptAttribute('cart'),
+      mounted: false,
+    };
 
     return mount(options);
   } catch {

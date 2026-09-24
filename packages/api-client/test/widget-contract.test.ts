@@ -25,6 +25,7 @@ const CARD = {
   imageUrl: null,
   productUrl: null,
   stockStatus: 'IN_STOCK',
+  variantId: '45123456789',
 } as const;
 
 describe('the product a shopper is shown', () => {
@@ -51,6 +52,7 @@ describe('the product a shopper is shown', () => {
       'producer',
       'productUrl',
       'stockStatus',
+      'variantId',
       'vintage',
     ]);
   });

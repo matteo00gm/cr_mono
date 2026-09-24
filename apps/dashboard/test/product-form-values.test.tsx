@@ -34,7 +34,7 @@ describe('valuesFrom', () => {
     expect(
       valuesFrom({
         sku: 'BAR-2019',
-        externalVariantId: 'gid-42',
+        externalVariantId: '45123456789',
         name: 'Barolo Bussia',
         producer: 'Poderi Colla',
         vintage: 2019,
@@ -55,7 +55,7 @@ describe('valuesFrom', () => {
       }),
     ).toEqual({
       sku: 'BAR-2019',
-      externalVariantId: 'gid-42',
+      externalVariantId: '45123456789',
       name: 'Barolo Bussia',
       producer: 'Poderi Colla',
       vintage: '2019',
@@ -103,7 +103,7 @@ describe('buildPayload', () => {
       buildPayload({
         ...REQUIRED,
         sku: ' BAR-2019 ',
-        externalVariantId: ' gid-42 ',
+        externalVariantId: ' gid://shopify/ProductVariant/45123456789 ',
         producer: 'Poderi Colla',
         vintage: '2019',
         grapeVarieties: 'Nebbiolo, , Barbera',
@@ -121,7 +121,7 @@ describe('buildPayload', () => {
       ok: true,
       payload: {
         sku: 'BAR-2019',
-        externalVariantId: 'gid-42',
+        externalVariantId: '45123456789',
         name: 'Barolo Bussia',
         producer: 'Poderi Colla',
         vintage: 2019,
@@ -182,5 +182,38 @@ describe('the form', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Salva' }));
 
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ stockStatus: 'OUT_OF_STOCK' }));
+  });
+});
+
+describe('the Shopify variant id', () => {
+  /*
+   * **Normalised here rather than at the cart** (P3-11). `/cart/add.js` accepts
+   * only the numeric form, so a GID stored unnoticed produces a wine that looks
+   * correctly configured on this screen and fails at the moment a visitor
+   * presses *Aggiungi al carrello* — weeks later, on a shopper's screen.
+   */
+  it('stores a global id as the number the cart needs', () => {
+    const result = buildPayload({
+      ...REQUIRED,
+      externalVariantId: 'gid://shopify/ProductVariant/45123456789',
+    });
+
+    expect(result.ok && result.payload.externalVariantId).toBe('45123456789');
+  });
+
+  it('refuses something that is neither, naming both formats', () => {
+    const result = buildPayload({ ...REQUIRED, externalVariantId: 'barolo-bussia' });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? '' : result.errors.externalVariantId).toContain(
+      'gid://shopify/ProductVariant/',
+    );
+  });
+
+  it('accepts an empty value, because most catalogues are not on Shopify', () => {
+    const result = buildPayload({ ...REQUIRED, externalVariantId: '' });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && 'externalVariantId' in result.payload).toBe(false);
   });
 });

@@ -10,10 +10,12 @@ import {
   stopped,
   type Conversation,
 } from '../conversation.js';
+import type { CartPort } from '../cart/port.js';
 import { useT } from '../i18n/useT.js';
 import { failureOf } from '../send.js';
 import type { StreamEvent } from '../sse.js';
 import { acceptsQuestions, stateFor } from '../states.js';
+import { CartButton } from './CartButton.js';
 import { Notice } from './Notice.js';
 import { ProductCard } from './ProductCard.js';
 
@@ -45,12 +47,20 @@ export interface ChatProps {
   readonly ask: Asker;
   /** The tenant's own status, so a winery that lapses mid-session says so (§1.3). */
   readonly status?: 'ACTIVE' | 'DISABLED' | undefined;
+  /** The storefront's cart, when it has one we can reach (§1.6). */
+  readonly cart?: CartPort | undefined;
+  /** The seller's configured cart path, validated before it is navigated to. */
+  readonly cartUrl?: string | undefined;
+  /** Injected by tests; the default moves the host page. */
+  readonly navigate?: ((url: string) => void) | undefined;
 }
 
-export const Chat = ({ ask, status = 'ACTIVE' }: ChatProps) => {
+export const Chat = ({ ask, status = 'ACTIVE', cart, cartUrl, navigate }: ChatProps) => {
   const t = useT();
   const [conversation, setConversation] = useState<Conversation>(empty);
   const [draft, setDraft] = useState('');
+  /* Bumped after every add, which is what makes the badge refetch (P3-13). */
+  const [added, setAdded] = useState(0);
   const flight = useRef<AbortController | undefined>(undefined);
 
   /*
@@ -130,6 +140,16 @@ export const Chat = ({ ask, status = 'ACTIVE' }: ChatProps) => {
     [conversation.streaming, draft, open, run],
   );
 
+  const addToCart = useCallback(
+    async (item: { productId: string; variantId: string | null }): Promise<void> => {
+      if (cart === undefined) return;
+
+      await cart.add({ ...item, quantity: 1 });
+      setAdded((current) => current + 1);
+    },
+    [cart],
+  );
+
   const retry = useCallback((): void => {
     const text = lastQuestion(conversation);
 
@@ -140,6 +160,17 @@ export const Chat = ({ ask, status = 'ACTIVE' }: ChatProps) => {
 
   return (
     <div class="chat">
+      {cart !== undefined && cartUrl !== undefined && (
+        <div class="chat-tools">
+          <CartButton
+            cart={cart}
+            cartUrl={cartUrl}
+            refreshKey={added}
+            {...(navigate === undefined ? {} : { navigate })}
+          />
+        </div>
+      )}
+
       <div
         class="chat-log"
         role="log"
@@ -160,6 +191,9 @@ export const Chat = ({ ask, status = 'ACTIVE' }: ChatProps) => {
                       productId={item.productId}
                       reason={item.reason}
                       product={item.product}
+                      variantId={item.product.variantId}
+                      needsVariantId={cart?.needsVariantId ?? false}
+                      {...(cart?.canAdd === true ? { onAdd: addToCart } : {})}
                     />
                   ))}
                 </ul>

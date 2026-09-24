@@ -72,6 +72,7 @@ export const run = (deps: Deps = {}): void => {
       config: state.config,
       api: sommelier.api,
       key: sommelier.key,
+      cart: sommelier.cart,
     });
 
     attach_(mounted.launcher, {

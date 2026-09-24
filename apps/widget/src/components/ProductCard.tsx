@@ -27,6 +27,13 @@ export interface ProductCardProps {
   readonly productId: string;
   readonly reason: string;
   readonly product: WidgetProduct;
+  /** Absent when the storefront has no cart we can reach: the card degrades to a link (§1.6). */
+  readonly onAdd?:
+    ((item: { productId: string; variantId: string | null }) => Promise<void>) | undefined;
+  /** Shopify needs one; every other adapter takes the product id (P3-11). */
+  readonly variantId?: string | null | undefined;
+  /** True when this adapter cannot add a wine that has no variant id. */
+  readonly needsVariantId?: boolean | undefined;
 }
 
 /** What a shopper is told about availability, when there is anything to say. */
@@ -45,14 +52,49 @@ const titleOf = (product: WidgetProduct): string =>
     .filter((part) => part !== '')
     .join(' — ');
 
-export const ProductCard = ({ productId, reason, product }: ProductCardProps) => {
+/** What the add button is doing, which is three things and not a boolean. */
+type Adding = 'idle' | 'busy' | 'done' | 'failed';
+
+export const ProductCard = ({
+  productId,
+  reason,
+  product,
+  onAdd,
+  variantId = null,
+  needsVariantId = false,
+}: ProductCardProps) => {
   const t = useT();
   const locale = useLocale();
   const [imageFailed, setImageFailed] = useState(false);
+  const [adding, setAdding] = useState<Adding>('idle');
 
   const image = imageFailed ? undefined : asHttpUrl(product.imageUrl);
   const link = asHttpUrl(product.productUrl);
   const badge = badgeKeyOf(product.stockStatus);
+
+  /*
+   * **Out of stock means no add-to-cart** (§1.5), and a missing variant id
+   * means the same thing on Shopify: a seller left a column blank, and a button
+   * that failed on click would look like our bug rather than their setup.
+   */
+  const sellable =
+    onAdd !== undefined &&
+    product.stockStatus !== 'OUT_OF_STOCK' &&
+    !(needsVariantId && (variantId === null || variantId === ''));
+
+  const add = (): void => {
+    if (onAdd === undefined) return;
+
+    setAdding('busy');
+    void onAdd({ productId, variantId }).then(
+      () => {
+        setAdding('done');
+      },
+      () => {
+        setAdding('failed');
+      },
+    );
+  };
 
   return (
     <li class="card" data-product-id={productId}>
@@ -84,22 +126,39 @@ export const ProductCard = ({ productId, reason, product }: ProductCardProps) =>
           {badge !== undefined && <span class="card-badge">{t(badge)}</span>}
         </p>
 
-        {link !== undefined && (
-          <a
-            class="card-link"
-            href={link}
-            target="_blank"
-            /*
-             * `noopener` is the security half: without it the opened page gets a
-             * handle on `window.opener` and can navigate the seller's own tab
-             * somewhere else. `noreferrer` keeps the shopper's page out of a
-             * third party's logs.
-             */
-            rel="noopener noreferrer"
-          >
-            {t('details')}
-          </a>
-        )}
+        <p class="card-actions">
+          {sellable && (
+            <button
+              type="button"
+              class="card-add"
+              onClick={add}
+              disabled={adding === 'busy'}
+              data-state={adding}
+            >
+              {adding === 'busy' && t('adding')}
+              {adding === 'done' && t('added')}
+              {adding === 'failed' && t('addFailed')}
+              {adding === 'idle' && t('addToCart')}
+            </button>
+          )}
+
+          {link !== undefined && (
+            <a
+              class="card-link"
+              href={link}
+              target="_blank"
+              /*
+               * `noopener` is the security half: without it the opened page gets a
+               * handle on `window.opener` and can navigate the seller's own tab
+               * somewhere else. `noreferrer` keeps the shopper's page out of a
+               * third party's logs.
+               */
+              rel="noopener noreferrer"
+            >
+              {sellable ? t('details') : t('viewProduct')}
+            </a>
+          )}
+        </p>
       </div>
     </li>
   );

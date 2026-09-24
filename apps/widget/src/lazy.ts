@@ -41,6 +41,8 @@ export interface LazyPanelOptions {
    * the chat ends up in the 5 KB that runs on every page (P3-06). */
   readonly api: string;
   readonly key: string;
+  /** `data-cart`, when the seller wrote one. Forwarded, never interpreted here. */
+  readonly cart?: string | undefined;
   readonly load?: LoadWidget | undefined;
   readonly document?: Document | undefined;
   /** Injected so a test can run the idle callback rather than wait for one. */
@@ -93,6 +95,7 @@ export const lazyPanel = ({
   config,
   api,
   key,
+  cart,
   load = importWidget,
   document: document_ = document,
   whenIdle = idle,
@@ -144,7 +147,15 @@ export const lazyPanel = ({
       try {
         const module = await fetchModule();
 
-        panel = module.mountPanel({ shadow, launcher, config, api, key, document: document_ });
+        panel = module.mountPanel({
+          shadow,
+          launcher,
+          config,
+          api,
+          key,
+          cart,
+          document: document_,
+        });
         panel.open();
       } catch {
         /*

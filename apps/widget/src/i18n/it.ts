@@ -31,6 +31,14 @@ export const it = {
   details: 'Dettagli',
   outOfStock: 'Non disponibile',
   preorder: 'Su ordinazione',
+
+  /* The cart (P3-11 → P3-13, §1.6). */
+  addToCart: 'Aggiungi al carrello',
+  added: 'Aggiunto',
+  adding: 'Aggiungo…',
+  addFailed: 'Non sono riuscito ad aggiungerlo.',
+  openCart: 'Apri il carrello',
+  viewProduct: 'Vedi prodotto',
 } as const;
 
 /**

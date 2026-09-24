@@ -1,6 +1,6 @@
 import type { WidgetProduct } from '@catalogorosso/api-client';
-import { cleanup, fireEvent, render, screen } from '@testing-library/preact';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ProductCard } from '../src/components/ProductCard.js';
 import { en } from '../src/i18n/en.js';
@@ -28,16 +28,44 @@ const WINE: WidgetProduct = {
   imageUrl: 'https://cdn.example/barolo.jpg',
   productUrl: 'https://cantina-rossi.example/barolo',
   stockStatus: 'IN_STOCK',
+  variantId: '45123456789',
 };
 
-const show = (product: Partial<WidgetProduct> = {}, locale: 'it' | 'en' = 'it') =>
+interface Extras {
+  readonly onAdd?: (item: { productId: string; variantId: string | null }) => Promise<void>;
+  readonly needsVariantId?: boolean;
+}
+
+const show = (
+  product: Partial<WidgetProduct> = {},
+  locale: 'it' | 'en' = 'it',
+  extras: Extras = {},
+) =>
   render(
     <LocaleContext.Provider value={locale}>
       <MessagesContext.Provider value={locale === 'it' ? italian : en}>
-        <ProductCard productId="p1" reason="tannino deciso" product={{ ...WINE, ...product }} />
+        <ProductCard
+          productId="p1"
+          reason="tannino deciso"
+          product={{ ...WINE, ...product }}
+          variantId={'variantId' in product ? (product.variantId ?? null) : WINE.variantId}
+          {...extras}
+        />
       </MessagesContext.Provider>
     </LocaleContext.Provider>,
   );
+
+const addButton = (): HTMLButtonElement | null =>
+  card().querySelector<HTMLButtonElement>('.card-add');
+
+/** The button, insisting it is there: a missing one is the test's own bug. */
+const pressAdd = (): void => {
+  const button = addButton();
+
+  if (button === null) throw new Error('The card rendered no add-to-cart button.');
+
+  fireEvent.click(button);
+};
 
 const card = (): HTMLElement => screen.getByRole('listitem');
 const textOf = (selector: string): string =>
@@ -159,5 +187,105 @@ describe('what a shopper can buy', () => {
     show({ stockStatus: 'OUT_OF_STOCK' }, 'en');
 
     expect(textOf('.card-badge')).toBe(en.outOfStock);
+  });
+});
+
+describe('adding a wine to the cart', () => {
+  const adding = () => vi.fn(() => Promise.resolve());
+
+  it('offers no button on a storefront with no cart we can reach', () => {
+    // §1.6: degrade to "Vedi prodotto" rather than a button that does nothing.
+    show();
+
+    expect(addButton()).toBeNull();
+    expect(card().querySelector('.card-link')?.textContent).toBe(italian.viewProduct);
+  });
+
+  it('offers the button when there is somewhere to add to', () => {
+    show({}, 'it', { onAdd: adding() });
+
+    expect(addButton()?.textContent).toBe(italian.addToCart);
+  });
+
+  it('hands the cart the wine and its variant id', async () => {
+    const onAdd = adding();
+
+    show({}, 'it', { onAdd });
+    pressAdd();
+
+    await waitFor(() => {
+      expect(onAdd).toHaveBeenCalledWith({ productId: 'p1', variantId: '45123456789' });
+    });
+  });
+
+  it('says it is working, then that it is done', async () => {
+    show({}, 'it', { onAdd: adding() });
+    pressAdd();
+
+    await waitFor(() => {
+      expect(addButton()?.textContent).toBe(italian.added);
+    });
+  });
+
+  it('says so when the shop refused, rather than pretending it worked', async () => {
+    /* A button that says "aggiunto" over a cart that never changed is the worst
+     * outcome here: the shopper finds out at checkout. */
+    const onAdd = vi.fn(() => Promise.reject(new Error('esaurito')));
+
+    show({}, 'it', { onAdd });
+    pressAdd();
+
+    await waitFor(() => {
+      expect(addButton()?.textContent).toBe(italian.addFailed);
+    });
+  });
+
+  it('cannot be pressed twice while it is working', async () => {
+    const onAdd = vi.fn(() => new Promise<void>(() => undefined));
+
+    show({}, 'it', { onAdd });
+    pressAdd();
+
+    await waitFor(() => {
+      expect(addButton()?.disabled).toBe(true);
+    });
+  });
+
+  it('offers nothing for a wine that is out of stock', () => {
+    // §1.5: a clear badge and no add-to-cart.
+    show({ stockStatus: 'OUT_OF_STOCK' }, 'it', { onAdd: adding() });
+
+    expect(addButton()).toBeNull();
+    expect(textOf('.card-badge')).toBe(italian.outOfStock);
+  });
+
+  it('still offers a pre-order, which is a wine a shop will sell you', () => {
+    show({ stockStatus: 'PREORDER' }, 'it', { onAdd: adding() });
+
+    expect(addButton()).not.toBeNull();
+  });
+
+  it('offers nothing on Shopify for a wine with no variant id', () => {
+    /*
+     * A seller left the column blank. Disabled *before* the press, because a
+     * button that failed on click would look like our bug rather than their
+     * setup (P3-11).
+     */
+    show({ variantId: null }, 'it', { onAdd: adding(), needsVariantId: true });
+
+    expect(addButton()).toBeNull();
+    expect(card().querySelector('.card-link')?.textContent).toBe(italian.viewProduct);
+  });
+
+  it('offers it anyway when the adapter does not need one', () => {
+    show({ variantId: null }, 'it', { onAdd: adding(), needsVariantId: false });
+
+    expect(addButton()).not.toBeNull();
+  });
+
+  it('calls the link "Dettagli" beside a working button', () => {
+    show({}, 'it', { onAdd: adding() });
+
+    expect(card().querySelector('.card-link')?.textContent).toBe(italian.details);
   });
 });

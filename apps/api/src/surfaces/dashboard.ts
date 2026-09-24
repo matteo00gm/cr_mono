@@ -37,6 +37,8 @@ import {
   MAX_IMPORT_ROWS,
   NotFoundError,
   rangeOfBand,
+  readVariantId,
+  VARIANT_ID_EXPECTED,
 } from '@catalogorosso/core';
 import {
   EMBEDDING_STATES,
@@ -169,6 +171,26 @@ const readImportBody = async <T>(
 };
 
 /**
+ * The Shopify variant id, normalised on the way in (P3-11).
+ *
+ * **`/cart/add.js` accepts only the numeric form**, and a seller pastes
+ * whichever their export gave them. A GID stored unnoticed produces a wine that
+ * looks correctly configured in the console and silently fails at the moment a
+ * visitor presses *Aggiungi al carrello* — the worst place to find out, and
+ * one nobody would connect back to an import three weeks earlier.
+ *
+ * `undefined` means the value was neither shape, which fails the row.
+ */
+const normalisedVariant = (row: ProductInsert): ProductInsert | undefined => {
+  const variant = readVariantId(row.externalVariantId);
+
+  if (variant === undefined) return row;
+  if (!variant.ok) return undefined;
+
+  return { ...row, externalVariantId: variant.id };
+};
+
+/**
  * Every row checked against the product contract, or the whole request refused (P1-25).
  *
  * `productInsert` strips what it does not know, `tenantId` included, so a row
@@ -181,8 +203,17 @@ const contractRows = (candidates: readonly unknown[]): ProductInsert[] => {
 
   candidates.forEach((row, index) => {
     const parsed = productInsert.safeParse(row);
-    if (parsed.success) rows.push(parsed.data);
-    else invalid.push(index + 1);
+
+    if (!parsed.success) {
+      invalid.push(index + 1);
+
+      return;
+    }
+
+    const variant = normalisedVariant(parsed.data);
+
+    if (variant === undefined) invalid.push(index + 1);
+    else rows.push(variant);
   });
 
   if (invalid.length > 0) {
@@ -563,13 +594,18 @@ export const createDashboardApp = ({
       throw new InvalidRequestError('Send a JSON body describing a product.');
     }
 
+    /* Same normalisation as the import path, for the same reason (P3-11). */
+    const values = normalisedVariant(parsed.data);
+
+    if (values === undefined) throw new InvalidRequestError(VARIANT_ID_EXPECTED);
+
     const result = await products.create({
       /*
        * From a `memberships` row, never from the body (P0-48). The contract
        * makes the alternative impossible rather than merely discouraged.
        */
       tenantId: c.get('tenantId'),
-      values: parsed.data,
+      values,
     });
 
     if (result.outcome === 'duplicate-sku') {

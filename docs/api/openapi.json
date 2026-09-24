@@ -3048,6 +3048,12 @@
                                         "OUT_OF_STOCK",
                                         "PREORDER"
                                       ]
+                                    },
+                                    "variantId": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
                                     }
                                   },
                                   "required": [
@@ -3058,7 +3064,8 @@
                                     "currency",
                                     "imageUrl",
                                     "productUrl",
-                                    "stockStatus"
+                                    "stockStatus",
+                                    "variantId"
                                   ],
                                   "additionalProperties": false
                                 }

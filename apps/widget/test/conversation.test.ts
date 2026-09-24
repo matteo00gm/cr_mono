@@ -32,6 +32,7 @@ const WINE = {
   imageUrl: null,
   productUrl: null,
   stockStatus: 'IN_STOCK',
+  variantId: '45123456789',
 } as const;
 
 const ITEMS = [{ productId: 'p1', reason: 'tannino deciso', confidence: 0.9, product: WINE }];

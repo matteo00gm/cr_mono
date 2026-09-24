@@ -1,4 +1,5 @@
 import { productRequest, type ProductRequest } from '@catalogorosso/api-client';
+import { readVariantId } from '@catalogorosso/core/variant-id';
 import type { JSX } from 'preact';
 import { useState } from 'preact/hooks';
 
@@ -184,6 +185,16 @@ export const buildPayload = (values: ProductFormValues): BuildResult => {
     text(values.alcoholPct) === undefined ? undefined : parseAlcohol(values.alcoholPct);
   if (alcohol !== undefined && !alcohol.ok) errors.alcoholPct = ALCOHOL_MESSAGES[alcohol.reason];
 
+  /*
+   * **Normalised here rather than at the cart** (P3-11). `/cart/add.js` accepts
+   * only the numeric form, and a GID stored unnoticed produces a wine that
+   * looks correctly configured on this screen and silently fails at the moment
+   * a visitor presses *Aggiungi al carrello*.
+   */
+  const variant = readVariantId(values.externalVariantId);
+
+  if (variant !== undefined && !variant.ok) errors.externalVariantId = variant.message;
+
   const candidate = {
     sku: values.sku.trim(),
     name: values.name.trim(),
@@ -191,9 +202,7 @@ export const buildPayload = (values: ProductFormValues): BuildResult => {
     currency: values.currency.trim(),
     stockStatus: values.stockStatus,
     priceCents: price.ok ? price.cents : -1,
-    ...(text(values.externalVariantId) === undefined
-      ? {}
-      : { externalVariantId: text(values.externalVariantId) }),
+    ...(variant?.ok === true ? { externalVariantId: variant.id } : {}),
     ...(text(values.producer) === undefined ? {} : { producer: text(values.producer) }),
     ...(vintage.value === undefined ? {} : { vintage: vintage.value }),
     ...(list(values.grapeVarieties) === undefined

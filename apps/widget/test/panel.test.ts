@@ -1,6 +1,7 @@
 import type { WidgetConfigResponse } from '@catalogorosso/api-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { CartPort } from '../src/cart/port.js';
 import type { Asker } from '../src/components/Chat.js';
 import { en } from '../src/i18n/en.js';
 import { it as COPY } from '../src/i18n/it.js';
@@ -183,5 +184,62 @@ describe('closing', () => {
     panel.close();
 
     expect(launcher.getAttribute('aria-expanded')).toBe('false');
+  });
+});
+
+describe('the storefront own cart', () => {
+  const port = (count: number | undefined): CartPort => ({
+    canAdd: true,
+    needsVariantId: false,
+    add: () => Promise.resolve(),
+    count: () => Promise.resolve(count),
+  });
+
+  const withCart = (cartPort: CartPort | undefined) =>
+    mountPanel({
+      shadow,
+      launcher,
+      config,
+      api: API,
+      key: KEY,
+      ask: silent,
+      ...(cartPort === undefined ? {} : { cartPort }),
+      navigate: () => undefined,
+    });
+
+  it('shows a cart button when the storefront has a cart', () => {
+    expect(withCart(port(0)).body.querySelector('.cart-button')).not.toBeNull();
+  });
+
+  it('resolves the page own cart when nobody injected one', () => {
+    /*
+     * jsdom has neither `window.Shopify` nor `__sommelierCart`, so this is the
+     * `none` branch reaching the panel: a button that leads to the shop's cart,
+     * and cards that degrade to "Vedi prodotto" (§1.6).
+     */
+    const panel = withCart(undefined);
+
+    expect(panel.body.querySelector('.cart-button')).not.toBeNull();
+    expect(panel.body.querySelector('.card-add')).toBeNull();
+  });
+
+  it('points the button at the winery configured cart', async () => {
+    const navigate = vi.fn();
+    const panel = mountPanel({
+      shadow,
+      launcher,
+      config: { ...config, cartUrl: 'https://cantina-rossi.example/carrello' },
+      api: API,
+      key: KEY,
+      ask: silent,
+      cartPort: port(0),
+      navigate,
+    });
+
+    panel.body.querySelector<HTMLButtonElement>('.cart-button')?.click();
+
+    await Promise.resolve();
+
+    expect(navigate).toHaveBeenCalledOnce();
   });
 });

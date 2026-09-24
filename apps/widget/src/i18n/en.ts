@@ -24,4 +24,11 @@ export const en: Messages = {
   details: 'Details',
   outOfStock: 'Out of stock',
   preorder: 'Pre-order',
+
+  addToCart: 'Add to cart',
+  added: 'Added',
+  adding: 'Adding…',
+  addFailed: 'I could not add it.',
+  openCart: 'Open cart',
+  viewProduct: 'View product',
 };
