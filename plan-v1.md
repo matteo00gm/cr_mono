@@ -1361,8 +1361,8 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P3-17 | `packages/testing`: fake host pages | two origins (4001 verified / 4002 not), fake Shopify cart | P0-44 |
 | ✅ P3-18 | ⛔ 🔒 Cross-origin Playwright suite | real browser proves CORS, not just headers | P3-17,P2-09 |
 | P3-19 | Visual regression per state per locale | | P3-14 |
-| P3-20 | `widget_events` emission | open, message, recommendation, detail, add_to_cart, zero_results | P0-29 |
-| P3-21 | Session auto-refresh | proactive + on-401, single-flight, retry once, `DISABLED` renders disabled not error | P2-12a |
+| ✅ P3-20 | `widget_events` emission | open, message, recommendation, detail, add_to_cart, zero_results | P0-29 |
+| ✅ P3-21 | Session auto-refresh | proactive + on-401, single-flight, retry once, `DISABLED` renders disabled not error | P2-12a |
 
 ### P4 — Security hardening
 
@@ -6239,6 +6239,16 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 
 **Files.** `analytics.ts`, tests. **~100 lines.**
 
+**As built (2026-09-25).** Shipped with **P3-21**, which touches the same session.
+
+- **⚠ The ingest endpoint is P6-01's and does not exist**, so every batch is a 404 today. That is not a gap in this row — it is precisely the case the row asks to survive, and `analytics.test.ts` asserts a 404, a rejection, a synchronous throw and a body that will not serialise are all invisible to a shopper.
+- **`sendBeacon` on `pagehide`, `fetch` otherwise.** A `fetch` on unload is cancellable, and the events it loses are the interesting ones: the visitor who read three cards and left without asking anything. The beacon's return value is *read* rather than assumed — it answers `false` over 64 KB, which is exactly when losing a batch would matter most — and a throw from a sandboxed frame falls through to `fetch` as well.
+- **Events are stamped when they happened, not when they were sent** *(addition)*. A batch flushed on unload can be seconds after the click, and a send-time timestamp would put every event of a visit at the same instant.
+- **A cap of twenty as well as a debounce** *(addition)*. A shopper working through a long list should not be one lost `pagehide` away from us knowing nothing about the visit.
+- **Each event is recorded where the thing actually happened.** `ADD_TO_CART` after the cart accepted the wine, never before — an attempt that failed is not a sale, and counting it puts a number in front of a seller that their own order list contradicts. An answer with no cards is `ZERO_RESULTS` rather than a recommendation, because that is the one number worth acting on.
+- **It carries the anonymous per-tab id** (P3-16) and never the token, so a visit groups without naming anybody.
+- **The component runs without it.** Analytics is an optional prop and most of the widget suite passes none, which is the enforcement of "must never block or break the UI" rather than a claim about it.
+
 ---
 
 ### P3-21 · Session auto-refresh (client side)
@@ -6261,6 +6271,16 @@ Conversation state (messages, cards) lives in component state and is never clear
 **Tests.** Expired token refreshes and the send succeeds with history intact; five concurrent sends trigger exactly one refresh; a `401` after refresh surfaces an error without looping; a `DISABLED` refusal renders the disabled state; refresh beyond the continuation window starts a new `sid` while keeping the on-screen conversation.
 
 **Files.** `apps/widget/src/session.ts`, `api-client.ts`, tests. **~120 lines.**
+
+**As built (2026-09-25).**
+
+- **Both triggers, one path.** `token()` refreshes inside a minute of expiry, which is what stops most 401s happening at all; the asker in `panel.ts` catches the one that got through anyway — a revoked token, a clock apart, a mint that raced an expiry — and replays exactly once.
+- **`exp` is decoded, never verified.** The signature is the server's business and the key to check it is deliberately not in the widget. A token whose expiry cannot be read counts as expired, which costs a refresh nobody needed rather than a `401` in front of a visitor.
+- **The base64url alphabet is converted before `atob`** — and the fixture had to be chosen to *need* it. The two alphabets differ by two characters, so a payload containing neither passes a decoder that never converts them, which is what let a mutation of that line survive the first run.
+- **⚠ Single-flight was implemented twice, and each copy hid the other.** A guard in `token()`/`refresh()` returning the in-flight promise, and a `??=` in the helper they both call. Mutating either left the property intact, so neither was tested; the `??=` is gone and the guard — which also returns the right promise — is the one mechanism.
+- **A failed refresh clears the held token**, so the next question mints rather than presenting the token that caused the 401 all over again, which would be a loop with extra steps.
+- **A lapsed winery renders *disabled*, not an error.** `ChatRefused` carries the body's `error.code`, and `unavailable` flips the panel's state under a conversation that is already on screen — keeping the messages and the cards, which is §6.8's blocked-mid-conversation case verbatim. A retry button that can never succeed turns an invoice into a support ticket.
+- **⚠ A `vi.fn` cannot be used to prove a rejection is handled.** A mock attaches its own handler to whatever it returns in order to record the result, which *handles* the rejection — so the "does not reject into the page" test passed against a version with no `.catch` at all. It uses a plain function now, and watches both the DOM event and `process`, because which one fires depends on the environment.
 
 ---
 

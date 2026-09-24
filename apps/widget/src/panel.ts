@@ -4,13 +4,14 @@ import { h, render } from 'preact';
 import { channelsOf, readableOn } from '@catalogorosso/core/contrast';
 
 import type { AdoptStyles } from './adopt-styles.js';
+import { createAnalytics, type Analytics } from './analytics.js';
 import { trapFocus, type FocusTrap } from './a11y/focus-trap.js';
 import { createCartPort, type CartPort } from './cart/port.js';
 import { resolveCart, type HostPage } from './cart/resolve.js';
 import { Chat, type Asker } from './components/Chat.js';
 import { catalogues, localeFor } from './i18n/index.js';
 import { LocaleContext, MessagesContext } from './i18n/useT.js';
-import { ask } from './send.js';
+import { ask, ChatRefused } from './send.js';
 import { anonId, createSession } from './session.js';
 
 /**
@@ -133,6 +134,8 @@ export interface PanelOptions {
   readonly cart?: string | undefined;
   /** Injected by tests; the default resolves the host page's own cart. */
   readonly cartPort?: CartPort | undefined;
+  /** Injected by tests; the default batches to P6-01's ingest (P3-20). */
+  readonly analytics?: Analytics | undefined;
   readonly navigate?: ((url: string) => void) | undefined;
   /** Injected by tests; the default is a real session and a real stream. */
   readonly ask?: Asker | undefined;
@@ -192,7 +195,27 @@ const asker = (api: string, key: string): Asker => {
   const session = createSession({ api, key });
 
   return async function* (message, signal) {
-    yield* ask({ api, key, token: await session.token(), message, signal });
+    /*
+     * **Proactive first, reactive second** (P3-21). `token()` refreshes a token
+     * inside a minute of expiry, which is what stops most 401s happening at
+     * all; this is the one that got through anyway — a revoked token, a clock
+     * apart, a mint that raced an expiry.
+     */
+    try {
+      yield* ask({ api, key, token: await session.token(), message, signal });
+
+      return;
+    } catch (error) {
+      if (!(error instanceof ChatRefused) || error.status !== 401) throw error;
+    }
+
+    /*
+     * **Exactly once.** A 401 after a successful refresh means something is
+     * genuinely wrong — a lapsed winery, a removed domain — and looping on it
+     * is a denial of service we would be running against our own session
+     * endpoint, from a visitor's browser, at their expense.
+     */
+    yield* ask({ api, key, token: await session.refresh(), message, signal });
   };
 };
 
@@ -226,11 +249,17 @@ export const mountPanel = ({
   key,
   cart,
   cartPort,
+  analytics: analytics_,
   navigate,
   ask: ask_,
   adoptStyles,
   document: document_ = document,
 }: PanelOptions): Panel => {
+  /*
+   * One per panel, built here rather than per component: the debounce and the
+   * `pagehide` flush are properties of the page, not of a render (P3-20).
+   */
+  const analytics = analytics_ ?? createAnalytics({ api, key, visitorId: anonId() });
   const element = document_.createElement('div');
 
   element.className = 'panel';
@@ -283,6 +312,7 @@ export const mountPanel = ({
           cart: cartPort ?? cartFor(cart),
           cartUrl: config.cartUrl,
           navigate,
+          analytics,
         }),
       ),
     ),
@@ -291,10 +321,19 @@ export const mountPanel = ({
 
   let trap: FocusTrap | undefined;
 
+  /* Recorded once, on the first open: the second is the same visitor looking
+   * again, and counting it would inflate the one number this measures. */
+  let opened = false;
+
   const setOpen = (open: boolean): void => {
     element.hidden = !open;
     element.setAttribute('aria-modal', String(open));
     launcher.setAttribute('aria-expanded', String(open));
+
+    if (open && !opened) {
+      opened = true;
+      analytics.record('WIDGET_OPEN');
+    }
 
     if (!open) {
       trap?.release();

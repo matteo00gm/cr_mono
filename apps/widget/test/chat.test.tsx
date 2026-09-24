@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { Analytics, WidgetEventType } from '../src/analytics.js';
+import type { CartPort } from '../src/cart/port.js';
 import { Chat, type Asker } from '../src/components/Chat.js';
 import { it as COPY } from '../src/i18n/it.js';
 import { ChatRefused } from '../src/send.js';
@@ -426,5 +428,282 @@ describe('leaving', () => {
     await settle();
 
     expect(screen.queryByText(COPY.errorNetwork)).toBeNull();
+  });
+});
+
+describe('when the winery stops serving mid-conversation', () => {
+  /*
+   * **A lapsed subscription must not look like a broken widget** (P3-21, §1.3).
+   * The config said ACTIVE when the panel opened; the API is now answering
+   * `unavailable`, and the state has to change under a panel already on screen
+   * — to *disabled*, not to an error with a retry that can never succeed.
+   */
+  const lapsing: Asker = () => {
+    throw new ChatRefused(403, undefined, 'unavailable');
+  };
+
+  it('renders the disabled notice rather than an error', async () => {
+    render(<Chat ask={lapsing} />);
+    await askAbout();
+
+    await waitFor(() => {
+      expect(screen.getByText(COPY.disabled)).toBeDefined();
+    });
+  });
+
+  it('offers no retry, because there is nothing a retry could fix', async () => {
+    render(<Chat ask={lapsing} />);
+    await askAbout();
+
+    await waitFor(() => {
+      expect(screen.getByText(COPY.disabled)).toBeDefined();
+    });
+
+    expect(screen.queryByRole('button', { name: COPY.retry })).toBeNull();
+  });
+
+  it('takes no further questions', async () => {
+    render(<Chat ask={lapsing} />);
+    await askAbout();
+
+    await waitFor(() => {
+      expect(box().disabled).toBe(true);
+    });
+  });
+
+  it('keeps the conversation on screen', async () => {
+    /*
+     * §6.8's blocked-mid-conversation case, verbatim: not an error state, and
+     * not a reset that discards what the shopper was reading.
+     */
+    const ask = vi
+      .fn<Asker>()
+      .mockImplementationOnce(streamOf({ type: 'text', delta: 'Un Barolo.' }, { type: 'done' }))
+      .mockImplementationOnce(lapsing);
+
+    render(<Chat ask={ask} />);
+    await askAbout('Che vino?');
+
+    await waitFor(() => {
+      expect(log().textContent).toContain('Un Barolo.');
+    });
+
+    await askAbout('E con il pesce?');
+
+    await waitFor(() => {
+      expect(screen.getByText(COPY.disabled)).toBeDefined();
+    });
+
+    expect(log().textContent).toContain('Un Barolo.');
+    expect(log().textContent).toContain('Che vino?');
+  });
+
+  it('treats a refusal with any other code as an ordinary failure', async () => {
+    /* A 403 for a mismatched origin is our problem to fix, not the seller's
+     * billing, and it must not tell a shopper the shop is switched off. */
+    const ask: Asker = () => {
+      throw new ChatRefused(403, undefined, 'forbidden');
+    };
+
+    render(<Chat ask={ask} />);
+    await askAbout();
+
+    await waitFor(() => {
+      expect(screen.getByText(COPY.errorProvider)).toBeDefined();
+    });
+  });
+});
+
+describe('what a conversation records', () => {
+  /*
+   * **The events are how we learn what the widget is worth** (P3-20, §Data
+   * Model), and each has to be emitted where the thing actually happened — an
+   * `ADD_TO_CART` recorded before the cart accepted the wine counts a sale that
+   * did not happen.
+   */
+  const recording = () => {
+    const seen: { type: WidgetEventType; productId?: string | undefined }[] = [];
+    const analytics: Analytics = {
+      record: (type, productId) => seen.push({ type, productId }),
+      flush: () => undefined,
+      stop: () => undefined,
+    };
+
+    return { analytics, types: () => seen.map((event) => event.type), seen };
+  };
+
+  const cartOf = (add: () => Promise<void>): CartPort => ({
+    canAdd: true,
+    needsVariantId: false,
+    add,
+    count: () => Promise.resolve(0),
+  });
+
+  it('records a message when one is sent', async () => {
+    const { analytics, types } = recording();
+
+    render(<Chat ask={streamOf({ type: 'done' })} analytics={analytics} />);
+    await askAbout();
+
+    await waitFor(() => {
+      expect(types()).toContain('MESSAGE_SENT');
+    });
+  });
+
+  it('records cards when cards arrive', async () => {
+    const { analytics, types } = recording();
+
+    render(
+      <Chat
+        ask={streamOf({ type: 'recommendations', items: ITEMS }, { type: 'done' })}
+        analytics={analytics}
+      />,
+    );
+    await askAbout();
+
+    await waitFor(() => {
+      expect(types()).toContain('RECOMMENDATION_SHOWN');
+    });
+  });
+
+  it('records an answer with no cards as exactly that', async () => {
+    /*
+     * The one number that says the catalogue could not answer. Counting it as a
+     * recommendation would hide the case worth acting on.
+     */
+    const { analytics, types } = recording();
+
+    render(
+      <Chat
+        ask={streamOf({ type: 'recommendations', items: [] }, { type: 'done' })}
+        analytics={analytics}
+      />,
+    );
+    await askAbout();
+
+    await waitFor(() => {
+      expect(types()).toContain('ZERO_RESULTS');
+    });
+
+    expect(types()).not.toContain('RECOMMENDATION_SHOWN');
+  });
+
+  it('records an add only once the cart took it', async () => {
+    const { analytics, seen } = recording();
+
+    render(
+      <Chat
+        ask={streamOf({ type: 'recommendations', items: ITEMS }, { type: 'done' })}
+        analytics={analytics}
+        cart={cartOf(() => Promise.resolve())}
+        cartUrl="/cart"
+        navigate={() => undefined}
+      />,
+    );
+    await askAbout();
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: COPY.addToCart })).not.toHaveLength(0);
+    });
+
+    fireEvent.click(
+      screen.getAllByRole('button', { name: COPY.addToCart })[0] as HTMLButtonElement,
+    );
+
+    await waitFor(() => {
+      expect(seen.map((event) => event.type)).toContain('ADD_TO_CART');
+    });
+
+    expect(seen.find((event) => event.type === 'ADD_TO_CART')?.productId).toBe('p1');
+  });
+
+  it('records no add when the cart refused', async () => {
+    /* An attempt that failed is not a sale, and counting it would put a number
+     * in front of a seller that their own order list contradicts. */
+    const { analytics, types } = recording();
+
+    render(
+      <Chat
+        ask={streamOf({ type: 'recommendations', items: ITEMS }, { type: 'done' })}
+        analytics={analytics}
+        cart={cartOf(() => Promise.reject(new Error('esaurito')))}
+        cartUrl="/cart"
+        navigate={() => undefined}
+      />,
+    );
+    await askAbout();
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: COPY.addToCart })).not.toHaveLength(0);
+    });
+
+    fireEvent.click(
+      screen.getAllByRole('button', { name: COPY.addToCart })[0] as HTMLButtonElement,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: COPY.addFailed })).not.toHaveLength(0);
+    });
+
+    expect(types()).not.toContain('ADD_TO_CART');
+  });
+
+  it('records the cart being opened', async () => {
+    const { analytics, types } = recording();
+
+    render(
+      <Chat
+        ask={streamOf({ type: 'done' })}
+        analytics={analytics}
+        cart={cartOf(() => Promise.resolve())}
+        cartUrl="/cart"
+        navigate={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: COPY.openCart }));
+
+    await waitFor(() => {
+      expect(types()).toContain('CART_OPEN');
+    });
+  });
+
+  it('records a shopper following a link to the wine', async () => {
+    const { analytics, seen } = recording();
+    const linked = [
+      {
+        productId: 'p1',
+        reason: 'tannino deciso',
+        confidence: 0.9,
+        product: { ...WINE, productUrl: 'https://shop.example/x' },
+      },
+    ];
+
+    render(
+      <Chat
+        ask={streamOf({ type: 'recommendations', items: linked }, { type: 'done' })}
+        analytics={analytics}
+      />,
+    );
+    await askAbout();
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('link')).not.toHaveLength(0);
+    });
+
+    fireEvent.click(screen.getAllByRole('link')[0] as HTMLAnchorElement);
+
+    expect(seen.find((event) => event.type === 'PRODUCT_DETAIL_VIEW')?.productId).toBe('p1');
+  });
+
+  it('works with no analytics at all, because it must never be load-bearing', async () => {
+    /* Every other test in this file runs without one, and that is the point:
+     * the chat has to work when the events have nowhere to go. */
+    render(<Chat ask={streamOf({ type: 'text', delta: 'Un Barolo.' }, { type: 'done' })} />);
+    await askAbout();
+
+    await waitFor(() => {
+      expect(log().textContent).toContain('Un Barolo.');
+    });
   });
 });

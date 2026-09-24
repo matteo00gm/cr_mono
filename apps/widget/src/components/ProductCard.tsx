@@ -34,6 +34,8 @@ export interface ProductCardProps {
   readonly variantId?: string | null | undefined;
   /** True when this adapter cannot add a wine that has no variant id. */
   readonly needsVariantId?: boolean | undefined;
+  /** Called when a shopper follows the link to the wine (P3-20). */
+  readonly onDetail?: ((productId: string) => void) | undefined;
 }
 
 /** What a shopper is told about availability, when there is anything to say. */
@@ -62,6 +64,7 @@ export const ProductCard = ({
   onAdd,
   variantId = null,
   needsVariantId = false,
+  onDetail,
 }: ProductCardProps) => {
   const t = useT();
   const locale = useLocale();
@@ -146,6 +149,9 @@ export const ProductCard = ({
             <a
               class="card-link"
               href={link}
+              onClick={() => {
+                onDetail?.(productId);
+              }}
               target="_blank"
               /*
                * `noopener` is the security half: without it the opened page gets a
