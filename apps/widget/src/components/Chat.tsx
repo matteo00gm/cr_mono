@@ -15,6 +15,7 @@ import { failureOf } from '../send.js';
 import type { StreamEvent } from '../sse.js';
 import { acceptsQuestions, stateFor } from '../states.js';
 import { Notice } from './Notice.js';
+import { ProductCard } from './ProductCard.js';
 
 /**
  * The chat (P3-06, §1.4, §1.7).
@@ -154,14 +155,12 @@ export const Chat = ({ ask, status = 'ACTIVE' }: ChatProps) => {
               {turn.recommendations.length > 0 && (
                 <ul class="cards">
                   {turn.recommendations.map((item) => (
-                    /*
-                     * A placeholder card until P3-08. Only `reason` is model
-                     * output and it is rendered as text; every other field a
-                     * card will show comes from our own catalogue (P2-25).
-                     */
-                    <li key={item.productId} class="card" data-product-id={item.productId}>
-                      {item.reason}
-                    </li>
+                    <ProductCard
+                      key={item.productId}
+                      productId={item.productId}
+                      reason={item.reason}
+                      product={item.product}
+                    />
                   ))}
                 </ul>
               )}

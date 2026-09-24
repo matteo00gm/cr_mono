@@ -16,7 +16,6 @@ import {
   type EmbeddingProvider,
   type EscalationReason,
   type LlmProvider,
-  type PairingChunk,
   type PairingOutcome,
   type Recommendation,
   type SupportedLocale,
@@ -29,6 +28,7 @@ import {
   withTenant,
   type ProductRow,
 } from '@catalogorosso/db';
+import type { WidgetChatEvent, WidgetProduct } from '@catalogorosso/api-client';
 import type { PairingUsage } from '@catalogorosso/llm';
 import { redactPii } from '@catalogorosso/security';
 
@@ -126,7 +126,7 @@ export interface ChatPort {
   readonly answer: (
     request: ChatRequest,
     onReport: (report: TurnReport) => void,
-  ) => AsyncIterable<PairingChunk>;
+  ) => AsyncIterable<WidgetChatEvent>;
 }
 
 export interface ChatPortOptions {
@@ -146,6 +146,24 @@ export interface ChatPortOptions {
  * the fused candidate's ranking numbers — which is the same rule the widget
  * renders cards under (§3.7).
  */
+/**
+ * A wine as a shopper sees it (P3-08, §1.5, §3.7).
+ *
+ * **Narrower than the seller's own record, on purpose.** This is world-readable
+ * on a storefront: no `sku`, and above all no `stockQty`, which would publish a
+ * winery's inventory levels to anyone who asked.
+ */
+const asCard = (row: ProductRow): WidgetProduct => ({
+  name: row.name,
+  producer: row.producer,
+  vintage: row.vintage,
+  priceCents: row.priceCents,
+  currency: row.currency,
+  imageUrl: row.imageUrl,
+  productUrl: row.productUrl,
+  stockStatus: row.stockStatus,
+});
+
 const asCandidate = (row: ProductRow): CandidateProduct => ({
   id: row.id,
   name: row.name,
@@ -180,7 +198,7 @@ export const createChatPort = ({
 
   return {
     answer: ({ tenant, sessionId, origin, visitorHash, message, signal }, onReport) =>
-      (async function* (): AsyncGenerator<PairingChunk> {
+      (async function* (): AsyncGenerator<WidgetChatEvent> {
         /*
          * **First, before anything is spent.** Retrieval is a query and
          * generation is a bill; a quota checked after either has already cost
@@ -300,7 +318,33 @@ export const createChatPort = ({
           for await (const chunk of answered) {
             if (chunk.type === 'text') reply += chunk.delta;
 
-            yield chunk;
+            /*
+             * **The card is attached here, from our own rows** (P3-08, §1.5).
+             * The model named an id and wrote a reason; every other field a
+             * visitor will see is read out of `byId`, so a card cannot carry a
+             * name, a price or a URL the model wrote.
+             *
+             * **The `undefined` branch is unreachable and stays anyway.**
+             * `allowlisted` (P2-25) has already refused any id outside this
+             * request's candidates, and `candidates` is built from `byId` — so
+             * a missing row cannot happen, which mutation testing confirms by
+             * changing this line and killing nothing. `Map.get` is partial, and
+             * the alternative to dropping is a non-null assertion that would be
+             * wrong the day the allowlist moves.
+             */
+            if (chunk.type !== 'recommendations') {
+              yield chunk;
+              continue;
+            }
+
+            yield {
+              type: 'recommendations',
+              items: chunk.items.flatMap((item) => {
+                const row = byId.get(item.productId);
+
+                return row === undefined ? [] : [{ ...item, product: asCard(row) }];
+              }),
+            };
           }
         } finally {
           /*

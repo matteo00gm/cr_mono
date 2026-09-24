@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { PairingChunk } from '@catalogorosso/core';
+import { widgetChatEvent, type WidgetChatEvent } from '@catalogorosso/api-client';
 import type { WidgetResolution } from '@catalogorosso/db';
 import { memoryRateLimiter } from '@catalogorosso/security';
 import {
@@ -73,7 +73,7 @@ beforeAll(async () => {
 });
 
 /** A chat port that answers with exactly these chunks. */
-const answering = (...chunks: readonly PairingChunk[]): ChatPort => ({
+const answering = (...chunks: readonly WidgetChatEvent[]): ChatPort => ({
   answer: () =>
     (async function* () {
       for (const chunk of chunks) yield await Promise.resolve(chunk);
@@ -113,6 +113,13 @@ const ask = (
     body: JSON.stringify(body),
   });
 
+/** The `data:` payloads in order, as the widget parses them. */
+const payloadsOf = (body: string): unknown[] =>
+  body
+    .split('\n')
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice('data: '.length)) as unknown);
+
 /** The `event:` names in order, which is what a client switches on. */
 const eventsOf = (body: string): string[] =>
   body
@@ -137,6 +144,96 @@ describe('the stream', () => {
     expect(response.status).toBe(200);
     expect(eventsOf(body)).toEqual(['text', 'text', 'recommendations', 'done']);
     expect(body).toContain('Con una bistecca ');
+  });
+
+  it('sends nothing the published contract does not name', async () => {
+    /*
+     * **Strict at every level, and checked against what actually went out.**
+     * This stream is world-readable on a storefront, so a field added on the
+     * server that the contract does not name — a tenant id, a plan, a stock
+     * level — has to fail here rather than quietly reach every visitor of every
+     * seller. The same argument P2-10 makes for the config response.
+     */
+    const response = await ask(
+      appWith({
+        chat: answering(
+          { type: 'text', delta: 'Un Barolo.' },
+          {
+            type: 'recommendations',
+            items: [
+              {
+                productId: randomUUID(),
+                reason: 'tannino deciso',
+                confidence: 0.9,
+                product: {
+                  name: 'Barolo Bussia',
+                  producer: 'Cantina Rossi',
+                  vintage: 2016,
+                  priceCents: 4200,
+                  currency: 'EUR',
+                  imageUrl: null,
+                  productUrl: null,
+                  stockStatus: 'IN_STOCK',
+                },
+              },
+            ],
+          },
+          { type: 'error', code: 'provider_error' },
+        ),
+      }),
+    );
+
+    for (const payload of payloadsOf(await response.text())) {
+      /* `done` is the one empty payload, and it is framed by its event name. */
+      if (JSON.stringify(payload) === '{}') continue;
+
+      const parsed = widgetChatEvent.safeParse(payload);
+
+      expect(parsed.error?.message ?? 'ok', JSON.stringify(payload)).toBe('ok');
+    }
+  });
+
+  it('refuses a card field the contract does not name', async () => {
+    /*
+     * **The strictness is the test, because nothing re-validates outbound.**
+     * The port is typed, so an extra field is a type error in our own code —
+     * what this pins is the *published* contract: `additionalProperties: false`
+     * is what a widget author reads in `openapi.json`, and a schema that
+     * quietly accepted an unknown key would be promising something else.
+     */
+    const response = await ask(
+      appWith({
+        chat: answering({
+          type: 'recommendations',
+          items: [
+            {
+              productId: randomUUID(),
+              reason: 'tannino deciso',
+              confidence: 0.9,
+              product: {
+                name: 'Barolo Bussia',
+                producer: null,
+                vintage: null,
+                priceCents: 4200,
+                currency: 'EUR',
+                imageUrl: null,
+                productUrl: null,
+                stockStatus: 'IN_STOCK',
+                /* The field nobody should have added. */
+                stockQty: 3,
+              },
+            },
+          ],
+        } as unknown as WidgetChatEvent),
+      }),
+    );
+
+    const cards = payloadsOf(await response.text()).filter(
+      (payload) => (payload as { type?: string }).type === 'recommendations',
+    );
+
+    expect(cards).toHaveLength(1);
+    expect(widgetChatEvent.safeParse(cards[0]).success).toBe(false);
   });
 
   it('always ends with done, so a client knows an answer finished', async () => {
@@ -172,7 +269,7 @@ describe('a failure after the first event', () => {
     const failing: ChatPort = {
       answer: () =>
         (async function* () {
-          yield await Promise.resolve<PairingChunk>({ type: 'text', delta: 'Un ' });
+          yield await Promise.resolve<WidgetChatEvent>({ type: 'text', delta: 'Un ' });
           throw new Error('the provider fell over');
         })(),
     };
@@ -189,7 +286,7 @@ describe('a failure after the first event', () => {
     const failing: ChatPort = {
       answer: () =>
         (async function* () {
-          yield await Promise.resolve<PairingChunk>({ type: 'text', delta: 'Un ' });
+          yield await Promise.resolve<WidgetChatEvent>({ type: 'text', delta: 'Un ' });
           throw new Error('postgres://user:pw@host/db is unreachable');
         })(),
     };
@@ -204,7 +301,7 @@ describe('a failure after the first event', () => {
     const refusing: ChatPort = {
       answer: () =>
         (async function* () {
-          yield await Promise.resolve<PairingChunk>({ type: 'text', delta: '' });
+          yield await Promise.resolve<WidgetChatEvent>({ type: 'text', delta: '' });
           throw new QuotaExceededError();
         })(),
     };
@@ -215,7 +312,7 @@ describe('a failure after the first event', () => {
 
 describe('the body it accepts', () => {
   it('reads the message and nothing else (P0-48)', async () => {
-    const answer = vi.fn((request: ChatRequest): AsyncIterable<PairingChunk> => ({
+    const answer = vi.fn((request: ChatRequest): AsyncIterable<WidgetChatEvent> => ({
       [Symbol.asyncIterator]: () => ({
         next: () =>
           Promise.resolve({ done: true as const, value: undefined, seen: request.message }),

@@ -3,7 +3,7 @@ import { h, render } from 'preact';
 
 import { Chat, type Asker } from './components/Chat.js';
 import { catalogues, localeFor } from './i18n/index.js';
-import { MessagesContext } from './i18n/useT.js';
+import { LocaleContext, MessagesContext } from './i18n/useT.js';
 import { ask } from './send.js';
 import { createSession } from './session.js';
 
@@ -45,7 +45,24 @@ const PANEL_STYLE = [
   '.turn-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }',
   '.turn-visitor .turn-text { font-weight: 600; }',
   '.cards { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }',
-  '.card { border: 1px solid #eee; border-radius: 8px; padding: 8px 10px; font-size: 14px; }',
+  '.card {',
+  '  display: flex; gap: 10px; align-items: flex-start;',
+  '  border: 1px solid #eee; border-radius: 8px; padding: 8px 10px; font-size: 14px;',
+  '}',
+  '.card-image {',
+  '  flex: 0 0 auto; width: 48px; height: 64px; object-fit: cover; border-radius: 4px;',
+  '  background: #f6f6f6;',
+  '}',
+  '.card-image--missing { display: grid; place-items: center; font-size: 22px; }',
+  '.card-body { min-width: 0; }',
+  '.card-title { margin: 0; font-weight: 600; overflow-wrap: anywhere; }',
+  '.card-reason { margin: 2px 0 0; color: #555; overflow-wrap: anywhere; }',
+  '.card-meta { margin: 4px 0 0; display: flex; gap: 8px; align-items: baseline; }',
+  '.card-price { font-weight: 600; }',
+  '.card-badge {',
+  '  font-size: 12px; padding: 1px 6px; border-radius: 999px; background: #f0e6e9; color: #7b1e3c;',
+  '}',
+  '.card-link { color: #7b1e3c; }',
   '.notice {',
   '  display: flex; align-items: center; gap: 8px; justify-content: space-between;',
   '  padding: 8px 16px; background: #fdf3f5; font-size: 14px;',
@@ -148,9 +165,13 @@ export const mountPanel = ({
 
   render(
     h(
-      MessagesContext.Provider,
-      { value: catalogues[locale] },
-      h(Chat, { ask: ask_ ?? asker(api, key), status: config.status }),
+      LocaleContext.Provider,
+      { value: locale },
+      h(
+        MessagesContext.Provider,
+        { value: catalogues[locale] },
+        h(Chat, { ask: ask_ ?? asker(api, key), status: config.status }),
+      ),
     ),
     body,
   );

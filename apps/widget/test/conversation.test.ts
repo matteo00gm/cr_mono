@@ -23,7 +23,18 @@ import {
 const answer = (text: string): Conversation =>
   apply(asked(empty, 'Che vino?'), { type: 'text', delta: text });
 
-const ITEMS = [{ productId: 'p1', reason: 'tannino deciso', confidence: 0.9 }];
+const WINE = {
+  name: 'Barolo Bussia',
+  producer: 'Cantina Rossi',
+  vintage: 2016,
+  priceCents: 4200,
+  currency: 'EUR',
+  imageUrl: null,
+  productUrl: null,
+  stockStatus: 'IN_STOCK',
+} as const;
+
+const ITEMS = [{ productId: 'p1', reason: 'tannino deciso', confidence: 0.9, product: WINE }];
 
 describe('asking', () => {
   it('adds the question and an empty answer to write into', () => {

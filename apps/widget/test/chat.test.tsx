@@ -38,9 +38,20 @@ const hangingAfter =
     },
   });
 
+const WINE = {
+  name: 'Barolo Bussia',
+  producer: 'Cantina Rossi',
+  vintage: 2016,
+  priceCents: 4200,
+  currency: 'EUR',
+  imageUrl: null,
+  productUrl: null,
+  stockStatus: 'IN_STOCK',
+} as const;
+
 const ITEMS = [
-  { productId: 'p1', reason: 'tannino deciso', confidence: 0.9 },
-  { productId: 'p2', reason: 'sorso morbido', confidence: 0.7 },
+  { productId: 'p1', reason: 'tannino deciso', confidence: 0.9, product: WINE },
+  { productId: 'p2', reason: 'sorso morbido', confidence: 0.7, product: WINE },
 ];
 
 const log = (): HTMLElement => screen.getByTestId('chat-log');

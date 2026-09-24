@@ -14,12 +14,15 @@ import type { StreamEvent } from './sse.js';
  * the DOM, which is what lets every case below be a plain assertion.
  */
 
-/** A card the visitor may be shown. Only ids this request retrieved reach here (P2-25). */
-export interface Recommendation {
-  readonly productId: string;
-  readonly reason: string;
-  readonly confidence: number;
-}
+/**
+ * A card the visitor may be shown.
+ *
+ * **Taken from the wire contract rather than restated** (P0-63). Only ids this
+ * request retrieved reach here, and every field but `reason` was replaced by
+ * the server from its own row before the event was sent (P2-25, P3-08) — a
+ * second declaration here would be a place for those to quietly disagree.
+ */
+export type Recommendation = Extract<WidgetChatEvent, { type: 'recommendations' }>['items'][number];
 
 export interface Turn {
   readonly role: 'visitor' | 'sommelier';
