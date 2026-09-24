@@ -540,3 +540,56 @@ jobs:
 
       - name: Integration tests
         run: pnpm test:integration
+
+  # The browser suite (P3-18).
+  #
+  # **Its own job, not part of `test`.** It needs Docker for Postgres *and* a
+  # downloaded Chromium, which is a different set of prerequisites from the unit
+  # suites — folding it in would make the fast job slow and make a laptop
+  # without either fail for a reason that has nothing to do with the change.
+  #
+  # Not behind `needs:` either, for the reason the integration job is not:
+  # chaining would hide a CORS regression behind a lint failure and cost a round
+  # trip to learn something we could have reported at once. This is the suite
+  # that proves the browser enforces the origin allowlist, which is the whole of
+  # the anti-sharing design — it should report on every pull request.
+  e2e:
+    name: Cross-origin browser suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The suite imports `@catalogorosso/api` and `@catalogorosso/testing` by
+      # package name, which resolve to `dist`. Without this it fails at import,
+      # several layers from the cause.
+      - name: Build
+        run: pnpm build
+
+      # And the widget bundle, which the host pages serve by file. The whole
+      # point is driving the *built* loader: a suite against source would have
+      # missed both defects this one found on its first run.
+      - name: Build the widget bundle
+        run: pnpm --filter @catalogorosso/widget build:bundle
+
+      - name: Install Chromium
+        run: pnpm e2e:install
+
+      - name: Cross-origin suite
+        run: pnpm e2e
+
+      - name: Upload traces
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-traces
+          path: apps/e2e/test-results/
+          retention-days: 7

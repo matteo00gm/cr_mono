@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  /* Lint + typecheck project. Nothing here is built: Playwright transpiles it. */
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["test", "playwright.config.ts"]
+}

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <title>Vini Neri</title>
+    <!--
+      The page that is trying to break us, without meaning to (P3-17, §6.3).
+
+      **A hostile reset**, of the kind a theme written in 2014 still ships:
+      `* { all: unset }` plus wildcard rules on everything the widget renders.
+      If any of it reaches inside the shadow root the launcher disappears from a
+      seller's site and we find out from them.
+
+      **And an aggressive CSP.** No `unsafe-inline`, no `unsafe-eval`. The
+      loader is written to survive exactly this (P3-01: no `eval`, no
+      `new Function`, no `document.write`), and a seller running a payment form
+      on the same page will have a policy at least this strict. `connect-src`
+      names the API because the widget has to be allowed to reach it at all —
+      that is a line in the seller documentation, and this page is where we find
+      out it is the right line.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' __API__"
+    />
+    <link rel="stylesheet" href="/hostile.css" />
+  </head>
+  <body>
+    <h1>Vini Neri</h1>
+    <p id="marker">Un tema del 2014, e nessuna intenzione di cambiarlo.</p>
+
+    <script
+      type="module"
+      src="/widget/loader.js"
+      data-key="__WIDGET_KEY__"
+      data-api="__API__"
+      async
+    ></script>
+  </body>
+</html>

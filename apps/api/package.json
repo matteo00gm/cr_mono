@@ -22,5 +22,15 @@
     "@types/node": "^26.4.0",
     "drizzle-orm": "^0.45.2"
   },
-  "type": "module"
+  "type": "module",
+  "exports": {
+    "./app": {
+      "types": "./dist/app.d.ts",
+      "default": "./dist/app.js"
+    },
+    "./security-events": {
+      "types": "./dist/security-events.d.ts",
+      "default": "./dist/security-events.js"
+    }
+  }
 }

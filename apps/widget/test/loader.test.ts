@@ -280,3 +280,112 @@ describe('what the launcher does when it is used', () => {
     expect(onPress).not.toHaveBeenCalled();
   });
 });
+
+describe('the stylesheet it injects', () => {
+  /*
+   * **Both of these shipped, and only a browser caught them** (P3-18). JSDOM
+   * applies no CSS, so nothing in this file could have — but a stylesheet is a
+   * string, and asserting on the string is cheap insurance against the same
+   * mistake being made again by somebody who never runs the browser suite.
+   */
+  const sheet = (): string => {
+    let text = '';
+
+    withScript({ 'data-key': 'pk_test_abc' }, () => {
+      const mounted = start();
+
+      text = [...(mounted?.shadow.querySelectorAll('style') ?? [])]
+        .map((node) => node.textContent ?? '')
+        .join(String.fromCharCode(10));
+    });
+
+    return text;
+  };
+
+  it('injects one at all, so the assertions below are not vacuous', () => {
+    expect(sheet()).toContain('button');
+  });
+
+  it('scopes every rule to the launcher', () => {
+    /*
+     * A bare `button` selector reaches the panel too: the composer, the cards
+     * and the retry all live in this same shadow root, and every one of them
+     * rendered as a 56px circle pinned to the bottom-right corner.
+     */
+    for (const rule of sheet().split('}')) {
+      const selector = rule.split('{')[0]?.trim() ?? '';
+
+      if (!selector.includes('button')) continue;
+
+      expect(selector, selector).toContain("part='launcher'");
+    }
+  });
+
+  it('claims the corner for the launcher and nothing else', () => {
+    const fixed = sheet()
+      .split('}')
+      .filter((rule) => rule.includes('position: fixed'));
+
+    expect(fixed).not.toHaveLength(0);
+
+    for (const rule of fixed) {
+      expect(rule, rule).toContain("part='launcher'");
+    }
+  });
+});
+
+describe('finding its own tag', () => {
+  /*
+   * **`document.currentScript` is null in a module script**, always, and the
+   * loader ships as one: `type="module"` is what makes `import()` resolve the
+   * widget chunk against the bundle's own URL rather than the shop's document
+   * base, and a classic script cannot use `import.meta` at all.
+   *
+   * As shipped before P3-18, the built loader threw
+   * `Cannot use 'import.meta' outside a module` on every storefront while every
+   * test here passed — because these call `start()` rather than loading the
+   * bundle in a browser.
+   */
+  it('falls back to the tag carrying the key', () => {
+    const script = document.createElement('script');
+
+    script.setAttribute('data-key', 'pk_test_abc');
+    script.setAttribute('data-api', 'https://api.example');
+    document.head.append(script);
+
+    /* No `currentScript`, exactly as a module script sees it. */
+    Object.defineProperty(document, 'currentScript', { value: null, configurable: true });
+
+    try {
+      expect(start()).toBeDefined();
+      expect(globalThis.__sommelier?.key).toBe('pk_test_abc');
+      expect(globalThis.__sommelier?.api).toBe('https://api.example');
+    } finally {
+      script.remove();
+    }
+  });
+
+  it('still prefers currentScript when there is one', () => {
+    /* Exact when it works, and two tags on a page is a thing that happens. */
+    const other = document.createElement('script');
+
+    other.setAttribute('data-key', 'pk_test_wrong');
+    document.head.append(other);
+
+    try {
+      withScript({ 'data-key': 'pk_test_right' }, () => {
+        start();
+      });
+
+      expect(globalThis.__sommelier?.key).toBe('pk_test_right');
+    } finally {
+      other.remove();
+    }
+  });
+
+  it('mounts nothing when no tag carries a key', () => {
+    Object.defineProperty(document, 'currentScript', { value: null, configurable: true });
+
+    expect(start()).toBeUndefined();
+  });
+});

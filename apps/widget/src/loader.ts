@@ -55,17 +55,41 @@ declare global {
 }
 
 /**
- * Read from `document.currentScript`, synchronously, at module top level.
+ * The tag the seller pasted.
  *
- * **`currentScript` is null inside any async callback**, and a loader that read
- * it later would find nothing and mount nothing — with no error, on the
- * seller's site, discovered by the seller. Captured here and passed down.
+ * **`document.currentScript` is null in a module script**, always, and this
+ * ships as one — `type="module"` is what makes `import()` resolve the widget
+ * chunk against the bundle's own URL rather than against the shop's document
+ * base, and a classic script cannot use `import.meta` at all. That combination
+ * is not obvious from either half, and it cost a whole suite to find: the built
+ * loader threw `Cannot use 'import.meta' outside a module` on every storefront
+ * while every unit test passed, because the unit tests call `start()` rather
+ * than loading the bundle in a browser (P3-18).
+ *
+ * `currentScript` is still tried first, because it is exact when it works and
+ * this file is also loaded directly by tests. The fallback finds our tag by the
+ * attribute only we ask for — and a module script is deferred, so the DOM is
+ * parsed by the time it runs and the tag is there to find.
  */
-const scriptAttribute = (name: string): string | undefined => {
-  const script = document.currentScript;
+const ownScript = (): HTMLScriptElement | undefined => {
+  const current = document.currentScript;
 
-  return script instanceof HTMLScriptElement ? (script.dataset[name] ?? undefined) : undefined;
+  if (current instanceof HTMLScriptElement) return current;
+
+  const tagged = document.querySelector('script[data-key]');
+
+  return tagged instanceof HTMLScriptElement ? tagged : undefined;
 };
+
+/**
+ * Read synchronously, at module top level.
+ *
+ * **Never inside an async callback**, whichever mechanism found the tag: a
+ * loader that read it later would find nothing and mount nothing — with no
+ * error, on the seller's site, discovered by the seller.
+ */
+const scriptAttribute = (name: string): string | undefined =>
+  ownScript()?.dataset[name] ?? undefined;
 
 /** Where the API lives when the seller has not said otherwise. */
 export const DEFAULT_API = 'https://api.catalogorosso.com';
@@ -91,18 +115,32 @@ const buildLauncher = (document_: Document, label: string): HTMLButtonElement =>
   return button;
 };
 
-/** The launcher's styles, scoped by the shadow root rather than by a class name nobody owns. */
+/**
+ * The launcher's styles.
+ *
+ * **Every selector names the launcher, and a bare `button` would be a bug.**
+ * The shadow root scopes these away from the shop, which is what it is for —
+ * but the panel P3-06 mounts lives in the *same* root, so an unqualified
+ * `button` rule reaches the composer, the cards and the retry alike. It did:
+ * every control in the panel rendered as a 56px circle pinned to the corner,
+ * stacked on top of the launcher and on top of each other.
+ *
+ * Nothing in JSDOM could see it, because JSDOM applies no CSS. P3-18 found it
+ * on its first run, and `cross-origin.spec.ts` pins it.
+ */
 const LAUNCHER_STYLE = [
   ':host { all: initial; }',
-  'button {',
+  "button[part='launcher'] {",
   '  position: fixed; bottom: 20px; right: 20px; z-index: 2147483000;',
   '  width: 56px; height: 56px; border: 0; border-radius: 50%;',
   '  background: #7b1e3c; color: #fff; font-size: 24px; line-height: 1;',
   '  cursor: pointer; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);',
   '}',
-  'button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }',
-  '@media (prefers-reduced-motion: no-preference) { button { transition: transform 120ms; } }',
-  'button:hover { transform: scale(1.05); }',
+  "button[part='launcher']:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }",
+  '@media (prefers-reduced-motion: no-preference) {',
+  "  button[part='launcher'] { transition: transform 120ms; }",
+  '}',
+  "button[part='launcher']:hover { transform: scale(1.05); }",
 ].join('\n');
 
 /**

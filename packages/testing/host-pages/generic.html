@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <title>Enoteca Bianchi</title>
+    <!--
+      A proprietary site with its own cart (P3-17, P3-12, §1.6).
+
+      No `window.Shopify`, no `/cart/add.js` — the shape most wineries worth
+      selling to actually have, where a web agency built the cart in 2019 and
+      nobody is porting it. What it implements instead is the documented
+      contract, and `__calls` is how a test reads back what the widget asked it
+      to do.
+    -->
+    <script>
+      window.__sommelierCalls = [];
+      window.__sommelierCart = {
+        addToCart(item) {
+          window.__sommelierCalls.push(item);
+
+          return Promise.resolve();
+        },
+        getCount() {
+          return window.__sommelierCalls.length;
+        },
+      };
+    </script>
+  </head>
+  <body>
+    <h1>Enoteca Bianchi</h1>
+    <p id="marker">Un carrello nostro, non il vostro.</p>
+
+    <script
+      type="module"
+      src="/widget/loader.js"
+      data-key="__WIDGET_KEY__"
+      data-api="__API__"
+      async
+    ></script>
+  </body>
+</html>

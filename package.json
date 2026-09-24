@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "AI Sommelier \u2014 Multi-Tenant SaaS RAG Platform",
+  "description": "AI Sommelier — Multi-Tenant SaaS RAG Platform",
   "packageManager": "pnpm@11.24.0",
   "engines": {
     "node": ">=22.13"
@@ -36,7 +36,9 @@
     "consumers": "node scripts/api-consumers.mjs",
     "consumers:check": "node scripts/api-consumers.mjs --check",
     "eval": "turbo run build --filter=@catalogorosso/eval... && node packages/eval/dist/cli.js",
-    "size:check": "pnpm --filter @catalogorosso/widget build:bundle && node scripts/check-bundle-size.mjs"
+    "size:check": "pnpm --filter @catalogorosso/widget build:bundle && node scripts/check-bundle-size.mjs",
+    "e2e": "pnpm --filter @catalogorosso/e2e e2e",
+    "e2e:install": "pnpm --filter @catalogorosso/e2e e2e:install"
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [
@@ -50,6 +52,7 @@
   "devDependencies": {
     "@commitlint/cli": "^21.2.2",
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0",
     "@testcontainers/postgresql": "^12.1.0",
     "@types/node": "^26.4.0",
     "@vitest/coverage-v8": "^4.1.11",

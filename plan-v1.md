@@ -236,9 +236,11 @@ Every request opens a transaction and sets `SET LOCAL app.tenant_id = $1` from t
 The seller pastes one tag (dashboard shows it with a copy button):
 
 ```html
-<script async src="https://cdn.catalogorosso.com/v1/w.js"
+<script type="module" async src="https://cdn.catalogorosso.com/v1/w.js"
         data-key="pk_live_9f3a…"></script>
 ```
+
+**`type="module"` is load-bearing** *(P3-18)*. The loader reaches the widget bundle through a dynamic `import()`, which only resolves against the bundle's own URL in a module — a classic script resolves it against the *shop's* document base and cannot use `import.meta` at all. As shipped before the browser suite existed, the built loader threw `Cannot use 'import.meta' outside a module` on every storefront while every unit test passed. It also means `document.currentScript` is always null, so the loader finds its own tag by `[data-key]`.
 
 - **Shopify:** paste into `theme.liquid` before `</body>`. Ship a theme app extension in phase 2 so no theme edit is needed.
 - **Custom sites:** same tag; add-to-cart wired through the adapter contract (§1.7).
@@ -1356,8 +1358,8 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P3-14 | i18n IT/EN | | P3-07 |
 | ✅ P3-15 | a11y pass | focus trap, keyboard, reduced motion, AA contrast check | P3-07 |
 | ✅ P3-16 | 🔒 Token in memory, anon id in sessionStorage | no cookies, no `localStorage` | P3-06 |
-| P3-17 | `packages/testing`: fake host pages | two origins (4001 verified / 4002 not), fake Shopify cart | P0-44 |
-| P3-18 | ⛔ 🔒 Cross-origin Playwright suite | real browser proves CORS, not just headers | P3-17,P2-09 |
+| ✅ P3-17 | `packages/testing`: fake host pages | two origins (4001 verified / 4002 not), fake Shopify cart | P0-44 |
+| ✅ P3-18 | ⛔ 🔒 Cross-origin Playwright suite | real browser proves CORS, not just headers | P3-17,P2-09 |
 | P3-19 | Visual regression per state per locale | | P3-14 |
 | P3-20 | `widget_events` emission | open, message, recommendation, detail, add_to_cart, zero_results | P0-29 |
 | P3-21 | Session auto-refresh | proactive + on-401, single-flight, retry once, `DISABLED` renders disabled not error | P2-12a |
@@ -6188,6 +6190,13 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 
 **Files.** `packages/testing/host-pages/*`, server script. **~150 lines.**
 
+**As built (2026-09-24).** Four pages and one server, in `packages/testing`.
+
+- **One page file, served on both ports.** `:4001` is verified in the seed and `:4002` is not, and they are byte-identical by construction — asserted, because if they ever differ a widget that fails on `:4002` proves nothing: it could be the CORS refusal the suite is looking for, or a typo in a second copy of the page.
+- **The fake Shopify cart answers on the *host page's* origin**, which is the point: `/cart/add.js` belongs to the shop, and a harness serving it from the API would prove nothing about the request the widget actually makes. It records every call and exposes them over HTTP, because a browser test cannot read our memory.
+- **The hostile page carries a real CSP and a reset that would flatten anything it could reach.** `* { all: unset }`, wildcard `display: none` on every class the widget renders, and `script-src 'self'` with no `unsafe-inline` and no `unsafe-eval`.
+- **⚠ The widget needs `style-src 'unsafe-inline'`** *(open item)*. It builds its stylesheet as a `<style>` element inside the shadow root, and CSP governs those wherever they are created — so a seller with a strict policy must allow it or lose every style. That is a line in the seller documentation rather than a bug, and it is asserted in the harness so it stays a deliberate cost. `adoptedStyleSheets` is not governed by `style-src` and would remove the requirement entirely; not done here, because a test row is the wrong place for a rendering change.
+
 ---
 
 ### P3-18 · Cross-origin Playwright suite ⛔ 🔒
@@ -6197,6 +6206,18 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 **How.** Playwright against the P3-17 pages. From `:4001`: widget mounts, config loads, session mints, a message streams, cards render, add-to-cart hits the fake Shopify endpoint with the session property. From `:4002`: the browser **blocks** the request — assert on the console CORS error and on the absence of a rendered widget, and assert a `security_events` row was written server-side. Then: remove the domain via the API and confirm `:4001` starts failing on the next request (§5.7's immediate effect). Also run the hostile-CSS page to confirm no style leakage in either direction.
 
 **Files.** `e2e/cross-origin.spec.ts`, Playwright config. **~180 test lines.**
+
+**As built (2026-09-24).** `apps/e2e`, twelve cases, green in about thirteen seconds against a real Chromium and a real Postgres. **It found two defects that would have shipped**, and neither was visible to any unit test.
+
+- **`apps/e2e` rather than a root `e2e/`** *(deviation)*. A root directory would sit outside the workspace globs and therefore outside `lint` and `typecheck` — the shape `infra/` already has, and tests nobody typechecks are tests nobody can trust. As an app it is linted and typechecked like everything else. It is the one consumer *downstream* of the apps, so the packages-may-not-import-apps rule is switched off for it explicitly, with the reason written beside the exception.
+- **⚠ The built loader threw on every storefront.** `Cannot use 'import.meta' outside a module`: Vite emits the module-preload helper for the dynamic `import()`, and the seller snippet was a classic script. The fix is `type="module"`, which is also what makes `import()` resolve the widget chunk against the bundle's own URL rather than the shop's document base — and which means `document.currentScript` is *always* null, so the loader now finds its own tag by `[data-key]`. Every unit test passed throughout, because they call `start()` rather than loading the bundle in a browser. §1.1's snippet is updated.
+- **⚠ The launcher's stylesheet styled every control in the panel.** A bare `button` selector. The shadow root scopes it away from the *shop* — which is what it is for — but the panel lives in the same root, so the composer, the cards and the retry all rendered as 56px circles pinned to the bottom-right corner, stacked on the launcher and on each other. JSDOM applies no CSS, so the entire widget suite was green. Every selector now names `button[part='launcher']`, pinned by a browser assertion *and* by a cheap string assertion in `loader.test.ts`.
+- **The model is the one scripted piece** (P1-47: no paid provider calls without agreed spend). Everything under it is real: the CORS middleware, the key resolution against Postgres as `app_rw`, the session mint with a per-run keyset, the SSE stream piped rather than buffered, and the cart line posted to the shop's own endpoint.
+- **⚠ `environment: 'development'`, and it is load-bearing.** P2-05's production rule refuses `http:` and `localhost` outright, so a production-mode harness would refuse *both* ports and the `:4002` case would pass for the wrong reason — proving the scheme check rather than the verified-origin set. Development relaxes normalisation only; membership of `tenant_domains` is decided identically either way, which is the thing under test.
+- **⚠ §5.7's "immediate effect" is not observable on the config route**, and the first version of the test assumed it was. The config response is deliberately cacheable (`public, max-age=60`, P2-10, because it is edge-cached and world-readable), so a shopper who reloads inside that minute is answered by their own browser. The session mint is a POST and cannot be cached, so that is where the effect shows: the panel opens from cached config and the first question is refused.
+- **Serial, one worker, no retries.** Every test shares one database and one API, and one test un-verifies the domain the others depend on — restored in `beforeEach`. A retry would hide a flake, and a flake in the suite that proves the browser enforces CORS is a thing to investigate.
+- **Its own CI job**, not folded into `test`: it needs Docker *and* a downloaded Chromium, and `pnpm test` must stay runnable on a laptop with neither. Not behind `needs:`, for the reason the integration job is not.
+- **Deferred to P3-19:** the `axe-core` full rule set in a browser (P3-15 runs the structural subset in JSDOM) and the hostile-CSS style-leakage assertions, which are visual-regression work and belong with the screenshots.
 
 ---
 

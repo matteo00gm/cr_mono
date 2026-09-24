@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <title>Cantina Rossi</title>
+    <!--
+      A Shopify storefront, as far as the widget can tell (P3-17, §6.3).
+
+      `window.Shopify` is what every Shopify theme sets and what `resolveCart`
+      detects, and `/cart/add.js` is served by this same origin — which is the
+      point: the cart belongs to the shop, not to us, and a harness that served
+      it from the API origin would prove nothing about the thing that matters.
+
+      **This page is served on two ports from one file.** `:4001` is a verified
+      domain in the seed and `:4002` is not, so the only difference between a
+      widget that works and a widget the browser blocks is the origin it is
+      loaded from. Two files would let them drift, and a drift here would look
+      exactly like the CORS failure the suite exists to prove.
+    -->
+    <script>
+      window.Shopify = { shop: 'cantina-rossi.myshopify.com', locale: 'it' };
+    </script>
+    <style>
+      body {
+        font:
+          16px/1.5 system-ui,
+          sans-serif;
+        margin: 0;
+        padding: 32px;
+        color: #222;
+      }
+      .wine {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 16px;
+        max-width: 420px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Cantina Rossi</h1>
+
+    <div class="wine">
+      <h2>Barolo Bussia 2016</h2>
+      <p>42,00 €</p>
+      <button type="button" id="host-add">Aggiungi al carrello</button>
+    </div>
+
+    <p id="marker">La pagina del negozio, non la nostra.</p>
+
+    <script
+      type="module"
+      src="/widget/loader.js"
+      data-key="__WIDGET_KEY__"
+      data-api="__API__"
+      async
+    ></script>
+  </body>
+</html>
