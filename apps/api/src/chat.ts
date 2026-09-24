@@ -1,11 +1,13 @@
 import {
   allowlisted,
   assertModelPriced,
+  capHistory,
   CHAT_MESSAGE,
   costMicrosFor,
   escalationsFor,
   MAX_HISTORY_TURNS,
   periodOf,
+  replyLocale,
   QUOTA_EXCEEDED_MESSAGE,
   tierFor,
   withoutLeakedInstructions,
@@ -17,6 +19,7 @@ import {
   type PairingChunk,
   type PairingOutcome,
   type Recommendation,
+  type SupportedLocale,
   type Turn,
 } from '@catalogorosso/core';
 import {
@@ -102,6 +105,11 @@ export interface TurnReport {
    * being kept out of. The count is enough to notice a spike.
    */
   readonly redacted: number;
+  /** The language the reply was written in, and whether the message chose it (P2-34). */
+  readonly locale: SupportedLocale;
+  readonly localeDetected: boolean;
+  /** How many earlier turns the caps left out (P2-35). */
+  readonly historyDropped: number;
   /**
    * The reply was cut short because it began quoting the instructions (P2-32).
    *
@@ -202,6 +210,14 @@ export const createChatPort = ({
           return row === undefined ? [] : [asCandidate(row)];
         });
 
+        /*
+         * **The shop's locale is the tie-breaker, not English** (P2-34). A
+         * three-word message is not reliably detectable, and a winery in
+         * Piemonte whose visitor typed something ambiguous is answered in
+         * Italian far more often than not.
+         */
+        const { locale, detected } = replyLocale(question, tenant.locale);
+
         const history: Turn[] = (
           await withTenant(tenant.tenantId, (tx) =>
             readConversation(tx, sessionId, MAX_HISTORY_TURNS * 2),
@@ -211,6 +227,14 @@ export const createChatPort = ({
             ? []
             : [{ role: entry.role === 'USER' ? 'user' : 'assistant', content: entry.content }],
         );
+
+        /*
+         * **Two controls in one number** (P2-35, §1.4). History is the largest
+         * variable part of a prompt, so it is what the bill scales with — and
+         * every earlier turn is text a visitor wrote, so it is attack surface
+         * that grows with the conversation.
+         */
+        const recent = capHistory(history);
 
         /*
          * **A provider swap, not a second code path** (P2-28). The schema
@@ -252,7 +276,7 @@ export const createChatPort = ({
           allowlisted(
             withSchemaRepair(
               provider,
-              { query: question, locale: tenant.locale, candidates, history },
+              { query: question, locale, candidates, history: recent.turns },
               signal,
               {
                 onOutcome: (reported) => {
@@ -299,7 +323,7 @@ export const createChatPort = ({
               sessionId,
               origin,
               visitorHash,
-              locale: tenant.locale,
+              locale,
               question,
               reply,
               retrievedProductIds: candidates.map((candidate) => candidate.id),
@@ -328,6 +352,9 @@ export const createChatPort = ({
             dropped,
             leaked,
             redacted: removed,
+            locale,
+            localeDetected: detected,
+            historyDropped: recent.dropped,
             costMicros,
           });
         }

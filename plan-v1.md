@@ -1332,8 +1332,8 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P2-31 | `usage_events` writer | tokens, model, cost per turn | P0-30 |
 | ✅ P2-32 | 🔒 Prompt-injection test suite | instructions seeded into `tasting_notes` | P2-23 |
 | ✅ P2-33 | 🔒 PII redaction pre-prompt | regex + fixtures; nothing personal reaches the model | P2-23 |
-| P2-34 | Language detection + reply locale | IT/EN | P2-29 |
-| P2-35 | History + token caps | 6 turns, hard token ceiling | P2-29 |
+| ✅ P2-34 | Language detection + reply locale | IT/EN | P2-29 |
+| ✅ P2-35 | History + token caps | 6 turns, hard token ceiling | P2-29 |
 | ✅ P2-36 | Quota check **before** model call | the actual cost gate | P2-04 |
 
 ### P3 — Widget client
@@ -5793,6 +5793,14 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 
 **Files.** `locale.ts`, tests. **~70 lines.**
 
+**As built (2026-09-22).** `packages/core/src/rag/locale.ts`, called by P2-29's chat port.
+
+- **A word list rather than `franc`** *(deviation the row allows)*. General detectors want a paragraph and a visitor types four words — and the words a wine question is made of are loanwords everywhere: a Londoner asks for a *rosso*, a Roman for a *blend*. The markers are function words, which are the part of a sentence a visitor cannot borrow.
+- **Two signals before the detector is believed**, and the shop's locale otherwise. One word is a coin toss: "Barolo" is Italian and is also what an English speaker types.
+- **A tie goes to the shop too** *(addition)*. Equal markers in both languages is a message that has said nothing, which is the same situation as a short one.
+- **An unsupported tenant locale falls to Italian, not English**, because every tenant at launch is an Italian winery (§1.1).
+- **It reports whether the message or the shop decided** *(addition)*, so a run of fallbacks on a shop whose visitors write English is visible.
+
 ---
 
 ### P2-35 · History and token caps
@@ -5802,6 +5810,13 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 **Tests.** 20 turns truncate to 6; a single enormous turn is truncated by the token ceiling; truncation never splits a message.
 
 **Files.** `history.ts`, tests. **~70 lines.**
+
+**As built (2026-09-22).** `packages/core/src/rag/history.ts`, called by P2-29's chat port. *Shipped in P2-34's commit* — both are small pure functions wiring into the same three lines of that port, and the commit convention takes one task id.
+
+- **Both caps, and the tighter decides.** Six turns is a count, and one turn can be most of a prompt — so a count alone bounds the wrong quantity, and the bill is what finds out.
+- **Whole messages only.** A turn that does not fit is dropped, never trimmed: the model reads a fragment as a complete thought, and a fragment of a visitor's message is exactly where an injected instruction ends up looking like our own (§1.4).
+- **Four characters per token**, conservative in the direction that trims a turn rather than overruns a prompt. A tokeniser would be a dependency and a version to keep aligned with a remote model, for a bound that exists to be approximate — and the caller may pass the provider's own counter instead.
+- **It reports what was left out and what the rest costs**, which is what P1-46 sweeps against.
 
 ---
 

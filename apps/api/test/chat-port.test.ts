@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { MAX_HISTORY_TURNS } from '@catalogorosso/core';
 import type { EmbeddingProvider, LlmProvider, PairingChunk } from '@catalogorosso/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -316,5 +317,55 @@ describe('what a visitor volunteers', () => {
 
     expect(recorded.turns[0]?.question).toBe('cerco un Barolo del 2016 sotto i 30 euro');
     expect(report?.redacted).toBe(0);
+  });
+});
+
+describe('which language, and how much history', () => {
+  it('answers an English question in English from an Italian shop (P2-34)', async () => {
+    const seen: string[] = [];
+    const watching: LlmProvider = {
+      id: 'watching',
+      streamPairing: (request) => {
+        seen.push(request.locale);
+
+        return speaking().streamPairing({} as never, new AbortController().signal);
+      },
+    };
+
+    const { report } = await ask(portWith(watching), 'What would you recommend with steak?');
+
+    expect(seen[0]).toBe('en');
+    expect(report?.locale).toBe('en');
+    expect(report?.localeDetected).toBe(true);
+  });
+
+  it('falls back to the shop for a message too short to read', async () => {
+    const { report } = await ask(portWith(speaking()), 'Barolo');
+
+    expect(report?.locale).toBe('it');
+    expect(report?.localeDetected).toBe(false);
+  });
+
+  it('sends the model at most the recent turns (P2-35)', async () => {
+    recorded.history = Array.from({ length: 20 }, (_, at) => ({
+      role: at % 2 === 0 ? 'USER' : 'ASSISTANT',
+      content: `turno ${String(at)}`,
+      retrievedProductIds: [],
+    }));
+
+    const seen: number[] = [];
+    const watching: LlmProvider = {
+      id: 'watching',
+      streamPairing: (request) => {
+        seen.push(request.history.length);
+
+        return speaking().streamPairing({} as never, new AbortController().signal);
+      },
+    };
+
+    const { report } = await ask(portWith(watching));
+
+    expect(seen[0]).toBeLessThanOrEqual(MAX_HISTORY_TURNS);
+    expect(report?.historyDropped).toBeGreaterThan(0);
   });
 });

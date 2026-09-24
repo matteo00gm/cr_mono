@@ -188,3 +188,35 @@ export {
  * reply, and the adapters stream text before that check runs.
  */
 export { LONGEST_PATTERN, withoutLeakedInstructions } from './leak-guard.js';
+
+/**
+ * Which language the reply is written in (P2-34).
+ *
+ * Two languages and a known domain make a word list better than a general
+ * detector — and the shop's own locale is the tie-breaker, because a
+ * three-word message is not reliably detectable.
+ */
+export {
+  MIN_SIGNALS,
+  replyLocale,
+  SUPPORTED_LOCALES,
+  tenantLocale,
+  type LocaleChoice,
+  type SupportedLocale,
+} from './locale.js';
+
+/**
+ * How much of a conversation reaches the prompt (P2-35).
+ *
+ * A cost control and an injection-surface control in one number: history is
+ * the largest variable part of a prompt, and every earlier turn is text a
+ * visitor wrote.
+ */
+export {
+  capHistory,
+  CHARACTERS_PER_TOKEN,
+  estimateTokens,
+  MAX_HISTORY_TOKENS,
+  type CappedHistory,
+  type HistoryLimits,
+} from './history.js';
