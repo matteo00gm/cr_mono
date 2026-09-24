@@ -20,6 +20,8 @@
  * and no model call, no session, no query.
  */
 
+import { adoptStyles } from './adopt-styles.js';
+
 /** The element the loader mounts. A custom name, so a page's own CSS cannot reach inside. */
 export const HOST_TAG = 'sommelier-widget';
 
@@ -228,13 +230,18 @@ export const mount = ({
 
   const host = document_.createElement(HOST_TAG);
   const shadow = host.attachShadow({ mode: 'open' });
-  const style = document_.createElement('style');
 
-  style.textContent = LAUNCHER_STYLE;
+  /*
+   * Adopted rather than appended as a `<style>` element (P3-18). A style
+   * element is governed by `style-src` wherever it is created, so the element
+   * form asks every seller on a strict CSP for `'unsafe-inline'` — and a seller
+   * with a payment form on the same page is the one least willing to give it.
+   */
+  adoptStyles(shadow, LAUNCHER_STYLE, document_);
 
   const launcher = buildLauncher(document_, label);
 
-  shadow.append(style, launcher);
+  shadow.append(launcher);
   document_.body.append(host);
 
   return { host, shadow, launcher };

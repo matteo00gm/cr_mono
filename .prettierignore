@@ -33,3 +33,7 @@ docs/api/consumers.md
 # `pnpm format:check` fails on somebody else's checkout of the same code, and
 # the fix looks like formatting the whole repository.
 .claude/
+
+# Playwright output (P3-18): generated, and not ours to format.
+apps/e2e/test-results/
+apps/e2e/playwright-report/

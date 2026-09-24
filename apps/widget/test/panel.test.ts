@@ -1,6 +1,7 @@
 import type { WidgetConfigResponse } from '@catalogorosso/api-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { adoptStyles } from '../src/adopt-styles.js';
 import type { CartPort } from '../src/cart/port.js';
 import type { Asker } from '../src/components/Chat.js';
 import { en } from '../src/i18n/en.js';
@@ -56,7 +57,7 @@ beforeEach(() => {
 });
 
 const mount = (ask: Asker = silent) =>
-  mountPanel({ shadow, launcher, config, api: API, key: KEY, ask });
+  mountPanel({ shadow, launcher, adoptStyles, config, api: API, key: KEY, ask });
 
 describe('what is inside the panel', () => {
   it('mounts the chat', () => {
@@ -92,7 +93,7 @@ describe('what is inside the panel', () => {
 
     vi.stubGlobal('fetch', fetch_);
 
-    mountPanel({ shadow, launcher, config, api: API, key: KEY });
+    mountPanel({ shadow, launcher, adoptStyles, config, api: API, key: KEY });
 
     expect(fetch_).not.toHaveBeenCalled();
   });
@@ -147,6 +148,7 @@ describe('a winery that is not serving', () => {
     const panel = mountPanel({
       shadow,
       launcher,
+      adoptStyles,
       config: { ...config, status: 'DISABLED' },
       api: API,
       key: KEY,
@@ -199,6 +201,7 @@ describe('the storefront own cart', () => {
     mountPanel({
       shadow,
       launcher,
+      adoptStyles,
       config,
       api: API,
       key: KEY,
@@ -228,6 +231,7 @@ describe('the storefront own cart', () => {
     const panel = mountPanel({
       shadow,
       launcher,
+      adoptStyles,
       config: { ...config, cartUrl: 'https://cantina-rossi.example/carrello' },
       api: API,
       key: KEY,

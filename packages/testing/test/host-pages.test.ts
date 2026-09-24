@@ -239,21 +239,22 @@ describe('the other two pages', () => {
     expect(policy).not.toContain('unsafe-eval');
   });
 
-  it('⚠ still has to allow inline style, which is a requirement we ship', async () => {
+  it('forbids inline style too, which the widget no longer needs', async () => {
     /*
-     * **The widget cannot run under `style-src 'self'` today.** It builds its
-     * stylesheet as a `<style>` element inside the shadow root, and CSP governs
-     * those wherever they are created — so a seller with a strict policy has to
-     * add `'unsafe-inline'` to `style-src` or lose every style.
+     * **This used to say the opposite.** The widget built its stylesheet as a
+     * `<style>` element, and CSP governs those wherever they are created — so
+     * every seller on a strict policy had to add `'unsafe-inline'` to
+     * `style-src` or lose every style. P3-18 adopts a constructed stylesheet
+     * instead, which is a script operation covered by the `script-src` they
+     * already allow, and the requirement is gone.
      *
-     * That is a line in the seller documentation rather than a bug, and it is
-     * asserted here so it stays a deliberate cost: `adoptedStyleSheets` is not
-     * governed by `style-src` and would remove the requirement entirely, which
-     * is recorded as an open item rather than done in a test row.
+     * The page asserting it is the page that proves it: the widget has to look
+     * right under this policy, in a real browser (P3-18).
      */
     const policy = cspIn(await (await get(verified.origin, '/hostile')).text());
+    const styleSrc = /style-src ([^;]*)/u.exec(policy)?.[1] ?? '';
 
-    expect(policy).toContain("style-src 'self' 'unsafe-inline'");
+    expect(styleSrc).toBe("'self'");
   });
 
   it('serves a reset that would flatten anything it could reach', async () => {

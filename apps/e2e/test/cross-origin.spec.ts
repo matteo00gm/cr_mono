@@ -181,6 +181,62 @@ test.describe('from a verified domain', () => {
   });
 });
 
+test.describe('on a page with a strict CSP and a hostile reset', () => {
+  test('mounts, and is styled, under `style-src self`', async ({ page }) => {
+    /*
+     * **The requirement this removes was real.** A `<style>` element is governed
+     * by `style-src` wherever it is created, so building the stylesheet that way
+     * asked every seller on a strict policy for `'unsafe-inline'` — and a seller
+     * with a payment form on the same page is the one least willing to give it.
+     * P3-18 adopts a constructed stylesheet instead, which is a script operation
+     * covered by the `script-src` they already allow.
+     *
+     * Only a browser can say whether that worked: a policy violation is a
+     * console error and a silently unstyled widget, which reads exactly like a
+     * CSS bug.
+     */
+    const lines = consoleOf(page);
+
+    await page.goto(`${harness.verified.origin}/hostile`);
+    await expect(launcher(page)).toBeVisible();
+
+    /* Styled, not merely present: the launcher's own rule has to have applied. */
+    const box = await launcher(page).boundingBox();
+
+    expect(box?.width).toBe(56);
+    expect(box?.height).toBe(56);
+
+    expect(lines.join('\n')).not.toMatch(/Content Security Policy|Refused to apply/iu);
+  });
+
+  test('injects no style element at all', async ({ page }) => {
+    await page.goto(`${harness.verified.origin}/hostile`);
+    await expect(launcher(page)).toBeVisible();
+
+    const styles = await page.evaluate(
+      () =>
+        document.querySelector('sommelier-widget')?.shadowRoot?.querySelectorAll('style').length,
+    );
+
+    expect(styles).toBe(0);
+  });
+
+  test('lets none of the shop reset reach inside, and none of ours reach out', async ({ page }) => {
+    /*
+     * Both directions. The page's `* { all: unset }` and its wildcard
+     * `display: none !important` would flatten the launcher if they could reach
+     * it; our own rules must equally not touch the shop's own markup.
+     */
+    await page.goto(`${harness.verified.origin}/hostile`);
+    await expect(launcher(page)).toBeVisible();
+
+    const marker = page.locator('#marker');
+
+    await expect(marker).toBeVisible();
+    await expect(marker).toHaveCSS('color', 'rgb(17, 17, 17)');
+  });
+});
+
 test.describe('from a domain nobody verified', () => {
   test('the browser blocks the config request', async ({ page }) => {
     /*
