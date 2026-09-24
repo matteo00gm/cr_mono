@@ -417,6 +417,9 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
       /** A refused *token* (P2-16), which is a different fact from a refused origin. */
       onTokenRejected: refusalRecorders(insertSecurityEvent).onTokenRejected,
 
+      /** The metric's one dimension (P2-28). */
+      stage: config.stage,
+
       chat,
     },
 

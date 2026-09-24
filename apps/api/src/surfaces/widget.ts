@@ -21,6 +21,11 @@ import { Hono, type Context, type Handler, type MiddlewareHandler } from 'hono';
 import { streamSSE } from 'hono/streaming';
 
 import type { AppEnv } from '../env.js';
+import {
+  CHAT_ESCALATIONS_METRIC,
+  CHAT_METRIC_NAMESPACE,
+  CHAT_TURNS_METRIC,
+} from '../chat-metrics.js';
 import { QuotaExceededError, type ChatPort } from '../chat.js';
 import { requireWidgetToken, type RejectedWidgetToken } from '../middleware/widget-auth.js';
 import { routeKey } from '../middleware/capability.js';
@@ -81,6 +86,12 @@ export interface WidgetDependencies {
    * continuing without asking could revive a revoked token's conversation.
    */
   readonly isTokenRevoked?: TokenRevocationCheck | undefined;
+  /**
+   * Which stage this is, as the metric's one dimension (P2-28).
+   *
+   * Absent on a local run, where the metric line is a log line nobody reads.
+   */
+  readonly stage?: string | undefined;
   /** Where a refused *token* goes (P2-16). Separate from `onRejected`, which is CORS's. */
   readonly onTokenRejected?: ((event: RejectedWidgetToken) => Promise<void>) | undefined;
   /**
@@ -374,7 +385,40 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
           signal: c.req.raw.signal,
         },
         (report) => {
-          logger.info({ ...report, tenantId: tenant.tenantId }, 'widget chat turn');
+          /*
+           * **Embedded Metric Format**, so CloudWatch extracts the two counts
+           * from this line with no metric filter to wire and forget (P2-28,
+           * and the same mechanism the sweep uses). The alarm divides them: an
+           * escalation *rate* is what says the cheap tier is failing, where an
+           * absolute count says only that it was a busy Saturday.
+           *
+           * No tenant dimension. A per-tenant metric is a custom metric per
+           * tenant, billed per tenant, and the question the rate answers is
+           * about the model rather than about any one shop.
+           */
+          logger.info(
+            {
+              ...report,
+              tenantId: tenant.tenantId,
+              _aws: {
+                Timestamp: Date.now(),
+                CloudWatchMetrics: [
+                  {
+                    Namespace: CHAT_METRIC_NAMESPACE,
+                    Dimensions: [['Stage']],
+                    Metrics: [
+                      { Name: CHAT_TURNS_METRIC, Unit: 'Count' },
+                      { Name: CHAT_ESCALATIONS_METRIC, Unit: 'Count' },
+                    ],
+                  },
+                ],
+              },
+              Stage: widget.stage,
+              [CHAT_TURNS_METRIC]: 1,
+              [CHAT_ESCALATIONS_METRIC]: report.escalations.length > 0 ? 1 : 0,
+            },
+            'widget chat turn',
+          );
         },
       );
 
