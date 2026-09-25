@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { insertDomain, readDomainByOrigin, readDomains } from '../src/domains-write.js';
+import {
+  countDomains,
+  insertDomain,
+  readDomainByOrigin,
+  readDomains,
+  readTenantPlan,
+} from '../src/domains-write.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 
 /**
@@ -54,70 +60,172 @@ const raw = {
   created_at: new Date('2026-09-25T09:00:00.000Z'),
 };
 
+/**
+ * The three statements an insert issues, in order: the lock, the count, the
+ * insert itself. Naming them here rather than indexing by number means a
+ * statement added in front of the lock breaks these tests loudly.
+ */
+const LOCK = 0;
+const COUNT = 1;
+const INSERT = 2;
+
+/** An insert against a winery holding `held` origins, under a cap of `cap`. */
+const adding = (rows: unknown[], held = 0, cap = 2) => {
+  const captured = capturing([], [{ held }], rows);
+  const result = insertDomain(
+    captured.tx,
+    {
+      origin: 'https://www.winery.com',
+      registrableDomain: 'winery.com',
+      verificationToken: 'a-nonce',
+    },
+    cap,
+  );
+
+  return { ...captured, result };
+};
+
 describe('inserting a domain', () => {
-  it('takes its tenant from the GUC, never from an argument', () => {
+  it('takes its tenant from the GUC, never from an argument', async () => {
     /*
      * The statement names no tenant (P0-19, P0-48). A caller outside
      * `withTenant` therefore writes nothing at all, rather than writing a row
      * attributed to whatever it happened to pass.
      */
-    const { statements, tx } = capturing([raw]);
+    const { statements, result } = adding([raw]);
 
-    void insertDomain(tx, {
-      origin: 'https://www.winery.com',
-      registrableDomain: 'winery.com',
-      verificationToken: 'a-nonce',
-    });
+    await result;
 
-    expect(text(statements[0])).toMatch(/current_setting\('app\.tenant_id', true\)/u);
-    expect(text(statements[0])).not.toMatch(/tenant_id\s*=/u);
+    expect(text(statements[INSERT])).toMatch(/current_setting\('app\.tenant_id', true\)/u);
+    expect(text(statements[INSERT])).not.toMatch(/tenant_id\s*=/u);
   });
 
-  it('asks the unique index rather than raising on it', () => {
+  it('asks the unique index rather than raising on it', async () => {
     /* `DO NOTHING`, because a raised 23505 aborts the transaction the audit row
      * has to share (P0-53). `DO UPDATE` would hand a returning seller a new
      * nonce for a DNS record they have already published. */
-    const { statements, tx } = capturing([raw]);
+    const { statements, result } = adding([raw]);
 
-    void insertDomain(tx, {
-      origin: 'https://www.winery.com',
-      registrableDomain: 'winery.com',
-      verificationToken: 'a-nonce',
-    });
+    await result;
 
-    expect(text(statements[0])).toMatch(/ON CONFLICT \(origin\) DO NOTHING/u);
-    expect(text(statements[0])).not.toMatch(/DO UPDATE/u);
+    expect(text(statements[INSERT])).toMatch(/ON CONFLICT \(origin\) DO NOTHING/u);
+    expect(text(statements[INSERT])).not.toMatch(/DO UPDATE/u);
   });
 
   it('maps the row back into the shape the application uses', async () => {
-    const { tx } = capturing([raw]);
+    const { result } = adding([raw]);
 
-    await expect(
-      insertDomain(tx, {
+    await expect(result).resolves.toEqual({
+      outcome: 'created',
+      domain: {
+        id: 'd1',
         origin: 'https://www.winery.com',
         registrableDomain: 'winery.com',
+        status: 'PENDING',
         verificationToken: 'a-nonce',
-      }),
-    ).resolves.toEqual({
-      id: 'd1',
-      origin: 'https://www.winery.com',
-      registrableDomain: 'winery.com',
-      status: 'PENDING',
-      verificationToken: 'a-nonce',
-      createdAt: new Date('2026-09-25T09:00:00.000Z'),
+        createdAt: new Date('2026-09-25T09:00:00.000Z'),
+      },
     });
   });
 
-  it('reports an empty result as nothing, which is how a conflict arrives', async () => {
+  it('reports an empty result as taken, which is how a conflict arrives', async () => {
+    const { result } = adding([]);
+
+    await expect(result).resolves.toEqual({ outcome: 'taken' });
+  });
+});
+
+describe('the plan cap', () => {
+  it('locks the winery own row before counting anything', async () => {
+    /*
+     * **The set being counted is often empty, and there is no way to lock rows
+     * that do not exist** — so the thing that serialises two simultaneous adds
+     * is the one row that is always there. Whether it *actually* serialises
+     * them is `domains.integration.test.ts`; that it is asked for first, and
+     * with `FOR UPDATE`, is here.
+     */
+    const { statements, result } = adding([raw]);
+
+    await result;
+
+    expect(text(statements[LOCK])).toMatch(/SELECT 1 FROM tenants FOR UPDATE/u);
+    expect(text(statements[COUNT])).toMatch(/count\(\*\)/u);
+  });
+
+  it('refuses once the winery holds its allowance', async () => {
+    const { result } = adding([raw], 2, 2);
+
+    await expect(result).resolves.toEqual({ outcome: 'at-cap', held: 2 });
+  });
+
+  it('refuses if it somehow holds more than its allowance', async () => {
+    /* A plan downgrade leaves a winery over its new cap, and `=== cap` would
+     * let it add another. */
+    const { result } = adding([raw], 5, 2);
+
+    await expect(result).resolves.toMatchObject({ outcome: 'at-cap' });
+  });
+
+  it('allows the last one under the allowance', async () => {
+    const { result } = adding([raw], 1, 2);
+
+    await expect(result).resolves.toMatchObject({ outcome: 'created' });
+  });
+
+  it('writes nothing at all once refused', async () => {
+    const { statements, result } = adding([raw], 2, 2);
+
+    await result;
+
+    /* The lock and the count, and no insert. */
+    expect(statements).toHaveLength(2);
+  });
+
+  it('counts pending claims as well as verified ones', async () => {
+    /* A cap that ignored pending rows would let a seller hold any number of
+     * origins by never finishing verification — and a pending row holds the
+     * origin against every other winery (§3.2). */
+    const { statements, result } = adding([raw]);
+
+    await result;
+
+    expect(text(statements[COUNT])).not.toMatch(/status/u);
+  });
+});
+
+describe('counting domains', () => {
+  it('reads the count as a number, not a bigint string', async () => {
+    const { tx } = capturing([{ held: 3 }]);
+
+    await expect(countDomains(tx)).resolves.toBe(3);
+  });
+
+  it('is nought when the query answers nothing at all', async () => {
     const { tx } = capturing([]);
 
-    await expect(
-      insertDomain(tx, {
-        origin: 'https://www.winery.com',
-        registrableDomain: 'winery.com',
-        verificationToken: 'a-nonce',
-      }),
-    ).resolves.toBeUndefined();
+    await expect(countDomains(tx)).resolves.toBe(0);
+  });
+});
+
+describe('reading the plan', () => {
+  it('gives back the plan the winery is on', async () => {
+    const { tx } = capturing([{ plan: 'ECOMMERCE' }]);
+
+    await expect(readTenantPlan(tx)).resolves.toBe('ECOMMERCE');
+  });
+
+  it('gives back nothing for a winery between signup and checkout', async () => {
+    const { tx } = capturing([{ plan: null }]);
+
+    await expect(readTenantPlan(tx)).resolves.toBeNull();
+  });
+
+  it('names no tenant, because the policy is what scopes it', async () => {
+    const { statements, tx } = capturing([{ plan: 'CANTINA' }]);
+
+    await readTenantPlan(tx);
+
+    expect(text(statements[0])).not.toMatch(/WHERE/u);
   });
 });
 

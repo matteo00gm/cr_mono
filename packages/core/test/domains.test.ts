@@ -1,7 +1,14 @@
 import type { NormalizeFailure } from '@catalogorosso/security';
 import { describe, expect, it } from 'vitest';
 
-import { ORIGIN_UNAVAILABLE, refusalMessage, verificationToken } from '../src/domains.js';
+import {
+  capFor,
+  capMessage,
+  DOMAIN_CAPS,
+  ORIGIN_UNAVAILABLE,
+  refusalMessage,
+  verificationToken,
+} from '../src/domains.js';
 
 /**
  * What a seller is told when a domain is refused (P4-01, §3.3).
@@ -80,5 +87,62 @@ describe('a verification nonce', () => {
     const tokens = new Set(Array.from({ length: 50 }, () => verificationToken()));
 
     expect(tokens.size).toBe(50);
+  });
+});
+
+describe('how many domains a plan includes', () => {
+  it('is what the plans sell', () => {
+    /* A published number. Changing one here is a pricing change, and it should
+     * read as one in the diff rather than as a config tweak. */
+    expect(DOMAIN_CAPS).toEqual({ CANTINA: 1, ECOMMERCE: 2, none: 1 });
+  });
+
+  it('rises with the plan', () => {
+    expect(capFor('ECOMMERCE')).toBeGreaterThan(capFor('CANTINA'));
+  });
+
+  it('lets a winery with no plan yet add the one domain it came to add', () => {
+    /*
+     * Every winery is `none` between signup and checkout. Nought here would
+     * mean a seller cannot try the product at all, on the screen that gates
+     * everything else.
+     */
+    expect(capFor('none')).toBeGreaterThan(0);
+  });
+
+  it('never gives an unsubscribed winery more than a paying one', () => {
+    expect(capFor('none')).toBeLessThanOrEqual(capFor('CANTINA'));
+  });
+});
+
+describe('what a seller at their cap is told', () => {
+  it('names the plan, the number, and where to change it', () => {
+    /*
+     * **A bare "limit reached" is a support ticket.** A seller who cannot tell
+     * whether they are one domain short or simply on the wrong plan has no way
+     * to act on the refusal.
+     */
+    const message = capMessage('CANTINA', 1);
+
+    expect(message).toMatch(/Cantina/u);
+    expect(message).toMatch(/\b1 domain\b/u);
+    expect(message).toMatch(/Fatturazione/u);
+  });
+
+  it('counts in the plural when there is more than one', () => {
+    expect(capMessage('ECOMMERCE', 2)).toMatch(/\b2 domains\b/u);
+    expect(capMessage('ECOMMERCE', 2)).toMatch(/E-commerce/u);
+  });
+
+  it('calls an unsubscribed winery something a seller would recognise', () => {
+    /* `none` is an enum value, not a word anybody has seen on an invoice. */
+    const message = capMessage('none', 1);
+
+    expect(message).not.toMatch(/none/u);
+    expect(message).toMatch(/trial/iu);
+  });
+
+  it('says what to do, not only what went wrong', () => {
+    expect(capMessage('CANTINA', 1)).toMatch(/remove/iu);
   });
 });

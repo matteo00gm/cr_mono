@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
-import type { NormalizeFailure } from '@catalogorosso/security';
+import type { NormalizeFailure, PlanTier } from '@catalogorosso/security';
 
 /**
  * What a seller is told when a domain is refused (P4-01, §3.3).
@@ -52,3 +52,44 @@ export const ORIGIN_UNAVAILABLE =
  * Expiry and single use are P4-04's; this is the generator both halves share.
  */
 export const verificationToken = (): string => randomBytes(32).toString('hex');
+
+/**
+ * How many domains a plan includes (P4-07).
+ *
+ * **Counted across `PENDING` and `VERIFIED` together**, because a pending claim
+ * holds the origin against every other winery on the platform (§3.2) — so a cap
+ * that ignored them would let a seller hold any number of origins simply by
+ * never finishing the verification.
+ *
+ * `none` is a tenant that has not chosen a plan yet, which every tenant is
+ * between signup and checkout. It gets the entry allowance rather than nought:
+ * a seller who cannot add the one domain they came to add cannot try the
+ * product at all, and this is the screen that gates everything else.
+ */
+export const DOMAIN_CAPS: Readonly<Record<PlanTier, number>> = {
+  CANTINA: 1,
+  ECOMMERCE: 2,
+  none: 1,
+};
+
+/** What a seller calls their plan, which is not what the enum calls it. */
+const PLAN_NAMES: Readonly<Record<PlanTier, string>> = {
+  CANTINA: 'Cantina',
+  ECOMMERCE: 'E-commerce',
+  none: 'trial',
+};
+
+export const capFor = (plan: PlanTier): number => DOMAIN_CAPS[plan];
+
+/**
+ * What a seller at their cap is told.
+ *
+ * **Names the plan, the number, and where to change it.** A bare "limit
+ * reached" on the screen that gates the whole product is a support ticket, and
+ * a seller who cannot tell whether they are one domain short or on the wrong
+ * plan has no way to act on it.
+ */
+export const capMessage = (plan: PlanTier, cap: number): string =>
+  `Your ${PLAN_NAMES[plan]} plan includes ${String(cap)} ${cap === 1 ? 'domain' : 'domains'}, ` +
+  'and they are all in use. Remove one you no longer serve, or change plan on the ' +
+  'Fatturazione screen.';

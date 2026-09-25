@@ -226,9 +226,12 @@ export { readOpenInvitations, revokeInvitation, type PendingInvitation } from '.
  * same information and leaves the transaction usable.
  */
 export {
+  countDomains,
   insertDomain,
   readDomainByOrigin,
   readDomains,
+  readTenantPlan,
+  type DomainInsert,
   type DomainRow,
   type NewDomain,
 } from './domains-write.js';

@@ -1375,7 +1375,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P4-04 | 🔒 Verification token expiry | 7 days, single-use, rate-limited retries | P4-02 |
 | P4-05 | 🔒 Apex + www dual entry | two visible removable entries; probe which responds | P4-02 |
 | P4-06 | 🔒 Domain removal | immediate effect while uncached; revokes live sessions | P4-01 |
-| P4-07 | Per-plan domain cap | 1 prod + 1 dev (Cantina) / 2 prod + 2 dev (E-commerce) | P4-01 |
+| ✅ P4-07 | Per-plan domain cap | 1 prod + 1 dev (Cantina) / 2 prod + 2 dev (E-commerce) | P4-01 |
 | P4-08 | 🔒 Public key rotation | 24 h grace, countdown in UI | P0-25 |
 | P4-09 | 🔒 Secret key create/rotate | argon2id, shown exactly once, prefix+last4 stored | P0-25 |
 | P4-10 | 🔒 Server-minted session endpoint | `sk_` authenticated, the forgery-proof path | P4-09,P2-12 |
@@ -6405,6 +6405,17 @@ Message names the current plan and the cap, and links to upgrade. Counted per te
 **Tests.** At cap the add is refused with an upgrade path; pending rows count; staging origins do not count against the cap.
 
 **Files.** route change, tests. **~50 lines.**
+
+**As built.**
+
+- **The count and the insert are one transaction, serialised on the winery's own row** *(addition; the How line describes a check, and a check is a race)*. Counting and then inserting is exactly the shape P0-52's last-OWNER guard exists to avoid: two concurrent adds each see the winery one under its cap and both succeed. The usual answer — lock the rows you counted — does not work here, because **the set being counted is often empty and there is no way to lock rows that do not exist**. So the lock is `SELECT 1 FROM tenants FOR UPDATE`: one row, always present, scoped by the policy rather than by a predicate.
+- **The dev and staging halves of the cap wait for P4-19** *(deviation)*. `productionDomains` and `devDomains` need `tenant_domains.kind`, which is P4-19's migration — and today a dev origin cannot exist at all on a deployed stage, because P2-05 refuses `http:` and `localhost` outside development. A cap keyed on a distinction the schema cannot express is a cap that counts nothing, so this row ships the number that is enforceable and P4-19 brings the split with the column it needs.
+- **`none` gets the entry allowance rather than nought** *(addition; the plans table has no row for a tenant without one)*. Every winery is `none` between signup and checkout, and one that cannot add the domain it came to add cannot try the product at all — on the screen that gates everything else.
+- **`held >= cap`, not `> cap`.** A plan downgrade leaves a winery over its new cap, and the wrong comparison would let it add another on the way down.
+- **The cap governs adding, not looking.** A seller at their cap who reopens the screen still gets the row for a domain they already hold, with its token — they are mid-verification, and refusing them the token would strand them there.
+- **The refusal is a 409 that says a great deal**, which is the exact opposite of P4-01's other 409. A cap is the seller's own state, so naming the plan and the number is what lets them act; an origin somebody else holds is not their state, and naming anything about it would be an oracle.
+
+**Verified.** 21 more unit cases and four more against real Postgres. **The concurrency case had to be rewritten**: the first version ran two adds through `Promise.all` and passed with the lock removed, because the driver's round trips happened to serialise. It now holds the first transaction open deliberately and asserts the second has *not finished* while it is — which is false the moment the lock goes, since an uncommitted insert is invisible to the count. A mutation run of 21 mutants killed 21, after the first pass found all seven cap-table mutants surviving: the numbers and the message had been added to `packages/core` with no test in that package's own suite.
 
 ---
 

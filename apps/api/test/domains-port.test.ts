@@ -31,9 +31,13 @@ const state = {
   existing: undefined as Row | undefined,
   inserted: undefined as Row | undefined,
   committed: true,
+  plan: null as 'CANTINA' | 'ECOMMERCE' | null,
+  atCap: false,
   /** What the insert was actually handed, which the response does not echo. */
   written: undefined as
     { origin: string; registrableDomain: string; verificationToken: string } | undefined,
+  /** The cap the port computed, which is the thing the plan table decides. */
+  cap: undefined as number | undefined,
 };
 
 const row = (origin: string, overrides: Partial<Row> = {}): Row => ({
@@ -69,11 +73,24 @@ vi.mock('@catalogorosso/db', () => ({
   insertDomain: (
     _tx: unknown,
     domain: { origin: string; registrableDomain: string; verificationToken: string },
+    cap: number,
   ) => {
     calls.push(`insertDomain(${domain.origin})`);
     state.written = domain;
+    state.cap = cap;
 
-    return Promise.resolve(state.inserted);
+    if (state.atCap) return Promise.resolve({ outcome: 'at-cap', held: cap });
+
+    return Promise.resolve(
+      state.inserted === undefined
+        ? { outcome: 'taken' }
+        : { outcome: 'created', domain: state.inserted },
+    );
+  },
+  readTenantPlan: () => {
+    calls.push('readTenantPlan');
+
+    return Promise.resolve(state.plan);
   },
 }));
 
@@ -108,6 +125,9 @@ beforeEach(() => {
   state.existing = undefined;
   state.inserted = undefined;
   state.written = undefined;
+  state.cap = undefined;
+  state.plan = null;
+  state.atCap = false;
   state.committed = true;
 });
 
@@ -261,7 +281,7 @@ describe('an origin another winery holds', () => {
     await expect(port().add({ tenantId: 't1', input: 'winery.com' })).rejects.toThrow();
 
     expect(recorded()).toEqual([
-      expect.objectContaining({ action: 'domain.add_refused', target: 'https://winery.com' }),
+      expect.objectContaining({ action: 'domain.add_taken', target: 'https://winery.com' }),
     ]);
   });
 });
@@ -285,6 +305,82 @@ describe('the audit row', () => {
     /* Nothing changed, so there is nothing to record. An entry here would make
      * the log report an addition every time the screen is opened. */
     expect(recorded()).toEqual([]);
+  });
+});
+
+describe('the plan cap', () => {
+  it('is the entry allowance for a winery that has not chosen a plan', async () => {
+    /* Every winery is this between signup and checkout, and one that cannot add
+     * the domain it came to add cannot try the product at all. */
+    state.inserted = row('https://winery.com');
+    state.plan = null;
+
+    await port().add({ tenantId: 't1', input: 'winery.com' });
+
+    expect(state.cap).toBe(1);
+  });
+
+  it('is the plan own allowance otherwise', async () => {
+    state.inserted = row('https://winery.com');
+    state.plan = 'ECOMMERCE';
+
+    await port().add({ tenantId: 't1', input: 'winery.com' });
+
+    expect(state.cap).toBe(2);
+  });
+
+  it('comes from the winery own row, never from the caller', async () => {
+    state.inserted = row('https://winery.com');
+
+    await port().add({ tenantId: 't1', input: 'winery.com' });
+
+    expect(calls).toContain('readTenantPlan');
+  });
+
+  it('names the plan and the number when it refuses', async () => {
+    /*
+     * **The opposite of the other refusal, on purpose.** A cap is the seller's
+     * own state, so saying which plan and how many is what lets them act on it.
+     * An origin somebody else holds is not their state, and naming anything
+     * about it would be an oracle.
+     */
+    state.atCap = true;
+    state.plan = 'CANTINA';
+
+    const message = await port()
+      .add({ tenantId: 't1', input: 'winery.com' })
+      .then(
+        () => '',
+        (error: unknown) => (error as Error).message,
+      );
+
+    expect(message).toMatch(/Cantina/u);
+    expect(message).toMatch(/1 domain\b/u);
+    expect(message).toMatch(/Fatturazione/u);
+  });
+
+  it('is a conflict, and the attempt is recorded', async () => {
+    state.atCap = true;
+    state.plan = 'ECOMMERCE';
+
+    await expect(port().add({ tenantId: 't1', input: 'winery.com' })).rejects.toMatchObject({
+      kind: 'conflict',
+    });
+
+    expect(recorded()).toEqual([
+      expect.objectContaining({ action: 'domain.add_at-cap', target: 'https://winery.com' }),
+    ]);
+  });
+
+  it('does not stop a winery seeing a domain it already holds', async () => {
+    /* The cap governs adding, not looking. A seller at their cap reopening the
+     * screen still needs the token for the domain they are verifying. */
+    state.atCap = true;
+    state.existing = row('https://winery.com', { verificationToken: 'old-nonce' });
+
+    const result = await port().add({ tenantId: 't1', input: 'winery.com' });
+
+    expect(result.domain.verificationToken).toBe('old-nonce');
   });
 });
 
