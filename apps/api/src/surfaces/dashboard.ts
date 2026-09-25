@@ -8,6 +8,7 @@ import {
   contextResponse,
   importPreviewResponse,
   domainAddedResponse,
+  domainVerifiedResponse,
   invitationRevokedResponse,
   inviteResponse,
   meResponse,
@@ -415,6 +416,15 @@ const simulationRequest = z
  * seller will actually type.
  */
 const domainBody = z.object({ domain: z.string().min(1).max(300) }).strict();
+
+/**
+ * Which proof a seller is offering.
+ *
+ * An enum with one member today rather than no field at all: P4-03 adds
+ * `wellknown`, and a route that took no method would have to guess — or change
+ * its contract — the day there are two.
+ */
+const verifyBody = z.object({ method: z.literal('dns') }).strict();
 
 export const createDashboardApp = ({
   auth,
@@ -1105,6 +1115,34 @@ export const createDashboardApp = ({
   );
 
   /* ---- domains (P4-01) -------------------------------------------------- */
+
+  /**
+   * Check a domain's proof.
+   *
+   * `POST` rather than `GET`, because it is not a read: it makes an outbound
+   * DNS query on our behalf, spends a rate-limit bucket, and writes both a
+   * status and an audit row.
+   *
+   * **A failed check answers 200.** "Your record is not there yet" is the
+   * expected state for most of the minutes after a seller publishes it, and a
+   * screen that has to catch an exception to render a normal outcome is a
+   * screen that renders it badly.
+   */
+  app.post('/domains/:id/verify', requireCapability('domains:manage'), async (c) => {
+    const parsed = verifyBody.safeParse(await readJson(c));
+
+    if (!parsed.success) {
+      throw new InvalidRequestError('Send a JSON body naming the verification method.');
+    }
+
+    return c.json(
+      await domains.verify({
+        /* From a `memberships` row, never from the body (P0-48). */
+        tenantId: c.get('tenantId'),
+        domainId: c.req.param('id'),
+      }),
+    );
+  });
 
   /**
    * Add a domain.
@@ -1811,6 +1849,34 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         created: true,
       },
       response: domainAddedResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/domains/:id/verify`),
+    {
+      access: requires('domains:manage'),
+      summary: "Check a domain's proof",
+      description:
+        'Resolves the `_somm-verify` TXT record for the domain and compares it, in constant ' +
+        'time, against the nonce we issued. **The resolver is a pinned public one rather than ' +
+        "the host's**: in a VPC the default resolver answers for internal names and can be " +
+        'reconfigured by anybody with that reach, so a verification that trusted it could be ' +
+        'forged for any domain and the forged answer would look real. A record that is absent, ' +
+        'wrong, or unreachable answers 200 with `verified: false` and prose saying which — they ' +
+        'send a seller to three different places. Attempts are counted per domain, because this ' +
+        "route makes a network call on demand. Another winery's id answers 404, never 403.",
+      example: {
+        domain: {
+          id: '9f0b2d41-6c3a-4e8b-9d27-1a5c8e3f7b40',
+          origin: 'https://www.winery.com',
+          registrableDomain: 'winery.com',
+          status: 'VERIFIED',
+          verificationToken: null,
+          createdAt: '2026-09-25T09:00:00.000Z',
+        },
+        verified: true,
+      },
+      response: domainVerifiedResponse,
     },
   ],
   [

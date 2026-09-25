@@ -177,3 +177,56 @@ export const readTenantPlan = async (tx: DbTransaction): Promise<TenantPlan | nu
 
   return row?.plan ?? null;
 };
+
+/**
+ * One of this winery's domains by id.
+ *
+ * `undefined` for an id that belongs to another winery *and* for one that does
+ * not exist, because RLS makes them the same query result — which is exactly
+ * what §3.5 wants the caller to answer 404 to. The distinction an attacker
+ * would like is one this statement cannot express.
+ */
+export const readDomainById = async (
+  tx: DbTransaction,
+  id: string,
+): Promise<DomainRow | undefined> => {
+  const rows = await tx.execute(sql`
+    SELECT ${COLUMNS} FROM tenant_domains WHERE id = ${id}::uuid LIMIT 1
+  `);
+
+  const row = [...rows][0] as DomainSqlRow | undefined;
+
+  return row === undefined ? undefined : toDomain(row);
+};
+
+/**
+ * Stamps a domain verified (P4-02).
+ *
+ * **`WHERE status = 'PENDING'` is in the statement rather than beside it**, on
+ * `setMemberRole`'s reasoning: a caller that checked first and updated second
+ * has a guard with a bypass, and two verifications arriving together would both
+ * pass it. An empty result means somebody else got there first, which is a
+ * success from the seller's point of view and not something to report as one
+ * from ours.
+ *
+ * The tenant is never named: the policy is what scopes this (P0-19).
+ */
+export const markDomainVerified = async (
+  tx: DbTransaction,
+  id: string,
+  method: 'DNS_TXT' | 'WELL_KNOWN',
+): Promise<DomainRow | undefined> => {
+  const rows = await tx.execute(sql`
+    UPDATE tenant_domains
+    SET status = 'VERIFIED',
+        verified_at = now(),
+        verification_method = ${method}::domain_verification_method,
+        updated_at = now()
+    WHERE id = ${id}::uuid AND status = 'PENDING'
+    RETURNING ${COLUMNS}
+  `);
+
+  const row = [...rows][0] as DomainSqlRow | undefined;
+
+  return row === undefined ? undefined : toDomain(row);
+};

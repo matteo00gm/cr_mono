@@ -166,6 +166,24 @@ export const domainAddedResponse = z.object({
 });
 
 /**
+ * What checking a domain gives back.
+ *
+ * **A failed check is a 200, not an error**, and that is the contract worth
+ * pausing on: "your TXT record is not there yet" is the expected answer for
+ * most of the minutes after a seller publishes it, and a screen that has to
+ * catch an exception to show a perfectly normal state gets written badly. The
+ * errors on this route are the ones that are actually errors — no such domain,
+ * too many attempts.
+ *
+ * `reason` is prose for the seller, absent on success.
+ */
+export const domainVerifiedResponse = z.object({
+  domain: domainSchema,
+  verified: z.boolean(),
+  reason: z.string().optional(),
+});
+
+/**
  * What redeeming an invitation gives back.
  *
  * The membership as written, so the dashboard can switch straight into the new
@@ -186,6 +204,7 @@ export type MemberRemovedResponse = z.infer<typeof memberRemovedResponse>;
 export type InvitationRevokedResponse = z.infer<typeof invitationRevokedResponse>;
 export type Domain = z.infer<typeof domainSchema>;
 export type DomainAddedResponse = z.infer<typeof domainAddedResponse>;
+export type DomainVerifiedResponse = z.infer<typeof domainVerifiedResponse>;
 export type Product = z.infer<typeof productSchema>;
 
 /**

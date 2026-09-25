@@ -3,20 +3,30 @@ import {
   capFor,
   capMessage,
   ConflictError,
+  dnsRefusalMessage,
   InvalidRequestError,
+  isOurFault,
+  NotFoundError,
   ORIGIN_UNAVAILABLE,
+  RateLimitedError,
   refusalMessage,
   verificationToken,
+  VERIFY_ATTEMPTS,
+  verifyLimitKey,
+  VERIFY_WINDOW_SEC,
 } from '@catalogorosso/core';
 import type { Domain } from '@catalogorosso/api-client';
 import {
   insertDomain,
+  markDomainVerified,
+  readDomainById,
   readDomainByOrigin,
   readTenantPlan,
   withTenant,
   type DomainRow,
 } from '@catalogorosso/db';
-import { normalizeOrigin, type PlanTier } from '@catalogorosso/security';
+import { normalizeOrigin, type PlanTier, type RateLimiter } from '@catalogorosso/security';
+import { publicResolveTxt, verifyDnsToken, type ResolveTxt } from '@catalogorosso/security/net';
 
 /**
  * The domains port (P4-01, §3.3).
@@ -42,8 +52,21 @@ export interface AddDomainResult {
   readonly created: boolean;
 }
 
+export interface VerifyDomainCommand {
+  readonly tenantId: string;
+  readonly domainId: string;
+}
+
+export interface VerifyDomainResult {
+  readonly domain: Domain;
+  readonly verified: boolean;
+  /** Absent on success. What the seller is told, and where to look, when not. */
+  readonly reason?: string | undefined;
+}
+
 export interface DomainsPort {
   add(command: AddDomainCommand): Promise<AddDomainResult>;
+  verify(command: VerifyDomainCommand): Promise<VerifyDomainResult>;
 }
 
 /** What the transaction decided, before it is turned into an answer. */
@@ -77,12 +100,26 @@ export interface DomainsDeps {
   readonly environment?: 'production' | 'development' | undefined;
   /** Injected so a test can assert the stored nonce rather than re-deriving it. */
   readonly newToken?: () => string;
+  /**
+   * Counts verification attempts (P2-04). Absent means unlimited, which is
+   * only ever right in a test — see the note on the check itself.
+   */
+  readonly limiter?: RateLimiter | undefined;
+  /**
+   * Builds the resolver for one check. A factory rather than an instance
+   * because a `Resolver` holds a channel, and one shared across every
+   * invocation on a warm container has no way to be reset after a failure.
+   * Injected so a test can answer without a nameserver.
+   */
+  readonly newResolver?: () => ResolveTxt;
 }
 
 export const createDomainsPort = ({
   audit: record = audit,
   environment,
   newToken = verificationToken,
+  limiter,
+  newResolver = publicResolveTxt,
 }: DomainsDeps = {}): DomainsPort => ({
   async add(command) {
     const normalised = normalizeOrigin(command.input, { environment });
@@ -177,6 +214,113 @@ export const createDomainsPort = ({
 
     return { domain: toResponse(outcome.domain), created: outcome.created };
   },
+
+  async verify(command) {
+    /*
+     * **Counted before the lookup, not after.** This endpoint makes an outbound
+     * network call on demand, so an unlimited one is a way to drive DNS queries
+     * from our address at somebody else's nameservers — and counting a request
+     * that has already spent the resource protects nothing.
+     *
+     * Per domain rather than per tenant: a seller with two domains is
+     * legitimately verifying both, and the thing worth bounding is how hard any
+     * one of them is retried.
+     */
+    if (limiter !== undefined) {
+      const allowance = await limiter.check([
+        {
+          key: verifyLimitKey(command.domainId),
+          limit: VERIFY_ATTEMPTS,
+          windowSec: VERIFY_WINDOW_SEC,
+        },
+      ]);
+
+      if (!allowance.allowed) {
+        throw new RateLimitedError(
+          'That domain has been checked several times in the last few minutes. ' +
+            'DNS takes a while to propagate — wait a moment and try again.',
+        );
+      }
+    }
+
+    /*
+     * Read, look up, write: three steps that cannot be one transaction, because
+     * the middle one is a network call and a transaction held open across it
+     * would hold a connection for as long as somebody else's nameserver takes
+     * to answer. The write re-checks `PENDING` in its own statement, so a second
+     * verification arriving meanwhile loses harmlessly rather than racing.
+     */
+    const domain = await withTenant(command.tenantId, (tx) => readDomainById(tx, command.domainId));
+
+    /*
+     * 404 for another winery's id as well as for one that does not exist, and
+     * they are the same answer because RLS makes them the same query result.
+     * 403 would tell an attacker the id is real (§3.5).
+     */
+    if (domain === undefined) throw new NotFoundError('No such domain.');
+
+    /* Already done. Idempotent rather than a conflict: the seller's intent is
+     * satisfied, and a screen that errors on a second click is worse. */
+    if (domain.status === 'VERIFIED') {
+      return { domain: toResponse(domain), verified: true };
+    }
+
+    if (domain.verificationToken === null) {
+      throw new ConflictError('That domain has no verification in progress. Add it again.');
+    }
+
+    const checked = await verifyDnsToken(
+      domain.registrableDomain,
+      domain.verificationToken,
+      newResolver(),
+    );
+
+    if (!checked.ok) {
+      /*
+       * **A failed check is still an attempt, and it is audited.** A domain
+       * being checked repeatedly against a record that never appears is what a
+       * contested claim looks like from our side (P4-18), and the response
+       * tells the seller only what to do next.
+       */
+      await withTenant(command.tenantId, (tx) =>
+        record(tx, {
+          action: isOurFault(checked.reason) ? 'domain.verify_error' : 'domain.verify_failed',
+          target: domain.origin,
+          metadata: { reason: checked.reason, method: 'DNS_TXT' },
+        }),
+      );
+
+      return {
+        domain: toResponse(domain),
+        verified: false,
+        reason: dnsRefusalMessage(checked.reason),
+      };
+    }
+
+    const verified = await withTenant(command.tenantId, async (tx) => {
+      const updated = await markDomainVerified(tx, domain.id, 'DNS_TXT');
+
+      if (updated !== undefined) {
+        await record(tx, {
+          action: 'domain.verified',
+          target: domain.origin,
+          metadata: { method: 'DNS_TXT' },
+        });
+      }
+
+      return updated;
+    });
+
+    /*
+     * `undefined` means another request verified it between the read and the
+     * write. That is a success, and reporting it as anything else would make
+     * a double-click an error.
+     */
+    return {
+      domain: toResponse(verified ?? { ...domain, status: 'VERIFIED' }),
+      verified: true,
+    };
+  },
 });
 
 /**
@@ -197,4 +341,5 @@ export class DomainsPortNotConfiguredError extends Error {
 
 export const unconfiguredDomains: DomainsPort = {
   add: () => Promise.reject(new DomainsPortNotConfiguredError()),
+  verify: () => Promise.reject(new DomainsPortNotConfiguredError()),
 };

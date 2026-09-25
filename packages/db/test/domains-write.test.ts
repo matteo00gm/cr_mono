@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   countDomains,
   insertDomain,
+  markDomainVerified,
+  readDomainById,
   readDomainByOrigin,
   readDomains,
   readTenantPlan,
@@ -286,5 +288,72 @@ describe('listing a winery domains', () => {
     void readDomains(tx);
 
     expect(text(statements[0])).toMatch(/ORDER BY created_at, origin/u);
+  });
+});
+
+describe('reading a domain by id', () => {
+  it('names no tenant, because the policy is what scopes it', async () => {
+    /*
+     * The absence is what makes §3.5 work: another winery's id and an id that
+     * does not exist are the same empty result, so the caller has one answer to
+     * give and it is 404. A predicate here would suggest the isolation came
+     * from the query.
+     */
+    const { statements, tx } = capturing([raw]);
+
+    await readDomainById(tx, 'd1');
+
+    expect(text(statements[0])).toMatch(/WHERE id =/u);
+    expect(text(statements[0])).not.toMatch(/tenant_id/u);
+  });
+
+  it('gives back nothing for an id it cannot see', async () => {
+    const { tx } = capturing([]);
+
+    await expect(readDomainById(tx, 'd1')).resolves.toBeUndefined();
+  });
+});
+
+describe('marking a domain verified', () => {
+  const verified = { ...raw, status: 'VERIFIED' as const };
+
+  it('stamps the status, the time and the proof', async () => {
+    const { statements, tx } = capturing([verified]);
+
+    await markDomainVerified(tx, 'd1', 'DNS_TXT');
+
+    const sql = text(statements[0]);
+
+    expect(sql).toMatch(/SET status = 'VERIFIED'/u);
+    expect(sql).toMatch(/verified_at = now\(\)/u);
+    expect(sql).toMatch(/verification_method =/u);
+  });
+
+  it('refuses to re-verify, in the statement rather than beside it', async () => {
+    /*
+     * **The guard is part of the write.** A caller that read the status and then
+     * updated has a guard with a bypass, and two verifications arriving together
+     * would both pass it — resetting `verified_at` on a domain that was verified
+     * weeks ago, which is the one column an incident review reads.
+     */
+    const { statements, tx } = capturing([verified]);
+
+    await markDomainVerified(tx, 'd1', 'DNS_TXT');
+
+    expect(text(statements[0])).toMatch(/AND status = 'PENDING'/u);
+  });
+
+  it('reports nothing when it changed nothing', async () => {
+    const { tx } = capturing([]);
+
+    await expect(markDomainVerified(tx, 'd1', 'DNS_TXT')).resolves.toBeUndefined();
+  });
+
+  it('gives the updated row back', async () => {
+    const { tx } = capturing([verified]);
+
+    await expect(markDomainVerified(tx, 'd1', 'WELL_KNOWN')).resolves.toMatchObject({
+      status: 'VERIFIED',
+    });
   });
 });
