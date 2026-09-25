@@ -149,6 +149,14 @@ export const domainSchema = z.object({
   registrableDomain: z.string(),
   status: z.enum(['PENDING', 'VERIFIED']),
   verificationToken: z.string().nullable(),
+  /**
+   * When the nonce stops being accepted (P4-04), ISO, null once it is used.
+   *
+   * On the wire because the screen has to say it. A seller who publishes a
+   * record and comes back a fortnight later needs to be told the value changed
+   * rather than left wondering why a correct-looking record does not verify.
+   */
+  verificationExpiresAt: z.string().nullable(),
   createdAt: z.string(),
 });
 

@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 
 import type { tenantPlan } from './schema/tenants.js';
+import { asDate, asDateOrNull, type SqlTimestamp } from './timestamps.js';
 import type { DbTransaction } from './with-tenant.js';
 
 type TenantPlan = (typeof tenantPlan.enumValues)[number];
@@ -35,6 +36,8 @@ export interface DomainRow {
   readonly registrableDomain: string;
   readonly status: 'PENDING' | 'VERIFIED';
   readonly verificationToken: string | null;
+  /** When the nonce stops being accepted (P4-04). Null once it has been used. */
+  readonly verificationExpiresAt: Date | null;
   readonly createdAt: Date;
 }
 
@@ -50,7 +53,8 @@ interface DomainSqlRow {
   readonly registrable_domain: string;
   readonly status: 'PENDING' | 'VERIFIED';
   readonly verification_token: string | null;
-  readonly created_at: Date;
+  readonly verification_expires_at: SqlTimestamp | null;
+  readonly created_at: SqlTimestamp;
 }
 
 const toDomain = (row: DomainSqlRow): DomainRow => ({
@@ -59,10 +63,28 @@ const toDomain = (row: DomainSqlRow): DomainRow => ({
   registrableDomain: row.registrable_domain,
   status: row.status,
   verificationToken: row.verification_token,
-  createdAt: row.created_at,
+  verificationExpiresAt: asDateOrNull(row.verification_expires_at),
+  createdAt: asDate(row.created_at),
 });
 
-const COLUMNS = sql`id, origin, registrable_domain, status, verification_token, created_at`;
+const COLUMNS = sql`
+  id, origin, registrable_domain, status,
+  verification_token, verification_expires_at, created_at
+`;
+
+/**
+ * How long a nonce is accepted for (P4-04).
+ *
+ * **Seven days, and the length is a judgement rather than a constant somebody
+ * picked.** DNS is not always the seller's to change — plenty of them have to
+ * ask whoever built the site — so a window of hours would fail honest
+ * customers, and one that never closed would leave a live proof lying in a
+ * public TXT record for a domain we may later have to contest (P4-18).
+ *
+ * Computed in SQL from `now()`, never passed in: a clock the caller supplies is
+ * a clock the caller can move.
+ */
+const VERIFICATION_WINDOW = sql`interval '7 days'`;
 
 /**
  * This tenant's own row for an origin, if it has one.
@@ -136,12 +158,15 @@ export const insertDomain = async (
   if (held >= cap) return { outcome: 'at-cap', held };
 
   const rows = await tx.execute(sql`
-    INSERT INTO tenant_domains (tenant_id, origin, registrable_domain, verification_token)
+    INSERT INTO tenant_domains (
+      tenant_id, origin, registrable_domain, verification_token, verification_expires_at
+    )
     VALUES (
       nullif(current_setting('app.tenant_id', true), '')::uuid,
       ${domain.origin},
       ${domain.registrableDomain},
-      ${domain.verificationToken}
+      ${domain.verificationToken},
+      now() + ${VERIFICATION_WINDOW}
     )
     ON CONFLICT (origin) DO NOTHING
     RETURNING ${COLUMNS}
@@ -221,6 +246,39 @@ export const markDomainVerified = async (
     SET status = 'VERIFIED',
         verified_at = now(),
         verification_method = ${method}::domain_verification_method,
+        -- Single use (P4-04). The nonce is in a public TXT record, and one that
+        -- keeps working is a proof anybody who reads that record can replay.
+        verification_token = null,
+        verification_expires_at = null,
+        updated_at = now()
+    WHERE id = ${id}::uuid AND status = 'PENDING'
+    RETURNING ${COLUMNS}
+  `);
+
+  const row = [...rows][0] as DomainSqlRow | undefined;
+
+  return row === undefined ? undefined : toDomain(row);
+};
+
+/**
+ * Issues a fresh nonce for a claim whose old one has lapsed (P4-04).
+ *
+ * **A new value rather than a new window on the old one.** The lapsed nonce has
+ * been sitting in a public TXT record for a week; extending it would mean the
+ * thing that proves control is a thing anybody who looked has a copy of.
+ *
+ * `WHERE status = 'PENDING'` for `markDomainVerified`'s reason — a verified
+ * domain must not be handed a nonce, which would reopen a closed proof.
+ */
+export const reissueVerification = async (
+  tx: DbTransaction,
+  id: string,
+  token: string,
+): Promise<DomainRow | undefined> => {
+  const rows = await tx.execute(sql`
+    UPDATE tenant_domains
+    SET verification_token = ${token},
+        verification_expires_at = now() + ${VERIFICATION_WINDOW},
         updated_at = now()
     WHERE id = ${id}::uuid AND status = 'PENDING'
     RETURNING ${COLUMNS}

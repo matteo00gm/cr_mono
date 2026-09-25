@@ -22,6 +22,7 @@ import {
   readDomainById,
   readDomainByOrigin,
   readTenantPlan,
+  reissueVerification,
   withTenant,
   type DomainRow,
 } from '@catalogorosso/db';
@@ -82,6 +83,7 @@ const toResponse = (row: DomainRow): Domain => ({
   registrableDomain: row.registrableDomain,
   status: row.status,
   verificationToken: row.verificationToken,
+  verificationExpiresAt: row.verificationExpiresAt?.toISOString() ?? null,
   createdAt: row.createdAt.toISOString(),
 });
 
@@ -100,6 +102,8 @@ export interface DomainsDeps {
   readonly environment?: 'production' | 'development' | undefined;
   /** Injected so a test can assert the stored nonce rather than re-deriving it. */
   readonly newToken?: () => string;
+  /** Injected so a test can decide a nonce has lapsed without waiting a week. */
+  readonly now?: () => number;
   /**
    * Counts verification attempts (P2-04). Absent means unlimited, which is
    * only ever right in a test — see the note on the check itself.
@@ -120,6 +124,7 @@ export const createDomainsPort = ({
   newToken = verificationToken,
   limiter,
   newResolver = publicResolveTxt,
+  now = Date.now,
 }: DomainsDeps = {}): DomainsPort => ({
   async add(command) {
     const normalised = normalizeOrigin(command.input, { environment });
@@ -267,6 +272,41 @@ export const createDomainsPort = ({
 
     if (domain.verificationToken === null) {
       throw new ConflictError('That domain has no verification in progress. Add it again.');
+    }
+
+    /*
+     * **A lapsed nonce is replaced, not extended** (P4-04). It has been sitting
+     * in a public TXT record for a week, so anybody who looked has a copy —
+     * extending the window would mean the thing that proves control is a thing
+     * a passer-by can replay.
+     *
+     * The seller is told the value changed rather than that verification
+     * failed: to them the record they published is still there, and "it does
+     * not match" with no explanation is the version of this that generates a
+     * support ticket.
+     */
+    if (domain.verificationExpiresAt !== null && domain.verificationExpiresAt.getTime() <= now()) {
+      const reissued = await withTenant(command.tenantId, async (tx) => {
+        const fresh = await reissueVerification(tx, domain.id, newToken());
+
+        if (fresh !== undefined) {
+          await record(tx, {
+            action: 'domain.verification_reissued',
+            target: domain.origin,
+            metadata: { reason: 'expired' },
+          });
+        }
+
+        return fresh;
+      });
+
+      return {
+        domain: toResponse(reissued ?? domain),
+        verified: false,
+        reason:
+          'That verification value expired, so we have issued a new one. ' +
+          'Replace the TXT record with the value below and check again.',
+      };
     }
 
     const checked = await verifyDnsToken(

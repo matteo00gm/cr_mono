@@ -7,8 +7,10 @@ import {
   insertInvitation,
   insertMembershipFromInvitation,
   markInvitationAccepted,
+  readOpenInvitations,
   revokeInvitation,
 } from '../src/invitations.js';
+import { readRoster } from '../src/memberships.js';
 import { readUserEmail } from '../src/users.js';
 import { withInvitation } from '../src/with-invitation.js';
 import { withTenant } from '../src/with-tenant.js';
@@ -437,5 +439,47 @@ describe('emailIsMember', () => {
       },
       db,
     );
+  });
+});
+
+describe('the timestamps these statements hand back', () => {
+  /*
+   * **The only place this is provable.** A raw `execute` returns `timestamptz`
+   * as a string rather than a `Date`, and every unit test that mocks the driver
+   * returns whatever the fake was told to — so the double and the code agree
+   * with each other and not with Postgres. `rate-limit.ts` learned this in CI;
+   * these two readers had the same bug and nothing could see it.
+   *
+   * What it costs is quiet: the string reaches the wire as
+   * `2026-10-02 01:01:04.326752+00`, the dashboard's client parses every
+   * response against `z.iso.datetime()`, and that is not ISO-8601 — so the
+   * members screen does not load at all.
+   */
+  it('gives the open invitations real Dates', async () => {
+    await invite('timestamps@cantina.example');
+
+    const open = await withTenant(TENANT_A, (tx) => readOpenInvitations(tx), db);
+    const found = open.find((row) => row.email === 'timestamps@cantina.example');
+
+    expect(found?.expiresAt).toBeInstanceOf(Date);
+    expect(found?.createdAt).toBeInstanceOf(Date);
+    expect(Number.isNaN(found?.expiresAt.getTime() ?? Number.NaN)).toBe(false);
+  });
+
+  it('gives the roster real Dates', async () => {
+    const roster = await withTenant(TENANT_A, (tx) => readRoster(tx), db);
+
+    expect(roster.length).toBeGreaterThan(0);
+    expect(roster[0]?.joinedAt).toBeInstanceOf(Date);
+    expect(Number.isNaN(roster[0]?.joinedAt.getTime() ?? Number.NaN)).toBe(false);
+  });
+
+  it('serialises to what the wire contract actually requires', async () => {
+    /* The assertion that names the failure rather than approximating it. */
+    const { z } = await import('zod');
+    const roster = await withTenant(TENANT_A, (tx) => readRoster(tx), db);
+    const onTheWire = JSON.parse(JSON.stringify(roster)) as { joinedAt: string }[];
+
+    expect(z.iso.datetime().safeParse(onTheWire[0]?.joinedAt).success).toBe(true);
   });
 });

@@ -8,6 +8,7 @@ import {
   readDomainByOrigin,
   readDomains,
   readTenantPlan,
+  reissueVerification,
 } from '../src/domains-write.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 
@@ -59,6 +60,7 @@ const raw = {
   registrable_domain: 'winery.com',
   status: 'PENDING',
   verification_token: 'a-nonce',
+  verification_expires_at: new Date('2026-10-02T09:00:00.000Z'),
   created_at: new Date('2026-09-25T09:00:00.000Z'),
 };
 
@@ -125,6 +127,7 @@ describe('inserting a domain', () => {
         registrableDomain: 'winery.com',
         status: 'PENDING',
         verificationToken: 'a-nonce',
+        verificationExpiresAt: new Date('2026-10-02T09:00:00.000Z'),
         createdAt: new Date('2026-09-25T09:00:00.000Z'),
       },
     });
@@ -354,6 +357,126 @@ describe('marking a domain verified', () => {
 
     await expect(markDomainVerified(tx, 'd1', 'WELL_KNOWN')).resolves.toMatchObject({
       status: 'VERIFIED',
+    });
+  });
+});
+
+describe('what the driver actually hands back', () => {
+  it('turns a Postgres timestamp string into a Date', async () => {
+    /*
+     * **A raw `execute` returns `timestamptz` as a string.** Drizzle parses
+     * column types for a typed select and does nothing of the kind for a
+     * hand-written statement — so the row type says `Date`, TypeScript believes
+     * it, and the first `.toISOString()` anybody calls throws on a path no
+     * mocked-driver test can reach. The integration suite found it; this is
+     * what stops it coming back.
+     */
+    const { tx } = capturing([
+      {
+        ...raw,
+        created_at: '2026-09-25 09:00:00.123456+00',
+        verification_expires_at: '2026-10-02 09:00:00.123456+00',
+      },
+    ]);
+
+    const row = await readDomainById(tx, 'd1');
+
+    expect(row?.createdAt).toBeInstanceOf(Date);
+    expect(row?.createdAt.toISOString()).toBe('2026-09-25T09:00:00.123Z');
+    expect(row?.verificationExpiresAt).toBeInstanceOf(Date);
+  });
+
+  it('leaves a Date alone', async () => {
+    const { tx } = capturing([raw]);
+    const row = await readDomainById(tx, 'd1');
+
+    expect(row?.createdAt).toEqual(new Date('2026-09-25T09:00:00.000Z'));
+  });
+
+  it('keeps a null deadline null rather than making it the epoch', async () => {
+    /* `new Date(null)` is 1970, which would read on the screen as a nonce that
+     * expired before the product existed. */
+    const { tx } = capturing([{ ...raw, verification_expires_at: null }]);
+
+    await expect(readDomainById(tx, 'd1')).resolves.toMatchObject({
+      verificationExpiresAt: null,
+    });
+  });
+});
+
+describe('the nonce lifecycle (P4-04)', () => {
+  it('gives a new nonce a deadline, computed by the database', async () => {
+    /*
+     * `now() + interval` in SQL rather than a `Date` from here. A clock the
+     * caller supplies is a clock the caller can move — and on a fleet of
+     * Lambdas, "the caller's clock" is several clocks.
+     */
+    const { statements, result } = adding([raw]);
+
+    await result;
+
+    const sql = text(statements[INSERT]);
+
+    expect(sql).toMatch(/verification_expires_at/u);
+    expect(sql).toMatch(/now\(\) \+/u);
+  });
+
+  it('clears the nonce when it is spent', async () => {
+    /*
+     * **Single use.** The nonce lives in a public TXT record, so one that keeps
+     * working is a proof anybody who read that record can replay against a
+     * domain they do not control.
+     */
+    const { statements, tx } = capturing([{ ...raw, status: 'VERIFIED' }]);
+
+    await markDomainVerified(tx, 'd1', 'DNS_TXT');
+
+    expect(text(statements[0])).toMatch(/verification_token = null/u);
+    expect(text(statements[0])).toMatch(/verification_expires_at = null/u);
+  });
+
+  it('issues a fresh value rather than extending the old one', async () => {
+    /* Extending would mean the thing that proves control is a thing a
+     * passer-by has had a week to copy. */
+    const { statements, tx } = capturing([raw]);
+
+    await reissueVerification(tx, 'd1', 'a-new-nonce');
+
+    const sql = text(statements[0]);
+
+    expect(sql).toMatch(/SET verification_token =/u);
+    expect(sql).toMatch(/verification_expires_at = now\(\) \+/u);
+  });
+
+  it('refuses to hand a verified domain a nonce', async () => {
+    /* Reopening a closed proof. The guard is in the statement, as it is for the
+     * verification itself. */
+    const { statements, tx } = capturing([raw]);
+
+    await reissueVerification(tx, 'd1', 'a-new-nonce');
+
+    expect(text(statements[0])).toMatch(/AND status = 'PENDING'/u);
+  });
+
+  it('reports nothing when it changed nothing', async () => {
+    const { tx } = capturing([]);
+
+    await expect(reissueVerification(tx, 'd1', 'n')).resolves.toBeUndefined();
+  });
+
+  it('gives the refreshed row back', async () => {
+    const { tx } = capturing([{ ...raw, verification_token: 'a-new-nonce' }]);
+
+    await expect(reissueVerification(tx, 'd1', 'a-new-nonce')).resolves.toMatchObject({
+      verificationToken: 'a-new-nonce',
+    });
+  });
+
+  it('reads the deadline back, rather than dropping it on the way out', async () => {
+    const { tx } = capturing([raw]);
+
+    await expect(readDomainById(tx, 'd1')).resolves.toMatchObject({
+      verificationExpiresAt: new Date('2026-10-02T09:00:00.000Z'),
     });
   });
 });
