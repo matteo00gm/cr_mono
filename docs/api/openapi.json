@@ -219,6 +219,118 @@
           }
         }
       },
+      "/v1/dashboard/domains/:id/verify": {
+        "post": {
+          "summary": "Check a domain's proof",
+          "description": "Resolves the `_somm-verify` TXT record for the domain and compares it, in constant time, against the nonce we issued. **The resolver is a pinned public one rather than the host's**: in a VPC the default resolver answers for internal names and can be reconfigured by anybody with that reach, so a verification that trusted it could be forged for any domain and the forged answer would look real. A record that is absent, wrong, or unreachable answers 200 with `verified: false` and prose saying which — they send a seller to three different places. Attempts are counted per domain, because this route makes a network call on demand. Another winery's id answers 404, never 403.\n\nRequires the `domains:manage` capability.",
+          "operationId": "postV1DashboardDomains:idVerify",
+          "x-required-capability": "domains:manage",
+          "responses": {
+            "200": {
+              "description": "Check a domain's proof",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "domain": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "origin": {
+                            "type": "string"
+                          },
+                          "registrableDomain": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "PENDING",
+                              "VERIFIED"
+                            ]
+                          },
+                          "verificationToken": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "origin",
+                          "registrableDomain",
+                          "status",
+                          "verificationToken",
+                          "createdAt"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "verified": {
+                        "type": "boolean"
+                      },
+                      "reason": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "domain",
+                      "verified"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "domain": {
+                      "id": "9f0b2d41-6c3a-4e8b-9d27-1a5c8e3f7b40",
+                      "origin": "https://www.winery.com",
+                      "registrableDomain": "winery.com",
+                      "status": "VERIFIED",
+                      "verificationToken": null,
+                      "createdAt": "2026-09-25T09:00:00.000Z"
+                    },
+                    "verified": true
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/me": {
         "get": {
           "summary": "The caller and the wineries they belong to",

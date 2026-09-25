@@ -366,6 +366,12 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
      */
     domains: createDomainsPort({
       environment: config.stage === 'unknown' ? 'development' : 'production',
+      /*
+       * The same limiter every other counted path uses (P2-02). Absent in a
+       * test; never absent here, because an uncounted verify endpoint is a way
+       * to drive DNS queries from our address at somebody else's nameservers.
+       */
+      ...(config.rateLimiter === undefined ? {} : { limiter: config.rateLimiter }),
     }),
 
     /** The monthly plan cap (P2-36), read from `usage_events` rather than a bucket. */

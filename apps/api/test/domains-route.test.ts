@@ -1,8 +1,13 @@
-import { ConflictError, InvalidRequestError } from '@catalogorosso/core';
+import {
+  ConflictError,
+  InvalidRequestError,
+  NotFoundError,
+  RateLimitedError,
+} from '@catalogorosso/core';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/app.js';
-import type { AddDomainCommand, DomainsPort } from '../src/domains.js';
+import type { AddDomainCommand, DomainsPort, VerifyDomainCommand } from '../src/domains.js';
 import { fakeAuth, oneMembership, signedIn } from './support/auth.js';
 
 /**
@@ -18,11 +23,33 @@ const TENANT = '11111111-1111-1111-1111-111111111111';
 
 const seen: AddDomainCommand[] = [];
 
-const port = (add: DomainsPort['add']): DomainsPort => ({
+const verified = {
+  domain: {
+    id: 'd1',
+    origin: 'https://www.winery.com',
+    registrableDomain: 'winery.com',
+    status: 'VERIFIED' as const,
+    verificationToken: null,
+    createdAt: '2026-09-25T09:00:00.000Z',
+  },
+  verified: true,
+};
+
+const checks: VerifyDomainCommand[] = [];
+
+const port = (
+  add: DomainsPort['add'],
+  verify: DomainsPort['verify'] = () => Promise.resolve(verified),
+): DomainsPort => ({
   add: (command) => {
     seen.push(command);
 
     return add(command);
+  },
+  verify: (command) => {
+    checks.push(command);
+
+    return verify(command);
   },
 });
 
@@ -174,5 +201,89 @@ describe('a refusal', () => {
 
     expect(response.status).toBe(500);
     expect(await response.text()).not.toMatch(/ECONNREFUSED|10\.0\.1\.42|app_rw/u);
+  });
+});
+
+describe('checking a domain', () => {
+  const verifyWith = (role: 'OWNER' | 'EDITOR', body: unknown, verify?: DomainsPort['verify']) =>
+    createApp({
+      auth: signedIn(),
+      readMemberships: oneMembership(TENANT, role),
+      domains: port(() => Promise.resolve(created), verify),
+    }).request('/v1/dashboard/domains/d1/verify', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('answers 200 with the domain and whether it passed', async () => {
+    checks.length = 0;
+
+    const response = await verifyWith('OWNER', { method: 'dns' });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ verified: true });
+  });
+
+  it('takes the id from the path and the tenant from the membership', async () => {
+    checks.length = 0;
+
+    await verifyWith('OWNER', { method: 'dns' });
+
+    expect(checks[0]).toEqual({ tenantId: TENANT, domainId: 'd1' });
+  });
+
+  it('answers 200 for a record that is not there yet', async () => {
+    /*
+     * **The contract worth stating.** For most of the minutes after a seller
+     * publishes a TXT record, "not there yet" is the correct answer — and a
+     * screen that has to catch an exception to render it renders it badly.
+     */
+    const response = await verifyWith('OWNER', { method: 'dns' }, () =>
+      Promise.resolve({ ...verified, verified: false, reason: 'We could not find it yet.' }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ verified: false });
+  });
+
+  it('refuses a method it does not offer', async () => {
+    checks.length = 0;
+
+    const response = await verifyWith('OWNER', { method: 'carrier-pigeon' });
+
+    expect(response.status).toBe(422);
+    expect(checks).toEqual([]);
+  });
+
+  it('refuses a body with no method at all', async () => {
+    const response = await verifyWith('OWNER', {});
+
+    expect(response.status).toBe(422);
+  });
+
+  it('is closed to an EDITOR', async () => {
+    checks.length = 0;
+
+    const response = await verifyWith('EDITOR', { method: 'dns' });
+
+    expect(response.status).toBe(403);
+    expect(checks).toEqual([]);
+  });
+
+  it('answers 404 for a domain that is not this winery', async () => {
+    const response = await verifyWith('OWNER', { method: 'dns' }, () =>
+      Promise.reject(new NotFoundError('No such domain.')),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it('answers 429 when the domain has been checked too often', async () => {
+    const response = await verifyWith('OWNER', { method: 'dns' }, () =>
+      Promise.reject(new RateLimitedError('Wait a moment and try again.')),
+    );
+
+    expect(response.status).toBe(429);
   });
 });

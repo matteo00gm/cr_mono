@@ -1369,7 +1369,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | # | Task | How / notes | Deps |
 |---|---|---|---|
 | ✅ P4-01 | 🔒 Domain add endpoint | normalize, PSL-validate, reduce to registrable domain | P2-05 |
-| P4-02 | 🔒 DNS TXT verification | `_somm-verify.<domain>`, single-use nonce | P4-01 |
+| ✅ P4-02 | 🔒 DNS TXT verification | `_somm-verify.<domain>`, single-use nonce | P4-01 |
 | ✅ P4-03a | 🔒 `guardedFetch` (SSRF-safe agent) | validates the address **at socket connect**, defeating DNS rebinding; reused by every outbound fetch | P0-54 |
 | P4-03 | 🔒 Well-known file verification | `/.well-known/somm-verify-<nonce>.txt` via `guardedFetch` | P4-03a |
 | P4-04 | 🔒 Verification token expiry | 7 days, single-use, rate-limited retries | P4-02 |
@@ -6314,6 +6314,20 @@ Conversation state (messages, cards) lives in component state and is never clear
 **Tests.** Matching TXT verifies; absent or wrong TXT stays `PENDING` with a clear reason; a resolver error is retryable not fatal; retries are rate-limited.
 
 **Files.** `verify-dns.ts`, tests (mocked resolver). **~110 lines.**
+
+**As built.** Expiry and single use are P4-04's, which is the next row.
+
+- **It lives in `packages/security/src/net/`, beside `guardedFetch`** *(deviation from an unqualified `verify-dns.ts`)*. Same family and same reason: outbound network with a security constraint on *which* network. The `./net` subpath already exists to keep `node:dns` out of the dashboard bundle (P4-03a).
+- **A failed check answers 200, not an error** *(addition)*. For most of the minutes after a seller publishes a TXT record, "not there yet" is the correct answer — and a screen that has to catch an exception to render the expected state renders it badly. The errors on this route are the ones that are errors: no such domain, too many attempts.
+- **Three failure reasons, not two** *(addition)*. `no_record`, `mismatch` and `resolver_error` send a seller to three different places: publish it, check what you pasted, and wait because it is ours. Conflating the third with the first is how somebody spends an afternoon re-checking DNS they already got right, and they are told apart in the audit log too — a domain checked over and over against a record that never appears is what a contested claim looks like from our side (P4-18).
+- **Every TXT record at the name is checked, not the first** *(addition)*. A real domain's records at one name are a set: SPF, another vendor's verification, an older nonce of ours. Reading `records[0]` would fail for every seller who already verifies with anybody else, which is most of them.
+- **The verify write re-checks `PENDING` inside its own statement**, on P0-52's reasoning. A caller that read the status and then updated has a guard with a bypass — and the column at stake is `verified_at`, which an incident review reads. Losing that race is still reported to the seller as success, because it is.
+- **The read, the lookup and the write are three transactions, not one** *(addition)*. The middle one is a network call, and a transaction held open across it holds a connection for as long as somebody else's nameserver takes to answer.
+- **The limit is ten attempts per ten minutes, per domain** *(the How line says to rate-limit and not by how much)*. Counted before the lookup, because a bucket spent after the resource protects nothing. Per domain rather than per tenant: a seller with two domains is legitimately verifying both. Ten in ten minutes is set against what DNS propagation makes a seller actually do — publish, then press the button a few times over a quarter of an hour — because a limit tight enough to catch that teaches sellers the product is broken.
+
+**Verified.** 24 cases on the verifier, 18 on the port, 7 more on the route, 9 on the two new statements, and 3 more against real Postgres. A mutation run of 33 mutants killed 33 after six survivors were fixed: `markDomainVerified` and `readDomainById` had no statement tests at all, the "fresh resolver" case compared the closures rather than the receivers, and a rejection of `null` would have thrown inside the catch.
+
+**One mutant is equivalent and is recorded rather than chased**: swapping `timingSafeEqual` for `===` changes timing, not behaviour, so no test can distinguish them. The reason is written beside the line.
 
 ---
 

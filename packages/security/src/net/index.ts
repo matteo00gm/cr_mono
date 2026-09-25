@@ -19,3 +19,12 @@ export {
   type ResolveAll,
 } from './guarded-fetch.js';
 export { isPublicUnicast, mappedIpv4 } from './addresses.js';
+export {
+  publicResolveTxt,
+  verifyDnsToken,
+  PUBLIC_RESOLVERS,
+  VERIFY_LABEL,
+  type DnsFailure,
+  type DnsVerification,
+  type ResolveTxt,
+} from './verify-dns.js';

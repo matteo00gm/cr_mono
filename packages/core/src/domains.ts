@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import type { NormalizeFailure, PlanTier } from '@catalogorosso/security';
+import type { DnsFailure } from '@catalogorosso/security/net';
 
 /**
  * What a seller is told when a domain is refused (P4-01, §3.3).
@@ -93,3 +94,44 @@ export const capMessage = (plan: PlanTier, cap: number): string =>
   `Your ${PLAN_NAMES[plan]} plan includes ${String(cap)} ${cap === 1 ? 'domain' : 'domains'}, ` +
   'and they are all in use. Remove one you no longer serve, or change plan on the ' +
   'Fatturazione screen.';
+
+/**
+ * How often one domain may be re-checked (P4-02, P2-04).
+ *
+ * **This endpoint makes an outbound network call on demand**, which makes it an
+ * amplification vector: without a limit, an owner with one domain can drive as
+ * many DNS lookups from our address as they like, at somebody else's
+ * nameservers.
+ *
+ * Ten in ten minutes is set against what a seller legitimately does. DNS
+ * propagation is slow and uneven, so the honest behaviour is to publish the
+ * record and press the button a few times over a quarter of an hour — and a
+ * limit tight enough to catch that is a limit that teaches sellers the product
+ * is broken.
+ */
+export const VERIFY_ATTEMPTS = 10;
+export const VERIFY_WINDOW_SEC = 600;
+
+/** The bucket a domain's verification attempts are counted in. */
+export const verifyLimitKey = (domainId: string): string => `domain-verify:${domainId}`;
+
+/**
+ * What a seller is told when a domain did not verify.
+ *
+ * **"Not found" and "does not match" send them to different places**, and
+ * giving the wrong one is how somebody spends an afternoon re-checking DNS they
+ * already got right. The third is ours, not theirs, and says so.
+ */
+const DNS_REFUSALS: Readonly<Record<DnsFailure, string>> = {
+  no_record:
+    'We could not find the TXT record. DNS can take a few minutes to propagate — publish it, then try again.',
+  mismatch:
+    'We found a TXT record at that name, but it is not the value we issued. Copy the value below exactly, with no quotes around it.',
+  resolver_error:
+    'We could not complete the DNS lookup. That is a problem at our end rather than with your record — try again in a moment.',
+};
+
+export const dnsRefusalMessage = (reason: DnsFailure): string => DNS_REFUSALS[reason];
+
+/** A failed check is worth retrying by the seller; ours is worth retrying by us. */
+export const isOurFault = (reason: DnsFailure): boolean => reason === 'resolver_error';

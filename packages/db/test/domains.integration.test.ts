@@ -5,6 +5,8 @@ import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import {
   countDomains,
   insertDomain,
+  markDomainVerified,
+  readDomainById,
   readDomainByOrigin,
   readDomains,
   readTenantPlan,
@@ -414,5 +416,51 @@ describe('the CHECK constraint behind the normaliser', () => {
     ]) {
       expect(await refusedBy(origin)).toBe('tenant_domains_origin_format');
     }
+  });
+});
+
+describe('marking a domain verified (P4-02)', () => {
+  it('stamps the status, the time and the proof', async () => {
+    const created = await add(TENANT_A, 'https://verifiable.winery.com');
+    const verified = await withTenant(
+      TENANT_A,
+      (tx) => markDomainVerified(tx, created?.id ?? '', 'DNS_TXT'),
+      db,
+    );
+
+    expect(verified?.status).toBe('VERIFIED');
+
+    const stored = await withTenant(TENANT_A, (tx) => readDomainById(tx, created?.id ?? ''), db);
+
+    expect(stored?.status).toBe('VERIFIED');
+  });
+
+  it('refuses a second time, so a re-check cannot move verified_at', async () => {
+    /*
+     * The guard is inside the statement. `verified_at` is the column an
+     * incident review reads, and a row that re-stamps it every time somebody
+     * presses the button records when the button was last pressed rather than
+     * when the domain was proved.
+     */
+    const created = await add(TENANT_A, 'https://twice.winery.com');
+
+    await withTenant(TENANT_A, (tx) => markDomainVerified(tx, created?.id ?? '', 'DNS_TXT'), db);
+
+    await expect(
+      withTenant(TENANT_A, (tx) => markDomainVerified(tx, created?.id ?? '', 'DNS_TXT'), db),
+    ).resolves.toBeUndefined();
+  });
+
+  it('cannot be reached for another winery row, and says nothing either way', async () => {
+    /* §3.5: the policy makes "not yours" and "does not exist" the same empty
+     * result, which is what leaves the caller one answer to give. */
+    const created = await add(TENANT_A, 'https://theirs.winery.com');
+
+    await expect(
+      withTenant(TENANT_B, (tx) => readDomainById(tx, created?.id ?? ''), db),
+    ).resolves.toBeUndefined();
+    await expect(
+      withTenant(TENANT_B, (tx) => markDomainVerified(tx, created?.id ?? '', 'DNS_TXT'), db),
+    ).resolves.toBeUndefined();
   });
 });

@@ -228,6 +228,8 @@ export { readOpenInvitations, revokeInvitation, type PendingInvitation } from '.
 export {
   countDomains,
   insertDomain,
+  markDomainVerified,
+  readDomainById,
   readDomainByOrigin,
   readDomains,
   readTenantPlan,
