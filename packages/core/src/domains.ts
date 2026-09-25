@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import type { NormalizeFailure, PlanTier } from '@catalogorosso/security';
-import type { DnsFailure } from '@catalogorosso/security/net';
+import type { DnsFailure, WellKnownFailure } from '@catalogorosso/security/net';
 
 /**
  * What a seller is told when a domain is refused (P4-01, §3.3).
@@ -135,3 +135,34 @@ export const dnsRefusalMessage = (reason: DnsFailure): string => DNS_REFUSALS[re
 
 /** A failed check is worth retrying by the seller; ours is worth retrying by us. */
 export const isOurFault = (reason: DnsFailure): boolean => reason === 'resolver_error';
+
+/**
+ * What a seller is told when the file check did not pass (P4-03).
+ *
+ * **`unreachable` is one message for eight different refusals**, and the
+ * flattening is deliberate: `guardedFetch`'s reasons name what our network
+ * declined to do — an address it would not connect to, a redirect it would not
+ * follow — and a caller who could read them could use this endpoint to map our
+ * defences. The precise reason goes to the audit log instead.
+ */
+const WELL_KNOWN_REFUSALS: Readonly<Record<WellKnownFailure, string>> = {
+  not_found:
+    'We could not find the file. Upload it to that exact path on your storefront, then try again.',
+  mismatch:
+    'Something answered at that path and it is not the value we issued. The file must contain the value below and nothing else — many storefronts serve a themed page instead of a 404, which looks like this.',
+  unreachable:
+    'We could not reach your site to check. Make sure it is served over https on the standard port and try again.',
+};
+
+export const wellKnownRefusalMessage = (reason: WellKnownFailure): string =>
+  WELL_KNOWN_REFUSALS[reason];
+
+/** The two proofs a seller may offer, as the API names them. */
+export const VERIFY_METHODS = ['dns', 'wellknown'] as const;
+export type VerifyMethod = (typeof VERIFY_METHODS)[number];
+
+/** How the choice is recorded on the row. */
+export const METHOD_COLUMN: Readonly<Record<VerifyMethod, 'DNS_TXT' | 'WELL_KNOWN'>> = {
+  dns: 'DNS_TXT',
+  wellknown: 'WELL_KNOWN',
+};

@@ -232,7 +232,7 @@ describe('checking a domain', () => {
 
     await verifyWith('OWNER', { method: 'dns' });
 
-    expect(checks[0]).toEqual({ tenantId: TENANT, domainId: 'd1' });
+    expect(checks[0]).toEqual({ tenantId: TENANT, domainId: 'd1', method: 'dns' });
   });
 
   it('answers 200 for a record that is not there yet', async () => {
@@ -247,6 +247,19 @@ describe('checking a domain', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ verified: false });
+  });
+
+  it('carries the proof the seller chose, rather than picking one', async () => {
+    /*
+     * **Their choice, not ours.** DNS is not always theirs to change — plenty
+     * would have to ask whoever built the site — and a file on the storefront
+     * is. A route that picked for them would strand exactly those sellers.
+     */
+    checks.length = 0;
+
+    await verifyWith('OWNER', { method: 'wellknown' });
+
+    expect(checks[0]?.method).toBe('wellknown');
   });
 
   it('refuses a method it does not offer', async () => {

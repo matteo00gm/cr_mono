@@ -28,3 +28,10 @@ export {
   type DnsVerification,
   type ResolveTxt,
 } from './verify-dns.js';
+export {
+  verifyWellKnownFile,
+  wellKnownPath,
+  type Fetcher,
+  type WellKnownFailure,
+  type WellKnownVerification,
+} from './verify-wellknown.js';
