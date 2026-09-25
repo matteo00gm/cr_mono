@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { GuardedFetchRefused, type GuardedResponse } from '../src/net/guarded-fetch.js';
-import { verifyWellKnownFile, wellKnownPath, type Fetcher } from '../src/net/verify-wellknown.js';
+import {
+  probeOrigin,
+  verifyWellKnownFile,
+  wellKnownPath,
+  type Fetcher,
+} from '../src/net/verify-wellknown.js';
 
 /**
  * Proving control of a domain by serving a file (P4-03, §3.3).
@@ -245,5 +250,68 @@ describe('the client it uses when nobody supplies one', () => {
      * something that is not a `GuardedFetchRefused`, and `detail` would read
      * `network` instead. */
     expect(result).toMatchObject({ ok: false, reason: 'unreachable', detail: 'dns_failure' });
+  });
+});
+
+describe('probing whether a host answers (P4-05)', () => {
+  it('asks the root with HEAD, not GET', async () => {
+    /* A liveness question, not a read. A GET would pull a whole homepage
+     * through the body cap for an answer that is in the status line. */
+    const seen: { url: string; method?: string }[] = [];
+    const fetcher = ((url: string, options?: { method?: string }) => {
+      seen.push({ url, ...(options?.method === undefined ? {} : { method: options.method }) });
+
+      return Promise.resolve({ status: 200, body: '' });
+    }) as Fetcher;
+
+    await probeOrigin('https://winery.com', fetcher);
+
+    expect(seen).toEqual([{ url: 'https://winery.com/', method: 'HEAD' }]);
+  });
+
+  it('counts any answer, including a 404', async () => {
+    /*
+     * The question is whether a widget loaded on that origin would reach a live
+     * host, not whether the root path happens to be a page. Plenty of
+     * storefronts answer `/` with a redirect or a 403 and serve everything else
+     * perfectly.
+     */
+    for (const status of [200, 301, 403, 404, 500]) {
+      const fetcher = (() => Promise.resolve({ status, body: '' })) as Fetcher;
+
+      await expect(probeOrigin('https://winery.com', fetcher)).resolves.toBe(true);
+    }
+  });
+
+  it('reports a host that does not answer, without throwing', async () => {
+    /*
+     * **The swallow is the contract.** A probe is advice on a screen — "www
+     * does not respond, remove it?" — and a host that is down for the minute
+     * somebody pressed verify must not fail the verification it hangs off.
+     */
+    await expect(
+      probeOrigin('https://winery.com', refusing(new Error('ECONNREFUSED'))),
+    ).resolves.toBe(false);
+  });
+
+  it('reports a refusal by our own agent as no answer', async () => {
+    await expect(
+      probeOrigin('https://winery.com', refusing(new GuardedFetchRefused('blocked_address'))),
+    ).resolves.toBe(false);
+  });
+
+  it('goes through the guarded agent when nobody supplies one', async () => {
+    /*
+     * **A probe is an equally attacker-chosen host and gets no exemption.** A
+     * "just a quick HEAD" helper written beside this one would be the hole —
+     * which is exactly why this lives here rather than in the port.
+     *
+     * A probe returns a boolean, so it cannot report *which* client refused:
+     * an unguarded one would look identical from out here. What makes this
+     * assertable is that both functions share one `DEFAULT_FETCHER`, so the
+     * case above — which can tell them apart, because it reads `detail` —
+     * proves this one too.
+     */
+    await expect(probeOrigin('https://a..b')).resolves.toBe(false);
   });
 });

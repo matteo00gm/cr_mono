@@ -9,6 +9,7 @@ import {
   METHOD_COLUMN,
   ORIGIN_UNAVAILABLE,
   refusalMessage,
+  siblingOrigin,
   verificationToken,
   VERIFY_METHODS,
   wellKnownRefusalMessage,
@@ -202,5 +203,54 @@ describe('the proofs on offer', () => {
   it('each map to their own column value', () => {
     expect(METHOD_COLUMN.dns).toBe('DNS_TXT');
     expect(METHOD_COLUMN.wellknown).toBe('WELL_KNOWN');
+  });
+});
+
+describe('the other spelling of an origin (P4-05)', () => {
+  it('gives an apex its www', () => {
+    expect(siblingOrigin('https://winery.com', 'winery.com')).toBe('https://www.winery.com');
+  });
+
+  it('gives a www its apex', () => {
+    expect(siblingOrigin('https://www.winery.com', 'winery.com')).toBe('https://winery.com');
+  });
+
+  it('carries the scheme and the port across', () => {
+    /* A sibling on a different port is a different origin, and a development
+     * run on `http://localhost:3000` has to pair with itself, not with 443. */
+    expect(siblingOrigin('http://winery.com:3000', 'winery.com')).toBe(
+      'http://www.winery.com:3000',
+    );
+  });
+
+  it('has nothing to give an ordinary subdomain', () => {
+    /*
+     * **`shop.winery.com` is not an apex and `www.shop.winery.com` is not a
+     * spelling of it.** Both are subdomains a seller adds deliberately, and
+     * inventing a `www` for each one would widen an allowlist nobody asked to
+     * widen — which §3.3 forbids more than it forbids the inconvenience.
+     */
+    expect(siblingOrigin('https://shop.winery.com', 'winery.com')).toBeUndefined();
+    expect(siblingOrigin('https://www.shop.winery.com', 'winery.com')).toBeUndefined();
+  });
+
+  it('has nothing to give a host that is not under the domain at all', () => {
+    /* The registrable domain is what was proved. A mismatch here would mean
+     * pairing an origin with a host nobody proved anything about. */
+    expect(siblingOrigin('https://evil.example', 'winery.com')).toBeUndefined();
+    expect(siblingOrigin('https://winery.com.evil.example', 'winery.com')).toBeUndefined();
+  });
+
+  it('has nothing to give something that is not an origin', () => {
+    expect(siblingOrigin('not a url', 'winery.com')).toBeUndefined();
+  });
+
+  it('is its own inverse', () => {
+    /* Verifying either spelling has to produce the same pair, or which one the
+     * seller happened to type would decide what their widget runs on. */
+    const apex = 'https://winery.com';
+    const www = siblingOrigin(apex, 'winery.com');
+
+    expect(siblingOrigin(www ?? '', 'winery.com')).toBe(apex);
   });
 });

@@ -3,10 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   countDomains,
   insertDomain,
+  insertVerifiedSibling,
   markDomainVerified,
   readDomainById,
   readDomainByOrigin,
   readDomains,
+  readDomainsFor,
   readTenantPlan,
   reissueVerification,
 } from '../src/domains-write.js';
@@ -154,7 +156,7 @@ describe('the plan cap', () => {
     await result;
 
     expect(text(statements[LOCK])).toMatch(/SELECT 1 FROM tenants FOR UPDATE/u);
-    expect(text(statements[COUNT])).toMatch(/count\(\*\)/u);
+    expect(text(statements[COUNT])).toMatch(/count\(DISTINCT registrable_domain\)/u);
   });
 
   it('refuses once the winery holds its allowance', async () => {
@@ -478,5 +480,79 @@ describe('the nonce lifecycle (P4-04)', () => {
     await expect(readDomainById(tx, 'd1')).resolves.toMatchObject({
       verificationExpiresAt: new Date('2026-10-02T09:00:00.000Z'),
     });
+  });
+});
+
+describe('the pair a verification earns (P4-05)', () => {
+  it('counts domains rather than rows', async () => {
+    /*
+     * **A `www` sibling must not cost a plan slot.** Counting rows would put a
+     * Cantina seller — whose plan includes one domain — over their cap the
+     * instant they verify the only domain it allows, and the next thing they do
+     * is refused over a row they never added.
+     */
+    const { statements, tx } = capturing([{ held: 1 }]);
+
+    await countDomains(tx);
+
+    expect(text(statements[0])).toMatch(/count\(DISTINCT registrable_domain\)/u);
+  });
+
+  it('creates the sibling already verified, with no nonce', async () => {
+    /* It was never a claim: nothing is pending on it and there is nothing for
+     * anybody to publish. */
+    const { statements, tx } = capturing([raw]);
+
+    await insertVerifiedSibling(
+      tx,
+      { origin: 'https://www.winery.com', registrableDomain: 'winery.com' },
+      'DNS_TXT',
+    );
+
+    const sql = text(statements[0]);
+
+    expect(sql).toMatch(/'VERIFIED'/u);
+    expect(sql).toMatch(/verified_at/u);
+    expect(sql).not.toMatch(/verification_token/u);
+  });
+
+  it('takes its tenant from the GUC like every other write', () => {
+    const { statements, tx } = capturing([raw]);
+
+    void insertVerifiedSibling(
+      tx,
+      { origin: 'https://www.winery.com', registrableDomain: 'winery.com' },
+      'DNS_TXT',
+    );
+
+    expect(text(statements[0])).toMatch(/current_setting\('app\.tenant_id', true\)/u);
+  });
+
+  it('yields rather than raising when the sibling is spoken for', async () => {
+    /* An origin does not become a winery's by being adjacent to something they
+     * proved, and the refusal must not abort the transaction the verification
+     * and its audit row share. */
+    const { statements, tx } = capturing([]);
+
+    await expect(
+      insertVerifiedSibling(
+        tx,
+        { origin: 'https://www.winery.com', registrableDomain: 'winery.com' },
+        'DNS_TXT',
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(text(statements[0])).toMatch(/ON CONFLICT \(origin\) DO NOTHING/u);
+  });
+
+  it('reads every origin under one registrable domain', async () => {
+    const { statements, tx } = capturing([raw, { ...raw, id: 'd2' }]);
+
+    const held = await readDomainsFor(tx, 'winery.com');
+
+    expect(held).toHaveLength(2);
+    expect(text(statements[0])).toMatch(/WHERE registrable_domain =/u);
+    /* Scoped by the policy, not by a predicate (P0-19). */
+    expect(text(statements[0])).not.toMatch(/tenant_id/u);
   });
 });

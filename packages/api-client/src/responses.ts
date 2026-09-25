@@ -185,10 +185,27 @@ export const domainAddedResponse = z.object({
  *
  * `reason` is prose for the seller, absent on success.
  */
+/**
+ * An origin and whether it answered a probe (P4-05).
+ *
+ * **Advice, not state.** The probe is taken at verification time and never
+ * stored: a host that is down for the minute somebody pressed the button is not
+ * a domain to delete, and a stored flag would go stale the moment it was
+ * written. The screen offers "www.winery.com does not respond — remove it?" and
+ * the seller decides.
+ */
+export const probedDomainSchema = z.object({ domain: domainSchema, responds: z.boolean() });
+
 export const domainVerifiedResponse = z.object({
   domain: domainSchema,
   verified: z.boolean(),
   reason: z.string().optional(),
+  /**
+   * Every origin this verification enabled — the apex and its `www` — each
+   * probed. Both are always listed and both are individually removable: **the
+   * allowlist never widens invisibly** (§3.3).
+   */
+  verifiedOrigins: z.array(probedDomainSchema).optional(),
 });
 
 /**
@@ -213,6 +230,7 @@ export type InvitationRevokedResponse = z.infer<typeof invitationRevokedResponse
 export type Domain = z.infer<typeof domainSchema>;
 export type DomainAddedResponse = z.infer<typeof domainAddedResponse>;
 export type DomainVerifiedResponse = z.infer<typeof domainVerifiedResponse>;
+export type ProbedDomain = z.infer<typeof probedDomainSchema>;
 export type Product = z.infer<typeof productSchema>;
 
 /**

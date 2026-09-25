@@ -13,17 +13,20 @@ import {
   refusalMessage,
   verificationToken,
   VERIFY_ATTEMPTS,
+  siblingOrigin,
   verifyLimitKey,
   VERIFY_WINDOW_SEC,
   wellKnownRefusalMessage,
   type VerifyMethod,
 } from '@catalogorosso/core';
-import type { Domain } from '@catalogorosso/api-client';
+import type { Domain, ProbedDomain } from '@catalogorosso/api-client';
 import {
   insertDomain,
+  insertVerifiedSibling,
   markDomainVerified,
   readDomainById,
   readDomainByOrigin,
+  readDomainsFor,
   readTenantPlan,
   reissueVerification,
   withTenant,
@@ -31,6 +34,7 @@ import {
 } from '@catalogorosso/db';
 import { normalizeOrigin, type PlanTier, type RateLimiter } from '@catalogorosso/security';
 import {
+  probeOrigin,
   publicResolveTxt,
   verifyDnsToken,
   verifyWellKnownFile,
@@ -74,6 +78,8 @@ export interface VerifyDomainResult {
   readonly verified: boolean;
   /** Absent on success. What the seller is told, and where to look, when not. */
   readonly reason?: string | undefined;
+  /** Every origin the verification enabled, each probed (P4-05). */
+  readonly verifiedOrigins?: readonly ProbedDomain[] | undefined;
 }
 
 export interface DomainsPort {
@@ -417,7 +423,7 @@ export const createDomainsPort = ({
       return { domain: toResponse(domain), verified: false, reason: checked.message };
     }
 
-    const verified = await withTenant(command.tenantId, async (tx) => {
+    const { verified, held } = await withTenant(command.tenantId, async (tx) => {
       const updated = await markDomainVerified(tx, domain.id, METHOD_COLUMN[command.method]);
 
       if (updated !== undefined) {
@@ -428,17 +434,76 @@ export const createDomainsPort = ({
         });
       }
 
-      return updated;
+      /*
+       * **The `www` spelling comes free with the proof** (P4-05, §3.3). The
+       * seller proved control of the *zone* — a TXT record at the apex, or a
+       * file on the storefront — and `www` is inside it. Demanding a second
+       * round for the spelling a browser might use is how somebody ends up with
+       * a silently dead widget on half their traffic and nothing anywhere
+       * saying why.
+       *
+       * It is created here, inside the same transaction as the verification it
+       * comes from, so a failure leaves neither.
+       */
+      const sibling = siblingOrigin(domain.origin, domain.registrableDomain);
+
+      if (sibling !== undefined) {
+        const made = await insertVerifiedSibling(
+          tx,
+          { origin: sibling, registrableDomain: domain.registrableDomain },
+          METHOD_COLUMN[command.method],
+        );
+
+        /*
+         * `undefined` means the sibling is already somebody's — theirs, or
+         * another winery's. It does not become theirs by being adjacent to
+         * something they proved, and a refusal here is not an error.
+         */
+        if (made !== undefined) {
+          await record(tx, {
+            action: 'domain.sibling_added',
+            target: sibling,
+            metadata: { from: domain.origin },
+          });
+        }
+      }
+
+      return {
+        verified: updated,
+        held: await readDomainsFor(tx, domain.registrableDomain),
+      };
     });
 
     /*
-     * `undefined` means another request verified it between the read and the
-     * write. That is a success, and reporting it as anything else would make
-     * a double-click an error.
+     * **Probed outside the transaction, and outside it deliberately.** Each
+     * probe is a network round trip to a host somebody else controls, and a
+     * transaction held open across two of them holds a connection for as long
+     * as the slower one takes to answer.
+     *
+     * Through `guardedFetch` like every other outbound request (P4-03a): a
+     * probe is an equally attacker-chosen host and gets no exemption.
+     */
+    const probed = await Promise.all(
+      held
+        .filter((row) => row.status === 'VERIFIED')
+        .map(async (row) => ({
+          domain: toResponse(row),
+          responds: await probeOrigin(
+            row.origin,
+            ...(fetcher === undefined ? [] : ([fetcher] as const)),
+          ),
+        })),
+    );
+
+    /*
+     * `verified === undefined` means another request got there between the read
+     * and the write. That is a success, and reporting it as anything else would
+     * make a double-click an error.
      */
     return {
       domain: toResponse(verified ?? { ...domain, status: 'VERIFIED' }),
       verified: true,
+      verifiedOrigins: probed,
     };
   },
 });

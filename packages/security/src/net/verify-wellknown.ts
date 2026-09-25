@@ -59,6 +59,18 @@ export type WellKnownVerification =
 export type Fetcher = typeof guardedFetch;
 
 /**
+ * The client every outbound request in this module reaches for.
+ *
+ * **One constant, so there is one thing to be right about.** Two defaults would
+ * be two places to get it wrong, and the one that got it wrong would be the
+ * quieter function — a probe that returns a boolean cannot report *why* it
+ * failed, so an unguarded one would look identical to a guarded one from
+ * outside. Sharing the binding means the case that proves `verifyWellKnownFile`
+ * is guarded proves the probe is too.
+ */
+const DEFAULT_FETCHER: Fetcher = guardedFetch;
+
+/**
  * Whether two strings are the same, without saying where they first differ.
  *
  * Constant-time for the reason `verify-dns.ts` gives, and equivalent to `===`
@@ -95,7 +107,7 @@ const failureOf = (status: number): WellKnownFailure =>
 export const verifyWellKnownFile = async (
   registrableDomain: string,
   token: string,
-  fetcher: Fetcher = guardedFetch,
+  fetcher: Fetcher = DEFAULT_FETCHER,
 ): Promise<WellKnownVerification> => {
   let response: GuardedResponse;
 
@@ -118,4 +130,37 @@ export const verifyWellKnownFile = async (
   if (response.status !== 200) return { ok: false, reason: failureOf(response.status) };
 
   return bodyIsToken(response.body, token) ? { ok: true } : { ok: false, reason: 'mismatch' };
+};
+
+/**
+ * Whether a host answers at all (P4-05, §3.3).
+ *
+ * **Through the same guarded agent, and that is the point of it being here.** A
+ * liveness probe is a request to a host somebody else chose, exactly like the
+ * file check — so it gets the same address validation at socket connect, the
+ * same refusal to follow a redirect, the same ports and scheme. A "just a quick
+ * HEAD" helper written beside this one would be the hole.
+ *
+ * **Any answer counts, including a 404.** The question is whether a widget
+ * loaded on that origin would reach a live host, not whether the root path
+ * happens to be a page — plenty of storefronts answer `/` with a redirect or a
+ * 403 and serve everything else perfectly.
+ */
+export const probeOrigin = async (
+  origin: string,
+  fetcher: Fetcher = DEFAULT_FETCHER,
+): Promise<boolean> => {
+  try {
+    await fetcher(`${origin}/`, { method: 'HEAD' });
+
+    return true;
+  } catch {
+    /*
+     * Swallowed, and the swallow is the contract. A probe is advice on a screen
+     * — "www.winery.com does not respond, remove it?" — and a host that is down
+     * for the minute somebody happens to press verify must not fail the
+     * verification it is attached to.
+     */
+    return false;
+  }
 };

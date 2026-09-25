@@ -9,6 +9,8 @@ import {
   readDomainById,
   readDomainByOrigin,
   readDomains,
+  insertVerifiedSibling,
+  readDomainsFor,
   readTenantPlan,
   reissueVerification,
 } from '../src/domains-write.js';
@@ -250,15 +252,25 @@ describe('the plan cap', () => {
     });
   });
 
-  it('counts only the winery own rows', async () => {
-    /* RLS again: `count(*)` with no `WHERE` counts one winery's rows, which is
-     * why the statement names no tenant. A cap that counted the whole table
-     * would refuse every seller once the platform had two customers. */
-    const held = await withTenant(CAPPED, (tx) => countDomains(tx), db);
-    const others = await withTenant(TENANT_A, (tx) => countDomains(tx), db);
+  it('counts only the winery own domains, and counts them once each', async () => {
+    /*
+     * Two properties in one assertion, and both need a real database.
+     *
+     * **RLS**: the count names no tenant, so it counts one winery's rows — a
+     * cap that counted the whole table would refuse every seller once the
+     * platform had two customers.
+     *
+     * **DISTINCT**: `TENANT_A` holds a dozen origins by now and every one of
+     * them is under `winery.com`, so its plan usage is one. Counting rows would
+     * have it wildly over any cap it could be sold.
+     */
+    const capped = await withTenant(CAPPED, (tx) => countDomains(tx), db);
+    const busy = await withTenant(TENANT_A, (tx) => countDomains(tx), db);
+    const origins = await withTenant(TENANT_A, (tx) => readDomains(tx), db);
 
-    expect(held).toBe(1);
-    expect(others).toBeGreaterThan(1);
+    expect(capped).toBe(1);
+    expect(origins.length).toBeGreaterThan(5);
+    expect(busy).toBe(1);
   });
 
   it('makes a second add wait for the first to commit', async () => {
@@ -522,5 +534,116 @@ describe('the nonce lifecycle (P4-04)', () => {
     await expect(
       withTenant(TENANT_B, (tx) => reissueVerification(tx, created?.id ?? '', 'nope'), db),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('the pair a verification earns (P4-05)', () => {
+  it('creates the sibling already verified, with no nonce', async () => {
+    await add(TENANT_A, 'https://pair.winery.com');
+
+    const sibling = await withTenant(
+      TENANT_A,
+      (tx) =>
+        insertVerifiedSibling(
+          tx,
+          { origin: 'https://www.pair.winery.com', registrableDomain: 'winery.com' },
+          'DNS_TXT',
+        ),
+      db,
+    );
+
+    expect(sibling).toMatchObject({
+      status: 'VERIFIED',
+      verificationToken: null,
+      verificationExpiresAt: null,
+    });
+  });
+
+  it('does not take an origin another winery already holds', async () => {
+    /* An origin does not become a winery's by being adjacent to something they
+     * proved. The unique index decides. */
+    await add(TENANT_A, 'https://contested-sibling.winery.com');
+
+    await expect(
+      withTenant(
+        TENANT_B,
+        (tx) =>
+          insertVerifiedSibling(
+            tx,
+            {
+              origin: 'https://contested-sibling.winery.com',
+              registrableDomain: 'winery.com',
+            },
+            'DNS_TXT',
+          ),
+        db,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('leaves the transaction usable when the sibling is refused', async () => {
+    /* The refusal shares a transaction with the verification and its audit row.
+     * A raised 23505 would take both down. */
+    await add(TENANT_A, 'https://usable-sibling.winery.com');
+
+    const after = await withTenant(
+      TENANT_B,
+      async (tx) => {
+        const refused = await insertVerifiedSibling(
+          tx,
+          { origin: 'https://usable-sibling.winery.com', registrableDomain: 'winery.com' },
+          'DNS_TXT',
+        );
+        const rows = await tx.execute(sql`SELECT 1 AS ok`);
+
+        return { refused, ok: [...rows].length };
+      },
+      db,
+    );
+
+    expect(after).toEqual({ refused: undefined, ok: 1 });
+  });
+
+  it('reads every origin under one registrable domain, and nobody else', async () => {
+    const mine = await withTenant(TENANT_A, (tx) => readDomainsFor(tx, 'winery.com'), db);
+    const theirs = await withTenant(TENANT_B, (tx) => readDomainsFor(tx, 'winery.com'), db);
+
+    expect(mine.length).toBeGreaterThan(0);
+    expect(mine.every((row) => row.registrableDomain === 'winery.com')).toBe(true);
+    expect(theirs.map((row) => row.origin)).not.toContain(mine[0]?.origin);
+  });
+
+  it('counts a pair as one domain, not two', async () => {
+    /*
+     * **The whole reason the count is `DISTINCT registrable_domain`.** A
+     * Cantina plan includes one domain; counting rows would put that seller
+     * over their cap the instant they verify the only domain it allows.
+     */
+    const PAIRED = '66666666-6666-6666-6666-666666666666';
+
+    await withTenant(
+      PAIRED,
+      (tx) =>
+        tx.execute(sql`
+          INSERT INTO tenants (id, name, slug, plan)
+          VALUES (${PAIRED}::uuid, 'Cantina Gialli', 'cantina-gialli', 'CANTINA')
+          ON CONFLICT DO NOTHING
+        `),
+      db,
+    );
+
+    await attempt(PAIRED, 'https://paired.example', 'n', 1);
+    await withTenant(
+      PAIRED,
+      (tx) =>
+        insertVerifiedSibling(
+          tx,
+          { origin: 'https://www.paired.example', registrableDomain: 'winery.com' },
+          'DNS_TXT',
+        ),
+      db,
+    );
+
+    expect(await withTenant(PAIRED, (tx) => countDomains(tx), db)).toBe(1);
   });
 });
