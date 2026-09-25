@@ -124,6 +124,14 @@ export const guardedLookup =
   };
 
 export interface GuardedFetchOptions {
+  /**
+   * `HEAD` for a liveness probe (P4-05), `GET` to read a body.
+   *
+   * A probe is an equally attacker-chosen host and gets no exemption from any
+   * of the defences above — which is the whole reason it is a method on this
+   * function rather than a second, simpler one somebody would write beside it.
+   */
+  readonly method?: 'GET' | 'HEAD' | undefined;
   /** Injected so a test can simulate a rebinding resolver without a nameserver. */
   readonly resolveAll?: ResolveAll | undefined;
   readonly timeoutMs?: number | undefined;
@@ -148,6 +156,7 @@ export interface GuardedResponse {
 export const guardedFetch = async (
   url: string,
   {
+    method = 'GET',
     resolveAll,
     timeoutMs = GUARDED_TIMEOUT_MS,
     maxBytes = MAX_BODY_BYTES,
@@ -172,7 +181,7 @@ export const guardedFetch = async (
   if (parsed.port !== '') throw new GuardedFetchRefused('blocked_port');
 
   const options: RequestOptions = {
-    method: 'GET',
+    method,
     host: parsed.hostname,
     port: 443,
     path: `${parsed.pathname}${parsed.search}`,

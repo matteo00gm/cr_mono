@@ -497,6 +497,30 @@ describe('the options the client is handed', () => {
     expect(refused).toMatchObject({ reason: 'blocked_address' });
   });
 
+  it('sends the method it was given, for a probe that only wants a status', async () => {
+    /*
+     * `HEAD` for P4-05's liveness probe. A method on this function rather than
+     * a second, simpler one beside it: a probe is an equally attacker-chosen
+     * host and gets no exemption from the defences above.
+     */
+    let seen: Record<string, unknown> = {};
+    const request = fakeRequest((response) => {
+      response.emit('end');
+    });
+
+    await guardedFetch('https://winery.example/x', {
+      method: 'HEAD',
+      resolveAll: answering(PUBLIC),
+      request: ((options: Record<string, unknown>, handler?: (response: FakeResponse) => void) => {
+        seen = options;
+
+        return request(options, handler);
+      }) as never,
+    });
+
+    expect(seen.method).toBe('HEAD');
+  });
+
   it('sends nothing tenant-supplied, and always to 443', async () => {
     /*
      * **A header is a channel.** Anything of the tenant's that ends up in one

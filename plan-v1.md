@@ -1373,7 +1373,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-03a | 🔒 `guardedFetch` (SSRF-safe agent) | validates the address **at socket connect**, defeating DNS rebinding; reused by every outbound fetch | P0-54 |
 | ✅ P4-03 | 🔒 Well-known file verification | `/.well-known/somm-verify-<nonce>.txt` via `guardedFetch` | P4-03a |
 | ✅ P4-04 | 🔒 Verification token expiry | 7 days, single-use, rate-limited retries | P4-02 |
-| P4-05 | 🔒 Apex + www dual entry | two visible removable entries; probe which responds | P4-02 |
+| ✅ P4-05 | 🔒 Apex + www dual entry | two visible removable entries; probe which responds | P4-02 |
 | P4-06 | 🔒 Domain removal | immediate effect while uncached; revokes live sessions | P4-01 |
 | ✅ P4-07 | Per-plan domain cap | 1 prod + 1 dev (Cantina) / 2 prod + 2 dev (E-commerce) | P4-01 |
 | P4-08 | 🔒 Public key rotation | 24 h grace, countdown in UI | P0-25 |
@@ -6427,6 +6427,19 @@ The members screen was the worse case, and quieter than the domains port's. It d
 
 **Files.** `domains.ts` change, tests. **~100 lines.**
 
+**As built.**
+
+- **The plan cap now counts distinct registrable domains, not rows** *(deviation, and it resolves a contradiction between this row and P4-07)*. The Tests line here says "the plan cap counts both", and P4-07 sells a Cantina seller **one** domain — so counting rows would put that seller over their cap the instant they verify the only domain their plan allows, and the next thing they do would be refused over a row they never added. Counting domains is also what "1 domain" means to the person paying: `winery.com`, its `www`, and the subdomains §3.3 admits beneath it, on one slot. What the plan sells is a domain; what a domain costs us is a verification. P4-07's as-built note is updated to match.
+- **Only an apex and its `www` are a pair.** `shop.winery.com` is not an apex and `www.shop.winery.com` is not a spelling of it — both are subdomains a seller adds deliberately, and inventing a `www` for each one would widen an allowlist nobody asked to widen, which §3.3 forbids more firmly than it forbids the inconvenience. Scheme and port carry across, so a development pair on `http://…:3000` pairs with itself rather than with 443.
+- **The sibling is created inside the same transaction as the verification**, so a failure leaves neither — half a pair is an allowlist entry with no recorded proof behind it. It carries no nonce and no expiry: it was never a claim, and there is nothing for anybody to publish.
+- **A sibling another winery already holds is not an error** *(addition)*. An origin does not become a winery's by being adjacent to something they proved; the unique index decides, and `ON CONFLICT DO NOTHING` keeps the refusal from aborting the transaction the audit row shares.
+- **The probe is `HEAD` through `guardedFetch`**, and `method` is now an option on that function rather than a second, simpler helper beside it — a probe is an equally attacker-chosen host and gets no exemption. **Any answer counts, including a 404**: the question is whether a widget on that origin would reach a live host, not whether the root path happens to be a page.
+- **A probe that fails is swallowed** *(addition)*. It is advice on a screen — "www.winery.com does not respond, remove it?" — and a host down for the minute somebody pressed verify must not fail the verification it hangs off. It is flagged, never deleted: removing it automatically would be the allowlist narrowing invisibly, which is the same sin as widening it.
+- **Both origins are always listed**, each with its probe result, and the sibling gets its own `domain.sibling_added` audit row. A row appearing with nothing saying where it came from is exactly the invisible widening §3.3 forbids.
+- **The probes run outside the transaction.** Two network round trips to hosts somebody else controls, and a transaction held open across them holds a connection for as long as the slower one takes.
+
+**Verified.** 9 more cases on the sibling rule, 10 on the port, 6 on the statements, 5 on the probe, 5 more against real Postgres. A mutation run of 24 mutants killed 24 after two survivors: a probe returns a boolean and so cannot report *which* client refused — an unguarded one would have looked identical from outside — which is now closed structurally by having both functions share one `DEFAULT_FETCHER`, so the case that can tell them apart proves both; and the held-origins fixture had no `PENDING` row, so the filter that keeps unverified claims off the list was never exercised.
+
 ---
 
 ### P4-06 · Domain removal 🔒
@@ -6455,6 +6468,7 @@ Message names the current plan and the cap, and links to upgrade. Counted per te
 **As built.**
 
 - **The count and the insert are one transaction, serialised on the winery's own row** *(addition; the How line describes a check, and a check is a race)*. Counting and then inserting is exactly the shape P0-52's last-OWNER guard exists to avoid: two concurrent adds each see the winery one under its cap and both succeed. The usual answer — lock the rows you counted — does not work here, because **the set being counted is often empty and there is no way to lock rows that do not exist**. So the lock is `SELECT 1 FROM tenants FOR UPDATE`: one row, always present, scoped by the policy rather than by a predicate.
+- **The cap counts distinct registrable domains, not rows** *(revised by P4-05)*. It counted rows when this row landed; P4-05 creates a `www` sibling on every verification, and counting rows would have put a Cantina seller over their cap the moment they verified the one domain their plan allows. See P4-05's note.
 - **The dev and staging halves of the cap wait for P4-19** *(deviation)*. `productionDomains` and `devDomains` need `tenant_domains.kind`, which is P4-19's migration — and today a dev origin cannot exist at all on a deployed stage, because P2-05 refuses `http:` and `localhost` outside development. A cap keyed on a distinction the schema cannot express is a cap that counts nothing, so this row ships the number that is enforceable and P4-19 brings the split with the column it needs.
 - **`none` gets the entry allowance rather than nought** *(addition; the plans table has no row for a tenant without one)*. Every winery is `none` between signup and checkout, and one that cannot add the domain it came to add cannot try the product at all — on the screen that gates everything else.
 - **`held >= cap`, not `> cap`.** A plan downgrade leaves a winery over its new cap, and the wrong comparison would let it add another on the way down.

@@ -33,6 +33,8 @@ const state = {
   domain: undefined as Row | undefined,
   marked: undefined as Row | undefined,
   reissued: undefined as Row | undefined,
+  sibling: undefined as Row | undefined,
+  held: [] as Row[],
   committed: true,
 };
 
@@ -74,6 +76,16 @@ vi.mock('@catalogorosso/db', () => ({
     return Promise.resolve(
       state.reissued === undefined ? undefined : { ...state.reissued, verificationToken: token },
     );
+  },
+  insertVerifiedSibling: (_tx: unknown, sibling: { origin: string }) => {
+    calls.push(`insertVerifiedSibling(${sibling.origin})`);
+
+    return Promise.resolve(state.sibling);
+  },
+  readDomainsFor: (_tx: unknown, registrable: string) => {
+    calls.push(`readDomainsFor(${registrable})`);
+
+    return Promise.resolve(state.held);
   },
   readDomainByOrigin: () => Promise.resolve(undefined),
   insertDomain: () => Promise.resolve({ outcome: 'taken' }),
@@ -154,6 +166,13 @@ beforeEach(() => {
   state.domain = row();
   state.marked = row({ status: 'VERIFIED' });
   state.reissued = row();
+  state.sibling = row({ id: 'd2', origin: 'https://winery.com', status: 'VERIFIED' });
+  state.held = [
+    row({ status: 'VERIFIED' }),
+    row({ id: 'd2', origin: 'https://winery.com', status: 'VERIFIED' }),
+    /* A claim under the same domain that nobody has finished. */
+    row({ id: 'd3', origin: 'https://shop.winery.com', status: 'PENDING' }),
+  ];
   state.committed = true;
 });
 
@@ -172,9 +191,8 @@ describe('a domain whose record is published', () => {
     await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
 
     expect(calls).toContain('markDomainVerified(d1,DNS_TXT)');
-    expect(written).toEqual([
-      expect.objectContaining({ action: 'domain.verified', target: 'https://www.winery.com' }),
-    ]);
+    expect(written[0]?.action).toBe('domain.verified');
+    expect(written[0]?.target).toBe('https://www.winery.com');
   });
 
   it('is a success even if something else verified it first', async () => {
@@ -197,9 +215,13 @@ describe('a domain whose record is published', () => {
   });
 
   it('writes no audit row when it lost that race', async () => {
-    /* Something else already recorded the verification. Two rows for one event
-     * is a log that overstates what happened. */
+    /*
+     * Something else already recorded the verification — and created the
+     * sibling, so this request's insert conflicts too. Two rows for one event
+     * is a log that overstates what happened.
+     */
     state.marked = undefined;
+    state.sibling = undefined;
 
     await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
 
@@ -524,7 +546,6 @@ describe('the file proof (P4-03)', () => {
 
     expect(result.verified).toBe(true);
     expect(calls).toContain('markDomainVerified(d1,WELL_KNOWN)');
-    expect(written).toHaveLength(1);
     expect(written[0]?.action).toBe('domain.verified');
     expect(written[0]?.metadata).toMatchObject({ method: 'WELL_KNOWN' });
   });
@@ -604,5 +625,149 @@ describe('the file proof (P4-03)', () => {
         method: 'wellknown',
       }),
     ).rejects.toMatchObject({ kind: 'rate_limited' });
+  });
+});
+
+describe('the pair a verification earns (P4-05)', () => {
+  it('creates the other spelling, already verified', async () => {
+    /*
+     * **The `www` mismatch is otherwise the most common support ticket there
+     * is**, and it presents as "the widget doesn't work" with nothing visible
+     * to explain it: the seller verified the apex, their storefront redirects
+     * to `www`, and the browser sends an `Origin` the allowlist never heard of.
+     */
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
+
+    expect(calls).toContain('insertVerifiedSibling(https://winery.com)');
+  });
+
+  it('creates it inside the same transaction as the verification', async () => {
+    /* A failure must leave neither. Half a pair is an allowlist entry for an
+     * origin nothing recorded a proof for. */
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
+
+    const opened = calls.indexOf('withTenant(t1)');
+    const sibling = calls.indexOf('insertVerifiedSibling(https://winery.com)');
+    const marked = calls.indexOf('markDomainVerified(d1,DNS_TXT)');
+
+    expect(sibling).toBeGreaterThan(opened);
+    expect(sibling).toBeGreaterThan(marked);
+  });
+
+  it('records the sibling separately from the verification', async () => {
+    /* **The allowlist never widens invisibly** (§3.3). A row appearing with no
+     * entry saying where it came from is exactly that. */
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
+
+    expect(written.map((entry) => entry.action)).toEqual([
+      'domain.verified',
+      'domain.sibling_added',
+    ]);
+    expect(written[1]?.target).toBe('https://winery.com');
+  });
+
+  it('is not an error when the sibling belongs to somebody else', async () => {
+    /*
+     * An origin does not become a winery's by being adjacent to something they
+     * proved. The unique index decides, and a refusal here is not a failure of
+     * the verification it came from.
+     */
+    state.sibling = undefined;
+
+    const result = await port([['the-nonce']]).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'dns',
+    });
+
+    expect(result.verified).toBe(true);
+    expect(written.map((entry) => entry.action)).toEqual(['domain.verified']);
+  });
+
+  it('makes no sibling for an ordinary subdomain', async () => {
+    state.domain = row({ origin: 'https://shop.winery.com' });
+
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
+
+    expect(calls.some((call) => call.startsWith('insertVerifiedSibling'))).toBe(false);
+  });
+
+  it('lists both origins, each probed', async () => {
+    const result = await port([['the-nonce']]).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'dns',
+    });
+
+    expect(result.verifiedOrigins?.map((probed) => probed.domain.origin)).toEqual([
+      'https://www.winery.com',
+      'https://winery.com',
+    ]);
+  });
+
+  it('lists only what is actually verified', async () => {
+    /*
+     * A pending claim under the same domain is not an origin the widget may be
+     * served to, and listing it as one would tell a seller their widget is live
+     * somewhere it is not.
+     */
+    const result = await port([['the-nonce']]).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'dns',
+    });
+
+    expect(result.verifiedOrigins?.map((probed) => probed.domain.origin)).not.toContain(
+      'https://shop.winery.com',
+    );
+  });
+
+  it('flags a host that does not answer rather than deleting it', async () => {
+    /*
+     * **Advice, not a decision.** A host down for the minute somebody pressed
+     * verify is not a domain to remove, and removing it automatically would be
+     * the allowlist narrowing invisibly — the same sin as widening it.
+     */
+    const dead = filePort(() => Promise.reject(new Error('ECONNREFUSED')));
+    const result = await dead.verify({ tenantId: 't1', domainId: 'd1', method: 'wellknown' });
+
+    expect(result.verified).toBe(false);
+    /* The check itself failed here, so nothing was verified — the probe's own
+     * behaviour is asserted below against a check that passed. */
+    expect(result.verifiedOrigins).toBeUndefined();
+  });
+
+  it('reports which of the pair answered', async () => {
+    const answered: string[] = [];
+    const selective = createDomainsPort({
+      audit: record,
+      now: () => NOW,
+      newResolver: () => () => Promise.resolve([['the-nonce']]),
+      fetcher: (url: string) => {
+        answered.push(url);
+
+        return url.includes('www.')
+          ? Promise.resolve({ status: 200, body: '' })
+          : Promise.reject(new Error('ECONNREFUSED'));
+      },
+    });
+
+    const result = await selective.verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
+
+    expect(result.verifiedOrigins).toEqual([
+      { domain: expect.anything() as unknown, responds: true },
+      { domain: expect.anything() as unknown, responds: false },
+    ]);
+    /* A HEAD to the root of each, never a GET. */
+    expect(answered).toEqual(['https://www.winery.com/', 'https://winery.com/']);
+  });
+
+  it('probes outside the transaction it verified in', async () => {
+    /* Two network round trips to hosts somebody else controls. A transaction
+     * held open across them holds a connection for as long as the slower one
+     * takes to answer. */
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
+
+    expect(calls.indexOf('readDomainsFor(winery.com)')).toBeGreaterThan(-1);
   });
 });

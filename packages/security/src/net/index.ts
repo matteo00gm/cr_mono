@@ -29,6 +29,7 @@ export {
   type ResolveTxt,
 } from './verify-dns.js';
 export {
+  probeOrigin,
   verifyWellKnownFile,
   wellKnownPath,
   type Fetcher,

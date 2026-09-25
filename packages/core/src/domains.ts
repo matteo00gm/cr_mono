@@ -166,3 +166,38 @@ export const METHOD_COLUMN: Readonly<Record<VerifyMethod, 'DNS_TXT' | 'WELL_KNOW
   dns: 'DNS_TXT',
   wellknown: 'WELL_KNOWN',
 };
+
+/**
+ * The other spelling of an origin — apex to `www`, or `www` back to apex
+ * (P4-05, §3.3).
+ *
+ * **The `www` mismatch is otherwise the most common support ticket there is**,
+ * and it presents as "the widget doesn't work" with nothing visible anywhere to
+ * explain it: the seller verified `winery.com`, their storefront redirects to
+ * `www.winery.com`, and the browser sends an `Origin` the allowlist has never
+ * heard of.
+ *
+ * `undefined` when there is no sibling to make. `shop.winery.com` is not an
+ * apex and `www.shop.winery.com` is not a spelling of it — both are ordinary
+ * subdomains that a seller adds deliberately, and inventing a `www` for every
+ * one of them would expand an allowlist nobody asked to expand.
+ */
+export const siblingOrigin = (origin: string, registrableDomain: string): string | undefined => {
+  let url: URL;
+
+  try {
+    url = new URL(origin);
+  } catch {
+    return undefined;
+  }
+
+  /* Scheme and port carry over: `http://winery.com:3000` and its `www` are the
+   * same pair, and a sibling on a different port would be a different origin. */
+  const suffix = url.port === '' ? '' : `:${url.port}`;
+  const at = (host: string): string => `${url.protocol}//${host}${suffix}`;
+
+  if (url.hostname === registrableDomain) return at(`www.${registrableDomain}`);
+  if (url.hostname === `www.${registrableDomain}`) return at(registrableDomain);
+
+  return undefined;
+};

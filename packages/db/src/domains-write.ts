@@ -131,9 +131,25 @@ const lockTenant = async (tx: DbTransaction): Promise<void> => {
   await tx.execute(sql`SELECT 1 FROM tenants FOR UPDATE`);
 };
 
-/** How many origins this winery holds, pending and verified alike. */
+/**
+ * How many **domains** this winery holds, pending and verified alike (P4-07).
+ *
+ * **Distinct registrable domains, not rows**, and the distinction arrived with
+ * P4-05. Verifying `winery.com` creates `https://winery.com` *and*
+ * `https://www.winery.com`, because a `www` mismatch is otherwise the single
+ * most common support ticket. Counting rows would mean a Cantina seller — whose
+ * plan includes one domain — is over their cap the instant they verify the only
+ * domain it allows, and the next thing they do is refused over a row they never
+ * added.
+ *
+ * It is also what "1 domain" means to the person paying: `winery.com`, its
+ * `www`, and the subdomains §3.3 admits beneath it, on one slot. What the plan
+ * sells is a domain, and what a domain costs us is a verification.
+ */
 export const countDomains = async (tx: DbTransaction): Promise<number> => {
-  const rows = await tx.execute(sql`SELECT count(*)::int AS held FROM tenant_domains`);
+  const rows = await tx.execute(sql`
+    SELECT count(DISTINCT registrable_domain)::int AS held FROM tenant_domains
+  `);
   const row = [...rows][0] as { held?: number } | undefined;
 
   return row?.held ?? 0;
@@ -287,4 +303,61 @@ export const reissueVerification = async (
   const row = [...rows][0] as DomainSqlRow | undefined;
 
   return row === undefined ? undefined : toDomain(row);
+};
+
+/**
+ * Adds the sibling a verification earns, already `VERIFIED` (P4-05, §3.3).
+ *
+ * **Sound because the proof was of the zone, not of the host.** A TXT record at
+ * `_somm-verify.winery.com` or a file on the storefront shows control of the
+ * registrable domain, and `www` is inside it. Demanding a second round for the
+ * spelling a browser might use is how a seller ends up with a silently dead
+ * widget on the half of their traffic that hits the other one.
+ *
+ * `ON CONFLICT DO NOTHING`, because the sibling may already be theirs — or, in
+ * the case this quietly handles, somebody else's. It does not become theirs by
+ * being adjacent to something they proved; the unique index decides, and a
+ * refusal here is not an error.
+ *
+ * **It carries no verification token.** It was never a claim: nothing is
+ * pending on it, and there is nothing for anybody to publish.
+ */
+export const insertVerifiedSibling = async (
+  tx: DbTransaction,
+  sibling: { readonly origin: string; readonly registrableDomain: string },
+  method: 'DNS_TXT' | 'WELL_KNOWN',
+): Promise<DomainRow | undefined> => {
+  const rows = await tx.execute(sql`
+    INSERT INTO tenant_domains (
+      tenant_id, origin, registrable_domain, status, verification_method, verified_at
+    )
+    VALUES (
+      nullif(current_setting('app.tenant_id', true), '')::uuid,
+      ${sibling.origin},
+      ${sibling.registrableDomain},
+      'VERIFIED',
+      ${method}::domain_verification_method,
+      now()
+    )
+    ON CONFLICT (origin) DO NOTHING
+    RETURNING ${COLUMNS}
+  `);
+
+  const row = [...rows][0] as DomainSqlRow | undefined;
+
+  return row === undefined ? undefined : toDomain(row);
+};
+
+/** Every origin this winery holds under one registrable domain. */
+export const readDomainsFor = async (
+  tx: DbTransaction,
+  registrableDomain: string,
+): Promise<readonly DomainRow[]> => {
+  const rows = await tx.execute(sql`
+    SELECT ${COLUMNS} FROM tenant_domains
+    WHERE registrable_domain = ${registrableDomain}
+    ORDER BY origin
+  `);
+
+  return [...rows].map((row) => toDomain(row as unknown as DomainSqlRow));
 };

@@ -1866,6 +1866,12 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         '(P4-03a), which validates the address at socket connect, refuses redirects, and allows ' +
         'only https on 443; what it declined to do is recorded and never returned, because a ' +
         'caller who could read it could map our network with it. ' +
+        'A verification also creates the other spelling — apex gains its `www` and the reverse ' +
+        '— because the proof was of the zone and `www` is inside it, and a `www` mismatch is ' +
+        'otherwise the most common support ticket there is. Both are listed and both are ' +
+        'individually removable: the allowlist never widens invisibly. Each is probed with a ' +
+        'HEAD request through the same guarded agent, and a host that does not answer is ' +
+        'flagged rather than deleted. ' +
         'The DNS check resolves the TXT record and compares it, in constant ' +
         'time, against the nonce we issued. **The resolver is a pinned public one rather than ' +
         "the host's**: in a VPC the default resolver answers for internal names and can be " +
@@ -1881,6 +1887,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
           registrableDomain: 'winery.com',
           status: 'VERIFIED',
           verificationToken: null,
+          verificationExpiresAt: null,
           createdAt: '2026-09-25T09:00:00.000Z',
         },
         verified: true,
