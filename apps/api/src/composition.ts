@@ -23,6 +23,7 @@ import {
   withUser,
 } from '@catalogorosso/db';
 
+import { createDomainsPort, type DomainsPort } from './domains.js';
 import { createMembersPort, type MembersPort } from './members.js';
 import { createProductsPort, type ProductsPort } from './products.js';
 import { createChatPort, type ChatPort } from './chat.js';
@@ -170,6 +171,8 @@ export interface Dependencies {
   readonly originSecret?: string | undefined;
   readonly readMemberships: MembershipReader;
   readonly members: MembersPort;
+  /** Domains (P4-01). */
+  readonly domains: DomainsPort;
   /** The catalogue (P1-02). */
   readonly products: ProductsPort;
   /** The retrieval sandbox (P2-37). */
@@ -353,6 +356,17 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
      * the capability — is applied before this is reached.
      */
     products: createProductsPort(),
+
+    /*
+     * Domains (P4-01). The environment is decided the same way the widget
+     * surface decides it and from the same value, because they are two halves
+     * of one rule: an origin a seller may *add* and an origin a widget may be
+     * *served to* have to be the same set, or a local run adds domains the
+     * widget will then refuse.
+     */
+    domains: createDomainsPort({
+      environment: config.stage === 'unknown' ? 'development' : 'production',
+    }),
 
     /** The monthly plan cap (P2-36), read from `usage_events` rather than a bucket. */
     quota,

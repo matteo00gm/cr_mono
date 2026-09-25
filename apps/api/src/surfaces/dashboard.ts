@@ -7,6 +7,7 @@ import {
   catalogueReindexedResponse,
   contextResponse,
   importPreviewResponse,
+  domainAddedResponse,
   invitationRevokedResponse,
   inviteResponse,
   meResponse,
@@ -56,6 +57,7 @@ import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.
 import { requireCapability, routeKey } from '../middleware/capability.js';
 import { logger } from '../middleware/logger.js';
 import { resolveTenant } from '../middleware/tenant.js';
+import { unconfiguredDomains, type DomainsPort } from '../domains.js';
 import { unconfiguredMembers, type MembersPort } from '../members.js';
 import {
   countImportOutcomes,
@@ -107,6 +109,14 @@ export interface DashboardOptions {
    * candidate list, which a merchant would read as "retrieval found nothing".
    */
   readonly rag?: RagPort | undefined;
+
+  /**
+   * Domains (P4-01). Optional on the same terms as the rest: absent refuses
+   * every call with a wiring error. Answering plausibly would be worse here
+   * than anywhere else on this surface, because a domain that appears to have
+   * been added is a widget a seller believes is about to work.
+   */
+  readonly domains?: DomainsPort | undefined;
 }
 
 /**
@@ -396,12 +406,23 @@ const simulationRequest = z
   })
   .strict();
 
+/**
+ * What a seller types into the domains screen.
+ *
+ * Deliberately just a string with a length ceiling. Every rule about what an
+ * origin may be lives in `normalizeOrigin` (P2-05), and a `z.url()` here would
+ * be a second, weaker authority that refuses `winery.com` — which is what a
+ * seller will actually type.
+ */
+const domainBody = z.object({ domain: z.string().min(1).max(300) }).strict();
+
 export const createDashboardApp = ({
   auth,
   readMemberships,
   members = unconfiguredMembers,
   products = unconfiguredProducts,
   rag = unconfiguredRag,
+  domains = unconfiguredDomains,
 }: DashboardOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
@@ -1083,6 +1104,38 @@ export const createDashboardApp = ({
     c.json({ invitations: await members.pending(c.get('tenantId')) }),
   );
 
+  /* ---- domains (P4-01) -------------------------------------------------- */
+
+  /**
+   * Add a domain.
+   *
+   * Behind `domains:manage`, which only an OWNER holds: a verified origin is
+   * what lets a widget key work anywhere at all, so adding one is closer to
+   * billing than to editing a product.
+   *
+   * The body carries the raw string the seller typed. It is normalised in the
+   * port (P2-05) rather than validated into a shape here, because there is
+   * exactly one authority on what an origin is and a second opinion in a route
+   * handler is how `https://winery.com.` and `HTTPS://WINERY.COM` become two
+   * different rows.
+   */
+  app.post('/domains', requireCapability('domains:manage'), async (c) => {
+    const parsed = domainBody.safeParse(await readJson(c));
+
+    if (!parsed.success) {
+      throw new InvalidRequestError('Send a JSON body carrying the domain to add.');
+    }
+
+    return c.json(
+      await domains.add({
+        /* From a `memberships` row, never from the body (P0-48). */
+        tenantId: c.get('tenantId'),
+        input: parsed.data.domain,
+      }),
+      201,
+    );
+  });
+
   /**
    * Change a member's role.
    *
@@ -1731,6 +1784,33 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'who removed them.',
       example: { userId: 'user_anna', removed: true },
       response: memberRemovedResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/domains`),
+    {
+      access: requires('domains:manage'),
+      summary: 'Add a domain',
+      description:
+        'Normalises whatever the seller typed into one canonical origin (P2-05) and creates ' +
+        'a PENDING row with a verification nonce. An origin another winery already holds is ' +
+        'refused with 409 and a message that says only that it is not available: naming the ' +
+        'other winery would make this an oracle for enumerating who our customers are. An ' +
+        'origin this winery already holds is answered with the row it has, so the screen can ' +
+        'show the token again rather than reporting a conflict that is not one. Every ' +
+        'attempt is audited, including the refused ones, which are the interesting ones.',
+      example: {
+        domain: {
+          id: '9f0b2d41-6c3a-4e8b-9d27-1a5c8e3f7b40',
+          origin: 'https://www.winery.com',
+          registrableDomain: 'winery.com',
+          status: 'PENDING',
+          verificationToken: null,
+          createdAt: '2026-09-25T09:00:00.000Z',
+        },
+        created: true,
+      },
+      response: domainAddedResponse,
     },
   ],
   [

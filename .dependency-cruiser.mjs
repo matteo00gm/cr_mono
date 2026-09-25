@@ -239,6 +239,12 @@ export default {
           // caller, opening nothing; `products` is tenant-scoped and under
           // policy, and the caller is inside withTenant.
           '|^packages/db/src/embedding-status[.]ts$' +
+          // src/domains-write.ts is exempt from P4-01 on products.ts's terms: it
+          // writes statements and takes the transaction from its caller, opening
+          // nothing. `tenant_domains` carries the boilerplate tenant policy, and
+          // the insert names no tenant at all — it reads the GUC, which is why a
+          // caller outside withTenant writes nothing rather than writing wrongly.
+          '|^packages/db/src/domains-write[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
           '|^packages/core/src/auth[.]ts$' +

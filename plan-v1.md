@@ -1368,7 +1368,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 
 | # | Task | How / notes | Deps |
 |---|---|---|---|
-| P4-01 | 🔒 Domain add endpoint | normalize, PSL-validate, reduce to registrable domain | P2-05 |
+| ✅ P4-01 | 🔒 Domain add endpoint | normalize, PSL-validate, reduce to registrable domain | P2-05 |
 | P4-02 | 🔒 DNS TXT verification | `_somm-verify.<domain>`, single-use nonce | P4-01 |
 | ✅ P4-03a | 🔒 `guardedFetch` (SSRF-safe agent) | validates the address **at socket connect**, defeating DNS rebinding; reused by every outbound fetch | P0-54 |
 | P4-03 | 🔒 Well-known file verification | `/.well-known/somm-verify-<nonce>.txt` via `guardedFetch` | P4-03a |
@@ -6291,6 +6291,19 @@ Conversation state (messages, cards) lives in component state and is never clear
 **Tests.** Valid domain creates `PENDING`; an origin owned elsewhere returns a generic conflict; each P2-06 rejection reason maps to a clear message; `EDITOR` gets 403.
 
 **Files.** `apps/api/src/routes/domains.ts`, tests. **~120 lines.**
+
+**As built.** The cap is P4-07's, which is the next row; everything else here landed.
+
+- **The files follow this repository's own layout rather than the Files line** *(deviation)*. There is no `apps/api/src/routes/` — routes live on the surface they belong to and the logic behind them lives in a port, which is the shape every other row here has. So: the statements in `packages/db/src/domains-write.ts`, what a seller is told in `packages/core/src/domains.ts`, the composition in `apps/api/src/domains.ts`, and the route on `surfaces/dashboard.ts`.
+- **"That origin belongs to another tenant" is not a question RLS lets us ask** *(finding, and it shapes the whole row)*. The policy hides other wineries' rows, so a `SELECT` for an origin somebody else holds returns nothing — indistinguishable from an origin nobody holds. The global unique index is the only thing that knows, and the only way to consult it is to attempt the insert. An implementation that checked first and inserted second would report success and then fail on the constraint.
+- **The insert is `ON CONFLICT DO NOTHING`, not a caught `23505`** *(addition)*. A raised constraint violation aborts the transaction, and that is the transaction the audit row has to be written in (P0-53) — so catching it would leave nothing able to record the attempt. `DO NOTHING` rather than `DO UPDATE` for a second reason: a seller reloading the screen must not be handed a new nonce for a DNS record they have already published.
+- **The conflict is thrown *after* the transaction commits, never inside it** *(addition, and the same trap from the other side)*. Throwing inside rolls back the audit row recording the refusal — the one entry we most want, on the one path a caller is told nothing. The transaction returns an outcome and the port turns it into a 409, which is the shape `MemberWriteOutcome` already follows.
+- **An origin the winery already holds is answered with the row it has, not a conflict** *(addition; the How line covers only the other-tenant case)*. RLS means a row that comes back is theirs by construction, so saying so leaks nothing — and the response carries the existing token, which is the thing they came back to the screen for. `created: false` says which happened.
+- **Every attempt is audited, including the refused ones** *(addition)*, as `domain.added` and `domain.add_refused`. A run of refusals is what enumerating our customer base looks like, and the response deliberately tells the caller nothing — so the audit row is the only place it is visible.
+- **The environment is decided from the same value the widget surface uses.** An origin a seller may *add* and an origin a widget may be *served to* have to be the same set, or a local run adds domains the widget then refuses to load on.
+- **The route passes the raw string through.** `normalizeOrigin` is the one authority on what an origin is (P2-05); a `z.url()` in the handler would be a second, weaker one that refuses `winery.com` — which is what a seller actually types.
+
+**Verified.** 49 cases: the port's composition with the driver mocked, the route's surface, the statements' shapes, and the messages. Ten more against real Postgres in `packages/db/test/domains.integration.test.ts`, which is where the three properties above are actually provable — a fake transaction would be asserting the mock. A mutation run of 29 mutants killed 29, after three survivors were fixed: the registrable domain was asserted against the echoed row rather than against what was written, an empty `domain` string reached the port, and one mutant was a no-op as written.
 
 ---
 

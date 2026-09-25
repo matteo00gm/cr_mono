@@ -1,0 +1,54 @@
+import { randomBytes } from 'node:crypto';
+
+import type { NormalizeFailure } from '@catalogorosso/security';
+
+/**
+ * What a seller is told when a domain is refused (P4-01, §3.3).
+ *
+ * **A `DomainError`'s message is the API contract and reaches the caller
+ * verbatim** (P0-55), so these are written for the person adding a domain
+ * rather than for us. Each one says what was wrong and what to do instead,
+ * because "invalid domain" on the one screen a seller must get through before
+ * the product works is a support ticket by design.
+ *
+ * The map is exhaustive over `NormalizeFailure` by type, so a reason added to
+ * P2-05 fails the build here rather than falling through to a generic string —
+ * which is the failure mode that produces "invalid domain" in the first place.
+ */
+const REFUSALS: Record<NormalizeFailure, string> = {
+  invalid_url: 'That does not look like a domain. Enter it as winery.com or www.winery.com.',
+  not_https:
+    'Only https domains can be added. Your storefront has to be served over https before the widget can run on it.',
+  ip_literal:
+    'An IP address cannot be verified as a domain. Enter the hostname your storefront is served from.',
+  public_suffix:
+    'That is a domain suffix rather than a domain. Enter the full name, such as winery.com.',
+  single_label: 'A domain needs a suffix. Enter winery.com rather than winery.',
+  has_path:
+    'Enter the domain on its own, with no path. The widget is allowed on every page of a domain you verify.',
+  localhost: 'localhost cannot be verified. Add the domain your storefront is published on.',
+};
+
+export const refusalMessage = (reason: NormalizeFailure): string => REFUSALS[reason];
+
+/**
+ * What an origin somebody else already holds is answered with.
+ *
+ * **Generic on purpose, and the generality is the security property** (§3.2).
+ * "That origin belongs to another tenant" confirms a competitor is a customer,
+ * and repeated against a list of domains it enumerates our customer base. This
+ * message is the same one an origin the seller has mistyped would get.
+ */
+export const ORIGIN_UNAVAILABLE =
+  'That domain is not available to add. If it is yours and you are seeing this, contact support.';
+
+/**
+ * A verification nonce.
+ *
+ * 32 bytes from the CSPRNG, hex. It is published — in DNS or in a file at a
+ * URL — so its only job is to be unguessable: a seller who could predict the
+ * nonce another seller will be issued could stage the proof before the claim.
+ *
+ * Expiry and single use are P4-04's; this is the generator both halves share.
+ */
+export const verificationToken = (): string => randomBytes(32).toString('hex');
