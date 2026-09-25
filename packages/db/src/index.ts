@@ -218,6 +218,22 @@ export {
 export { readOpenInvitations, revokeInvitation, type PendingInvitation } from './invitations.js';
 
 /**
+ * Adding a domain (P4-01).
+ *
+ * `insertDomain` is `ON CONFLICT DO NOTHING` rather than a caught `23505`, and
+ * the reason is the audit row: a raised constraint violation aborts the
+ * transaction the audit write has to share (P0-53). An empty result carries the
+ * same information and leaves the transaction usable.
+ */
+export {
+  insertDomain,
+  readDomainByOrigin,
+  readDomains,
+  type DomainRow,
+  type NewDomain,
+} from './domains-write.js';
+
+/**
  * The Postgres rate limiter (P2-02), which is what closes A1.
  *
  * Here rather than in `packages/security` where P2-02's Files line puts it, and

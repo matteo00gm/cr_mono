@@ -132,6 +132,40 @@ export const invitationRevokedResponse = z.object({
 });
 
 /**
+ * A domain as the domains screen shows it (P4-01).
+ *
+ * **The verification token is in here on purpose**, and it is the one field
+ * worth pausing on: it is a value the seller has to publish, in DNS or in a
+ * file at a URL, so a contract that withheld it would make the screen unable
+ * to tell them what to do. It is not a credential — it proves control of a
+ * domain to us, not us to anybody.
+ *
+ * `createdAt` is an ISO string rather than a `Date`, like every other response
+ * here: what crosses the wire is JSON.
+ */
+export const domainSchema = z.object({
+  id: z.string(),
+  origin: z.string(),
+  registrableDomain: z.string(),
+  status: z.enum(['PENDING', 'VERIFIED']),
+  verificationToken: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+/**
+ * What adding a domain gives back.
+ *
+ * `created` says whether a row was made, because adding an origin the winery
+ * already holds is answered with the row it already has rather than a conflict
+ * — the seller's intent is satisfied either way, and the screen needs the token
+ * from the existing row to finish the job they came to do.
+ */
+export const domainAddedResponse = z.object({
+  domain: domainSchema,
+  created: z.boolean(),
+});
+
+/**
  * What redeeming an invitation gives back.
  *
  * The membership as written, so the dashboard can switch straight into the new
@@ -150,6 +184,8 @@ export type PendingInvitationsResponse = z.infer<typeof pendingInvitationsRespon
 export type RoleChangeResponse = z.infer<typeof roleChangeResponse>;
 export type MemberRemovedResponse = z.infer<typeof memberRemovedResponse>;
 export type InvitationRevokedResponse = z.infer<typeof invitationRevokedResponse>;
+export type Domain = z.infer<typeof domainSchema>;
+export type DomainAddedResponse = z.infer<typeof domainAddedResponse>;
 export type Product = z.infer<typeof productSchema>;
 
 /**

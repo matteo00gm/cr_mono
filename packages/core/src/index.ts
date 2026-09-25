@@ -11,6 +11,7 @@ export * from './webhooks/index.js';
 export * from './rag/index.js';
 export * from './completeness.js';
 export * from './import-limits.js';
+export * from './domains.js';
 
 /**
  * What a turn cost (P2-31).

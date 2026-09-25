@@ -110,6 +110,115 @@
           }
         }
       },
+      "/v1/dashboard/domains": {
+        "post": {
+          "summary": "Add a domain",
+          "description": "Normalises whatever the seller typed into one canonical origin (P2-05) and creates a PENDING row with a verification nonce. An origin another winery already holds is refused with 409 and a message that says only that it is not available: naming the other winery would make this an oracle for enumerating who our customers are. An origin this winery already holds is answered with the row it has, so the screen can show the token again rather than reporting a conflict that is not one. Every attempt is audited, including the refused ones, which are the interesting ones.\n\nRequires the `domains:manage` capability.",
+          "operationId": "postV1DashboardDomains",
+          "x-required-capability": "domains:manage",
+          "responses": {
+            "200": {
+              "description": "Add a domain",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "domain": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "origin": {
+                            "type": "string"
+                          },
+                          "registrableDomain": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "PENDING",
+                              "VERIFIED"
+                            ]
+                          },
+                          "verificationToken": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "origin",
+                          "registrableDomain",
+                          "status",
+                          "verificationToken",
+                          "createdAt"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "created": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "domain",
+                      "created"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "domain": {
+                      "id": "9f0b2d41-6c3a-4e8b-9d27-1a5c8e3f7b40",
+                      "origin": "https://www.winery.com",
+                      "registrableDomain": "winery.com",
+                      "status": "PENDING",
+                      "verificationToken": null,
+                      "createdAt": "2026-09-25T09:00:00.000Z"
+                    },
+                    "created": true
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/me": {
         "get": {
           "summary": "The caller and the wineries they belong to",
