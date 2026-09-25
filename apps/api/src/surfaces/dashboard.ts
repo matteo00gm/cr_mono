@@ -8,6 +8,7 @@ import {
   contextResponse,
   importPreviewResponse,
   domainAddedResponse,
+  domainRemovedResponse,
   domainVerifiedResponse,
   invitationRevokedResponse,
   inviteResponse,
@@ -1119,6 +1120,31 @@ export const createDashboardApp = ({
   /* ---- domains (P4-01) -------------------------------------------------- */
 
   /**
+   * Remove a domain.
+   *
+   * **Immediate, and immediate in a way that survives a cache.** Today CORS
+   * resolves the allowlist uncached on every request, so a removed origin is
+   * refused before a token is read. §5.7 contemplates caching that, and the day
+   * it does the immediacy would quietly become "within the TTL" — so the
+   * removal also writes a per-origin session cutoff, which is what still works
+   * then (P4-06).
+   *
+   * `confirm=true` is required only for the last **verified** domain, and it is
+   * a confirmation rather than a refusal: it is their domain and their
+   * decision, and what they must not be able to do is make it by accident.
+   */
+  app.delete('/domains/:id', requireCapability('domains:manage'), async (c) =>
+    c.json(
+      await domains.remove({
+        /* From a `memberships` row, never from the body (P0-48). */
+        tenantId: c.get('tenantId'),
+        domainId: c.req.param('id'),
+        confirmed: c.req.query('confirm') === 'true',
+      }),
+    ),
+  );
+
+  /**
    * Check a domain's proof.
    *
    * `POST` rather than `GET`, because it is not a read: it makes an outbound
@@ -1852,6 +1878,30 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         created: true,
       },
       response: domainAddedResponse,
+    },
+  ],
+  [
+    routeKey('DELETE', `${DASHBOARD_PREFIX}/domains/:id`),
+    {
+      access: requires('domains:manage'),
+      summary: 'Remove a domain',
+      description:
+        'Deletes the row and, in the same transaction, writes a per-origin session cutoff that ' +
+        'ends every live session on it — we never store the `jti`s we issue, so revoking them ' +
+        'one by one is impossible by construction and a timestamp does it in one row. The ' +
+        'effect is immediate today because the allowlist is uncached, and the cutoff is what ' +
+        'keeps it immediate once §5.7 caches it. A real delete, not a tombstone: the unique ' +
+        'index on origin is the anti-sharing backbone, and a kept row would hold that origin ' +
+        'against every winery for ever. Removing the last **verified** domain needs ' +
+        '`?confirm=true`, because it switches the widget off everywhere it is installed. ' +
+        "Another winery's id answers 404, never 403.",
+      example: {
+        origin: 'https://www.winery.com',
+        removed: true,
+        sessionsEnded: true,
+        verifiedRemaining: 1,
+      },
+      response: domainRemovedResponse,
     },
   ],
   [

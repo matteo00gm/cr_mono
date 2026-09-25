@@ -4,6 +4,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import {
   countDomains,
+  countVerifiedDomains,
+  deleteDomain,
   insertDomain,
   markDomainVerified,
   readDomainById,
@@ -14,6 +16,7 @@ import {
   readTenantPlan,
   reissueVerification,
 } from '../src/domains-write.js';
+import { endSessionsFor, sessionCutoffAt } from '../src/session-cutoffs.js';
 import { withTenant } from '../src/with-tenant.js';
 import { startPostgres } from './support/postgres.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
@@ -645,5 +648,120 @@ describe('the pair a verification earns (P4-05)', () => {
     );
 
     expect(await withTenant(PAIRED, (tx) => countDomains(tx), db)).toBe(1);
+  });
+});
+
+describe('removing a domain (P4-06)', () => {
+  it('leaves a cutoff that outlives the row it came from', async () => {
+    /*
+     * **The property this row is for.** The domain row is deleted outright — a
+     * tombstone would hold the origin against every other winery for ever
+     * (§3.2) — so the thing that ends its sessions has to live somewhere the
+     * delete does not reach. A foreign key to `tenant_domains` would have taken
+     * it with the row.
+     */
+    const created = await add(TENANT_A, 'https://removable.winery.com');
+
+    await withTenant(
+      TENANT_A,
+      async (tx) => {
+        await deleteDomain(tx, created?.id ?? '');
+        await endSessionsFor(tx, 'https://removable.winery.com');
+      },
+      db,
+    );
+
+    const gone = await withTenant(
+      TENANT_A,
+      (tx) => readDomainByOrigin(tx, 'https://removable.winery.com'),
+      db,
+    );
+
+    expect(gone).toBeUndefined();
+    await expect(
+      sessionCutoffAt(TENANT_A, 'https://removable.winery.com', db),
+    ).resolves.toBeInstanceOf(Date);
+  });
+
+  it('frees the origin for somebody else, which a tombstone would not', async () => {
+    const created = await add(TENANT_A, 'https://freed.winery.com');
+
+    await withTenant(TENANT_A, (tx) => deleteDomain(tx, created?.id ?? ''), db);
+
+    await expect(attempt(TENANT_B, 'https://freed.winery.com')).resolves.toMatchObject({
+      outcome: 'created',
+    });
+  });
+
+  it('cannot remove another winery domain, and says nothing either way', async () => {
+    const created = await add(TENANT_A, 'https://notdeletable.winery.com');
+
+    await expect(
+      withTenant(TENANT_B, (tx) => deleteDomain(tx, created?.id ?? ''), db),
+    ).resolves.toBeUndefined();
+
+    /* Still there. */
+    await expect(
+      withTenant(TENANT_A, (tx) => readDomainById(tx, created?.id ?? ''), db),
+    ).resolves.toBeDefined();
+  });
+
+  it('keeps one winery cutoffs out of another sight', async () => {
+    await withTenant(TENANT_A, (tx) => endSessionsFor(tx, 'https://scoped-cutoff.winery.com'), db);
+
+    await expect(
+      sessionCutoffAt(TENANT_A, 'https://scoped-cutoff.winery.com', db),
+    ).resolves.toBeInstanceOf(Date);
+    await expect(
+      sessionCutoffAt(TENANT_B, 'https://scoped-cutoff.winery.com', db),
+    ).resolves.toBeUndefined();
+  });
+
+  it('moves a cutoff forward rather than adding a second row', async () => {
+    /*
+     * A seller who removes an origin, re-verifies it and removes it again has
+     * ended two sets of sessions, and only the later cutoff matters. A conflict
+     * that did nothing would leave the earlier one standing, so the second
+     * run's sessions would survive.
+     */
+    await withTenant(TENANT_A, (tx) => endSessionsFor(tx, 'https://twice-cut.winery.com'), db);
+
+    const first = await sessionCutoffAt(TENANT_A, 'https://twice-cut.winery.com', db);
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    await withTenant(TENANT_A, (tx) => endSessionsFor(tx, 'https://twice-cut.winery.com'), db);
+
+    const second = await sessionCutoffAt(TENANT_A, 'https://twice-cut.winery.com', db);
+
+    expect(second?.getTime() ?? 0).toBeGreaterThan(first?.getTime() ?? 0);
+  });
+
+  it('has no cutoff for an origin nobody removed', async () => {
+    await expect(
+      sessionCutoffAt(TENANT_A, 'https://never-removed.example', db),
+    ).resolves.toBeUndefined();
+  });
+
+  it('counts only verified origins when deciding if one was the last', async () => {
+    const COUNTED = '77777777-7777-7777-7777-777777777777';
+
+    await withTenant(
+      COUNTED,
+      (tx) =>
+        tx.execute(sql`
+          INSERT INTO tenants (id, name, slug) VALUES (${COUNTED}::uuid, 'Cantina Blu', 'cantina-blu')
+          ON CONFLICT DO NOTHING
+        `),
+      db,
+    );
+
+    const pending = await attempt(COUNTED, 'https://pending-only.example', 'n', 5);
+
+    expect(pending.outcome).toBe('created');
+    /* One row, none of it verified. */
+    await expect(withTenant(COUNTED, (tx) => countVerifiedDomains(tx), db)).resolves.toBe(0);
+    await expect(withTenant(COUNTED, (tx) => countDomains(tx), db)).resolves.toBe(1);
   });
 });

@@ -31,6 +31,14 @@ const TOKEN_EVENT_TYPE: Readonly<Record<TokenRefusal, SecurityEventType>> = {
   invalid: 'INVALID_TOKEN',
   malformed: 'INVALID_TOKEN',
   revoked: 'INVALID_TOKEN',
+  /*
+   * A token for a session a seller ended by removing its domain (P4-06). Not
+   * `TOKEN_ORIGIN_MISMATCH`: that type means a token presented at a site it was
+   * not minted for, which is widget theft. This one was minted for exactly this
+   * site, by us, and the site stopped being theirs — an ordinary consequence of
+   * a seller's own action, and the exact reason still travels in `metadata`.
+   */
+  origin_removed: 'INVALID_TOKEN',
   origin_mismatch: 'TOKEN_ORIGIN_MISMATCH',
   tenant_mismatch: 'TOKEN_ORIGIN_MISMATCH',
 };

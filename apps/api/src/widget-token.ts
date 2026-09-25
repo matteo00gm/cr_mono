@@ -42,6 +42,17 @@ export const WIDGET_TOKEN_REFUSED = 'This session is no longer valid. Start a ne
 export type TokenRevocationCheck = (tenantId: string, jti: string) => Promise<boolean>;
 
 /**
+ * When sessions on this origin ended, or nothing — `sessionCutoffAt` (P4-06).
+ *
+ * Optional on the check below, and the default is the strict one: absent means
+ * *no cutoff is known*, not *there is no cutoff*. A verifier wired without it
+ * would accept sessions a seller has revoked, which is the failure this whole
+ * row exists to prevent — so a composition that forgets it is a wiring bug, and
+ * the composition root supplies it unconditionally.
+ */
+export type SessionCutoffCheck = (tenantId: string, origin: string) => Promise<Date | undefined>;
+
+/**
  * The token after `Bearer`, or nothing.
  *
  * Any other scheme, or none, reads as no token. P4-10's server-to-server
@@ -64,7 +75,14 @@ export type TokenRefusal =
   /** Ours, but without a claim every token we mint carries. */
   | 'malformed'
   /** Ours, bound to this site and tenant, and revoked. */
-  | 'revoked';
+  | 'revoked'
+  /**
+   * Ours, and belonging to a session that ended when its origin was removed
+   * (P4-06). Told apart from `revoked` because they are different events: one
+   * is a token we named, the other is every session on a domain at once, and an
+   * incident review reading `security_events` needs to know which.
+   */
+  | 'origin_removed';
 
 /** What an accepted token says about its session. */
 export interface SessionClaims {
@@ -86,6 +104,8 @@ export interface TokenCheckRequest {
   /** The origin CORS normalised and verified on this request. */
   readonly origin: string;
   readonly isRevoked: TokenRevocationCheck;
+  /** When sessions on this origin ended (P4-06). */
+  readonly cutoffAt?: SessionCutoffCheck | undefined;
   readonly now?: Date | undefined;
   /** Continuation only (P2-12a): accept a token that expired less than this long ago. */
   readonly expiredWithinSec?: number | undefined;
@@ -104,6 +124,9 @@ const refused = (reason: TokenRefusal): TokenCheck => ({ accepted: false, reason
  *    so a token passes only if its `tid` is that tenant; a domain removed after
  *    minting is refused by CORS before the token is read.
  * 4. **The `jti` is not revoked**, asked under the resolved tenant.
+ * 5. **The session started after this origin's cutoff** (P4-06). Removing a
+ *    domain ends every session on it at once, which no per-`jti` list could do:
+ *    we never store the `jti`s we issue.
  *
  * The tenant still being active is the caller's to check first: a switched-off
  * winery is `unavailable`, not refused a token.
@@ -114,6 +137,7 @@ export const checkWidgetToken = async ({
   tenant,
   origin,
   isRevoked,
+  cutoffAt,
   now,
   expiredWithinSec,
 }: TokenCheckRequest): Promise<TokenCheck> => {
@@ -142,6 +166,23 @@ export const checkWidgetToken = async ({
   }
 
   if (await isRevoked(tenant.tenantId, jti)) return refused('revoked');
+
+  /*
+   * **Compared against `iat_original`, never `iat`** (P4-06). The current
+   * token's own issue time moves every time a session refreshes (P3-21), so
+   * comparing it would let a session outlive its revocation by doing the one
+   * thing every live session does anyway.
+   *
+   * `>=` rather than `>`: a token minted in the same second as the removal is
+   * on the wrong side of it. The cost of the strict comparison is one session
+   * that has to start again; the cost of the loose one is a session that
+   * survives a revocation.
+   */
+  const cutoff = await cutoffAt?.(tenant.tenantId, origin);
+
+  if (cutoff !== undefined && startedAtSec * 1000 < cutoff.getTime()) {
+    return refused('origin_removed');
+  }
 
   return { accepted: true, claims: { sid, jti, startedAtSec } };
 };

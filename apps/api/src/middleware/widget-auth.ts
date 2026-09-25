@@ -8,6 +8,7 @@ import {
   bearerTokenOf,
   checkWidgetToken,
   WIDGET_TOKEN_REFUSED,
+  type SessionCutoffCheck,
   type TokenRefusal,
   type TokenRevocationCheck,
 } from '../widget-token.js';
@@ -44,6 +45,11 @@ export interface WidgetAuthOptions {
   readonly loadKeys: () => Promise<WidgetTokenKeys>;
   /** `isTokenRevoked` (P2-12a). Required: a verifier that cannot ask has nothing to fail closed on. */
   readonly isRevoked: TokenRevocationCheck;
+  /**
+   * `sessionCutoffAt` (P4-06). Required on the same terms: a verifier that
+   * cannot ask whether an origin's sessions were ended accepts them.
+   */
+  readonly cutoffAt: SessionCutoffCheck;
   /** Where refusals go; P2-16 supplies the `security_events` writer. */
   readonly onRejected?: ((event: RejectedWidgetToken) => Promise<void>) | undefined;
   /** What the daily address salt is derived from (P2-04), for the recorded refusal. */
@@ -92,6 +98,7 @@ export const requireWidgetToken =
   ({
     loadKeys,
     isRevoked,
+    cutoffAt,
     onRejected = logRejection,
     ipSecret,
     now = () => new Date(),
@@ -111,6 +118,7 @@ export const requireWidgetToken =
       tenant,
       origin,
       isRevoked,
+      cutoffAt,
       now: now(),
     });
 

@@ -225,8 +225,19 @@ export { readOpenInvitations, revokeInvitation, type PendingInvitation } from '.
  * transaction the audit write has to share (P0-53). An empty result carries the
  * same information and leaves the transaction usable.
  */
+/**
+ * Ending the sessions a removed domain left behind (P4-06).
+ *
+ * A timestamp rather than a revocation list, because we never store the `jti`s
+ * we issue — so revoking every live session on an origin by naming them is
+ * impossible by construction.
+ */
+export { endSessionsFor, sessionCutoffAt } from './session-cutoffs.js';
+
 export {
   countDomains,
+  countVerifiedDomains,
+  deleteDomain,
   insertDomain,
   insertVerifiedSibling,
   markDomainVerified,

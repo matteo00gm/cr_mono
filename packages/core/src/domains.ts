@@ -157,6 +157,18 @@ const WELL_KNOWN_REFUSALS: Readonly<Record<WellKnownFailure, string>> = {
 export const wellKnownRefusalMessage = (reason: WellKnownFailure): string =>
   WELL_KNOWN_REFUSALS[reason];
 
+/**
+ * What a seller is told when removing their last verified domain (P4-06).
+ *
+ * **A confirmation, not a refusal.** It is their domain and their decision —
+ * what they must not be able to do is make it *by accident*, because the
+ * consequence is a widget that stops answering on a live storefront and gives
+ * no sign anywhere that somebody turned it off.
+ */
+export const LAST_DOMAIN_WARNING =
+  'That is the only verified domain you have. Removing it switches the widget off ' +
+  'everywhere it is installed, immediately. Send confirm=true if that is what you want.';
+
 /** The two proofs a seller may offer, as the API names them. */
 export const VERIFY_METHODS = ['dns', 'wellknown'] as const;
 export type VerifyMethod = (typeof VERIFY_METHODS)[number];

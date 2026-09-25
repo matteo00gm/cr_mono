@@ -127,6 +127,8 @@ const harness = async ({
         return Promise.resolve(keys);
       },
       isRevoked: () => Promise.resolve(false),
+      /* No domain has been removed in these cases (P4-06). */
+      cutoffAt: () => Promise.resolve(undefined),
       onRejected: (event) => {
         rejected.push(event);
         return Promise.resolve();
@@ -232,6 +234,7 @@ describe('a refused token: one 401, and the reason only for the record', () => {
     const jti = randomUUID();
     const { keys, app, rejected } = await harness({
       options: {
+        cutoffAt: () => Promise.resolve(undefined),
         isRevoked: (tenantId, id) => {
           asked.push(`${tenantId}:${id}`);
           return Promise.resolve(true);
@@ -314,6 +317,7 @@ describe('before the token is read', () => {
       requireWidgetToken({
         loadKeys: freshKeys,
         isRevoked: () => Promise.resolve(false),
+        cutoffAt: () => Promise.resolve(undefined),
       }),
       (c) => c.json({ sessionId: c.get('widgetSessionId') }),
     );
