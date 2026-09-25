@@ -25,12 +25,14 @@ interface Row {
   registrableDomain: string;
   status: 'PENDING' | 'VERIFIED';
   verificationToken: string | null;
+  verificationExpiresAt: Date | null;
   createdAt: Date;
 }
 
 const state = {
   domain: undefined as Row | undefined,
   marked: undefined as Row | undefined,
+  reissued: undefined as Row | undefined,
   committed: true,
 };
 
@@ -40,6 +42,7 @@ const row = (overrides: Partial<Row> = {}): Row => ({
   registrableDomain: 'winery.com',
   status: 'PENDING',
   verificationToken: 'the-nonce',
+  verificationExpiresAt: new Date('2026-10-02T09:00:00.000Z'),
   createdAt: new Date('2026-09-25T09:00:00.000Z'),
   ...overrides,
 });
@@ -65,6 +68,13 @@ vi.mock('@catalogorosso/db', () => ({
 
     return Promise.resolve(state.marked);
   },
+  reissueVerification: (_tx: unknown, id: string, token: string) => {
+    calls.push(`reissueVerification(${id})`);
+
+    return Promise.resolve(
+      state.reissued === undefined ? undefined : { ...state.reissued, verificationToken: token },
+    );
+  },
   readDomainByOrigin: () => Promise.resolve(undefined),
   insertDomain: () => Promise.resolve({ outcome: 'taken' }),
   readTenantPlan: () => Promise.resolve(null),
@@ -85,10 +95,15 @@ const record = (_tx: unknown, entry: Entry) => {
   return Promise.resolve();
 };
 
+/** A clock the tests move, so a week does not have to pass. */
+const NOW = new Date('2026-09-26T09:00:00.000Z').getTime();
+
 /** Records are what a nameserver hands back: an array of chunk arrays. */
 const port = (records: string[][] | Error, allowed = true) =>
   createDomainsPort({
     audit: record,
+    now: () => NOW,
+    newToken: () => 'a-fresh-nonce',
     newResolver: () => () =>
       records instanceof Error ? Promise.reject(records) : Promise.resolve(records),
     limiter: {
@@ -112,6 +127,7 @@ beforeEach(() => {
   written.length = 0;
   state.domain = row();
   state.marked = row({ status: 'VERIFIED' });
+  state.reissued = row();
   state.committed = true;
 });
 
@@ -298,5 +314,113 @@ describe('with no port configured', () => {
     await expect(unconfiguredDomains.verify({ tenantId: 't1', domainId: 'd1' })).rejects.toThrow(
       /composition root/iu,
     );
+  });
+});
+
+describe('a nonce that has lapsed (P4-04)', () => {
+  const lapsed = () => row({ verificationExpiresAt: new Date(NOW - 1000) });
+
+  it('is replaced rather than extended', async () => {
+    /*
+     * **It has been in a public TXT record for a week.** Anybody who looked has
+     * a copy, so extending the window would mean the thing that proves control
+     * is a thing a passer-by can replay.
+     */
+    state.domain = lapsed();
+
+    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+
+    expect(calls).toContain('reissueVerification(d1)');
+    expect(result.domain.verificationToken).toBe('a-fresh-nonce');
+  });
+
+  it('is not checked against the record at all', async () => {
+    /* Checking first and reissuing after would accept a lapsed proof for
+     * exactly as long as it takes somebody to notice. */
+    state.domain = lapsed();
+
+    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+
+    expect(result.verified).toBe(false);
+    expect(calls.some((call) => call.startsWith('markDomainVerified'))).toBe(false);
+  });
+
+  it('tells the seller the value changed, not that they got it wrong', async () => {
+    /* To them, the record they published is still sitting there. "It does not
+     * match" with no explanation is the version that generates a ticket. */
+    state.domain = lapsed();
+
+    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+
+    expect(result.reason).toMatch(/expired/iu);
+    expect(result.reason).toMatch(/new one|replace/iu);
+  });
+
+  it('is recorded, so a claim nobody ever completes is visible', async () => {
+    state.domain = lapsed();
+
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+
+    expect(written).toEqual([expect.objectContaining({ action: 'domain.verification_reissued' })]);
+  });
+
+  it('writes no audit row when nothing was reissued', async () => {
+    /* Something else got there first. A row saying we issued a value when we
+     * did not is a record somebody will later try to reconcile against DNS. */
+    state.domain = lapsed();
+    state.reissued = undefined;
+
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+
+    expect(written).toEqual([]);
+  });
+
+  it('puts the new deadline on the wire, so the screen can say it', async () => {
+    /* A seller who publishes a record and comes back a fortnight later needs
+     * to be told when the value stops being accepted, not left guessing. */
+    state.domain = lapsed();
+
+    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+
+    expect(result.domain.verificationExpiresAt).toBe('2026-10-02T09:00:00.000Z');
+  });
+
+  it('is still counted against the limit', async () => {
+    /* Reissuing is a write and a round trip. An expired nonce is not a free
+     * pass through the thing that bounds this endpoint. */
+    state.domain = lapsed();
+
+    await expect(
+      port([['the-nonce']], false).verify({ tenantId: 't1', domainId: 'd1' }),
+    ).rejects.toMatchObject({ kind: 'rate_limited' });
+  });
+});
+
+describe('a nonce that has not lapsed', () => {
+  it('is checked as it stands', async () => {
+    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+
+    expect(calls.some((call) => call.startsWith('reissueVerification'))).toBe(false);
+    expect(result.verified).toBe(true);
+  });
+
+  it('is checked on the very last second rather than one early', async () => {
+    /* `<=` against `<` is the off-by-one, and it decides whether a seller who
+     * presses the button as the window closes is told their record is wrong. */
+    state.domain = row({ verificationExpiresAt: new Date(NOW + 1) });
+
+    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+
+    expect(result.verified).toBe(true);
+  });
+
+  it('is checked when it carries no deadline at all', async () => {
+    /* Rows created before this row existed. Treating a null deadline as lapsed
+     * would reissue a nonce every seller mid-verification had just published. */
+    state.domain = row({ verificationExpiresAt: null });
+
+    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+
+    expect(result.verified).toBe(true);
   });
 });

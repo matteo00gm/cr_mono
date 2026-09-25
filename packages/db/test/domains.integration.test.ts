@@ -10,6 +10,7 @@ import {
   readDomainByOrigin,
   readDomains,
   readTenantPlan,
+  reissueVerification,
 } from '../src/domains-write.js';
 import { withTenant } from '../src/with-tenant.js';
 import { startPostgres } from './support/postgres.js';
@@ -461,6 +462,65 @@ describe('marking a domain verified (P4-02)', () => {
     ).resolves.toBeUndefined();
     await expect(
       withTenant(TENANT_B, (tx) => markDomainVerified(tx, created?.id ?? '', 'DNS_TXT'), db),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe('the nonce lifecycle (P4-04)', () => {
+  it('gives a new claim a deadline about a week out', async () => {
+    /* The window is computed in SQL from the database's own clock, so this is
+     * the only place the arithmetic is actually exercised. */
+    const created = await add(TENANT_A, 'https://dated.winery.com');
+    const days =
+      ((created?.verificationExpiresAt?.getTime() ?? 0) - (created?.createdAt.getTime() ?? 0)) /
+      86_400_000;
+
+    expect(days).toBeGreaterThan(6.9);
+    expect(days).toBeLessThan(7.1);
+  });
+
+  it('spends the nonce on success', async () => {
+    const created = await add(TENANT_A, 'https://spent.winery.com');
+
+    await withTenant(TENANT_A, (tx) => markDomainVerified(tx, created?.id ?? '', 'DNS_TXT'), db);
+
+    const stored = await withTenant(TENANT_A, (tx) => readDomainById(tx, created?.id ?? ''), db);
+
+    expect(stored?.verificationToken).toBeNull();
+    expect(stored?.verificationExpiresAt).toBeNull();
+  });
+
+  it('issues a different value on reissue, and moves the deadline', async () => {
+    const created = await add(TENANT_A, 'https://reissued.winery.com', 'first-nonce');
+    const fresh = await withTenant(
+      TENANT_A,
+      (tx) => reissueVerification(tx, created?.id ?? '', 'second-nonce'),
+      db,
+    );
+
+    expect(fresh?.verificationToken).toBe('second-nonce');
+    expect(fresh?.verificationExpiresAt?.getTime() ?? 0).toBeGreaterThan(
+      created?.verificationExpiresAt?.getTime() ?? 0,
+    );
+  });
+
+  it('will not hand a verified domain a nonce', async () => {
+    /* Reopening a closed proof. A verified domain with a live nonce in DNS is
+     * a domain somebody can re-prove from a record they did not publish. */
+    const created = await add(TENANT_A, 'https://closed.winery.com');
+
+    await withTenant(TENANT_A, (tx) => markDomainVerified(tx, created?.id ?? '', 'DNS_TXT'), db);
+
+    await expect(
+      withTenant(TENANT_A, (tx) => reissueVerification(tx, created?.id ?? '', 'nope'), db),
+    ).resolves.toBeUndefined();
+  });
+
+  it('will not reissue for another winery', async () => {
+    const created = await add(TENANT_A, 'https://notyours.winery.com');
+
+    await expect(
+      withTenant(TENANT_B, (tx) => reissueVerification(tx, created?.id ?? '', 'nope'), db),
     ).resolves.toBeUndefined();
   });
 });

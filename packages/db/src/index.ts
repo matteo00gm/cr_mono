@@ -233,6 +233,7 @@ export {
   readDomainByOrigin,
   readDomains,
   readTenantPlan,
+  reissueVerification,
   type DomainInsert,
   type DomainRow,
   type NewDomain,

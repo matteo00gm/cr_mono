@@ -24,6 +24,7 @@ interface Row {
   registrableDomain: string;
   status: 'PENDING' | 'VERIFIED';
   verificationToken: string | null;
+  verificationExpiresAt: Date | null;
   createdAt: Date;
 }
 
@@ -46,6 +47,7 @@ const row = (origin: string, overrides: Partial<Row> = {}): Row => ({
   registrableDomain: 'winery.com',
   status: 'PENDING',
   verificationToken: 'nonce',
+  verificationExpiresAt: new Date('2026-10-02T09:00:00.000Z'),
   createdAt: new Date('2026-09-25T09:00:00.000Z'),
   ...overrides,
 });

@@ -150,6 +150,12 @@
                               "null"
                             ]
                           },
+                          "verificationExpiresAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "createdAt": {
                             "type": "string"
                           }
@@ -160,6 +166,7 @@
                           "registrableDomain",
                           "status",
                           "verificationToken",
+                          "verificationExpiresAt",
                           "createdAt"
                         ],
                         "additionalProperties": false
@@ -259,6 +266,12 @@
                               "null"
                             ]
                           },
+                          "verificationExpiresAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "createdAt": {
                             "type": "string"
                           }
@@ -269,6 +282,7 @@
                           "registrableDomain",
                           "status",
                           "verificationToken",
+                          "verificationExpiresAt",
                           "createdAt"
                         ],
                         "additionalProperties": false
