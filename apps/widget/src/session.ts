@@ -37,14 +37,92 @@ export interface SessionOptions {
   readonly api: string;
   readonly key: string;
   readonly fetch?: typeof globalThis.fetch | undefined;
+  /** Injected so a test can reach an expiry without waiting fifteen minutes. */
+  readonly now?: (() => number) | undefined;
 }
 
+/**
+ * A refusal from the session endpoint, carrying what it refused with.
+ *
+ * **The code is the whole reason this is a class.** A winery that has lapsed
+ * answers `unavailable`, and §1.3 says the widget renders *disabled* for that
+ * and *error* for everything else — a lapsed subscription that looks like a
+ * broken widget is a support ticket instead of an invoice (P3-21).
+ */
+export class SessionRefused extends Error {
+  constructor(
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(`The session endpoint refused with ${String(status)}.`);
+    this.name = 'SessionRefused';
+  }
+}
+
+/** The `error.code` a refusal carried, read defensively: a 502 is not our shape. */
+const codeIn = async (response: Response): Promise<string | undefined> => {
+  try {
+    const body = (await response.json()) as { error?: { code?: unknown } };
+
+    return typeof body.error?.code === 'string' ? body.error.code : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export interface Session {
-  /** The current token, minting one on first use. Concurrent callers share one request. */
+  /**
+   * A token good for the next minute at least, minting or refreshing as needed.
+   *
+   * Concurrent callers share one request — five sends in a burst trigger one
+   * mint, not five (P3-21).
+   */
   readonly token: () => Promise<string>;
-  /** Drops the token, so the next caller mints a fresh one. P3-21 calls this on a 401. */
+  /**
+   * Throws the current token away and gets another.
+   *
+   * What a `401` calls: the server has decided this token is no good, and no
+   * amount of looking at its `exp` would have told us.
+   */
+  readonly refresh: () => Promise<string>;
+  /** Drops the token without minting. For a test, and for a panel going away. */
   readonly forget: () => void;
 }
+
+/**
+ * How long before expiry a token is treated as already expired.
+ *
+ * A minute, because the alternative is a race nobody can debug: a token that
+ * passes the check and expires in the seconds between the check and the
+ * server reading it produces a `401` on a request a visitor is watching. The
+ * reactive path would recover it — this is what stops it happening at all.
+ */
+export const REFRESH_MARGIN_MS = 60_000;
+
+/**
+ * When a token stops being valid, or nothing.
+ *
+ * **Decoded, never verified.** The signature is the server's business and the
+ * key to check it is deliberately not here; the client needs one number, and
+ * reading it wrong costs a refresh it did not need rather than a security
+ * hole. A token we cannot read at all reads as "refresh now", which is the
+ * safe direction.
+ */
+export const expiryOf = (token: string): number | undefined => {
+  const payload = token.split('.')[1];
+
+  if (payload === undefined) return undefined;
+
+  try {
+    /* base64url, which `atob` does not accept: the two alphabets differ. */
+    const json = globalThis.atob(payload.replaceAll('-', '+').replaceAll('_', '/'));
+    const claims = JSON.parse(json) as { exp?: unknown };
+
+    return typeof claims.exp === 'number' ? claims.exp * 1000 : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 /**
  * Reads a value from a storage that is allowed to not work.
@@ -128,43 +206,101 @@ export const createSession = ({
   api,
   key,
   fetch: fetch_ = globalThis.fetch,
+  now = () => Date.now(),
 }: SessionOptions): Session => {
-  let pending: Promise<string> | undefined;
+  /** The live token and when it stops being one. Never written anywhere durable. */
+  let held: { token: string; expiresAt: number | undefined } | undefined;
 
-  const mint = async (): Promise<string> => {
+  /**
+   * The mint in flight, if there is one.
+   *
+   * **Single-flight, and the promise is what is cached.** Five sends in the
+   * same tick must trigger one mint: a resolved-value cache misses exactly the
+   * case that matters, where the second caller arrives before the first request
+   * has come back. Same reasoning as P3-04's module cache.
+   */
+  let minting: Promise<string> | undefined;
+
+  const mint = async (previous: string | undefined): Promise<string> => {
     const response = await fetch_(`${api}${SESSION_PATH}?key=${encodeURIComponent(key)}`, {
       method: 'POST',
       /* This surface accepts no cookies, and asking is how CORS fails (P2-08). */
       credentials: 'omit',
-      headers: { accept: 'application/json' },
+      headers: {
+        accept: 'application/json',
+        /*
+         * **The previous token continues its session** (P2-12a). Without it a
+         * refresh starts a new `sid`, and the conversation the server has been
+         * recording against the old one stops being the same conversation
+         * halfway through a visitor's sentence.
+         */
+        ...(previous === undefined ? {} : { authorization: `Bearer ${previous}` }),
+      },
     });
 
-    if (!response.ok)
-      throw new Error(`The session endpoint refused with ${String(response.status)}.`);
+    if (!response.ok) throw new SessionRefused(response.status, await codeIn(response));
 
     const session = (await response.json()) as WidgetSessionResponse;
+
+    held = { token: session.token, expiresAt: expiryOf(session.token) };
 
     return session.token;
   };
 
+  /**
+   * Starts a mint and holds the promise.
+   *
+   * **The single-flight lives in the two callers, not here.** Both read
+   * `minting` before doing anything and hand back what is already in flight, so
+   * a `??=` in this function guarded nothing — two mechanisms for one property,
+   * each hiding the other from a mutation. One of them had to go, and the
+   * callers' is the one that also returns the right promise.
+   */
+  const start = (previous: string | undefined): Promise<string> => {
+    minting = mint(previous).finally(() => {
+      /*
+       * Cleared whichever way it went. A cached rejection would leave a visitor
+       * unable to ask anything for the rest of the page with nothing saying
+       * why — the trap P3-04's loader avoids — and a cached *success* would
+       * make the next expiry unrefreshable.
+       */
+      minting = undefined;
+    });
+
+    return minting;
+  };
+
   return {
     token: () => {
-      pending ??= mint().catch((error: unknown) => {
-        /*
-         * A failed mint is not cached. Caching the rejection would leave a
-         * visitor unable to ask anything for the rest of the page, with nothing
-         * anywhere saying why — the same trap P3-04's loader avoids.
-         */
-        pending = undefined;
+      if (minting !== undefined) return minting;
 
-        throw error;
-      });
+      const current = held;
 
-      return pending;
+      /*
+       * A token with no readable expiry is treated as expired. Refreshing one
+       * that was fine costs a request; trusting one that was not costs a `401`
+       * in front of a visitor.
+       */
+      if (current !== undefined && (current.expiresAt ?? 0) - now() > REFRESH_MARGIN_MS) {
+        return Promise.resolve(current.token);
+      }
+
+      return start(current?.token);
+    },
+
+    refresh: () => {
+      if (minting !== undefined) return minting;
+
+      const previous = held?.token;
+
+      held = undefined;
+
+      return start(previous);
     },
 
     forget: () => {
-      pending = undefined;
+      held = undefined;
+      minting = undefined;
     },
   };
 };

@@ -36,11 +36,23 @@ export class ChatRefused extends Error {
     readonly status: number,
     /** Seconds, from `Retry-After`. Present on a 429, which is the one the visitor waits out. */
     readonly retryAfter?: number,
+    /**
+     * The `error.code` the body carried, when it carried one.
+     *
+     * `unavailable` is the one that matters: a winery that has lapsed renders
+     * *disabled* rather than *error*, because a retry button that can never
+     * succeed turns an invoice into a support ticket (§1.3, P3-21).
+     */
+    readonly code?: string,
   ) {
     super(`The chat endpoint refused with ${String(status)}.`);
     this.name = 'ChatRefused';
   }
 }
+
+/** True when the refusal means the winery is not serving, rather than that we broke. */
+export const isLapsed = (error: unknown): boolean =>
+  error instanceof ChatRefused && error.code === 'unavailable';
 
 /** The default wait when a 429 arrives without a readable `Retry-After`. */
 export const FALLBACK_RETRY_AFTER = 30;
@@ -83,6 +95,17 @@ export const failureOf = (error: unknown): ChatFailure => {
   return { k: 'error', cause: 'provider' };
 };
 
+/** The `error.code` a refusal carried, read defensively: a 502 is not our shape. */
+const codeIn = async (response: Response): Promise<string | undefined> => {
+  try {
+    const body = (await response.json()) as { error?: { code?: unknown } };
+
+    return typeof body.error?.code === 'string' ? body.error.code : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 /**
  * Sends one message and yields the answer as it arrives.
  *
@@ -113,7 +136,11 @@ export const ask = async function* ({
   });
 
   if (!response.ok) {
-    throw new ChatRefused(response.status, retryAfterIn(response.headers.get('retry-after')));
+    throw new ChatRefused(
+      response.status,
+      retryAfterIn(response.headers.get('retry-after')),
+      await codeIn(response),
+    );
   }
 
   /*

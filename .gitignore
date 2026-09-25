@@ -49,3 +49,8 @@ reports/
 # interrupted run leaves one in `src/`, where `pnpm lint` fails on the `any`
 # inside it for a reason nobody would trace back to a test.
 *.fixture.ts
+
+# Playwright's own output (P3-18). Traces are uploaded by CI on a failure and
+# are never worth committing: they are megabytes, and they describe one run.
+apps/e2e/test-results/
+apps/e2e/playwright-report/

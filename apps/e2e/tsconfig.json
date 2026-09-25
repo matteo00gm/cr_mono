@@ -3,7 +3,14 @@
   /* Lint + typecheck project. Nothing here is built: Playwright transpiles it. */
   "compilerOptions": {
     "noEmit": true,
-    "types": ["node"]
+    "types": ["node"],
+    /*
+     * `DOM` as well as Node: the spec files run in Node, but `page.evaluate`
+     * takes a callback that runs in the *browser*, and without this the DOM
+     * inside one is `any` — which type-aware lint reports as a wall of unsafe
+     * member access rather than checking it.
+     */
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
   "include": ["test", "playwright.config.ts"]
 }

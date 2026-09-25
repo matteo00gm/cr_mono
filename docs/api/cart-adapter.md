@@ -116,6 +116,20 @@ giro di eventi e un secondo timeout; se il contatore ti interessa, usa il Modo 1
 
 ---
 
+## Content Security Policy
+
+Se il tuo sito ha una CSP severa — e se hai un modulo di pagamento sulla stessa
+pagina dovresti — l'unica direttiva da aggiungere è quella per raggiungere la
+nostra API:
+
+```
+connect-src 'self' https://api.catalogorosso.com;
+```
+
+Non serve `'unsafe-inline'`, né per gli script né per gli stili: il widget non usa
+`eval`, non scrive `<script>` e adotta il proprio foglio di stile invece di
+iniettarlo. Funziona con `script-src 'self'` e `style-src 'self'`.
+
 ## Dove va il pulsante del carrello
 
 L'icona nell'intestazione del pannello porta il visitatore alla **tua** pagina

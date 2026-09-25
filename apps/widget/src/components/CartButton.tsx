@@ -26,9 +26,18 @@ export interface CartButtonProps {
   /** Injected so a test can watch the navigation rather than perform it. */
   readonly navigate?: ((url: string) => void) | undefined;
   readonly origin?: string | undefined;
+  /** Called before the host page moves, so the event is queued while we still exist (P3-20). */
+  readonly onOpen?: (() => void) | undefined;
 }
 
-export const CartButton = ({ cart, cartUrl, refreshKey, navigate, origin }: CartButtonProps) => {
+export const CartButton = ({
+  cart,
+  cartUrl,
+  refreshKey,
+  navigate,
+  origin,
+  onOpen,
+}: CartButtonProps) => {
   const t = useT();
   const [count, setCount] = useState<number | undefined>(undefined);
 
@@ -47,6 +56,12 @@ export const CartButton = ({ cart, cartUrl, refreshKey, navigate, origin }: Cart
   }, [cart, refreshKey]);
 
   const open = useCallback((): void => {
+    /*
+     * Recorded first. The next line navigates the host page away, and an event
+     * queued after that is an event nobody sends.
+     */
+    onOpen?.();
+
     const here = origin ?? globalThis.location.href;
     const url = safeCartUrl(cartUrl, here);
 
@@ -66,7 +81,7 @@ export const CartButton = ({ cart, cartUrl, refreshKey, navigate, origin }: Cart
     } catch {
       globalThis.location.assign(url);
     }
-  }, [cartUrl, navigate, origin]);
+  }, [cartUrl, navigate, onOpen, origin]);
 
   return (
     <button type="button" class="cart-button" onClick={open} aria-label={t('openCart')}>

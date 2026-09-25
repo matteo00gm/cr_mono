@@ -1,5 +1,6 @@
 import type { WidgetConfigResponse } from '@catalogorosso/api-client';
 
+import { adoptStyles } from './adopt-styles.js';
 import type { Panel, PanelOptions } from './panel.js';
 
 /**
@@ -154,6 +155,9 @@ export const lazyPanel = ({
           api,
           key,
           cart,
+          /* The loader's own copy, so the widget bundle imports no module the
+           * loader also imports (P3-05, P3-18). */
+          adoptStyles,
           document: document_,
         });
         panel.open();

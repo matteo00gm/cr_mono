@@ -22,7 +22,7 @@ sst dev --stage <you>  # local code against real AWS events
 | ------------------- | ------------------------------------------------------------------ |
 | `packages/db`       | Drizzle schema, migrations, RLS policies, `withTenant`             |
 | `packages/core`     | Domain rules and the request context. No HTTP, no AWS              |
-| `packages/security` | Redaction, capabilities. No HTTP, no AWS. 100% branch coverage     |
+| `packages/security` | Redaction, capabilities, `guardedFetch`. 100% branch coverage      |
 | `packages/testing`  | Container harness and fixtures. Never imported by production code  |
 | `packages/llm`      | Model adapters behind `LlmProvider`. Never in a browser bundle     |
 | `packages/eval`     | Golden eval dataset and harness. Never imported by production code |

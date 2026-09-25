@@ -10,9 +10,10 @@ import {
   stopped,
   type Conversation,
 } from '../conversation.js';
+import type { Analytics } from '../analytics.js';
 import type { CartPort } from '../cart/port.js';
 import { useT } from '../i18n/useT.js';
-import { failureOf } from '../send.js';
+import { failureOf, isLapsed } from '../send.js';
 import type { StreamEvent } from '../sse.js';
 import { acceptsQuestions, stateFor } from '../states.js';
 import { CartButton } from './CartButton.js';
@@ -53,14 +54,29 @@ export interface ChatProps {
   readonly cartUrl?: string | undefined;
   /** Injected by tests; the default moves the host page. */
   readonly navigate?: ((url: string) => void) | undefined;
+  /**
+   * Where the §Data Model events go (P3-20).
+   *
+   * Optional, and absent in most tests on purpose: analytics must never be the
+   * thing that makes the chat work, so the component has to run without it.
+   */
+  readonly analytics?: Analytics | undefined;
 }
 
-export const Chat = ({ ask, status = 'ACTIVE', cart, cartUrl, navigate }: ChatProps) => {
+export const Chat = ({ ask, status = 'ACTIVE', cart, cartUrl, navigate, analytics }: ChatProps) => {
   const t = useT();
   const [conversation, setConversation] = useState<Conversation>(empty);
   const [draft, setDraft] = useState('');
   /* Bumped after every add, which is what makes the badge refetch (P3-13). */
   const [added, setAdded] = useState(0);
+  /*
+   * **A winery can lapse while a shopper is mid-conversation** (P3-21). The
+   * config said `ACTIVE` when the panel opened and the API is now answering
+   * `unavailable`, so the state has to change under a panel that is already on
+   * screen — and it has to change to *disabled*, not to an error with a retry
+   * button that can never succeed (§1.3).
+   */
+  const [lapsed, setLapsed] = useState(false);
   const flight = useRef<AbortController | undefined>(undefined);
 
   /*
@@ -93,6 +109,14 @@ export const Chat = ({ ask, status = 'ACTIVE', cart, cartUrl, navigate }: ChatPr
         for await (const event of ask(text, controller.signal)) {
           if (controller.signal.aborted) return;
 
+          /*
+           * Recorded as the events arrive rather than at the end, because the
+           * end is exactly what a visitor who closes the tab never reaches.
+           */
+          if (event.type === 'recommendations') {
+            analytics?.record(event.items.length === 0 ? 'ZERO_RESULTS' : 'RECOMMENDATION_SHOWN');
+          }
+
           setConversation((current) => apply(current, event));
         }
 
@@ -117,13 +141,15 @@ export const Chat = ({ ask, status = 'ACTIVE', cart, cartUrl, navigate }: ChatPr
          */
         if (controller.signal.aborted) return;
 
+        if (isLapsed(error)) setLapsed(true);
+
         setConversation((current) => stopped(current, failureOf(error)));
       }
     },
     [ask],
   );
 
-  const state = stateFor(status, conversation.failure);
+  const state = stateFor(lapsed ? 'DISABLED' : status, conversation.failure);
   const open = acceptsQuestions(state);
 
   const submit = useCallback(
@@ -135,6 +161,7 @@ export const Chat = ({ ask, status = 'ACTIVE', cart, cartUrl, navigate }: ChatPr
       if (text === '' || conversation.streaming || !open) return;
 
       setDraft('');
+      analytics?.record('MESSAGE_SENT');
       void run(text, (current) => asked(current, text));
     },
     [conversation.streaming, draft, open, run],
@@ -145,6 +172,8 @@ export const Chat = ({ ask, status = 'ACTIVE', cart, cartUrl, navigate }: ChatPr
       if (cart === undefined) return;
 
       await cart.add({ ...item, quantity: 1 });
+      /* After the add, not before: an attempt that failed is not a sale. */
+      analytics?.record('ADD_TO_CART', item.productId);
       setAdded((current) => current + 1);
     },
     [cart],
@@ -166,6 +195,9 @@ export const Chat = ({ ask, status = 'ACTIVE', cart, cartUrl, navigate }: ChatPr
             cart={cart}
             cartUrl={cartUrl}
             refreshKey={added}
+            onOpen={() => {
+              analytics?.record('CART_OPEN');
+            }}
             {...(navigate === undefined ? {} : { navigate })}
           />
         </div>
@@ -193,6 +225,9 @@ export const Chat = ({ ask, status = 'ACTIVE', cart, cartUrl, navigate }: ChatPr
                       product={item.product}
                       variantId={item.product.variantId}
                       needsVariantId={cart?.needsVariantId ?? false}
+                      onDetail={(id) => {
+                        analytics?.record('PRODUCT_DETAIL_VIEW', id);
+                      }}
                       {...(cart?.canAdd === true ? { onAdd: addToCart } : {})}
                     />
                   ))}

@@ -48,7 +48,7 @@ export default defineConfig({
 
   use: {
     /* Chromium only. The thing under test is the CORS algorithm, which is a
-     * specification rather than a vendor behaviour; P3-19's screenshots are
+     * specification rather than a vendor behaviour; P3-18's screenshots are
      * where a second engine would earn its runtime. */
     ...devices['Desktop Chrome'],
     trace: 'retain-on-failure',

@@ -210,7 +210,22 @@ describe('what it leaves alone', () => {
       const mounted = start();
 
       expect(document.head.querySelector('style')).toBeNull();
-      expect(mounted?.shadow.querySelector('style')).not.toBeNull();
+      expect(mounted?.shadow.adoptedStyleSheets).not.toHaveLength(0);
+    });
+  });
+
+  it('adopts rather than injecting, so no CSP exception is needed', () => {
+    /*
+     * **A `<style>` element is governed by `style-src` wherever it is
+     * created** (P3-18). The element form asks every seller running a strict
+     * policy for `'unsafe-inline'`, and a seller with a payment form on the
+     * same page is the one least willing to give it. A constructed stylesheet
+     * is a script operation, covered by the `script-src` they already allow.
+     */
+    withScript({ 'data-key': 'pk_test_abc' }, () => {
+      const mounted = start();
+
+      expect(mounted?.shadow.querySelectorAll('style')).toHaveLength(0);
     });
   });
 });
@@ -288,15 +303,22 @@ describe('the stylesheet it injects', () => {
    * string, and asserting on the string is cheap insurance against the same
    * mistake being made again by somebody who never runs the browser suite.
    */
+  /** Every rule in the root, adopted or appended — P3-18 made it the former. */
   const sheet = (): string => {
     let text = '';
 
     withScript({ 'data-key': 'pk_test_abc' }, () => {
       const mounted = start();
+      const adopted = mounted?.shadow.adoptedStyleSheets as readonly CSSStyleSheet[] | undefined;
 
-      text = [...(mounted?.shadow.querySelectorAll('style') ?? [])]
-        .map((node) => node.textContent ?? '')
-        .join(String.fromCharCode(10));
+      text = [
+        ...[...(adopted ?? [])].map((one) =>
+          [...one.cssRules].map((rule) => rule.cssText).join(String.fromCharCode(10)),
+        ),
+        ...[...(mounted?.shadow.querySelectorAll('style') ?? [])].map(
+          (node) => node.textContent ?? '',
+        ),
+      ].join(String.fromCharCode(10));
     });
 
     return text;

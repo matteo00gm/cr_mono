@@ -1,8 +1,9 @@
 import type { WidgetConfigResponse } from '@catalogorosso/api-client';
-import { contrastRatio } from '@catalogorosso/core/contrast';
+import { contrastRatio, readableOn } from '@catalogorosso/core/contrast';
 import axe from 'axe-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { adoptStyles } from '../src/adopt-styles.js';
 import { focusableIn, trapFocus } from '../src/a11y/focus-trap.js';
 import type { Asker } from '../src/components/Chat.js';
 import { mountPanel, type Panel } from '../src/panel.js';
@@ -60,12 +61,29 @@ const mount = (overrides: Partial<WidgetConfigResponse> = {}): Panel =>
   mountPanel({
     shadow,
     launcher,
+    adoptStyles,
     config: { ...config, ...overrides },
     api: API,
     key: KEY,
     ask: silent,
     navigate: () => undefined,
   });
+
+/**
+ * Every rule in the shadow root, however it got there.
+ *
+ * P3-18 adopts a constructed stylesheet rather than appending a `<style>`
+ * element, so a seller on a strict CSP needs no `style-src 'unsafe-inline'` —
+ * and this reads both, because the element is still the fallback on a browser
+ * without `adoptedStyleSheets`.
+ */
+const cssIn = (root: ShadowRoot): string =>
+  [
+    ...[...((root.adoptedStyleSheets as readonly CSSStyleSheet[] | undefined) ?? [])].map((sheet) =>
+      [...sheet.cssRules].map((rule) => rule.cssText).join(String.fromCharCode(10)),
+    ),
+    ...[...root.querySelectorAll('style')].map((node) => node.textContent ?? ''),
+  ].join(String.fromCharCode(10));
 
 const press = (element: HTMLElement, key: string, shiftKey = false): void => {
   element.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, bubbles: true }));
@@ -258,27 +276,22 @@ describe('the focus trap', () => {
 
 describe('the tenant own colour', () => {
   it('uses it, rather than ours', () => {
-    expect(
-      mount({ theme: { ...config.theme, primaryColor: '#123456' } }).element.style.getPropertyValue(
-        '--accent',
-      ),
-    ).toBe('#123456');
+    mount({ theme: { ...config.theme, primaryColor: '#123456' } });
+
+    expect(cssIn(shadow)).toContain('--accent: #123456');
   });
 
   it('picks a foreground that can be read on it', () => {
     /* A seller who picked a pale gold gets black text on it, and does not have
      * to know that is a decision. */
-    const pale = mount({ theme: { ...config.theme, primaryColor: '#e8c66a' } });
+    mount({ theme: { ...config.theme, primaryColor: '#e8c66a' } });
 
-    expect(pale.element.style.getPropertyValue('--on-accent')).toBe('#000000');
+    expect(cssIn(shadow)).toContain('--on-accent: #000000');
   });
 
   it('keeps every accent pairing above the AA threshold', () => {
     for (const primary of ['#7b1e3c', '#e8c66a', '#123456', '#ffffff', '#000000']) {
-      const panel = mount({ theme: { ...config.theme, primaryColor: primary } });
-      const foreground = panel.element.style.getPropertyValue('--on-accent');
-
-      expect(contrastRatio(foreground, primary) ?? 0, primary).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(readableOn(primary), primary) ?? 0, primary).toBeGreaterThanOrEqual(4.5);
     }
   });
 });
@@ -299,11 +312,9 @@ describe('what the panel promises assistive technology', () => {
   it('animates only for a visitor who did not ask us not to', () => {
     /* The one animation in the panel, and it is inside the media query rather
      * than beside it. */
-    const panel = mount();
-    const style = panel.element.getRootNode() as ShadowRoot;
-    const sheet = [...style.querySelectorAll('style')]
-      .map((node) => node.textContent ?? '')
-      .join('\n');
+    mount();
+
+    const sheet = cssIn(shadow);
     const guarded = sheet.slice(sheet.indexOf('@media (prefers-reduced-motion: no-preference)'));
 
     /* The *declaration*, not just the keyframes: moving the animation out of
@@ -314,14 +325,22 @@ describe('what the panel promises assistive technology', () => {
 
   it('draws a focus ring a seller stylesheet cannot remove', () => {
     // Inside the shadow root, where their reset does not reach.
-    const panel = mount();
+    mount();
 
-    expect(
-      [...shadow.querySelectorAll('style')].some((node) =>
-        (node.textContent ?? '').includes(':focus-visible'),
-      ),
-      panel.element.className,
-    ).toBe(true);
+    expect(cssIn(shadow)).toContain(':focus-visible');
+  });
+
+  it('needs no style-src exception, because it adopts rather than injects', () => {
+    /*
+     * **The requirement this removes was real.** A `<style>` element is governed
+     * by `style-src` wherever it is created, so the element form asks every
+     * seller on a strict CSP for `'unsafe-inline'` — and a seller with a payment
+     * form on the same page is the one least willing to give it (P3-18).
+     */
+    mount();
+
+    expect(shadow.adoptedStyleSheets).not.toHaveLength(0);
+    expect(shadow.querySelectorAll('style')).toHaveLength(0);
   });
 
   it('passes axe on every structural rule it can run here', async () => {

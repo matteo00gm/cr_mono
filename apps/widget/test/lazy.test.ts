@@ -1,6 +1,7 @@
 import type { WidgetConfigResponse } from '@catalogorosso/api-client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { adoptStyles } from '../src/adopt-styles.js';
 import { lazyPanel, type WidgetModule } from '../src/lazy.js';
 import { mountPanel } from '../src/panel.js';
 
@@ -98,7 +99,7 @@ describe('the panel, once it exists', () => {
      * it should — and would appear at all for a caller that only wanted it
      * built.
      */
-    const panel = mountPanel({ shadow, launcher, config, api: API, key: KEY });
+    const panel = mountPanel({ shadow, launcher, adoptStyles, config, api: API, key: KEY });
 
     expect(panel.isOpen()).toBe(false);
     expect(panel.element.hasAttribute('hidden')).toBe(true);

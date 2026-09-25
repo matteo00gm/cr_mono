@@ -1,15 +1,17 @@
 import type { WidgetConfigResponse } from '@catalogorosso/api-client';
 import { h, render } from 'preact';
 
-import { readableOn } from '@catalogorosso/core/contrast';
+import { channelsOf, readableOn } from '@catalogorosso/core/contrast';
 
+import type { AdoptStyles } from './adopt-styles.js';
+import { createAnalytics, type Analytics } from './analytics.js';
 import { trapFocus, type FocusTrap } from './a11y/focus-trap.js';
 import { createCartPort, type CartPort } from './cart/port.js';
 import { resolveCart, type HostPage } from './cart/resolve.js';
 import { Chat, type Asker } from './components/Chat.js';
 import { catalogues, localeFor } from './i18n/index.js';
 import { LocaleContext, MessagesContext } from './i18n/useT.js';
-import { ask } from './send.js';
+import { ask, ChatRefused } from './send.js';
 import { anonId, createSession } from './session.js';
 
 /**
@@ -43,6 +45,7 @@ const PANEL_STYLE = [
   '.panel[hidden] { display: none; }',
   /* The tenant's colour, and a foreground picked for contrast rather than taste
    * (P3-15). Set as variables so one rule decides it for every control. */
+  /* Overridden per tenant by `accentRule`, which validates the colour first. */
   '.panel { --accent: #7b1e3c; --on-accent: #fff; }',
   /*
    * **A focus ring that a seller's CSS reset cannot remove**, because it is
@@ -131,9 +134,19 @@ export interface PanelOptions {
   readonly cart?: string | undefined;
   /** Injected by tests; the default resolves the host page's own cart. */
   readonly cartPort?: CartPort | undefined;
+  /** Injected by tests; the default batches to P6-01's ingest (P3-20). */
+  readonly analytics?: Analytics | undefined;
   readonly navigate?: ((url: string) => void) | undefined;
   /** Injected by tests; the default is a real session and a real stream. */
   readonly ask?: Asker | undefined;
+  /**
+   * How a stylesheet reaches the shadow root (P3-18).
+   *
+   * **Handed in rather than imported**, so this bundle and the loader do not
+   * share a module — a shared module is a chunk the loader statically imports,
+   * which is the collapse P3-05 refuses. Same reason `attach` is a callback.
+   */
+  readonly adoptStyles: AdoptStyles;
   readonly document?: Document | undefined;
 }
 
@@ -146,6 +159,32 @@ export interface Panel {
 }
 
 /**
+ * The winery's colour, as a rule, or nothing.
+ *
+ * **Validated before it is interpolated, and that is the whole point.**
+ * `primaryColor` is tenant-authored; put unchecked into stylesheet text, a
+ * value like `red } * { display: none } .x {` closes the rule and writes its
+ * own. The CSSOM rejected that for free while this was a style *attribute* —
+ * moving it into a sheet to satisfy CSP moves the check here, where it has to
+ * be explicit.
+ *
+ * `channelsOf` is the same parser the contrast maths uses, so a colour that is
+ * good enough to compute a foreground for is exactly the one that reaches the
+ * page (P3-15).
+ */
+const accentRule = (primaryColor: string): string => {
+  if (channelsOf(primaryColor) === undefined) return '';
+
+  return [
+    '',
+    '.panel {',
+    `  --accent: ${primaryColor.trim()};`,
+    `  --on-accent: ${readableOn(primaryColor)};`,
+    '}',
+  ].join('\n');
+};
+
+/**
  * The real asker: one session for the page, one request per question.
  *
  * **Composed here, inside the widget bundle.** The loader never sees this — it
@@ -156,7 +195,27 @@ const asker = (api: string, key: string): Asker => {
   const session = createSession({ api, key });
 
   return async function* (message, signal) {
-    yield* ask({ api, key, token: await session.token(), message, signal });
+    /*
+     * **Proactive first, reactive second** (P3-21). `token()` refreshes a token
+     * inside a minute of expiry, which is what stops most 401s happening at
+     * all; this is the one that got through anyway — a revoked token, a clock
+     * apart, a mint that raced an expiry.
+     */
+    try {
+      yield* ask({ api, key, token: await session.token(), message, signal });
+
+      return;
+    } catch (error) {
+      if (!(error instanceof ChatRefused) || error.status !== 401) throw error;
+    }
+
+    /*
+     * **Exactly once.** A 401 after a successful refresh means something is
+     * genuinely wrong — a lapsed winery, a removed domain — and looping on it
+     * is a denial of service we would be running against our own session
+     * endpoint, from a visitor's browser, at their expense.
+     */
+    yield* ask({ api, key, token: await session.refresh(), message, signal });
   };
 };
 
@@ -190,14 +249,17 @@ export const mountPanel = ({
   key,
   cart,
   cartPort,
+  analytics: analytics_,
   navigate,
   ask: ask_,
+  adoptStyles,
   document: document_ = document,
 }: PanelOptions): Panel => {
-  const style = document_.createElement('style');
-
-  style.textContent = PANEL_STYLE;
-
+  /*
+   * One per panel, built here rather than per component: the debounce and the
+   * `pagehide` flush are properties of the page, not of a render (P3-20).
+   */
+  const analytics = analytics_ ?? createAnalytics({ api, key, visitorId: anonId() });
   const element = document_.createElement('div');
 
   element.className = 'panel';
@@ -211,14 +273,6 @@ export const mountPanel = ({
   element.setAttribute('aria-modal', 'false');
   element.setAttribute('aria-label', config.welcomeMessage);
 
-  /*
-   * The winery's own colour, with a foreground chosen for contrast rather than
-   * assumed (P3-15, §1.7). A seller who picked a pale gold gets black text on
-   * it; one who picked a deep bordeaux gets white, and neither has to know.
-   */
-  element.style.setProperty('--accent', config.theme.primaryColor);
-  element.style.setProperty('--on-accent', readableOn(config.theme.primaryColor));
-
   const header = document_.createElement('div');
 
   header.className = 'panel-header';
@@ -229,7 +283,14 @@ export const mountPanel = ({
   body.className = 'panel-body';
 
   element.append(header, body);
-  shadow.append(style, element);
+
+  /*
+   * Adopted rather than appended (P3-18), and the tenant's colour goes *into*
+   * the sheet rather than onto a style attribute — which is the same CSP rule
+   * from the other end: an inline `style=` is `'unsafe-inline'` too.
+   */
+  adoptStyles(shadow, PANEL_STYLE + accentRule(config.theme.primaryColor), document_);
+  shadow.append(element);
 
   /*
    * The locale is decided once, here: the tenant's setting, overridden by the
@@ -251,6 +312,7 @@ export const mountPanel = ({
           cart: cartPort ?? cartFor(cart),
           cartUrl: config.cartUrl,
           navigate,
+          analytics,
         }),
       ),
     ),
@@ -259,10 +321,19 @@ export const mountPanel = ({
 
   let trap: FocusTrap | undefined;
 
+  /* Recorded once, on the first open: the second is the same visitor looking
+   * again, and counting it would inflate the one number this measures. */
+  let opened = false;
+
   const setOpen = (open: boolean): void => {
     element.hidden = !open;
     element.setAttribute('aria-modal', String(open));
     launcher.setAttribute('aria-expanded', String(open));
+
+    if (open && !opened) {
+      opened = true;
+      analytics.record('WIDGET_OPEN');
+    }
 
     if (!open) {
       trap?.release();

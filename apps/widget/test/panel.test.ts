@@ -1,6 +1,7 @@
 import type { WidgetConfigResponse } from '@catalogorosso/api-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { adoptStyles } from '../src/adopt-styles.js';
 import type { CartPort } from '../src/cart/port.js';
 import type { Asker } from '../src/components/Chat.js';
 import { en } from '../src/i18n/en.js';
@@ -56,7 +57,7 @@ beforeEach(() => {
 });
 
 const mount = (ask: Asker = silent) =>
-  mountPanel({ shadow, launcher, config, api: API, key: KEY, ask });
+  mountPanel({ shadow, launcher, adoptStyles, config, api: API, key: KEY, ask });
 
 describe('what is inside the panel', () => {
   it('mounts the chat', () => {
@@ -92,7 +93,7 @@ describe('what is inside the panel', () => {
 
     vi.stubGlobal('fetch', fetch_);
 
-    mountPanel({ shadow, launcher, config, api: API, key: KEY });
+    mountPanel({ shadow, launcher, adoptStyles, config, api: API, key: KEY });
 
     expect(fetch_).not.toHaveBeenCalled();
   });
@@ -147,6 +148,7 @@ describe('a winery that is not serving', () => {
     const panel = mountPanel({
       shadow,
       launcher,
+      adoptStyles,
       config: { ...config, status: 'DISABLED' },
       api: API,
       key: KEY,
@@ -199,6 +201,7 @@ describe('the storefront own cart', () => {
     mountPanel({
       shadow,
       launcher,
+      adoptStyles,
       config,
       api: API,
       key: KEY,
@@ -228,6 +231,7 @@ describe('the storefront own cart', () => {
     const panel = mountPanel({
       shadow,
       launcher,
+      adoptStyles,
       config: { ...config, cartUrl: 'https://cantina-rossi.example/carrello' },
       api: API,
       key: KEY,
@@ -241,5 +245,136 @@ describe('the storefront own cart', () => {
     await Promise.resolve();
 
     expect(navigate).toHaveBeenCalledOnce();
+  });
+});
+
+/** One macrotask, which flushes Preact's microtask-batched renders. */
+const settle = (): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+describe('a token the server has stopped accepting', () => {
+  /*
+   * **The reactive half of P3-21, through the real asker.** `token()` refreshes
+   * inside a minute of expiry, which stops most 401s happening at all; this is
+   * the one that got through anyway — a revoked token, a clock apart, a mint
+   * that raced an expiry.
+   *
+   * Asserted here rather than in `chat.test.tsx` because the retry lives in the
+   * composition: the component is handed an asker and never sees a token.
+   */
+  const jwt = (secondsFromNow: number): string => {
+    const claims = { sid: 'sess', exp: Math.floor(Date.now() / 1000) + secondsFromNow };
+    const payload = globalThis
+      .btoa(JSON.stringify(claims))
+      .replaceAll('+', '-')
+      .replaceAll('/', '_')
+      .replace(/=+$/u, '');
+
+    return ['header', payload, 'signature'].join('.');
+  };
+
+  const minted = (token: string): Response =>
+    new Response(JSON.stringify({ token, expiresAt: '2026-09-25T12:00:00.000Z' }), {
+      headers: { 'content-type': 'application/json' },
+    });
+
+  const stream = (text: string): Response =>
+    new Response(
+      [
+        `event: text${String.fromCharCode(10)}data: ${JSON.stringify({ type: 'text', delta: text })}`,
+        '',
+        `event: done${String.fromCharCode(10)}data: {}`,
+        '',
+        '',
+      ].join(String.fromCharCode(10)),
+      { headers: { 'content-type': 'text/event-stream' } },
+    );
+
+  const refused = (status: number): Response =>
+    new Response(JSON.stringify({ error: { code: 'unauthorized', message: 'no' } }), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  /** Routes by path, so the order of session and chat calls is not assumed. */
+  const routing = (chat: readonly Response[]) => {
+    const tokens = [jwt(900), jwt(900)];
+    let mints = 0;
+    let asks = 0;
+
+    const fetch_ = vi.fn<typeof globalThis.fetch>((input) => {
+      /* Always a string here; `RequestInfo` is wider than what we ever pass. */
+      const url = input as string;
+
+      if (url.includes('/session')) {
+        mints += 1;
+
+        return Promise.resolve(minted(tokens[mints - 1] ?? jwt(900)));
+      }
+
+      asks += 1;
+
+      return Promise.resolve(chat[asks - 1] ?? stream('fallback'));
+    });
+
+    return { fetch_, mints: () => mints, asks: () => asks };
+  };
+
+  const answer = async (chat: readonly Response[]) => {
+    const route = routing(chat);
+
+    vi.stubGlobal('fetch', route.fetch_);
+
+    const panel = mountPanel({ shadow, launcher, adoptStyles, config, api: API, key: KEY });
+    const input = panel.body.querySelector('.composer-input');
+    const form = panel.body.querySelector('form');
+
+    (input as HTMLInputElement).value = 'Che vino?';
+    input?.dispatchEvent(new Event('input', { bubbles: true }));
+
+    /*
+     * A tick between typing and submitting, because Preact's state update is a
+     * microtask: submitting in the same tick reads an empty draft and the
+     * handler returns without asking anything.
+     */
+    await settle();
+
+    form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+    /* Let the mint, the refusal, the refresh and the replay all settle. */
+    for (let tick = 0; tick < 12; tick += 1) await settle();
+
+    return { panel, ...route };
+  };
+
+  it('refreshes once and replays the question', async () => {
+    const { panel, mints, asks } = await answer([refused(401), stream('Un Barolo.')]);
+
+    expect(mints()).toBe(2);
+    expect(asks()).toBe(2);
+    expect(panel.body.querySelector('.chat-log')?.textContent).toContain('Un Barolo.');
+  });
+
+  it('gives up after one refresh rather than looping', async () => {
+    /*
+     * A 401 after a successful refresh means something is genuinely wrong. An
+     * unbounded 401 to refresh to 401 cycle is a denial of service we would be
+     * running against our own session endpoint, from a visitor's browser.
+     */
+    const { mints, asks } = await answer([refused(401), refused(401), stream('never')]);
+
+    expect(mints()).toBe(2);
+    expect(asks()).toBe(2);
+  });
+
+  it('does not refresh for a refusal that is not a 401', async () => {
+    /* A 429 is a rate limit and a 403 is an origin. Neither is fixed by a new
+     * token, and minting one wastes a request the limiter is already counting. */
+    const { mints, asks } = await answer([refused(429), stream('never')]);
+
+    expect(mints()).toBe(1);
+    expect(asks()).toBe(1);
   });
 });
