@@ -1,13 +1,17 @@
 import type { NormalizeFailure } from '@catalogorosso/security';
+import type { WellKnownFailure } from '@catalogorosso/security/net';
 import { describe, expect, it } from 'vitest';
 
 import {
   capFor,
   capMessage,
   DOMAIN_CAPS,
+  METHOD_COLUMN,
   ORIGIN_UNAVAILABLE,
   refusalMessage,
   verificationToken,
+  VERIFY_METHODS,
+  wellKnownRefusalMessage,
 } from '../src/domains.js';
 
 /**
@@ -144,5 +148,59 @@ describe('what a seller at their cap is told', () => {
 
   it('says what to do, not only what went wrong', () => {
     expect(capMessage('CANTINA', 1)).toMatch(/remove/iu);
+  });
+});
+
+describe('what a seller is told when the file check fails (P4-03)', () => {
+  const EVERY: readonly WellKnownFailure[] = ['not_found', 'mismatch', 'unreachable'];
+
+  it.each(EVERY)('has its own message for %s', (reason) => {
+    /* Three different places to look: upload it, check what is in it, and
+     * nothing you can fix. One shared string would send every seller to the
+     * wrong one. */
+    expect(wellKnownRefusalMessage(reason).length).toBeGreaterThan(20);
+  });
+
+  it('is different for every reason', () => {
+    const messages = EVERY.map((reason) => wellKnownRefusalMessage(reason));
+
+    expect(new Set(messages).size).toBe(EVERY.length);
+  });
+
+  it('says what to do about a missing file', () => {
+    expect(wellKnownRefusalMessage('not_found')).toMatch(/upload/iu);
+  });
+
+  it('warns that a themed page looks like this, because most hosts serve one', () => {
+    expect(wellKnownRefusalMessage('mismatch')).toMatch(/themed|404/iu);
+  });
+
+  it('never names what our own network refused', () => {
+    /*
+     * **The flattening is the security property.** `guardedFetch`'s reasons say
+     * which addresses we would not connect to and which redirects we would not
+     * follow; a caller who could read them could map our defences one domain at
+     * a time. "We could not reach your site" is true and gives them nothing.
+     */
+    const message = wellKnownRefusalMessage('unreachable');
+
+    expect(message).not.toMatch(/private|internal|blocked|metadata|redirect|10\.|169\.254/iu);
+    expect(message).toMatch(/could not reach/iu);
+  });
+});
+
+describe('the proofs on offer', () => {
+  it('are the two a seller can actually produce', () => {
+    /*
+     * DNS is not always theirs to change — plenty would have to ask whoever
+     * built the site — and a file on the storefront is. Offering one and not
+     * the other strands exactly those sellers.
+     */
+    expect(VERIFY_METHODS).toEqual(['dns', 'wellknown']);
+  });
+
+  it('each map to their own column value', () => {
+    expect(METHOD_COLUMN.dns).toBe('DNS_TXT');
+    expect(METHOD_COLUMN.wellknown).toBe('WELL_KNOWN');
   });
 });

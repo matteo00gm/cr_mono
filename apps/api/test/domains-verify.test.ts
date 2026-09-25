@@ -95,6 +95,32 @@ const record = (_tx: unknown, entry: Entry) => {
   return Promise.resolve();
 };
 
+/** A port whose file check answers without a network. */
+const filePort = (respond: () => Promise<{ status: number; body: string }>, allowed = true) =>
+  createDomainsPort({
+    audit: record,
+    now: () => NOW,
+    newToken: () => 'a-fresh-nonce',
+    fetcher: (url: string) => {
+      calls.push(`fetch(${url})`);
+
+      return respond();
+    },
+    limiter: {
+      check: (checks) => {
+        calls.push(`limiter(${checks.map((check) => check.key).join(',')})`);
+
+        return Promise.resolve({
+          allowed,
+          remaining: 9,
+          resetAt: new Date(NOW),
+          limit: 10,
+          key: checks[0]?.key ?? '',
+        });
+      },
+    },
+  });
+
 /** A clock the tests move, so a week does not have to pass. */
 const NOW = new Date('2026-09-26T09:00:00.000Z').getTime();
 
@@ -133,13 +159,17 @@ beforeEach(() => {
 
 describe('a domain whose record is published', () => {
   it('verifies', async () => {
-    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    const result = await port([['the-nonce']]).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'dns',
+    });
 
     expect(result).toMatchObject({ verified: true, domain: { status: 'VERIFIED' } });
   });
 
   it('records which proof was used', async () => {
-    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
 
     expect(calls).toContain('markDomainVerified(d1,DNS_TXT)');
     expect(written).toEqual([
@@ -156,7 +186,11 @@ describe('a domain whose record is published', () => {
      */
     state.marked = undefined;
 
-    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    const result = await port([['the-nonce']]).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'dns',
+    });
 
     expect(result.verified).toBe(true);
     expect(result.domain.status).toBe('VERIFIED');
@@ -167,7 +201,7 @@ describe('a domain whose record is published', () => {
      * is a log that overstates what happened. */
     state.marked = undefined;
 
-    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
 
     expect(written).toEqual([]);
   });
@@ -175,14 +209,14 @@ describe('a domain whose record is published', () => {
 
 describe('a domain whose record is not', () => {
   it('is not an error, because it is the normal state for a while', async () => {
-    const result = await port([]).verify({ tenantId: 't1', domainId: 'd1' });
+    const result = await port([]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
 
     expect(result.verified).toBe(false);
     expect(result.domain.status).toBe('PENDING');
   });
 
   it('says where to look when the record is absent', async () => {
-    const result = await port([]).verify({ tenantId: 't1', domainId: 'd1' });
+    const result = await port([]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
 
     expect(result.reason).toMatch(/propagate|publish/iu);
   });
@@ -190,8 +224,12 @@ describe('a domain whose record is not', () => {
   it('says something different when the record is there and wrong', async () => {
     /* Two different places to look: "publish it" and "check what you pasted".
      * A seller given the wrong one spends an afternoon on the wrong screen. */
-    const absent = await port([]).verify({ tenantId: 't1', domainId: 'd1' });
-    const wrong = await port([['not-the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    const absent = await port([]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
+    const wrong = await port([['not-the-nonce']]).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'dns',
+    });
 
     expect(wrong.reason).not.toBe(absent.reason);
     expect(wrong.reason).toMatch(/not the value|exactly/iu);
@@ -201,13 +239,14 @@ describe('a domain whose record is not', () => {
     const result = await port(Object.assign(new Error('SERVFAIL'), { code: 'SERVFAIL' })).verify({
       tenantId: 't1',
       domainId: 'd1',
+      method: 'dns',
     });
 
     expect(result.reason).toMatch(/our end/iu);
   });
 
   it('leaves the status alone', async () => {
-    await port([['not-the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    await port([['not-the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
 
     expect(calls.some((call) => call.startsWith('markDomainVerified'))).toBe(false);
   });
@@ -218,13 +257,14 @@ describe('a domain whose record is not', () => {
      * what a contested claim looks like from our side (P4-18) — and a resolver
      * of ours falling over is not that at all.
      */
-    await port([['not-the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    await port([['not-the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
     const theirs = [...written];
 
     written.length = 0;
     await port(Object.assign(new Error('SERVFAIL'), { code: 'SERVFAIL' })).verify({
       tenantId: 't1',
       domainId: 'd1',
+      method: 'dns',
     });
 
     expect(theirs[0]?.action).toBe('domain.verify_failed');
@@ -236,7 +276,7 @@ describe('a domain that is already verified', () => {
   it('answers success without asking a nameserver', async () => {
     state.domain = row({ status: 'VERIFIED', verificationToken: null });
 
-    const result = await port([]).verify({ tenantId: 't1', domainId: 'd1' });
+    const result = await port([]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
 
     expect(result.verified).toBe(true);
     expect(calls.some((call) => call.startsWith('markDomainVerified'))).toBe(false);
@@ -252,7 +292,9 @@ describe('a domain that is not this winery', () => {
      */
     state.domain = undefined;
 
-    await expect(port([]).verify({ tenantId: 't1', domainId: 'd1' })).rejects.toMatchObject({
+    await expect(
+      port([]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' }),
+    ).rejects.toMatchObject({
       kind: 'not_found',
     });
   });
@@ -262,7 +304,9 @@ describe('a domain with no verification in progress', () => {
   it('is refused rather than checked against nothing', async () => {
     state.domain = row({ verificationToken: null });
 
-    await expect(port([['']]).verify({ tenantId: 't1', domainId: 'd1' })).rejects.toMatchObject({
+    await expect(
+      port([['']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' }),
+    ).rejects.toMatchObject({
       kind: 'conflict',
     });
   });
@@ -276,13 +320,13 @@ describe('how often it may be asked', () => {
      * somebody else's nameservers — and a bucket spent after the resource
      * protects nothing.
      */
-    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
 
     expect(calls[0]).toBe('limiter(domain-verify:d1)');
   });
 
   it('counts per domain, not per tenant', async () => {
-    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
 
     expect(calls[0]).toContain('d1');
     expect(calls[0]).not.toContain('t1');
@@ -290,7 +334,7 @@ describe('how often it may be asked', () => {
 
   it('refuses once the bucket is empty, before reading anything', async () => {
     await expect(
-      port([['the-nonce']], false).verify({ tenantId: 't1', domainId: 'd1' }),
+      port([['the-nonce']], false).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' }),
     ).rejects.toMatchObject({ kind: 'rate_limited' });
 
     expect(calls).toEqual(['limiter(domain-verify:d1)']);
@@ -298,7 +342,7 @@ describe('how often it may be asked', () => {
 
   it('tells a seller to wait rather than that something is broken', async () => {
     const message = await port([['the-nonce']], false)
-      .verify({ tenantId: 't1', domainId: 'd1' })
+      .verify({ tenantId: 't1', domainId: 'd1', method: 'dns' })
       .then(
         () => '',
         (error: unknown) => (error as Error).message,
@@ -311,9 +355,9 @@ describe('how often it may be asked', () => {
 
 describe('with no port configured', () => {
   it('refuses loudly rather than reporting a domain verified', async () => {
-    await expect(unconfiguredDomains.verify({ tenantId: 't1', domainId: 'd1' })).rejects.toThrow(
-      /composition root/iu,
-    );
+    await expect(
+      unconfiguredDomains.verify({ tenantId: 't1', domainId: 'd1', method: 'dns' }),
+    ).rejects.toThrow(/composition root/iu);
   });
 });
 
@@ -328,7 +372,11 @@ describe('a nonce that has lapsed (P4-04)', () => {
      */
     state.domain = lapsed();
 
-    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    const result = await port([['the-nonce']]).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'dns',
+    });
 
     expect(calls).toContain('reissueVerification(d1)');
     expect(result.domain.verificationToken).toBe('a-fresh-nonce');
@@ -339,7 +387,11 @@ describe('a nonce that has lapsed (P4-04)', () => {
      * exactly as long as it takes somebody to notice. */
     state.domain = lapsed();
 
-    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    const result = await port([['the-nonce']]).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'dns',
+    });
 
     expect(result.verified).toBe(false);
     expect(calls.some((call) => call.startsWith('markDomainVerified'))).toBe(false);
@@ -350,7 +402,11 @@ describe('a nonce that has lapsed (P4-04)', () => {
      * match" with no explanation is the version that generates a ticket. */
     state.domain = lapsed();
 
-    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    const result = await port([['the-nonce']]).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'dns',
+    });
 
     expect(result.reason).toMatch(/expired/iu);
     expect(result.reason).toMatch(/new one|replace/iu);
@@ -359,7 +415,7 @@ describe('a nonce that has lapsed (P4-04)', () => {
   it('is recorded, so a claim nobody ever completes is visible', async () => {
     state.domain = lapsed();
 
-    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
 
     expect(written).toEqual([expect.objectContaining({ action: 'domain.verification_reissued' })]);
   });
@@ -370,7 +426,7 @@ describe('a nonce that has lapsed (P4-04)', () => {
     state.domain = lapsed();
     state.reissued = undefined;
 
-    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
 
     expect(written).toEqual([]);
   });
@@ -380,7 +436,11 @@ describe('a nonce that has lapsed (P4-04)', () => {
      * to be told when the value stops being accepted, not left guessing. */
     state.domain = lapsed();
 
-    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    const result = await port([['the-nonce']]).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'dns',
+    });
 
     expect(result.domain.verificationExpiresAt).toBe('2026-10-02T09:00:00.000Z');
   });
@@ -391,14 +451,18 @@ describe('a nonce that has lapsed (P4-04)', () => {
     state.domain = lapsed();
 
     await expect(
-      port([['the-nonce']], false).verify({ tenantId: 't1', domainId: 'd1' }),
+      port([['the-nonce']], false).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' }),
     ).rejects.toMatchObject({ kind: 'rate_limited' });
   });
 });
 
 describe('a nonce that has not lapsed', () => {
   it('is checked as it stands', async () => {
-    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    const result = await port([['the-nonce']]).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'dns',
+    });
 
     expect(calls.some((call) => call.startsWith('reissueVerification'))).toBe(false);
     expect(result.verified).toBe(true);
@@ -409,7 +473,11 @@ describe('a nonce that has not lapsed', () => {
      * presses the button as the window closes is told their record is wrong. */
     state.domain = row({ verificationExpiresAt: new Date(NOW + 1) });
 
-    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    const result = await port([['the-nonce']]).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'dns',
+    });
 
     expect(result.verified).toBe(true);
   });
@@ -419,8 +487,122 @@ describe('a nonce that has not lapsed', () => {
      * would reissue a nonce every seller mid-verification had just published. */
     state.domain = row({ verificationExpiresAt: null });
 
-    const result = await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1' });
+    const result = await port([['the-nonce']]).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'dns',
+    });
 
     expect(result.verified).toBe(true);
+  });
+});
+
+describe('the file proof (P4-03)', () => {
+  const serving =
+    (body: string, status = 200) =>
+    () =>
+      Promise.resolve({ status, body });
+
+  it('asks for the nonce path on the registrable domain', async () => {
+    /* The nonce is in the *path*, so the URL is itself unguessable — a host
+     * that serves the right bytes somewhere else has proved nothing. */
+    await filePort(serving('the-nonce')).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'wellknown',
+    });
+
+    expect(calls).toContain('fetch(https://winery.com/.well-known/somm-verify-the-nonce.txt)');
+  });
+
+  it('verifies, and records which proof was used', async () => {
+    const result = await filePort(serving('the-nonce')).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'wellknown',
+    });
+
+    expect(result.verified).toBe(true);
+    expect(calls).toContain('markDomainVerified(d1,WELL_KNOWN)');
+    expect(written).toHaveLength(1);
+    expect(written[0]?.action).toBe('domain.verified');
+    expect(written[0]?.metadata).toMatchObject({ method: 'WELL_KNOWN' });
+  });
+
+  it('does not ask a nameserver at all', async () => {
+    /* The two proofs are alternatives. A seller who cannot edit DNS must not
+     * be failed by a DNS lookup they never asked for. */
+    await filePort(serving('the-nonce')).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'wellknown',
+    });
+
+    expect(calls.some((call) => call.startsWith('fetch('))).toBe(true);
+  });
+
+  it('tells a seller to upload the file when nothing is there', async () => {
+    const result = await filePort(serving('', 404)).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'wellknown',
+    });
+
+    expect(result.verified).toBe(false);
+    expect(result.reason).toMatch(/upload/iu);
+  });
+
+  it('tells a seller to check the contents when something else answers', async () => {
+    const result = await filePort(serving('<html>not found</html>')).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'wellknown',
+    });
+
+    expect(result.reason).toMatch(/value we issued|themed page/iu);
+  });
+
+  it('says only that it could not reach the site, whatever the refusal was', async () => {
+    /*
+     * **The response and the audit row say different amounts on purpose.**
+     * `blocked_address` tells a caller our network refused to connect to an
+     * address — run against a list of addresses, that maps our defences.
+     */
+    const { GuardedFetchRefused } = await import('@catalogorosso/security/net');
+    const result = await filePort(() =>
+      Promise.reject(new GuardedFetchRefused('blocked_address')),
+    ).verify({ tenantId: 't1', domainId: 'd1', method: 'wellknown' });
+
+    expect(result.reason).toMatch(/could not reach/iu);
+    expect(result.reason).not.toMatch(/blocked|address|redirect|private/iu);
+  });
+
+  it('records what our own agent actually refused', async () => {
+    const { GuardedFetchRefused } = await import('@catalogorosso/security/net');
+
+    await filePort(() => Promise.reject(new GuardedFetchRefused('blocked_redirect'))).verify({
+      tenantId: 't1',
+      domainId: 'd1',
+      method: 'wellknown',
+    });
+
+    expect(written).toHaveLength(1);
+    expect(written[0]?.action).toBe('domain.verify_error');
+    expect(written[0]?.metadata).toMatchObject({
+      detail: 'blocked_redirect',
+      method: 'WELL_KNOWN',
+    });
+  });
+
+  it('counts a file check against the same bucket as a DNS one', async () => {
+    /* One domain, one allowance. Two proofs would otherwise be twice the
+     * outbound traffic for the same claim. */
+    await expect(
+      filePort(serving('the-nonce'), false).verify({
+        tenantId: 't1',
+        domainId: 'd1',
+        method: 'wellknown',
+      }),
+    ).rejects.toMatchObject({ kind: 'rate_limited' });
   });
 });

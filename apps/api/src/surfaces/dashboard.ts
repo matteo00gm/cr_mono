@@ -41,6 +41,7 @@ import {
   rangeOfBand,
   readVariantId,
   VARIANT_ID_EXPECTED,
+  VERIFY_METHODS,
 } from '@catalogorosso/core';
 import {
   EMBEDDING_STATES,
@@ -420,11 +421,12 @@ const domainBody = z.object({ domain: z.string().min(1).max(300) }).strict();
 /**
  * Which proof a seller is offering.
  *
- * An enum with one member today rather than no field at all: P4-03 adds
- * `wellknown`, and a route that took no method would have to guess — or change
- * its contract — the day there are two.
+ * **Their choice, and the list is closed.** DNS is not always theirs to change
+ * — plenty would have to ask whoever built the site — and a file on the
+ * storefront is. Derived from `VERIFY_METHODS` so a third proof cannot be added
+ * to the domain rules and silently not reach the route.
  */
-const verifyBody = z.object({ method: z.literal('dns') }).strict();
+const verifyBody = z.object({ method: z.enum(VERIFY_METHODS) }).strict();
 
 export const createDashboardApp = ({
   auth,
@@ -1140,6 +1142,7 @@ export const createDashboardApp = ({
         /* From a `memberships` row, never from the body (P0-48). */
         tenantId: c.get('tenantId'),
         domainId: c.req.param('id'),
+        method: parsed.data.method,
       }),
     );
   });
@@ -1857,7 +1860,13 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
       access: requires('domains:manage'),
       summary: "Check a domain's proof",
       description:
-        'Resolves the `_somm-verify` TXT record for the domain and compares it, in constant ' +
+        'Takes one of two proofs, whichever the seller can actually produce: a `_somm-verify` ' +
+        'TXT record, or a file at `/.well-known/somm-verify-<nonce>.txt` — the nonce is in the ' +
+        'path, so the URL is itself unguessable. The file check goes through `guardedFetch` ' +
+        '(P4-03a), which validates the address at socket connect, refuses redirects, and allows ' +
+        'only https on 443; what it declined to do is recorded and never returned, because a ' +
+        'caller who could read it could map our network with it. ' +
+        'The DNS check resolves the TXT record and compares it, in constant ' +
         'time, against the nonce we issued. **The resolver is a pinned public one rather than ' +
         "the host's**: in a VPC the default resolver answers for internal names and can be " +
         'reconfigured by anybody with that reach, so a verification that trusted it could be ' +

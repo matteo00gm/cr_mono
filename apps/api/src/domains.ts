@@ -6,6 +6,7 @@ import {
   dnsRefusalMessage,
   InvalidRequestError,
   isOurFault,
+  METHOD_COLUMN,
   NotFoundError,
   ORIGIN_UNAVAILABLE,
   RateLimitedError,
@@ -14,6 +15,8 @@ import {
   VERIFY_ATTEMPTS,
   verifyLimitKey,
   VERIFY_WINDOW_SEC,
+  wellKnownRefusalMessage,
+  type VerifyMethod,
 } from '@catalogorosso/core';
 import type { Domain } from '@catalogorosso/api-client';
 import {
@@ -27,7 +30,13 @@ import {
   type DomainRow,
 } from '@catalogorosso/db';
 import { normalizeOrigin, type PlanTier, type RateLimiter } from '@catalogorosso/security';
-import { publicResolveTxt, verifyDnsToken, type ResolveTxt } from '@catalogorosso/security/net';
+import {
+  publicResolveTxt,
+  verifyDnsToken,
+  verifyWellKnownFile,
+  type Fetcher,
+  type ResolveTxt,
+} from '@catalogorosso/security/net';
 
 /**
  * The domains port (P4-01, §3.3).
@@ -56,6 +65,8 @@ export interface AddDomainResult {
 export interface VerifyDomainCommand {
   readonly tenantId: string;
   readonly domainId: string;
+  /** Which proof the seller is offering. Their choice, not ours (P4-03). */
+  readonly method: VerifyMethod;
 }
 
 export interface VerifyDomainResult {
@@ -68,6 +79,26 @@ export interface VerifyDomainResult {
 export interface DomainsPort {
   add(command: AddDomainCommand): Promise<AddDomainResult>;
   verify(command: VerifyDomainCommand): Promise<VerifyDomainResult>;
+}
+
+/**
+ * A check's outcome, with the two proofs' differing shapes already resolved.
+ *
+ * **Normalised at the call site rather than cast afterwards.** The DNS and file
+ * checks report different reason sets, and the branch that knows which proof
+ * ran is the only place that can map one to a message without a cast — which is
+ * also the only place that can be wrong about it and be caught.
+ */
+interface Checked {
+  readonly ok: boolean;
+  /** The code, for the log. */
+  readonly reason?: string | undefined;
+  /** The prose, for the seller. */
+  readonly message?: string | undefined;
+  /** Ours to retry rather than theirs to fix. */
+  readonly ours: boolean;
+  /** What our own defences declined to do. Never returned to a caller. */
+  readonly detail?: string | undefined;
 }
 
 /** What the transaction decided, before it is turned into an answer. */
@@ -105,6 +136,12 @@ export interface DomainsDeps {
   /** Injected so a test can decide a nonce has lapsed without waiting a week. */
   readonly now?: () => number;
   /**
+   * The outbound client for the file check (P4-03). Defaults to `guardedFetch`
+   * inside `verifyWellKnownFile` — injected here only so a test can answer
+   * without a network, never to substitute an unguarded one.
+   */
+  readonly fetcher?: Fetcher | undefined;
+  /**
    * Counts verification attempts (P2-04). Absent means unlimited, which is
    * only ever right in a test — see the note on the check itself.
    */
@@ -125,6 +162,7 @@ export const createDomainsPort = ({
   limiter,
   newResolver = publicResolveTxt,
   now = Date.now,
+  fetcher,
 }: DomainsDeps = {}): DomainsPort => ({
   async add(command) {
     const normalised = normalizeOrigin(command.input, { environment });
@@ -309,11 +347,47 @@ export const createDomainsPort = ({
       };
     }
 
-    const checked = await verifyDnsToken(
-      domain.registrableDomain,
-      domain.verificationToken,
-      newResolver(),
-    );
+    /*
+     * **Which proof is the seller's choice, and only theirs.** DNS is not
+     * always theirs to change — plenty of them would have to ask whoever built
+     * the site — and a file on the storefront is. Offering one and not the
+     * other is how a domain never gets verified at all.
+     */
+    let checked: Checked;
+
+    if (command.method === 'dns') {
+      const result = await verifyDnsToken(
+        domain.registrableDomain,
+        domain.verificationToken,
+        newResolver(),
+      );
+
+      checked = result.ok
+        ? { ok: true, ours: false }
+        : {
+            ok: false,
+            reason: result.reason,
+            message: dnsRefusalMessage(result.reason),
+            ours: isOurFault(result.reason),
+          };
+    } else {
+      const result = await verifyWellKnownFile(
+        domain.registrableDomain,
+        domain.verificationToken,
+        ...(fetcher === undefined ? [] : ([fetcher] as const)),
+      );
+
+      checked = result.ok
+        ? { ok: true, ours: false }
+        : {
+            ok: false,
+            reason: result.reason,
+            message: wellKnownRefusalMessage(result.reason),
+            /* A refusal by our own agent is ours to look at, not the seller's. */
+            ours: result.reason === 'unreachable',
+            ...(result.detail === undefined ? {} : { detail: result.detail }),
+          };
+    }
 
     if (!checked.ok) {
       /*
@@ -322,29 +396,35 @@ export const createDomainsPort = ({
        * contested claim looks like from our side (P4-18), and the response
        * tells the seller only what to do next.
        */
+      /*
+       * **The precise refusal is recorded and never returned.** For the file
+       * check, `detail` carries what `guardedFetch` actually declined to do —
+       * an address it would not connect to, a redirect it would not follow —
+       * and a caller who could read that could map our network with it.
+       */
       await withTenant(command.tenantId, (tx) =>
         record(tx, {
-          action: isOurFault(checked.reason) ? 'domain.verify_error' : 'domain.verify_failed',
+          action: checked.ours ? 'domain.verify_error' : 'domain.verify_failed',
           target: domain.origin,
-          metadata: { reason: checked.reason, method: 'DNS_TXT' },
+          metadata: {
+            reason: checked.reason,
+            method: METHOD_COLUMN[command.method],
+            ...(checked.detail === undefined ? {} : { detail: checked.detail }),
+          },
         }),
       );
 
-      return {
-        domain: toResponse(domain),
-        verified: false,
-        reason: dnsRefusalMessage(checked.reason),
-      };
+      return { domain: toResponse(domain), verified: false, reason: checked.message };
     }
 
     const verified = await withTenant(command.tenantId, async (tx) => {
-      const updated = await markDomainVerified(tx, domain.id, 'DNS_TXT');
+      const updated = await markDomainVerified(tx, domain.id, METHOD_COLUMN[command.method]);
 
       if (updated !== undefined) {
         await record(tx, {
           action: 'domain.verified',
           target: domain.origin,
-          metadata: { method: 'DNS_TXT' },
+          metadata: { method: METHOD_COLUMN[command.method] },
         });
       }
 

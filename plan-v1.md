@@ -1371,7 +1371,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-01 | 🔒 Domain add endpoint | normalize, PSL-validate, reduce to registrable domain | P2-05 |
 | ✅ P4-02 | 🔒 DNS TXT verification | `_somm-verify.<domain>`, single-use nonce | P4-01 |
 | ✅ P4-03a | 🔒 `guardedFetch` (SSRF-safe agent) | validates the address **at socket connect**, defeating DNS rebinding; reused by every outbound fetch | P0-54 |
-| P4-03 | 🔒 Well-known file verification | `/.well-known/somm-verify-<nonce>.txt` via `guardedFetch` | P4-03a |
+| ✅ P4-03 | 🔒 Well-known file verification | `/.well-known/somm-verify-<nonce>.txt` via `guardedFetch` | P4-03a |
 | ✅ P4-04 | 🔒 Verification token expiry | 7 days, single-use, rate-limited retries | P4-02 |
 | P4-05 | 🔒 Apex + www dual entry | two visible removable entries; probe which responds | P4-02 |
 | P4-06 | 🔒 Domain removal | immediate effect while uncached; revokes live sessions | P4-01 |
@@ -6361,7 +6361,7 @@ Then the rest: **redirects disabled entirely** (a 302 to an internal address is 
 
 **Files.** `packages/security/src/net/guarded-fetch.ts`, `verify-wellknown.ts`, tests. **~170 lines.** *Split: `guardedFetch` and its address-validation table tests are their own PR (`P4-03a`) — it is reusable and deserves isolated 100%-branch coverage.*
 
-**As built (P4-03a).** The split landed on its own; `verify-wellknown.ts` is still P4-03's.
+**As built (P4-03a).** The split landed on its own.
 
 - **It is on a subpath, `@catalogorosso/security/net`, not the package barrel** *(addition; the Files line implied the barrel)*. The barrel is bundled into the dashboard, and a browser build that has to resolve `node:dns` fails — so the import that breaks it would have arrived in whichever PR next touched the dashboard rather than in this one. `./tokens` already sets the precedent. The package description in `CLAUDE.md`, `AGENTS.md` and the barrel said "no HTTP"; all three now say what is actually true, because a rule that the code contradicts teaches the next reader to ignore the rules.
 - **A response with no `statusCode` is refused as `network`** *(addition)*. `statusCode` is optional on an `IncomingMessage`, and the obvious `?? 0` turns a response nothing can be decided from into one a caller reads as a non-2xx — or, one refactor later, as a 200.
@@ -6370,6 +6370,18 @@ Then the rest: **redirects disabled entirely** (a 302 to an internal address is 
 - **The 5 s timeout and the 1 KB cap are exported constants**, asserted against the row rather than left as literals a later edit could quietly widen.
 
 **Verified.** 123 cases across the two files, `packages/security` at 100% lines, statements, functions and branches — the bar this package is held to. A mutation run of 47 mutants killed 47, after three survivors were each fixed rather than explained away: an octet above 255 outside the leading position was reachable (the leading-position case was caught by the multicast rule and hid it), a resolver that reported an error *and* returned records was trusted, and the dead port comparison above.
+
+**As built (P4-03).** With the agent already shipped, this row is the file check on top of it.
+
+- **The SSRF constraints are not re-asserted here, deliberately.** They live in `guardedFetch` and are tested against it — the rebinding simulation, the refused redirect, the capped body, the port and the scheme. Re-testing them through `verifyWellKnownFile` would exercise the same code twice and leave a reader thinking there are two defences where there is one. What *is* asserted is that this reaches for the guarded client at all: the case that supplies no fetcher gets `dns_failure` from the guarded lookup, which plain `fetch` could not produce.
+- **The nonce is in the path, not only in the file** *(the How line has it in the filename; this is why it matters)*. A host that serves the right bytes at a path nobody told them about has proved nothing; one that serves anything at all at `/.well-known/somm-verify-<nonce>.txt` has. The URL is half the proof.
+- **The body is trimmed** *(addition)*. `echo <nonce> > file` leaves a newline and every editor adds one, so a check that refused it would fail for the most obvious way a seller creates this file — and read to them as "your correct file is wrong". Nothing else is tolerated: a quoted form or a `key=value` line is a different file.
+- **A 200 with the wrong body is a mismatch, not a missing file** *(addition)*. Plenty of storefronts answer an unknown path with a styled 200 rather than a 404, so "we found something and it is not your value" is what a seller needs — "not found" would send them to re-upload a file that is already there. The message says so explicitly, because that host behaviour is what most sellers will actually hit.
+- **Every refusal by our own agent collapses to one message**, with the precise reason recorded instead. `blocked_address` tells a caller our network would not connect to an address; run against a list, that maps our defences. "We could not reach your site" is true and gives them nothing — which is exactly what P4-03a's own note said a caller should get.
+- **Which proof to offer is the seller's choice** *(addition; the row describes the mechanism, not the flow)*. DNS is not always theirs to change — plenty would have to ask whoever built the site — and a file on the storefront is. `POST .../verify` takes `method`, derived from `VERIFY_METHODS` so a third proof cannot be added to the domain rules and silently not reach the route. Both proofs share one rate-limit bucket per domain: one claim, one allowance.
+- **The two checks' results are normalised at the call site rather than cast afterwards.** They report different reason sets, and the branch that knows which proof ran is the only place that can map one to a message without a cast — which is also the only place that can be wrong about it and be caught.
+
+**Verified (P4-03).** 31 cases on the verifier, 7 more on the port, 2 more on the route, 8 more in `packages/core` on what a seller is told. `packages/security` stays at 100% on all four. A mutation run of 24 mutants killed 24, after two survivors: the message table lives in `packages/core` and the port suite imports that package from `dist`, so a mutation in its source was invisible — the same gap P4-07 hit, and the tests now live beside the table.
 
 **What the tests are actually for.** Every request case injects the client, so the guarded `lookup` is never invoked by them — which means a `guardedFetch` that simply forgot to wire the lookup in would pass all of them. Two cases assert the options the client is handed: that `lookup` is there, and that driving it with a private answer refuses. Those are what make the rest mean anything, and the mutant that deleted the `lookup:` line is what showed they were missing.
 
