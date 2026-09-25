@@ -3,6 +3,7 @@ import type { Database } from './client.js';
 import { membershipRole } from './schema/memberships.js';
 import { withUser } from './with-user.js';
 import type { DbTransaction } from './with-tenant.js';
+import { asDate, type SqlTimestamp } from './timestamps.js';
 
 /**
  * The caller's memberships, read under RLS (P0-47).
@@ -91,17 +92,19 @@ export const readRoster = async (tx: DbTransaction): Promise<readonly RosterEntr
     const r = row as {
       user_id: string;
       role: MembershipRole;
-      created_at: Date;
+      created_at: SqlTimestamp;
       email: string;
       name: string;
     };
 
+    /* Coerced for the reason in `timestamps.ts`: the driver hands this back as
+     * a string, and the roster's client parses it as ISO-8601. */
     return {
       userId: r.user_id,
       email: r.email,
       name: r.name,
       role: r.role,
-      joinedAt: r.created_at,
+      joinedAt: asDate(r.created_at),
     };
   });
 };

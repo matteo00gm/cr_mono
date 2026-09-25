@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 
 import { getDb, type Database } from './client.js';
 import type { DbTransaction } from './with-tenant.js';
+import { asDate, type SqlTimestamp } from './timestamps.js';
 
 /**
  * The invitation acceptance scope (P0-51).
@@ -80,7 +81,7 @@ export const withInvitation = async <T>(
           email: string;
           role: string;
           invited_by: string;
-          expires_at: Date;
+          expires_at: SqlTimestamp;
         }
       | undefined;
 
@@ -100,6 +101,11 @@ export const withInvitation = async <T>(
       email: row.email,
       role: row.role,
       invitedBy: row.invited_by,
-      expiresAt: row.expires_at,
+      /* A string out of a raw `execute`, whatever the cast says. See
+       * `timestamps.ts` — and note the statement above already filtered on
+       * `expires_at > now()`, so nothing here depends on the value being
+       * comparable in JavaScript. It is coerced anyway, because the next
+       * caller to reach for it will assume it is a `Date`. */
+      expiresAt: asDate(row.expires_at),
     });
   });

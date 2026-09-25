@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 
 import type { DbTransaction } from './with-tenant.js';
+import { asDate, type SqlTimestamp } from './timestamps.js';
 
 /**
  * The `invitations` statements (P0-51).
@@ -191,17 +192,24 @@ export const readOpenInvitations = async (
       email: string;
       role: string;
       invited_by: string;
-      expires_at: Date;
-      created_at: Date;
+      expires_at: SqlTimestamp;
+      created_at: SqlTimestamp;
     };
 
+    /*
+     * Coerced, never passed through. A raw `execute` hands these back as
+     * strings whatever the cast above claims — and these two reach the members
+     * screen, whose client parses every response against `z.iso.datetime()`.
+     * Postgres's format is not ISO-8601, so the parse throws and the screen
+     * does not load. See `timestamps.ts`.
+     */
     return {
       id: r.id,
       email: r.email,
       role: r.role,
       invitedBy: r.invited_by,
-      expiresAt: r.expires_at,
-      createdAt: r.created_at,
+      expiresAt: asDate(r.expires_at),
+      createdAt: asDate(r.created_at),
     };
   });
 };

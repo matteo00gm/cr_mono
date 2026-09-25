@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 
 import type { tenantPlan } from './schema/tenants.js';
+import { asDate, asDateOrNull, type SqlTimestamp } from './timestamps.js';
 import type { DbTransaction } from './with-tenant.js';
 
 type TenantPlan = (typeof tenantPlan.enumValues)[number];
@@ -52,25 +53,9 @@ interface DomainSqlRow {
   readonly registrable_domain: string;
   readonly status: 'PENDING' | 'VERIFIED';
   readonly verification_token: string | null;
-  readonly verification_expires_at: string | Date | null;
-  readonly created_at: string | Date;
+  readonly verification_expires_at: SqlTimestamp | null;
+  readonly created_at: SqlTimestamp;
 }
-
-/**
- * A timestamp as a `Date`, whatever the driver handed back.
- *
- * **A raw `execute` returns `timestamptz` as a string**, not a `Date` — Drizzle
- * parses column types for a typed select and does no such thing for a hand-
- * written statement. The row type says `Date`, TypeScript believes it, and the
- * first `.toISOString()` anybody calls throws at runtime on a path no unit test
- * with a mocked driver can reach. This was found by the integration suite,
- * which is the only thing that could have found it.
- *
- * Postgres's own format — `2026-10-02 01:01:04.326752+00` — is one `new Date()`
- * parses correctly. Normalising it first does not help and makes it worse: a
- * `T` in front of a `+00` offset is what an ISO parser rejects.
- */
-const asDate = (value: string | Date): Date => (value instanceof Date ? value : new Date(value));
 
 const toDomain = (row: DomainSqlRow): DomainRow => ({
   id: row.id,
@@ -78,8 +63,7 @@ const toDomain = (row: DomainSqlRow): DomainRow => ({
   registrableDomain: row.registrable_domain,
   status: row.status,
   verificationToken: row.verification_token,
-  verificationExpiresAt:
-    row.verification_expires_at === null ? null : asDate(row.verification_expires_at),
+  verificationExpiresAt: asDateOrNull(row.verification_expires_at),
   createdAt: asDate(row.created_at),
 });
 
