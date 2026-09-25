@@ -1,6 +1,9 @@
 import { sql } from 'drizzle-orm';
 
+import type { tenantPlan } from './schema/tenants.js';
 import type { DbTransaction } from './with-tenant.js';
+
+type TenantPlan = (typeof tenantPlan.enumValues)[number];
 
 /**
  * Adding a domain, and the one refusal that cannot be a query (P4-01, §3.2).
@@ -16,6 +19,14 @@ import type { DbTransaction } from './with-tenant.js';
  * the one the audit row has to be written in (P0-53) — catching the error would
  * leave nothing able to record that the attempt happened. An empty `RETURNING`
  * carries the same information and leaves the transaction usable.
+ *
+ * **The plan cap is counted and spent in one transaction, serialised on the
+ * tenant's own row** (P4-07). Counting and then inserting is the same race the
+ * last-OWNER guard has: two concurrent adds each see the winery one under its
+ * cap and both succeed. The usual answer — lock the rows you counted — does not
+ * work here, because the set being counted is often *empty* and there is no way
+ * to lock rows that do not exist. So the lock goes on the one row that always
+ * exists: the winery's own.
  */
 
 export interface DomainRow {
@@ -75,16 +86,55 @@ export const readDomainByOrigin = async (
 };
 
 /**
- * Creates a `PENDING` row, or reports that the origin is spoken for.
+ * What the attempt did. Three outcomes rather than a row-or-nothing, because
+ * they are three different things to tell a seller: one is a conflict they can
+ * do nothing about, one is a plan they can change, and one is a domain they now
+ * have to verify.
+ */
+export type DomainInsert =
+  | { readonly outcome: 'created'; readonly domain: DomainRow }
+  | { readonly outcome: 'taken' }
+  | { readonly outcome: 'at-cap'; readonly held: number };
+
+/**
+ * Locks the winery's own row.
  *
- * `undefined` means the unique index refused it, and it deliberately does not
- * say by whom — there is no query that could answer that, and a caller that
- * could ask would be an oracle for enumerating who our customers are.
+ * **The set of domains may be empty, and you cannot lock rows that do not
+ * exist** — so this is what serialises two simultaneous adds. One row, always
+ * present, and every domain write for this winery queues behind it. `tenants`
+ * is under RLS, so inside `withTenant` this reaches exactly one row without
+ * naming it.
+ */
+const lockTenant = async (tx: DbTransaction): Promise<void> => {
+  await tx.execute(sql`SELECT 1 FROM tenants FOR UPDATE`);
+};
+
+/** How many origins this winery holds, pending and verified alike. */
+export const countDomains = async (tx: DbTransaction): Promise<number> => {
+  const rows = await tx.execute(sql`SELECT count(*)::int AS held FROM tenant_domains`);
+  const row = [...rows][0] as { held?: number } | undefined;
+
+  return row?.held ?? 0;
+};
+
+/**
+ * Creates a `PENDING` row, or reports why it did not.
+ *
+ * `taken` deliberately does not say by whom — there is no query that could
+ * answer that, and a caller that could ask would be an oracle for enumerating
+ * who our customers are.
  */
 export const insertDomain = async (
   tx: DbTransaction,
   domain: NewDomain,
-): Promise<DomainRow | undefined> => {
+  cap: number,
+): Promise<DomainInsert> => {
+  await lockTenant(tx);
+
+  const held = await countDomains(tx);
+
+  if (held >= cap) return { outcome: 'at-cap', held };
+
   const rows = await tx.execute(sql`
     INSERT INTO tenant_domains (tenant_id, origin, registrable_domain, verification_token)
     VALUES (
@@ -99,7 +149,7 @@ export const insertDomain = async (
 
   const row = [...rows][0] as DomainSqlRow | undefined;
 
-  return row === undefined ? undefined : toDomain(row);
+  return row === undefined ? { outcome: 'taken' } : { outcome: 'created', domain: toDomain(row) };
 };
 
 /** Every origin this tenant holds, pending or verified. Newest last. */
@@ -109,4 +159,21 @@ export const readDomains = async (tx: DbTransaction): Promise<readonly DomainRow
   `);
 
   return [...rows].map((row) => toDomain(row as unknown as DomainSqlRow));
+};
+
+/**
+ * The winery's plan, which decides its cap (P4-07).
+ *
+ * `null` for a tenant that has not chosen one — every tenant is that between
+ * signup and checkout — and the caller turns that into an allowance rather than
+ * a refusal. No `WHERE` clause: `tenants`' policy is `id = app.tenant_id`, so
+ * inside `withTenant` this table holds exactly one visible row, and a redundant
+ * predicate would suggest the isolation comes from the query rather than from
+ * the policy.
+ */
+export const readTenantPlan = async (tx: DbTransaction): Promise<TenantPlan | null> => {
+  const rows = await tx.execute(sql`SELECT plan FROM tenants LIMIT 1`);
+  const row = [...rows][0] as { plan?: TenantPlan | null } | undefined;
+
+  return row?.plan ?? null;
 };

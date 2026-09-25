@@ -2,7 +2,13 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
-import { insertDomain, readDomainByOrigin, readDomains } from '../src/domains-write.js';
+import {
+  countDomains,
+  insertDomain,
+  readDomainByOrigin,
+  readDomains,
+  readTenantPlan,
+} from '../src/domains-write.js';
 import { withTenant } from '../src/with-tenant.js';
 import { startPostgres } from './support/postgres.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
@@ -22,6 +28,11 @@ import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
  * 3. **`ON CONFLICT DO NOTHING` leaves the transaction usable.** A raised
  *    `23505` would abort it, taking the audit row with it — which is the whole
  *    reason the statement is written this way rather than wrapped in a `catch`.
+ * 4. **The plan cap survives two simultaneous adds** (P4-07). Counting and then
+ *    inserting is a race, and the lock that closes it is on the winery's own
+ *    row because the set being counted is often empty. A fake transaction runs
+ *    statements in order by construction, so a missing lock would look
+ *    identical to a correct one.
  *
  * A unit test with a mocked driver can assert none of them: it would be
  * asserting the mock.
@@ -72,12 +83,23 @@ afterAll(async () => {
   await container?.stop();
 }, 60_000);
 
-const add = (tenant: string, origin: string, token = 'a-nonce') =>
+/** A generous cap, so the cases that are not about the cap are not about it. */
+const ROOMY = 100;
+
+const attempt = (tenant: string, origin: string, token = 'a-nonce', cap = ROOMY) =>
   withTenant(
     tenant,
-    (tx) => insertDomain(tx, { origin, registrableDomain: 'winery.com', verificationToken: token }),
+    (tx) =>
+      insertDomain(tx, { origin, registrableDomain: 'winery.com', verificationToken: token }, cap),
     db,
   );
+
+/** The created row, or nothing — the shape the cases below were written against. */
+const add = async (tenant: string, origin: string, token = 'a-nonce') => {
+  const result = await attempt(tenant, origin, token);
+
+  return result.outcome === 'created' ? result.domain : undefined;
+};
 
 describe('a domain a winery adds', () => {
   it('is created PENDING, carrying the nonce it was given', async () => {
@@ -146,9 +168,9 @@ describe('an origin another winery already holds', () => {
   it('is refused, and the refusal is a returned nothing rather than a thrown error', async () => {
     await add(TENANT_A, 'https://taken.winery.com');
 
-    const attempt = await add(TENANT_B, 'https://taken.winery.com');
-
-    expect(attempt).toBeUndefined();
+    await expect(attempt(TENANT_B, 'https://taken.winery.com')).resolves.toEqual({
+      outcome: 'taken',
+    });
   });
 
   it('leaves the transaction usable, which is what the audit row depends on', async () => {
@@ -163,11 +185,15 @@ describe('an origin another winery already holds', () => {
     const after = await withTenant(
       TENANT_B,
       async (tx) => {
-        const refused = await insertDomain(tx, {
-          origin: 'https://usable.winery.com',
-          registrableDomain: 'winery.com',
-          verificationToken: 'b-nonce',
-        });
+        const refused = await insertDomain(
+          tx,
+          {
+            origin: 'https://usable.winery.com',
+            registrableDomain: 'winery.com',
+            verificationToken: 'b-nonce',
+          },
+          ROOMY,
+        );
 
         /* Any statement at all — if the transaction were aborted this throws. */
         const rows = await tx.execute(sql`SELECT 1 AS ok`);
@@ -177,7 +203,7 @@ describe('an origin another winery already holds', () => {
       db,
     );
 
-    expect(after.refused).toBeUndefined();
+    expect(after.refused).toEqual({ outcome: 'taken' });
     expect(after.ok).toBe(1);
   });
 
@@ -191,7 +217,133 @@ describe('an origin another winery already holds', () => {
     const claimed = await add(TENANT_A, 'https://unverified.winery.com');
 
     expect(claimed?.status).toBe('PENDING');
-    await expect(add(TENANT_B, 'https://unverified.winery.com')).resolves.toBeUndefined();
+    await expect(attempt(TENANT_B, 'https://unverified.winery.com')).resolves.toEqual({
+      outcome: 'taken',
+    });
+  });
+});
+
+describe('the plan cap', () => {
+  const CAPPED = '33333333-3333-3333-3333-333333333333';
+
+  it('refuses once the winery holds its allowance', async () => {
+    await withTenant(
+      CAPPED,
+      (tx) =>
+        tx.execute(sql`
+          INSERT INTO tenants (id, name, slug, plan)
+          VALUES (${CAPPED}::uuid, 'Cantina Bianchi', 'cantina-bianchi', 'CANTINA')
+          ON CONFLICT DO NOTHING
+        `),
+      db,
+    );
+
+    await expect(attempt(CAPPED, 'https://capped-one.winery.com', 'n', 1)).resolves.toMatchObject({
+      outcome: 'created',
+    });
+    await expect(attempt(CAPPED, 'https://capped-two.winery.com', 'n', 1)).resolves.toEqual({
+      outcome: 'at-cap',
+      held: 1,
+    });
+  });
+
+  it('counts only the winery own rows', async () => {
+    /* RLS again: `count(*)` with no `WHERE` counts one winery's rows, which is
+     * why the statement names no tenant. A cap that counted the whole table
+     * would refuse every seller once the platform had two customers. */
+    const held = await withTenant(CAPPED, (tx) => countDomains(tx), db);
+    const others = await withTenant(TENANT_A, (tx) => countDomains(tx), db);
+
+    expect(held).toBe(1);
+    expect(others).toBeGreaterThan(1);
+  });
+
+  it('makes a second add wait for the first to commit', async () => {
+    /*
+     * **The reason the lock is on `tenants` rather than on the rows being
+     * counted.** A winery with no domains has nothing to lock, so two
+     * transactions each count nought, each see room, and each insert — putting
+     * the winery over its cap with no error anywhere.
+     *
+     * **Two concurrent calls are not enough to show this**, and the first
+     * version of this test was exactly that: it passed with the lock removed,
+     * because the driver's round trips happened to serialise. So the first
+     * transaction is held open deliberately, and what is asserted is that the
+     * second *has not finished* while it is — which is false the moment the
+     * lock goes, because an uncommitted insert is invisible to the count and
+     * the second transaction sails through.
+     *
+     * This needs two real connections held at once. The pool is four.
+     */
+    const RACING = '44444444-4444-4444-4444-444444444444';
+
+    await withTenant(
+      RACING,
+      (tx) =>
+        tx.execute(sql`
+          INSERT INTO tenants (id, name, slug, plan)
+          VALUES (${RACING}::uuid, 'Cantina Neri', 'cantina-neri', 'CANTINA')
+          ON CONFLICT DO NOTHING
+        `),
+      db,
+    );
+
+    let holding = (): void => undefined;
+    let release = (): void => undefined;
+    const held = new Promise<void>((resolve) => {
+      holding = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const first = withTenant(
+      RACING,
+      async (tx) => {
+        const created = await insertDomain(
+          tx,
+          {
+            origin: 'https://race-one.winery.com',
+            registrableDomain: 'winery.com',
+            verificationToken: 'n',
+          },
+          1,
+        );
+
+        holding();
+        await released;
+
+        return created;
+      },
+      db,
+    );
+
+    await held;
+
+    let settled = false;
+    const second = attempt(RACING, 'https://race-two.winery.com', 'n', 1).then((result) => {
+      settled = true;
+
+      return result;
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 300);
+    });
+
+    /* Blocked on the lock the first transaction still holds. */
+    expect(settled).toBe(false);
+
+    release();
+    await expect(first).resolves.toMatchObject({ outcome: 'created' });
+    await expect(second).resolves.toEqual({ outcome: 'at-cap', held: 1 });
+    expect(await withTenant(RACING, (tx) => countDomains(tx), db)).toBe(1);
+  });
+
+  it('reads the plan from the winery own row', async () => {
+    await expect(withTenant(CAPPED, (tx) => readTenantPlan(tx), db)).resolves.toBe('CANTINA');
+    /* Seeded with no plan: a winery between signup and checkout. */
+    await expect(withTenant(TENANT_A, (tx) => readTenantPlan(tx), db)).resolves.toBeNull();
   });
 });
 

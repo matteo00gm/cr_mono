@@ -1,5 +1,7 @@
 import {
   audit,
+  capFor,
+  capMessage,
   ConflictError,
   InvalidRequestError,
   ORIGIN_UNAVAILABLE,
@@ -7,8 +9,14 @@ import {
   verificationToken,
 } from '@catalogorosso/core';
 import type { Domain } from '@catalogorosso/api-client';
-import { insertDomain, readDomainByOrigin, withTenant, type DomainRow } from '@catalogorosso/db';
-import { normalizeOrigin } from '@catalogorosso/security';
+import {
+  insertDomain,
+  readDomainByOrigin,
+  readTenantPlan,
+  withTenant,
+  type DomainRow,
+} from '@catalogorosso/db';
+import { normalizeOrigin, type PlanTier } from '@catalogorosso/security';
 
 /**
  * The domains port (P4-01, §3.3).
@@ -40,8 +48,9 @@ export interface DomainsPort {
 
 /** What the transaction decided, before it is turned into an answer. */
 type Outcome =
-  | { readonly taken: true }
-  | { readonly taken: false; readonly domain: DomainRow; readonly created: boolean };
+  | { readonly refused: 'taken' }
+  | { readonly refused: 'at-cap'; readonly plan: PlanTier; readonly cap: number }
+  | { readonly refused: false; readonly domain: DomainRow; readonly created: boolean };
 
 /** The wire shape: JSON has no `Date`. */
 const toResponse = (row: DomainRow): Domain => ({
@@ -104,13 +113,32 @@ export const createDomainsPort = ({
        */
       const existing = await readDomainByOrigin(tx, normalised.origin);
 
-      if (existing !== undefined) return { taken: false, domain: existing, created: false };
+      if (existing !== undefined) return { refused: false, domain: existing, created: false };
 
-      const created = await insertDomain(tx, {
-        origin: normalised.origin,
-        registrableDomain: normalised.registrableDomain,
-        verificationToken: newToken(),
-      });
+      /*
+       * The plan is read here rather than passed in, for the reason every other
+       * tenant fact on this path is: a value the caller supplied would be a
+       * value the caller could choose (P0-48). `null` is a winery between
+       * signup and checkout, and `capFor` gives it the entry allowance.
+       */
+      const plan: PlanTier = (await readTenantPlan(tx)) ?? 'none';
+      const cap = capFor(plan);
+
+      /*
+       * The count and the insert are one statement sequence inside one
+       * transaction, serialised on the winery's own row — see `insertDomain`.
+       * Counting out here and inserting in there would be the race the lock
+       * exists to close.
+       */
+      const attempt = await insertDomain(
+        tx,
+        {
+          origin: normalised.origin,
+          registrableDomain: normalised.registrableDomain,
+          verificationToken: newToken(),
+        },
+        cap,
+      );
 
       /*
        * **The attempt is audited whether or not it succeeded**, and the refused
@@ -124,17 +152,28 @@ export const createDomainsPort = ({
        * allowlist — it is what the row is about, not free-form detail.
        */
       await record(tx, {
-        action: created === undefined ? 'domain.add_refused' : 'domain.added',
+        action: attempt.outcome === 'created' ? 'domain.added' : `domain.add_${attempt.outcome}`,
         target: normalised.origin,
-        metadata: { registrableDomain: normalised.registrableDomain },
+        metadata: { registrableDomain: normalised.registrableDomain, plan },
       });
 
-      return created === undefined
-        ? { taken: true }
-        : { taken: false, domain: created, created: true };
+      if (attempt.outcome === 'created') {
+        return { refused: false, domain: attempt.domain, created: true };
+      }
+
+      return attempt.outcome === 'taken' ? { refused: 'taken' } : { refused: 'at-cap', plan, cap };
     });
 
-    if (outcome.taken) throw new ConflictError(ORIGIN_UNAVAILABLE);
+    /*
+     * Both refusals are 409s and they say opposite amounts on purpose. A plan
+     * cap is the seller's own state, so naming the plan and the number is what
+     * lets them act; an origin somebody else holds is not their state at all,
+     * and naming anything about it would be an oracle.
+     */
+    if (outcome.refused === 'taken') throw new ConflictError(ORIGIN_UNAVAILABLE);
+    if (outcome.refused === 'at-cap') {
+      throw new ConflictError(capMessage(outcome.plan, outcome.cap));
+    }
 
     return { domain: toResponse(outcome.domain), created: outcome.created };
   },
