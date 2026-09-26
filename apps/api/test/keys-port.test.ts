@@ -30,6 +30,9 @@ const state = {
   active: undefined as Keys | undefined,
   inserted: undefined as Keys | undefined,
   replaced: undefined as Keys | undefined,
+  inGrace: undefined as { publicKey: string; graceUntil: Date } | undefined,
+  rotated: undefined as
+    { active: Keys; previous: { publicKey: string; graceUntil: Date } } | undefined,
   committed: true,
 };
 
@@ -53,6 +56,12 @@ vi.mock('@catalogorosso/db', () => ({
     }
   },
   readActiveKeys: () => Promise.resolve(state.active),
+  readKeyInGrace: () => Promise.resolve(state.inGrace),
+  rotatePublicKey: (_tx: unknown, publicKey: string) => {
+    toDatabase.push({ publicKey });
+
+    return Promise.resolve(state.rotated);
+  },
   insertKeys: (_tx: unknown, keys: unknown) => {
     toDatabase.push(keys);
 
@@ -105,6 +114,11 @@ beforeEach(() => {
   state.active = stored();
   state.inserted = stored({ publicKey: 'pk_live_fresh' });
   state.replaced = stored({ secretKeyPrefix: 'sk_live_QQQQ', secretKeyLast4: 'TAIL' });
+  state.inGrace = undefined;
+  state.rotated = {
+    active: stored({ publicKey: 'pk_live_fresh' }),
+    previous: { publicKey: 'pk_live_stored', graceUntil: new Date('2026-09-27T09:00:00.000Z') },
+  };
   state.committed = true;
 });
 
@@ -241,6 +255,19 @@ describe('reading the keys', () => {
       secretKeyLast4: 'Wq7Z',
       createdAt: '2026-09-26T09:00:00.000Z',
       updatedAt: '2026-09-26T09:00:00.000Z',
+      previous: null,
+    });
+  });
+
+  it('shows the key still in its grace window, with its deadline', async () => {
+    /* A seller who has not redeployed yet needs to know how long they have. */
+    state.inGrace = { publicKey: 'pk_live_old', graceUntil: new Date('2026-09-27T09:00:00.000Z') };
+
+    const view = await port().read('t1');
+
+    expect(view.previous).toEqual({
+      publicKey: 'pk_live_old',
+      validUntil: '2026-09-27T09:00:00.000Z',
     });
   });
 
@@ -261,5 +288,53 @@ describe('reading the keys', () => {
 describe('with no port configured', () => {
   it.each(['read', 'create', 'rotateSecret'] as const)('refuses %s loudly', async (method) => {
     await expect(unconfiguredKeys[method]('t1')).rejects.toThrow(/composition root/iu);
+  });
+});
+
+describe('rotating the public key (P4-08)', () => {
+  it('hands back the new key and the old one with its deadline', async () => {
+    const view = await port().rotatePublic('t1');
+
+    expect(view.publicKey).toBe('pk_live_fresh');
+    expect(view.previous).toEqual({
+      publicKey: 'pk_live_stored',
+      validUntil: '2026-09-27T09:00:00.000Z',
+    });
+  });
+
+  it('asks the database for a freshly generated key', async () => {
+    await port().rotatePublic('t1');
+
+    expect(toDatabase).toEqual([{ publicKey: 'pk_live_fresh' }]);
+  });
+
+  it('records both keys, because "which key was live when?" has two answers for a day', async () => {
+    await port().rotatePublic('t1');
+
+    expect(written).toHaveLength(1);
+    expect(written[0]?.action).toBe('keys.public_rotated');
+    expect(written[0]?.target).toBe('pk_live_fresh');
+    expect(written[0]?.metadata).toEqual({
+      previousPublicKey: 'pk_live_stored',
+      previousValidUntil: '2026-09-27T09:00:00.000Z',
+    });
+  });
+
+  it('carries no secret, before or after', async () => {
+    const view = await port().rotatePublic('t1');
+
+    expect(view).not.toHaveProperty('secretKey');
+    expect(written.flatMap(strings)).not.toContain(SECRET);
+  });
+
+  it('is a 404 for a winery with no keys', async () => {
+    state.rotated = undefined;
+
+    await expect(port().rotatePublic('t1')).rejects.toMatchObject({ kind: 'not_found' });
+    expect(written).toEqual([]);
+  });
+
+  it('refuses loudly when no port is configured', async () => {
+    await expect(unconfiguredKeys.rotatePublic('t1')).rejects.toThrow(/composition root/iu);
   });
 });

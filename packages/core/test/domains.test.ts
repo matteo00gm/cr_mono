@@ -6,6 +6,7 @@ import {
   capFor,
   capMessage,
   DOMAIN_CAPS,
+  installSnippet,
   LAST_DOMAIN_WARNING,
   METHOD_COLUMN,
   ORIGIN_UNAVAILABLE,
@@ -276,5 +277,33 @@ describe('what a seller is told before removing their last domain (P4-06)', () =
     /* A confirmation that does not say how to confirm is a refusal with extra
      * steps. */
     expect(LAST_DOMAIN_WARNING).toMatch(/confirm=true/u);
+  });
+});
+
+describe('the tag a seller pastes (P4-08)', () => {
+  it('carries the key and the loader, as a module script', () => {
+    /* `type="module"` because the loader is one (P3-18): a classic script tag
+     * throws on the `import.meta` Vite's preload helper uses. */
+    expect(installSnippet('pk_live_abc', 'https://cdn.example/loader.js')).toBe(
+      '<script type="module" src="https://cdn.example/loader.js" data-key="pk_live_abc" async></script>',
+    );
+  });
+
+  it('carries whatever key it is given, so the key shown and the key pasted agree', () => {
+    /* A rotation screen whose snippet came from somewhere else would have a
+     * seller redeploy the key they were rotating away from. */
+    expect(installSnippet('pk_live_new', 'https://cdn.example/loader.js')).toContain(
+      'data-key="pk_live_new"',
+    );
+  });
+
+  it('escapes both attributes, whatever is put in them', () => {
+    /* Markup we tell somebody to paste into their own site. A value that could
+     * close the attribute could add another one — an `onload`, say. */
+    const snippet = installSnippet('pk"><script>x</script>', 'https://cdn.example/a"b&c');
+
+    expect(snippet).not.toContain('"><script>');
+    expect(snippet).toContain('pk&quot;&gt;&lt;script&gt;x&lt;/script&gt;');
+    expect(snippet).toContain('a&quot;b&amp;c');
   });
 });

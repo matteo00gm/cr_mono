@@ -218,6 +218,13 @@ export const keysResponse = z
     secretKeyLast4: z.string().length(4),
     createdAt: timestamp,
     updatedAt: timestamp,
+    /**
+     * The key rotated away from, while it still resolves (P4-08). The screen
+     * shows both with a countdown, because a seller who has not redeployed yet
+     * needs to know how long they have — and a key that silently stops working
+     * is a storefront that silently stops working.
+     */
+    previous: z.object({ publicKey: z.string(), validUntil: timestamp }).strict().nullable(),
   })
   .strict();
 

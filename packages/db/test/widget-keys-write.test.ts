@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { insertKeys, readActiveKeys, replaceSecretKey } from '../src/widget-keys-write.js';
+import {
+  insertKeys,
+  readActiveKeys,
+  readKeyInGrace,
+  replaceSecretKey,
+  rotatePublicKey,
+} from '../src/widget-keys-write.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 
 /**
@@ -180,5 +186,135 @@ describe('rotating the secret', () => {
     const { tx } = capturing([]);
 
     await expect(replaceSecretKey(tx, hashed)).resolves.toBeUndefined();
+  });
+});
+
+describe('rotating the public key (P4-08)', () => {
+  /** A fake that answers each statement in turn. */
+  const sequence = (...responses: unknown[][]) => {
+    const statements: unknown[] = [];
+    let call = 0;
+    const execute = vi.fn((statement: unknown): Promise<unknown[]> => {
+      statements.push(statement);
+
+      const rows = responses[call] ?? [];
+
+      call += 1;
+
+      return Promise.resolve(rows);
+    });
+
+    return { statements, tx: { execute } as unknown as DbTransaction };
+  };
+
+  const revokedRow = {
+    public_key: 'pk_live_old',
+    grace_until: '2026-09-27 09:00:00.000000+00',
+    secret_key_hash: 'a'.repeat(64),
+    secret_key_prefix: 'sk_live_Ab3x',
+    secret_key_last4: 'Wq7Z',
+  };
+
+  it('locks the winery row before touching any key', async () => {
+    const { statements, tx } = sequence([], [], [revokedRow], [raw]);
+
+    await rotatePublicKey(tx, 'pk_live_new');
+
+    expect(text(statements[0])).toMatch(/SELECT 1 FROM tenants FOR UPDATE/u);
+  });
+
+  it('ends any earlier grace before starting a new one', async () => {
+    /* At most one old key is live. A seller rotates because they think a key
+     * leaked, and rotating again must not leave the first one working. */
+    const { statements, tx } = sequence([], [], [revokedRow], [raw]);
+
+    await rotatePublicKey(tx, 'pk_live_new');
+
+    const sql = text(statements[1]);
+
+    expect(sql).toMatch(/SET grace_until = now\(\)/u);
+    expect(sql).toMatch(/WHERE revoked_at IS NOT NULL AND grace_until > now\(\)/u);
+  });
+
+  it('revokes the active key with a day of grace, before inserting', async () => {
+    /* Before, because the partial unique index allows one active key per
+     * tenant and checks it per statement. */
+    const { statements, tx } = sequence([], [], [revokedRow], [raw]);
+
+    await rotatePublicKey(tx, 'pk_live_new');
+
+    const sql = text(statements[2]);
+
+    expect(sql).toMatch(/SET revoked_at = now\(\), grace_until = now\(\) \+/u);
+    expect(sql).toMatch(/interval '24 hours'/u);
+    expect(sql).toMatch(/WHERE revoked_at IS NULL/u);
+    expect(text(statements[3])).toMatch(/INSERT INTO widget_keys/u);
+  });
+
+  it('carries the secret across from the row it revoked', async () => {
+    /* Rotating the public key must not rotate a secret the seller did not ask
+     * to change. The hash comes from the revoked row, not from the caller. */
+    const { statements, tx } = sequence([], [], [revokedRow], [raw]);
+
+    await rotatePublicKey(tx, 'pk_live_new');
+
+    const values = (statements[3] as { queryChunks: unknown[] }).queryChunks.filter(
+      (chunk) => typeof chunk === 'string',
+    );
+
+    expect(values).toContain('a'.repeat(64));
+    expect(values).toContain('pk_live_new');
+  });
+
+  it('takes the new row tenant from the GUC, like every other write', async () => {
+    const { statements, tx } = sequence([], [], [revokedRow], [raw]);
+
+    await rotatePublicKey(tx, 'pk_live_new');
+
+    expect(text(statements[3])).toMatch(/current_setting\('app\.tenant_id', true\)/u);
+  });
+
+  it('reports the new key and the old one with its deadline', async () => {
+    const { tx } = sequence([], [], [revokedRow], [raw]);
+
+    await expect(rotatePublicKey(tx, 'pk_live_new')).resolves.toMatchObject({
+      active: { publicKey: 'pk_live_x' },
+      previous: { publicKey: 'pk_live_old', graceUntil: new Date('2026-09-27T09:00:00.000Z') },
+    });
+  });
+
+  it('rotates nothing, and inserts nothing, when there is no active key', async () => {
+    const { statements, tx } = sequence([], [], [], [raw]);
+
+    await expect(rotatePublicKey(tx, 'pk_live_new')).resolves.toBeUndefined();
+    expect(statements).toHaveLength(3);
+  });
+
+  it('stops rather than report a rotation that inserted nothing', async () => {
+    /* Impossible under the lock — which is exactly why an empty result means
+     * the reasoning has broken, and the honest answer is to stop. */
+    const { tx } = sequence([], [], [revokedRow], []);
+
+    await expect(rotatePublicKey(tx, 'pk_live_new')).rejects.toThrow(/not inserted/u);
+  });
+});
+
+describe('the key in its grace window (P4-08)', () => {
+  it('is read with the database clock, so it agrees with resolution', async () => {
+    const { statements, tx } = capturing([
+      { public_key: 'pk_live_old', grace_until: '2026-09-27 09:00:00.000000+00' },
+    ]);
+
+    await expect(readKeyInGrace(tx)).resolves.toEqual({
+      publicKey: 'pk_live_old',
+      graceUntil: new Date('2026-09-27T09:00:00.000Z'),
+    });
+    expect(text(statements[0])).toMatch(/grace_until > now\(\)/u);
+  });
+
+  it('is nothing when no key is in grace', async () => {
+    const { tx } = capturing([]);
+
+    await expect(readKeyInGrace(tx)).resolves.toBeUndefined();
   });
 });

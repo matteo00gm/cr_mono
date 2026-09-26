@@ -243,8 +243,11 @@ export { endSessionsFor, sessionCutoffAt } from './session-cutoffs.js';
 export {
   insertKeys,
   readActiveKeys,
+  readKeyInGrace,
   replaceSecretKey,
+  rotatePublicKey,
   type ActiveKeys,
+  type KeyInGrace,
   type NewKeys,
 } from './widget-keys-write.js';
 

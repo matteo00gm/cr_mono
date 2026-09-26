@@ -28,6 +28,7 @@ const viewed: KeysView = {
   secretKeyLast4: 'LAST',
   createdAt: '2026-09-26T09:00:00.000Z',
   updatedAt: '2026-09-26T09:00:00.000Z',
+  previous: null,
 };
 
 const issued: IssuedKeys = { ...viewed, secretKey: SECRET };
@@ -49,6 +50,15 @@ const port = (overrides: Partial<KeysPort> = {}): KeysPort => ({
     calls.push(`rotateSecret(${tenantId})`);
 
     return Promise.resolve(issued);
+  },
+  rotatePublic: (tenantId) => {
+    calls.push(`rotatePublic(${tenantId})`);
+
+    return Promise.resolve({
+      ...viewed,
+      publicKey: 'pk_live_new',
+      previous: { publicKey: 'pk_live_stored', validUntil: '2026-09-27T09:00:00.000Z' },
+    });
   },
   ...overrides,
 });
@@ -155,6 +165,7 @@ describe('who may touch them', () => {
     ['GET', '/keys'],
     ['POST', '/keys'],
     ['POST', '/keys/secret/rotate'],
+    ['POST', '/keys/public/rotate'],
   ])('%s %s is closed to an EDITOR', async (method, path) => {
     /* The secret key is what lets a server mint sessions on the winery's
      * behalf (P4-10). That is closer to a password than to a setting. */
@@ -201,5 +212,40 @@ describe('the logs, while a secret is issued', () => {
 
     expect(response.status).toBe(500);
     expect(await response.text()).not.toContain(SECRET);
+  });
+});
+
+describe('rotating the public key (P4-08)', () => {
+  it('answers with the new key and the old one, with its deadline', async () => {
+    const response = await send(app(), 'POST', '/keys/public/rotate');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      publicKey: 'pk_live_new',
+      previous: { publicKey: 'pk_live_stored', validUntil: '2026-09-27T09:00:00.000Z' },
+    });
+  });
+
+  it('is uncacheable like everything under /keys', async () => {
+    const response = await send(app(), 'POST', '/keys/public/rotate');
+
+    expect(response.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('carries no secret', async () => {
+    /* Rotating the public key is not an occasion to show the secret again. */
+    const response = await send(app(), 'POST', '/keys/public/rotate');
+
+    expect(await response.json()).not.toHaveProperty('secretKey');
+  });
+
+  it('answers 404 before any keys exist', async () => {
+    const response = await send(
+      app('OWNER', port({ rotatePublic: () => Promise.reject(new NotFoundError('none yet')) })),
+      'POST',
+      '/keys/public/rotate',
+    );
+
+    expect(response.status).toBe(404);
   });
 });

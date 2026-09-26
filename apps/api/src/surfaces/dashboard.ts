@@ -1179,6 +1179,19 @@ export const createDashboardApp = ({
     c.json(await keys.rotateSecret(c.get('tenantId'))),
   );
 
+  /**
+   * Replace the public key, keeping the old one live for a day (P4-08).
+   *
+   * The grace exists because rotation cannot be atomic: the old key is in a
+   * script tag on the seller's pages until they redeploy. A second rotation
+   * ends the first one's grace, so at most one old key is ever live — a seller
+   * rotates because they think a key has leaked, and rotating again must not
+   * leave the first leaked key working beside the second.
+   */
+  app.post('/keys/public/rotate', requireCapability('keys:manage'), async (c) =>
+    c.json(await keys.rotatePublic(c.get('tenantId'))),
+  );
+
   /* ---- domains (P4-01) -------------------------------------------------- */
 
   /**
@@ -2005,6 +2018,31 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         secretKey: 'sk_live_…shown once…',
       },
       response: issuedKeysResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/keys/public/rotate`),
+    {
+      access: requires('keys:manage'),
+      summary: 'Replace the public key',
+      description:
+        'Issues a new public key and keeps the old one resolving for 24 hours, because the old ' +
+        "key is in a script tag on the seller's pages until they redeploy — and a window any " +
+        'shorter would break a live storefront the moment the button is pressed. **At most one ' +
+        "old key is ever live**: a second rotation ends the first one's grace, since a seller " +
+        'rotates when they think a key has leaked and rotating again must not leave the first ' +
+        'leaked key working. The secret key is carried across unchanged; rotating it is its ' +
+        "own route. Serialised on the winery's row, so two simultaneous rotations cannot both " +
+        'find the same active key.',
+      example: {
+        publicKey: 'pk_live_…new…',
+        secretKeyPrefix: 'sk_live_Ab3x',
+        secretKeyLast4: 'Wq7Z',
+        createdAt: '2026-09-26T10:00:00.000Z',
+        updatedAt: '2026-09-26T10:00:00.000Z',
+        previous: { publicKey: 'pk_live_…old…', validUntil: '2026-09-27T10:00:00.000Z' },
+      },
+      response: keysResponse,
     },
   ],
   [
