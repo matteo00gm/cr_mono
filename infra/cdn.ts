@@ -4,6 +4,7 @@ import { api, chat } from './api';
 import { originSecret } from './config';
 import { checkedBehaviourOrder } from './behaviour-order';
 import { SPA_REWRITE_CODE, VIEWER_IP_CODE } from './edge-functions';
+import { apiHeadersPolicyArgs, dashboardHeadersPolicyArgs } from './headers';
 import { WIDGET_CONFIG_PATH, widgetConfigCachePolicyArgs } from './widget-cache';
 import { isProtectedStage } from './stage';
 
@@ -164,6 +165,16 @@ const apiOriginDomain = api.url.apply((url) => new URL(url).hostname);
 const chatOriginId = 'chat-lambda';
 const chatOriginDomain = chat.url.apply((url) => new URL(url).hostname);
 
+/**
+ * The security headers, one policy per surface (P4-12) — see `headers.ts` for
+ * why the two differ, and the one thing neither may do to the other.
+ */
+const dashboardHeaders = new aws.cloudfront.ResponseHeadersPolicy(
+  'DashboardHeaders',
+  dashboardHeadersPolicyArgs(),
+);
+const apiHeaders = new aws.cloudfront.ResponseHeadersPolicy('ApiHeaders', apiHeadersPolicyArgs());
+
 /** Shared by both API behaviours; they differ only in caching and timeout. */
 const apiBehaviourBase = {
   targetOriginId: apiOriginId,
@@ -179,6 +190,7 @@ const apiBehaviourBase = {
     allViewerExceptHost.id,
   ),
   functionAssociations: [{ eventType: 'viewer-request', functionArn: viewerIp.arn }],
+  responseHeadersPolicyId: apiHeaders.id,
 };
 
 /**
@@ -275,6 +287,8 @@ export const distribution = new aws.cloudfront.Distribution('Cdn', {
     // Scoped to this behaviour, which is the entire reason it replaces
     // `customErrorResponses` — see the function's own file.
     functionAssociations: [{ eventType: 'viewer-request', functionArn: spaRewrite.arn }],
+
+    responseHeadersPolicyId: dashboardHeaders.id,
   },
 
   /**
