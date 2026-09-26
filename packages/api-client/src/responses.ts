@@ -203,6 +203,33 @@ export const probedDomainSchema = z.object({ domain: domainSchema, responds: z.b
  * than whenever its tokens happened to expire — which is the part a seller
  * needs to believe before they will trust the button.
  */
+/**
+ * A winery's keys as the dashboard shows them (P4-09).
+ *
+ * **There is no field for the secret key here, and no way to add one.** The
+ * dashboard can say which secret is live — its prefix and last four — and
+ * nothing more. The plaintext exists once, in `issuedKeysResponse`, and never
+ * again.
+ */
+export const keysResponse = z
+  .object({
+    publicKey: z.string(),
+    secretKeyPrefix: z.string(),
+    secretKeyLast4: z.string().length(4),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  })
+  .strict();
+
+/**
+ * The one response that ever carries a secret key (P4-09).
+ *
+ * Served with `Cache-Control: no-store`, because a secret in a response that a
+ * proxy, a CDN or the browser's back button could replay is a secret we have
+ * stored somewhere we cannot reach to delete.
+ */
+export const issuedKeysResponse = keysResponse.extend({ secretKey: z.string() }).strict();
+
 export const domainRemovedResponse = z.object({
   origin: z.string(),
   removed: z.literal(true),
@@ -247,6 +274,8 @@ export type DomainAddedResponse = z.infer<typeof domainAddedResponse>;
 export type DomainVerifiedResponse = z.infer<typeof domainVerifiedResponse>;
 export type ProbedDomain = z.infer<typeof probedDomainSchema>;
 export type DomainRemovedResponse = z.infer<typeof domainRemovedResponse>;
+export type KeysResponse = z.infer<typeof keysResponse>;
+export type IssuedKeysResponse = z.infer<typeof issuedKeysResponse>;
 export type Product = z.infer<typeof productSchema>;
 
 /**

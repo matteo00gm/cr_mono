@@ -146,7 +146,7 @@ tenant_domains   id, tenant_id, origin (text, normalized serialized origin),
                  tenant. This single constraint is the backbone of the
                  anti-widget-sharing design.
 
-widget_keys      id, tenant_id, public_key, secret_key_hash (argon2id),
+widget_keys      id, tenant_id, public_key, secret_key_hash (SHA-256, ADR 0025),
                  secret_key_prefix, secret_key_last4, revoked_at, created_at
 
 memberships      id, tenant_id, user_id (text — Better Auth ids are not
@@ -443,7 +443,7 @@ Full funnel: `WIDGET_OPEN → MESSAGE_SENT → RECOMMENDATION_SHOWN → ADD_TO_C
 
 - **Domains** — add, verify, remove, view status. Removal invalidates the allowlist cache within seconds and revokes live sessions for that origin.
 - **Widget appearance** — primary colour, position, avatar, welcome message per locale, suggestion chips, `cartUrl`. Live preview rendered in an iframe against a mock host page.
-- **Keys** — rotate public key (old key honoured for a 24h grace window, shown as a countdown); create/rotate secret key, **shown exactly once**, stored as argon2id hash with prefix + last4 for identification.
+- **Keys** — rotate public key (old key honoured for a 24h grace window, shown as a countdown); create/rotate secret key, **shown exactly once**, stored as a SHA-256 hash (ADR 0025) with prefix + last4 for identification.
 - **Team** — invite by email, assign `OWNER`/`EDITOR`, change role, remove. `OWNER`-only, and the last `OWNER` cannot be removed or demoted (§2.7).
 - ~~**Audit log** screen~~ **Deferred.** The `audit_log` table is written from day one — that is a security requirement, not a feature — but the browsable/filterable screen waits. Until then it is a direct query, and a runbook documents how to answer "who removed that domain?". Worth noting this is *more* defensible now that roles exist: with two people able to act on a tenant, "who did this" has a real answer recorded, even before there is a screen to read it on.
 - ~~**Data** export / hard-delete self-serve flows~~ **Deferred.** The GDPR *obligation* is met from day one by a documented ops runbook plus a script; only the self-serve buttons wait. Revisit before tenant count makes a manual process impractical — roughly the low hundreds, or the first enterprise seller with a procurement checklist.
@@ -612,7 +612,7 @@ Retrieved product text is **tenant-supplied user content**. Treat it as data:
 
 ### 3.8 Platform hardening
 
-- **Secrets** in **SSM Parameter Store** (`SecureString`, KMS-encrypted — the standard tier is free, versus $0.40/secret/month for Secrets Manager), read at cold start and cached in the Lambda container. None in the repo; a `gitleaks` pre-commit hook plus a CI scan. `sk_` keys hashed with argon2id, never recoverable. Per-Lambda IAM roles scoped to only the parameter paths and the one KMS key each function actually needs.
+- **Secrets** in **SSM Parameter Store** (`SecureString`, KMS-encrypted — the standard tier is free, versus $0.40/secret/month for Secrets Manager), read at cold start and cached in the Lambda container. None in the repo; a `gitleaks` pre-commit hook plus a CI scan. `sk_` keys hashed with SHA-256 — 256 bits nobody chose, so a slow KDF would add only a verification cost (ADR 0025) — never recoverable. Per-Lambda IAM roles scoped to only the parameter paths and the one KMS key each function actually needs.
 - **Headers** — dashboard: strict CSP (nonce-based, no `unsafe-inline`), HSTS with preload, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, `Permissions-Policy` minimal. Server banners removed.
 - **Input validation** — Zod at every boundary, from the `drizzle-zod` schemas in `packages/db`; unknown keys stripped; body size limits; per-endpoint timeouts.
 - **Stripe webhooks** — signature verified against the raw body (before any body parser touches it), idempotency enforced via `processed_webhooks`, timestamp tolerance window, replays logged.
@@ -1377,7 +1377,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-06 | 🔒 Domain removal | immediate effect while uncached; revokes live sessions | P4-01 |
 | ✅ P4-07 | Per-plan domain cap | 1 prod + 1 dev (Cantina) / 2 prod + 2 dev (E-commerce) | P4-01 |
 | P4-08 | 🔒 Public key rotation | 24 h grace, countdown in UI | P0-25 |
-| P4-09 | 🔒 Secret key create/rotate | argon2id, shown exactly once, prefix+last4 stored | P0-25 |
+| ✅ P4-09 | 🔒 Secret key create/rotate | SHA-256 (ADR 0025), shown exactly once, prefix+last4 stored | P0-25 |
 | P4-10 | 🔒 Server-minted session endpoint | `sk_` authenticated, the forgery-proof path | P4-09,P2-12 |
 | P4-11 | 🔒 MFA for OWNER + step-up re-auth | on keys, domains, plan, membership changes | P0-45 |
 | P4-12 | 🔒 Security headers | nonce CSP, HSTS preload, nosniff, referrer, frame-deny | P0-54 |
@@ -2191,7 +2191,7 @@ Defence in depth behind P2-05's normalisation, at the schema level.
 
 **Why.** `pk_` is public by construction; `sk_` must never be recoverable from the database.
 
-**How.** `public_key text unique not null` stored in plaintext (it is public). For the secret: `secret_key_hash text` (argon2id), `secret_key_prefix text`, `secret_key_last4 text` — the prefix and last4 exist so the UI can identify a key without storing it.
+**How.** `public_key text unique not null` stored in plaintext (it is public). For the secret: `secret_key_hash text` (SHA-256 since ADR 0025; argon2id as first specified), `secret_key_prefix text`, `secret_key_last4 text` — the prefix and last4 exist so the UI can identify a key without storing it.
 
 **`secret_key_prefix` earns its place only because there is more than one prefix.** If every secret began `sk_live_` the column would hold the same eight characters on every row and identify nothing — `secret_key_last4` would be doing all the work. It is kept because §5.2b's `event.livemode` assertion means test-mode and live-mode keys both exist, so the prefix distinguishes `sk_test_` from `sk_live_` at a glance, which is exactly the mistake worth catching in a support conversation. If that ever stops being true, the column should go. **No column ever holds the secret in plaintext.** Add `revoked_at`, and `grace_until` for the 24-hour public-key rotation window (P4-08). Partial unique index so only one non-revoked public key is active per tenant.
 
@@ -2199,7 +2199,7 @@ Defence in depth behind P2-05's normalisation, at the schema level.
 
 **Tests.** Assert no column contains the raw secret after creation — and assert it **against the stored row**, by searching every column of `to_jsonb(row)` for the plaintext, not by listing the columns. A future column that helpfully caches the secret then fails without anyone remembering to update the test. Plus: the second active key refused, rotation accepted once the first is revoked with both rows retained, and grace-without-revocation refused.
 
-The argon2id round-trip belongs with **key minting (P4-07)**, not here: hashing is not this table's behaviour, and pulling an argon2 binding into a migration PR tests the binding. The property that matters at this stage — the plaintext appears in no column — holds for any hash.
+The hash round-trip belongs with **key minting (P4-09)**, not here: hashing is not this table's behaviour, and pulling an argon2 binding into a migration PR tests the binding. The property that matters at this stage — the plaintext appears in no column — holds for any hash.
 
 **Files.** schema + generated migration + trigger migration + down files. **~95 lines + ~165 test lines.**
 
@@ -6510,13 +6510,26 @@ Message names the current plan and the cap, and links to upgrade. Counted per te
 
 **Files.** `keys.ts`, tests. **~110 lines.**
 
+**As built.**
+
+- **SHA-256, not argon2id** *(deviation; ADR 0025)*. The key is 256 bits from the CSPRNG that nobody chose, so there is no guess cheaper than any other and a leaked SHA-256 of it is exactly as irreversible as a leaked argon2id. A slow KDF protects low-entropy secrets; what it would add here is 64 MB of work per verification on P4-10's endpoint, which anybody on the internet can call — an amplification vector — and a salted hash cannot be found by value, which would force a second identifier into every server-to-server request. **The repository had already made this call once, for exactly this input**: P0-51 hashes invitation tokens with SHA-256 for the same reason, and its comment claimed the reasoning did not transfer to this key "because of entropy" — but this key is specified as 32 random bytes too. That comment is corrected.
+- **Which makes the generator the whole of the security argument.** 43 base62 characters by rejection sampling (≈256.03 bits); `% 62` on raw bytes would bias the first eight characters by about 25%, and a bias in a secret is lost entropy. The tests assert the entropy as arithmetic, that all 62 characters occur, that the distribution is flat, and — the one that ties it to the logger — that the redaction's key pattern scrubs a generated key whole. A character outside `[A-Za-z0-9]` would end that match early and log the rest in the clear.
+- **Secret rotation is an update in place, not a new row** *(deviation; the How line says "creates a new key and revokes the old")*. One row holds both keys, and the public key on it is live on the seller's pages — a new row would mean a new `pk_`, rotating a key they did not ask to rotate and breaking every page it is installed on. The update changes the hash, and the old secret stops matching the instant it commits, which is the "no grace" the row asks for.
+- **Nothing below the port ever sees the plaintext.** The statements take a hash and a hint; the audit row records the prefix and last four; `secret_key_hash` is never selected back out, because a hash of a key can be *replayed* against anything that trusts a hash, so it has no business leaving the database on any path.
+- **Every response under `/keys` is `no-store`** *(addition)*. A cached secret is a stored secret, somewhere we cannot reach to delete. All of them, not just the two that carry one: a header right on some responses of a path and missing on others is the header somebody forgets on the next route.
+- **Creating keys twice is a 409, never a replacement** *(addition)*. The partial unique index on the active key decides; replacing would silently invalidate a secret the seller may already have deployed.
+- **Nothing in production created a `widget_keys` row before this row.** Only tests and the e2e seeder did — so until now no winery could have a key at all. P4-08 rotates the public key this row creates.
+- **The lookup index on `secret_key_hash` lands with P4-10**, which is the row that looks keys up. Several integration seeders share placeholder hashes, and a unique index here would have broken them in a row that has no use for it yet.
+
+**Verified.** 24 cases on the generator and hash, 20 on the port, 14 on the routes. The log assertion spies every level of the process logger while both secret-bearing routes run *and* while one fails holding the secret in its error message — and first asserts that the error path did log something, so the absence of the secret is not an absence of logging. The `no-store` cases fail with the middleware removed.
+
 ---
 
 ### P4-10 · Server-minted session endpoint 🔒
 
 **Why.** §3.2 layer 3 — the only genuinely forgery-proof integration, and the recommended path for proprietary sites.
 
-**How.** Complete the P2-12 branch: `Authorization: Bearer sk_live_...`, verified against the argon2id hash. Because the caller is a server, there is no `Origin` — so the token's `origin` claim comes from a **request parameter that must be one of the tenant's verified origins**, validated server-side. Rate-limit per key. Document clearly that the secret key must never appear in browser-delivered code, and add a dashboard warning.
+**How.** Complete the P2-12 branch: `Authorization: Bearer sk_live_...`, verified by looking up its SHA-256 hash (ADR 0025). Because the caller is a server, there is no `Origin` — so the token's `origin` claim comes from a **request parameter that must be one of the tenant's verified origins**, validated server-side. Rate-limit per key. Document clearly that the secret key must never appear in browser-delivered code, and add a dashboard warning.
 
 **Tests.** Valid `sk_` mints a token for a verified origin; an unverified origin in the request is refused; a revoked key is refused; a `pk_` sent as a secret key is refused; the minted token then works from that origin and only that origin.
 

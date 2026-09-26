@@ -26,9 +26,13 @@ export const widgetKeys = pgTable(
     publicKey: text('public_key').notNull().unique(),
 
     /**
-     * argon2id. There is no plaintext column for the secret anywhere in this
-     * table, and that is the property the tests assert directly rather than by
-     * reading the schema.
+     * Hex SHA-256 of the whole key (ADR 0025). There is no plaintext column for
+     * the secret anywhere in this table, and that is the property the tests
+     * assert directly rather than by reading the schema.
+     *
+     * Not a slow KDF: the key is 256 bits nobody chose, so there is no guess
+     * cheaper than any other, and a slow hash would only make verifying it —
+     * on an endpoint anybody can call (P4-10) — expensive for us.
      */
     secretKeyHash: text('secret_key_hash').notNull(),
 

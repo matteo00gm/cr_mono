@@ -11,6 +11,8 @@ import {
   domainRemovedResponse,
   domainVerifiedResponse,
   invitationRevokedResponse,
+  issuedKeysResponse,
+  keysResponse,
   inviteResponse,
   meResponse,
   memberRemovedResponse,
@@ -26,7 +28,7 @@ import {
   rosterResponse,
   surfaceResponse,
 } from '@catalogorosso/api-client';
-import { Hono } from 'hono';
+import { Hono, type MiddlewareHandler } from 'hono';
 import { z } from 'zod';
 
 import {
@@ -61,6 +63,7 @@ import { requireCapability, routeKey } from '../middleware/capability.js';
 import { logger } from '../middleware/logger.js';
 import { resolveTenant } from '../middleware/tenant.js';
 import { unconfiguredDomains, type DomainsPort } from '../domains.js';
+import { unconfiguredKeys, type KeysPort } from '../keys.js';
 import { unconfiguredMembers, type MembersPort } from '../members.js';
 import {
   countImportOutcomes,
@@ -120,6 +123,14 @@ export interface DashboardOptions {
    * been added is a widget a seller believes is about to work.
    */
   readonly domains?: DomainsPort | undefined;
+
+  /**
+   * Keys (P4-09). Optional on the same terms as the rest: absent refuses every
+   * call with a wiring error. Answering plausibly would be worse here than
+   * anywhere else on this surface — a key that appears to have been issued is
+   * a key a seller will paste into their server.
+   */
+  readonly keys?: KeysPort | undefined;
 }
 
 /**
@@ -420,6 +431,18 @@ const simulationRequest = z
 const domainBody = z.object({ domain: z.string().min(1).max(300) }).strict();
 
 /**
+ * `Cache-Control: no-store` on the way out (P4-09).
+ *
+ * Set after the handler runs, so it lands on the response actually sent —
+ * including a refusal, which is harmless to cache but is not worth a rule
+ * with an exception in it.
+ */
+const noStore: MiddlewareHandler<AppEnv> = async (c, next) => {
+  await next();
+  c.header('Cache-Control', 'no-store');
+};
+
+/**
  * Which proof a seller is offering.
  *
  * **Their choice, and the list is closed.** DNS is not always theirs to change
@@ -436,6 +459,7 @@ export const createDashboardApp = ({
   products = unconfiguredProducts,
   rag = unconfiguredRag,
   domains = unconfiguredDomains,
+  keys = unconfiguredKeys,
 }: DashboardOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
@@ -1115,6 +1139,44 @@ export const createDashboardApp = ({
   /** Invitations still outstanding. Open ones only — see the port. */
   app.get('/members/invitations', requireCapability('members:manage'), async (c) =>
     c.json({ invitations: await members.pending(c.get('tenantId')) }),
+  );
+
+  /* ---- keys (P4-09) ----------------------------------------------------- */
+
+  /**
+   * Every response on these routes is `no-store`, not only the two that carry a
+   * secret. A header that is right on some responses of a path and missing on
+   * others is a header somebody forgets on the next route added here.
+   */
+  app.use('/keys/*', noStore);
+
+  /** The keys, as far as the dashboard is ever allowed to know them. */
+  app.get('/keys', requireCapability('keys:manage'), async (c) =>
+    c.json(await keys.read(c.get('tenantId'))),
+  );
+
+  /**
+   * Issue a winery's first keys.
+   *
+   * **The response carries the secret key, and it is the only time anything
+   * will.** Behind `keys:manage`, which only an OWNER holds: the secret key is
+   * what lets a server mint sessions on the winery's behalf (P4-10), and that is
+   * closer to a password than to a setting.
+   */
+  app.post('/keys', requireCapability('keys:manage'), async (c) =>
+    c.json(await keys.create(c.get('tenantId')), 201),
+  );
+
+  /**
+   * Replace the secret key, effective immediately.
+   *
+   * No grace window — unlike the public key's (P4-08) — because a seller rotates
+   * a secret when they think it has leaked, and a window in which the old one
+   * still works is a window in which the leak still works. They control their
+   * own server's deployment; the moment they rotate is the moment it changes.
+   */
+  app.post('/keys/secret/rotate', requireCapability('keys:manage'), async (c) =>
+    c.json(await keys.rotateSecret(c.get('tenantId'))),
   );
 
   /* ---- domains (P4-01) -------------------------------------------------- */
@@ -1878,6 +1940,71 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         created: true,
       },
       response: domainAddedResponse,
+    },
+  ],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/keys`),
+    {
+      access: requires('keys:manage'),
+      summary: "Read the winery's keys",
+      description:
+        'The public key and a hint of the secret one — its prefix and last four characters, ' +
+        'enough to answer "which key is live?" and not enough to use it. There is no field for ' +
+        'the secret key and no way to ask for it: it is shown once, when issued, and never ' +
+        'stored anywhere it could be read back from. 404 before any keys have been issued.',
+      example: {
+        publicKey: 'pk_live_…',
+        secretKeyPrefix: 'sk_live_Ab3x',
+        secretKeyLast4: 'Wq7Z',
+        createdAt: '2026-09-26T09:00:00.000Z',
+        updatedAt: '2026-09-26T09:00:00.000Z',
+      },
+      response: keysResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/keys`),
+    {
+      access: requires('keys:manage'),
+      summary: "Issue the winery's first keys",
+      description:
+        'Generates a public key and a secret key. **The secret key is in this response and ' +
+        'nowhere else, ever**: it is stored as a SHA-256 hash (ADR 0025) and cannot be shown ' +
+        'again, so the only remedy for not having copied it is to rotate. Served no-store, ' +
+        'because a secret a proxy or the back button could replay is a secret stored somewhere ' +
+        'we cannot delete. 409 if the winery already has keys — replacing them here would ' +
+        'invalidate a secret the seller may already have deployed.',
+      example: {
+        publicKey: 'pk_live_…',
+        secretKeyPrefix: 'sk_live_Ab3x',
+        secretKeyLast4: 'Wq7Z',
+        createdAt: '2026-09-26T09:00:00.000Z',
+        updatedAt: '2026-09-26T09:00:00.000Z',
+        secretKey: 'sk_live_…shown once…',
+      },
+      response: issuedKeysResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/keys/secret/rotate`),
+    {
+      access: requires('keys:manage'),
+      summary: 'Replace the secret key',
+      description:
+        'Effective immediately, with no grace window: a seller rotates a secret when they think ' +
+        'it has leaked, and a window in which the old one still works is a window in which the ' +
+        "leak still works. The public key is untouched — it is live on the seller's pages, " +
+        'and rotating it is its own route with its own grace (P4-08). The new secret is in ' +
+        'this response only.',
+      example: {
+        publicKey: 'pk_live_…',
+        secretKeyPrefix: 'sk_live_Hk2p',
+        secretKeyLast4: 'x9Rd',
+        createdAt: '2026-09-26T09:00:00.000Z',
+        updatedAt: '2026-09-26T09:30:00.000Z',
+        secretKey: 'sk_live_…shown once…',
+      },
+      response: issuedKeysResponse,
     },
   ],
   [

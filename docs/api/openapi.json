@@ -488,6 +488,275 @@
           }
         }
       },
+      "/v1/dashboard/keys": {
+        "get": {
+          "summary": "Read the winery's keys",
+          "description": "The public key and a hint of the secret one — its prefix and last four characters, enough to answer \"which key is live?\" and not enough to use it. There is no field for the secret key and no way to ask for it: it is shown once, when issued, and never stored anywhere it could be read back from. 404 before any keys have been issued.\n\nRequires the `keys:manage` capability.",
+          "operationId": "getV1DashboardKeys",
+          "x-required-capability": "keys:manage",
+          "responses": {
+            "200": {
+              "description": "Read the winery's keys",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "publicKey": {
+                        "type": "string"
+                      },
+                      "secretKeyPrefix": {
+                        "type": "string"
+                      },
+                      "secretKeyLast4": {
+                        "type": "string",
+                        "minLength": 4,
+                        "maxLength": 4
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      },
+                      "updatedAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      }
+                    },
+                    "required": [
+                      "publicKey",
+                      "secretKeyPrefix",
+                      "secretKeyLast4",
+                      "createdAt",
+                      "updatedAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "publicKey": "pk_live_…",
+                    "secretKeyPrefix": "sk_live_Ab3x",
+                    "secretKeyLast4": "Wq7Z",
+                    "createdAt": "2026-09-26T09:00:00.000Z",
+                    "updatedAt": "2026-09-26T09:00:00.000Z"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "post": {
+          "summary": "Issue the winery's first keys",
+          "description": "Generates a public key and a secret key. **The secret key is in this response and nowhere else, ever**: it is stored as a SHA-256 hash (ADR 0025) and cannot be shown again, so the only remedy for not having copied it is to rotate. Served no-store, because a secret a proxy or the back button could replay is a secret stored somewhere we cannot delete. 409 if the winery already has keys — replacing them here would invalidate a secret the seller may already have deployed.\n\nRequires the `keys:manage` capability.",
+          "operationId": "postV1DashboardKeys",
+          "x-required-capability": "keys:manage",
+          "responses": {
+            "200": {
+              "description": "Issue the winery's first keys",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "publicKey": {
+                        "type": "string"
+                      },
+                      "secretKeyPrefix": {
+                        "type": "string"
+                      },
+                      "secretKeyLast4": {
+                        "type": "string",
+                        "minLength": 4,
+                        "maxLength": 4
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      },
+                      "updatedAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      },
+                      "secretKey": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "publicKey",
+                      "secretKeyPrefix",
+                      "secretKeyLast4",
+                      "createdAt",
+                      "updatedAt",
+                      "secretKey"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "publicKey": "pk_live_…",
+                    "secretKeyPrefix": "sk_live_Ab3x",
+                    "secretKeyLast4": "Wq7Z",
+                    "createdAt": "2026-09-26T09:00:00.000Z",
+                    "updatedAt": "2026-09-26T09:00:00.000Z",
+                    "secretKey": "sk_live_…shown once…"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/dashboard/keys/secret/rotate": {
+        "post": {
+          "summary": "Replace the secret key",
+          "description": "Effective immediately, with no grace window: a seller rotates a secret when they think it has leaked, and a window in which the old one still works is a window in which the leak still works. The public key is untouched — it is live on the seller's pages, and rotating it is its own route with its own grace (P4-08). The new secret is in this response only.\n\nRequires the `keys:manage` capability.",
+          "operationId": "postV1DashboardKeysSecretRotate",
+          "x-required-capability": "keys:manage",
+          "responses": {
+            "200": {
+              "description": "Replace the secret key",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "publicKey": {
+                        "type": "string"
+                      },
+                      "secretKeyPrefix": {
+                        "type": "string"
+                      },
+                      "secretKeyLast4": {
+                        "type": "string",
+                        "minLength": 4,
+                        "maxLength": 4
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      },
+                      "updatedAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      },
+                      "secretKey": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "publicKey",
+                      "secretKeyPrefix",
+                      "secretKeyLast4",
+                      "createdAt",
+                      "updatedAt",
+                      "secretKey"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "publicKey": "pk_live_…",
+                    "secretKeyPrefix": "sk_live_Hk2p",
+                    "secretKeyLast4": "x9Rd",
+                    "createdAt": "2026-09-26T09:00:00.000Z",
+                    "updatedAt": "2026-09-26T09:30:00.000Z",
+                    "secretKey": "sk_live_…shown once…"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/me": {
         "get": {
           "summary": "The caller and the wineries they belong to",
