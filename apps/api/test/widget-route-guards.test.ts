@@ -114,6 +114,7 @@ const appWith = (overrides: Partial<WidgetDependencies>) =>
       ipSecret: randomUUID(),
       tokenKeys: () => Promise.resolve(keys),
       isTokenRevoked: () => Promise.resolve(false),
+      sessionCutoffAt: () => Promise.resolve(undefined),
       /* Answers nothing: these cases are about the guards in front of it. */
       chat: {
         answer: () => ({

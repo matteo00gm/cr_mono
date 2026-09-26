@@ -196,6 +196,21 @@ export const domainAddedResponse = z.object({
  */
 export const probedDomainSchema = z.object({ domain: domainSchema, responds: z.boolean() });
 
+/**
+ * What removing a domain gives back (P4-06).
+ *
+ * `sessionsEnded` says the widget stopped working on that origin *now* rather
+ * than whenever its tokens happened to expire — which is the part a seller
+ * needs to believe before they will trust the button.
+ */
+export const domainRemovedResponse = z.object({
+  origin: z.string(),
+  removed: z.literal(true),
+  sessionsEnded: z.literal(true),
+  /** How many verified origins the winery has left. Zero means the widget is off. */
+  verifiedRemaining: z.number().int().nonnegative(),
+});
+
 export const domainVerifiedResponse = z.object({
   domain: domainSchema,
   verified: z.boolean(),
@@ -231,6 +246,7 @@ export type Domain = z.infer<typeof domainSchema>;
 export type DomainAddedResponse = z.infer<typeof domainAddedResponse>;
 export type DomainVerifiedResponse = z.infer<typeof domainVerifiedResponse>;
 export type ProbedDomain = z.infer<typeof probedDomainSchema>;
+export type DomainRemovedResponse = z.infer<typeof domainRemovedResponse>;
 export type Product = z.infer<typeof productSchema>;
 
 /**

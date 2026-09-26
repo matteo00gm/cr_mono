@@ -1374,7 +1374,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-03 | 🔒 Well-known file verification | `/.well-known/somm-verify-<nonce>.txt` via `guardedFetch` | P4-03a |
 | ✅ P4-04 | 🔒 Verification token expiry | 7 days, single-use, rate-limited retries | P4-02 |
 | ✅ P4-05 | 🔒 Apex + www dual entry | two visible removable entries; probe which responds | P4-02 |
-| P4-06 | 🔒 Domain removal | immediate effect while uncached; revokes live sessions | P4-01 |
+| ✅ P4-06 | 🔒 Domain removal | immediate effect while uncached; revokes live sessions | P4-01 |
 | ✅ P4-07 | Per-plan domain cap | 1 prod + 1 dev (Cantina) / 2 prod + 2 dev (E-commerce) | P4-01 |
 | P4-08 | 🔒 Public key rotation | 24 h grace, countdown in UI | P0-25 |
 | P4-09 | 🔒 Secret key create/rotate | argon2id, shown exactly once, prefix+last4 stored | P0-25 |
@@ -6449,6 +6449,19 @@ The members screen was the worse case, and quieter than the domains port's. It d
 **Tests.** Removal blocks new sessions immediately; a token minted before removal is rejected on its next call; removing the last domain requires confirmation; audit row written.
 
 **Files.** migration, route, middleware change, tests. **~120 lines.**
+
+**As built.**
+
+- **The cutoff is its own table, not a column** *(deviation; the How line says "add that column")*. The domain row is *deleted*, so a column on it would go with the row. A soft delete is not the alternative either: the unique index on `origin` is the anti-sharing backbone (§3.2), and a tombstone would hold an origin against every other winery for ever — including against the seller themselves, if they ever want it back. `widget_session_cutoffs` is keyed `(tenant_id, origin)` and carries the boilerplate tenant policy; no new RLS context and no second GUC, because by the time a cutoff is read CORS has already resolved the tenant.
+- **Removal was already immediate, and that is the reason this row still needs the cutoff.** CORS resolves the allowlist uncached on every request (P2-07), so an origin removed a second ago is refused before a token is read. That is a consequence of another row's design rather than a guarantee of this one — **§5.7 contemplates caching the allowlist, and the day that cache exists the immediacy quietly becomes "within the TTL"**. The cutoff is what still works then, and it closes a gap CORS never covered: a seller who removes an origin and later re-verifies it would otherwise resurrect every session that was live when they removed it.
+- **The comparison is against `iat_original`, never `iat`** *(addition)*. A session refreshes (P3-21), and every refresh mints a token with a fresh `iat` — so comparing that would let a session outlive its revocation by doing the one thing every live session does anyway.
+- **`origin_removed` is its own refusal reason** *(addition)*, not folded into `revoked`. They are different events: one names a token we revoked, the other is every session on a domain at once, and an incident review reading `security_events` needs to tell "one session ended" from "a seller removed a domain". The exhaustive `TOKEN_EVENT_TYPE` map is what forced the decision — adding a reason without deciding its event type is a typecheck failure, which is the same rule P0-49 applies to capabilities.
+- **The verifier is required to be able to ask.** An absent cutoff reader refuses every token, on `isTokenRevoked`'s terms: a removal a verifier cannot see is a removal that did not happen. The composition root supplies it unconditionally.
+- **Only the last *verified* domain needs confirmation** *(addition)*. A widget is not running on a claim nobody finished, so warning about one would be a warning about a consequence that does not exist. And it is a confirmation rather than a refusal: it is their domain and their decision — what they must not be able to do is make it by accident.
+- **`?confirm=true` exactly**, not "any confirm parameter". Defaulting the other way would make the one irreversible thing on this screen the easiest to do by accident.
+- **The delete, the cutoff and the audit row are one transaction.** A removal that committed without its cutoff would leave live sessions answering on an origin the seller can no longer see — the failure this row exists to prevent, arriving by the back door.
+
+**Verified.** 17 cases on the port, 7 on the route, 6 on the token check, 9 on the statements, 3 on the wording, 7 more against real Postgres — including that the cutoff outlives the row it came from, that a removal frees the origin for another winery (which a tombstone would not), and that one winery's cutoffs are invisible to another. The down migration is exercised by `migration-reversibility.integration.test.ts`. A mutation run of 29 mutants killed 29 after two survivors: nothing asserted the cutoff's clock on *both* the insert and the conflict update — a single `toMatch` passed while one of them was a literal, because the other still contained `now()` — and `LAST_DOMAIN_WARNING` had no test in `packages/core`, which is the third time that gap has appeared and is now a habit worth naming: **a mutation run only sees a package whose own suite runs against its source.**
 
 ---
 

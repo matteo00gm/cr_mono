@@ -45,6 +45,17 @@ export interface E2eApi {
   readonly unverifyDomain: () => Promise<void>;
   /** Puts it back. The suite is serial and shares one database, so state has to be restorable. */
   readonly reverifyDomain: () => Promise<void>;
+  /**
+   * Ends every session on the verified origin, as a removal does (P4-06).
+   *
+   * Separate from `unverifyDomain` on purpose: that one takes the origin out of
+   * the allowlist, which CORS refuses on the next request anyway. This leaves
+   * the origin verified and ends the sessions, which is the only way to see the
+   * cutoff doing work CORS does not.
+   */
+  readonly endSessions: () => Promise<void>;
+  /** Puts the cutoff back in the past, so later tests get live sessions again. */
+  readonly restoreSessions: () => Promise<void>;
   /** Every `security_events` row of a kind, for the assertions P3-18 makes server-side. */
   readonly securityEvents: () => Promise<{ type: string; origin: string | null }[]>;
   readonly close: () => Promise<void>;
@@ -225,6 +236,21 @@ export const startE2eApi = async ({
     reverifyDomain: async () => {
       await admin.execute(sql`
         UPDATE tenant_domains SET status = 'VERIFIED', verified_at = now()
+        WHERE tenant_id = ${tenantId} AND origin = ${VERIFIED_ORIGIN}
+      `);
+    },
+
+    endSessions: async () => {
+      await admin.execute(sql`
+        INSERT INTO widget_session_cutoffs (tenant_id, origin, valid_from)
+        VALUES (${tenantId}, ${VERIFIED_ORIGIN}, now())
+        ON CONFLICT (tenant_id, origin) DO UPDATE SET valid_from = now()
+      `);
+    },
+
+    restoreSessions: async () => {
+      await admin.execute(sql`
+        DELETE FROM widget_session_cutoffs
         WHERE tenant_id = ${tenantId} AND origin = ${VERIFIED_ORIGIN}
       `);
     },

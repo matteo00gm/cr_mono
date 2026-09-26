@@ -171,6 +171,7 @@ const HEADERS: Readonly<Record<string, string>> = {
   '0040_import_runs_rls': 'Row-level security for import runs (P1-26).',
   '0042_widget_key_rls': 'The widget resolves its tenant from a key and an origin (P2-07).',
   '0043_revocation_sweep_rls': 'The sweep deletes lapsed token revocations across tenants (P2-14).',
+  '0047_session_cutoffs_rls': 'Row-level security for session cutoffs (P4-06).',
 };
 
 /** Every migration file this list generates, in first-appearance order. */
@@ -343,6 +344,16 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
       'lapsed more than the continuation window ago, so one that could still refuse a ' +
       'continuing session is invisible to it. WITH CHECK stays tenant-only, so the flag can ' +
       'neither write a revocation nor move one.',
+  },
+  {
+    ...boilerplate('widget_session_cutoffs'),
+    migration: '0047_session_cutoffs_rls',
+    note:
+      'Nothing but the boilerplate, and that is the whole point of where it is read (P4-06). A ' +
+      'cutoff is consulted on the widget request path — but only after CORS has resolved the ' +
+      'tenant from (pk_, Origin), so it is read inside an ordinary withTenant, exactly as ' +
+      'isTokenRevoked reads token_revocations two checks earlier on the same request. No new ' +
+      'GUC, no seventh context: the one thing a new table here could have cost, and did not.',
   },
 ];
 

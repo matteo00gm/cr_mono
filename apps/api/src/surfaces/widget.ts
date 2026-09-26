@@ -35,7 +35,11 @@ import { limitUnresolvedWidgetRequest, limitWidgetRequest } from '../middleware/
 import { WIDGET_PREFIX } from '../routes.js';
 import { widgetConfigFor } from '../widget-config.js';
 import { mintWidgetSession } from '../widget-session.js';
-import { bearerTokenOf, type TokenRevocationCheck } from '../widget-token.js';
+import {
+  bearerTokenOf,
+  type SessionCutoffCheck,
+  type TokenRevocationCheck,
+} from '../widget-token.js';
 import type { RouteDoc } from './dashboard.js';
 
 /**
@@ -86,6 +90,13 @@ export interface WidgetDependencies {
    * continuing without asking could revive a revoked token's conversation.
    */
   readonly isTokenRevoked?: TokenRevocationCheck | undefined;
+
+  /**
+   * When an origin's sessions were ended — `sessionCutoffAt` (P4-06). Absent,
+   * every token is refused, on `isTokenRevoked`'s terms: a verifier that cannot
+   * ask has nothing to fail closed on.
+   */
+  readonly sessionCutoffAt?: SessionCutoffCheck | undefined;
   /**
    * Which stage this is, as the metric's one dimension (P2-28).
    *
@@ -266,6 +277,12 @@ const mountGuarded = (
          * revocation it could not read (P2-12a).
          */
         isRevoked: widget.isTokenRevoked ?? (() => Promise.resolve(true)),
+        /*
+         * And the same, from the other side: absent, every session reads as
+         * ended. A domain removal that a verifier cannot see is a removal that
+         * did not happen (P4-06).
+         */
+        cutoffAt: widget.sessionCutoffAt ?? (() => Promise.resolve(new Date(8.64e15))),
         ...(widget.onTokenRejected === undefined ? {} : { onRejected: widget.onTokenRejected }),
         ipSecret: widget.ipSecret,
       }),

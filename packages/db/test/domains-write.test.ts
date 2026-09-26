@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   countDomains,
+  countVerifiedDomains,
+  deleteDomain,
   insertDomain,
   insertVerifiedSibling,
   markDomainVerified,
@@ -554,5 +556,60 @@ describe('the pair a verification earns (P4-05)', () => {
     expect(text(statements[0])).toMatch(/WHERE registrable_domain =/u);
     /* Scoped by the policy, not by a predicate (P0-19). */
     expect(text(statements[0])).not.toMatch(/tenant_id/u);
+  });
+});
+
+describe('removing a domain (P4-06)', () => {
+  it('really deletes, rather than leaving a tombstone', async () => {
+    /*
+     * The unique index on `origin` is the anti-sharing backbone (§3.2), and a
+     * row kept to remember the removal would hold that origin against every
+     * other winery for ever — including against this seller, if they want it
+     * back.
+     */
+    const { statements, tx } = capturing([raw]);
+
+    await deleteDomain(tx, 'd1');
+
+    const sql = text(statements[0]);
+
+    expect(sql).toMatch(/DELETE FROM tenant_domains/u);
+    expect(sql).not.toMatch(/UPDATE|deleted_at|SET/u);
+  });
+
+  it('names no tenant, because the policy is what scopes it', async () => {
+    /* An id belonging to another winery deletes nothing and comes back empty —
+     * the same answer as an id that never existed, which is what §3.5 wants. */
+    const { statements, tx } = capturing([raw]);
+
+    await deleteDomain(tx, 'd1');
+
+    expect(text(statements[0])).not.toMatch(/tenant_id/u);
+  });
+
+  it('gives back the row it deleted, so the caller knows which origin went', async () => {
+    /* The cutoff is keyed on the origin, and after the delete there is nowhere
+     * else to read it from. */
+    const { tx } = capturing([raw]);
+
+    await expect(deleteDomain(tx, 'd1')).resolves.toMatchObject({
+      origin: 'https://www.winery.com',
+    });
+  });
+
+  it('gives back nothing when it deleted nothing', async () => {
+    const { tx } = capturing([]);
+
+    await expect(deleteDomain(tx, 'd1')).resolves.toBeUndefined();
+  });
+
+  it('counts only what is verified when deciding if this was the last one', async () => {
+    /* A widget is not running on a claim nobody finished, so warning about one
+     * would be a warning about a consequence that does not exist. */
+    const { statements, tx } = capturing([{ held: 1 }]);
+
+    await countVerifiedDomains(tx);
+
+    expect(text(statements[0])).toMatch(/WHERE status = 'VERIFIED'/u);
   });
 });

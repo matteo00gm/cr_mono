@@ -18,6 +18,7 @@ import {
   insertSecurityEvent,
   isSuppressed,
   isTokenRevoked,
+  sessionCutoffAt,
   readMembershipsForUser,
   resolveTenantByKeyAndOrigin,
   withUser,
@@ -427,6 +428,13 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
         ? {}
         : { tokenKeys: keysLoader(config.widgetTokenKeys) }),
       isTokenRevoked,
+      /*
+       * Supplied unconditionally, like `isTokenRevoked`. A verifier that cannot
+       * ask whether an origin's sessions were ended accepts them (P4-06), and
+       * the absent-means-refuse default in the surface is a backstop for a
+       * wiring bug rather than a configuration anybody should choose.
+       */
+      sessionCutoffAt,
       /*
        * Where a refused widget request is recorded (P2-16). The middleware
        * reports through a hook that swallows a throw and a rejection alike, so

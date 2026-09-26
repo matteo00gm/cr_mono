@@ -333,3 +333,75 @@ test.describe('when a domain stops being verified', () => {
       );
   });
 });
+
+test.describe('when a removed domain is verified again (P4-06)', () => {
+  test.afterEach(async () => {
+    await harness.api.restoreSessions();
+  });
+
+  test('the session that was live when it was removed stays dead', async ({ page }) => {
+    /*
+     * **The one property CORS cannot provide, and the reason the cutoff exists
+     * at all.**
+     *
+     * Removal is already immediate today because the allowlist is uncached — a
+     * removed origin is refused before a token is read. But a seller who
+     * removes an origin and later verifies it again puts it *back* in the
+     * allowlist, and without a cutoff every session that was live at the moment
+     * of removal starts working again. Nothing about CORS notices.
+     *
+     * So this leaves the origin verified throughout and ends the sessions, which
+     * is the only arrangement where the cutoff is the thing under test. The
+     * visitor is holding a token minted before the cutoff; their next question
+     * has to be refused.
+     */
+    await page.goto(harness.verified.origin);
+    await launcher(page).click();
+    await expect(panel(page)).toBeVisible();
+
+    const composer = panel(page).locator('.composer-input');
+
+    /* A live session first, so the refusal below is a change and not the
+     * starting state. */
+    await composer.fill('Cosa mi consigli con una bistecca?');
+    await composer.press('Enter');
+    await expect(panel(page).locator('.chat-log')).toContainText(SCRIPTED_REPLY);
+
+    await harness.api.endSessions();
+
+    await composer.fill('E con il pesce?');
+    await composer.press('Enter');
+
+    /* Told, not spun (§1.3). */
+    await expect(panel(page).locator('.notice-text')).toBeVisible();
+  });
+
+  test('records it as an invalid token rather than a stolen widget', async ({ page }) => {
+    /*
+     * The origin is verified and the key is right — this is a seller ending
+     * their own sessions, not somebody presenting a token at a site it was not
+     * minted for. `UNAUTHORIZED_ORIGIN` would tell an incident review the wrong
+     * story entirely.
+     */
+    await page.goto(harness.verified.origin);
+    await launcher(page).click();
+    await expect(panel(page)).toBeVisible();
+
+    const composer = panel(page).locator('.composer-input');
+
+    await composer.fill('Cosa mi consigli con una bistecca?');
+    await composer.press('Enter');
+    await expect(panel(page).locator('.chat-log')).toContainText(SCRIPTED_REPLY);
+
+    await harness.api.endSessions();
+
+    await composer.fill('E con il pesce?');
+    await composer.press('Enter');
+
+    await expect
+      .poll(async () => await harness.api.securityEvents(), { timeout: 10_000 })
+      .toContainEqual(
+        expect.objectContaining({ type: 'INVALID_TOKEN', origin: harness.verified.origin }),
+      );
+  });
+});

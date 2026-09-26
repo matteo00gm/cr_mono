@@ -113,6 +113,15 @@ const INSERTS: Record<string, (tenantId: string, ctx: SeedContext) => SQL> = {
   token_revocations: (tenantId) =>
     sql`insert into token_revocations (jti, tenant_id, expires_at)
         values (${`jti-${tenantId}`}, ${tenantId}::uuid, '2030-01-01T00:00:00Z')`,
+  /*
+   * P4-06. The origin is per tenant for the reason `import_runs` gives: the
+   * primary key is `(tenant_id, origin)`, so a fixed origin would make B's
+   * attempted write carrying A's id fail on the key rather than on the policy —
+   * and this file would go on passing with the policy removed.
+   */
+  widget_session_cutoffs: (tenantId) =>
+    sql`insert into widget_session_cutoffs (tenant_id, origin)
+        values (${tenantId}::uuid, ${`https://${tenantId}.example`})`,
   outbox: (tenantId) =>
     sql`insert into outbox (tenant_id, aggregate_id, event_type)
         values (${tenantId}::uuid, gen_random_uuid(), 'e')`,

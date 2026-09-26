@@ -82,7 +82,12 @@ interface Harness {
    */
   readonly resolutions: string[];
   /** Changed mid-test, as removing a domain or lapsing a subscription changes it. */
-  readonly state: { resolution: WidgetResolution; readonly revoked: Set<string> };
+  readonly state: {
+    resolution: WidgetResolution;
+    readonly revoked: Set<string>;
+    /** When this origin's sessions were ended, if ever (P4-06). */
+    cutoff: Date | undefined;
+  };
 }
 
 const guarded = async (): Promise<Harness> => {
@@ -90,7 +95,12 @@ const guarded = async (): Promise<Harness> => {
   const keys = await loadWidgetTokenKeys(keysetOf(jwk));
   const rejected: RejectedWidgetToken[] = [];
   const resolutions: string[] = [];
-  const state = { resolution: found() as WidgetResolution, revoked: new Set<string>() };
+  const state = {
+    resolution: found() as WidgetResolution,
+    revoked: new Set<string>(),
+    /* When this origin's sessions were ended, if ever (P4-06). */
+    cutoff: undefined as Date | undefined,
+  };
 
   const app = new Hono<AppEnv>();
   app.use('*', requestContext());
@@ -111,6 +121,7 @@ const guarded = async (): Promise<Harness> => {
     requireWidgetToken({
       loadKeys: () => Promise.resolve(keys),
       isRevoked: (tenantId, jti) => Promise.resolve(tenantId === TENANT && state.revoked.has(jti)),
+      cutoffAt: () => Promise.resolve(state.cutoff),
       onRejected: (event) => {
         rejected.push(event);
         return Promise.resolve();
@@ -479,5 +490,114 @@ describe('the one token that works', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ sessionId: sid });
     expect(harness.rejected).toEqual([]);
+  });
+});
+
+describe('a session whose domain was removed (P4-06)', () => {
+  /*
+   * **Removing a domain has to stop the widget working on it now.** Today CORS
+   * already does that — it resolves the allowlist uncached on every request, so
+   * a removed origin is refused before a token is read. That is a consequence
+   * of P2-07's design rather than a guarantee of this one, and §5.7
+   * contemplates caching the allowlist: the day that cache exists, the
+   * immediacy becomes "within the TTL" and the cutoff is what still works.
+   *
+   * So these cases hold the allowlist resolving — as a cache would — and assert
+   * the token check refuses anyway.
+   */
+  it('is refused even when the allowlist still resolves', async () => {
+    const harness = await guarded();
+    const token = await minted(harness.keys, {}, { mintedAt: new Date(Date.now() - 60_000) });
+
+    harness.state.cutoff = new Date(Date.now() - 30_000);
+
+    const response = await send(harness, { token });
+
+    expect(response.status).toBe(401);
+    expect(harness.rejected.at(-1)?.reason).toBe('origin_removed');
+  });
+
+  it('is told apart from a revoked token in the record', async () => {
+    /*
+     * Two different events: one names a token we revoked, the other is every
+     * session on a domain at once. An incident review reading `security_events`
+     * needs to know which — "one session ended" and "a seller removed a domain"
+     * are very different stories.
+     */
+    const harness = await guarded();
+    const token = await minted(harness.keys, {}, { mintedAt: new Date(Date.now() - 60_000) });
+
+    harness.state.cutoff = new Date(Date.now() - 30_000);
+
+    await send(harness, { token });
+
+    expect(harness.rejected.at(-1)?.reason).not.toBe('revoked');
+  });
+
+  it('cannot be saved by refreshing, because the cutoff reads iat_original', async () => {
+    /*
+     * **The whole reason the comparison is against `iat_original`.** A session
+     * refreshes (P3-21), and every refresh mints a token with a fresh `iat`.
+     * Comparing that would let a session outlive its revocation by doing the
+     * one thing every live session does anyway.
+     *
+     * This token was minted *just now* and its session started before the
+     * cutoff — which is exactly the shape a refreshed token has.
+     */
+    const harness = await guarded();
+    const startedAt = new Date(Date.now() - 600_000);
+    const token = await minted(harness.keys, {
+      iat_original: Math.floor(startedAt.getTime() / 1000),
+    });
+
+    harness.state.cutoff = new Date(Date.now() - 300_000);
+
+    const response = await send(harness, { token });
+
+    expect(response.status).toBe(401);
+    expect(harness.rejected.at(-1)?.reason).toBe('origin_removed');
+  });
+
+  it('survives when its session started after the cutoff', async () => {
+    /*
+     * A seller who removes an origin, re-verifies it, and starts again has
+     * working sessions. The cutoff ends what was live when they removed it, not
+     * what comes after.
+     */
+    const harness = await guarded();
+
+    harness.state.cutoff = new Date(Date.now() - 600_000);
+
+    const token = await minted(harness.keys);
+    const response = await send(harness, { token });
+
+    expect(response.status).toBe(200);
+  });
+
+  it('survives when no domain was ever removed', async () => {
+    const harness = await guarded();
+    const token = await minted(harness.keys);
+
+    harness.state.cutoff = undefined;
+
+    const response = await send(harness, { token });
+
+    expect(response.status).toBe(200);
+  });
+
+  it('is refused by CORS too, which is what makes it immediate today', async () => {
+    /*
+     * The other half, and the half that works right now. With the origin gone
+     * from the allowlist, resolution fails and nothing reaches the token check
+     * at all — no cutoff needed, and no cache in the way yet.
+     */
+    const harness = await guarded();
+    const token = await minted(harness.keys);
+
+    harness.state.resolution = { found: false, reason: 'unknown_key' };
+
+    const response = await send(harness, { token });
+
+    expect(response.status).not.toBe(200);
   });
 });

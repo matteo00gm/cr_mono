@@ -361,3 +361,39 @@ export const readDomainsFor = async (
 
   return [...rows].map((row) => toDomain(row as unknown as DomainSqlRow));
 };
+
+/**
+ * Removes one of this winery's domains (P4-06).
+ *
+ * **A real delete, not a tombstone.** The unique index on `origin` is the
+ * anti-sharing backbone (§3.2), and a row kept to remember the removal would
+ * hold that origin against every other winery for ever — including against the
+ * seller themselves, if they ever want it back.
+ *
+ * The tenant is never named: the policy is what scopes this (P0-19), so an id
+ * belonging to another winery deletes nothing and comes back empty — which is
+ * the same answer as an id that never existed, and what §3.5 wants the caller to
+ * turn into a 404.
+ */
+export const deleteDomain = async (
+  tx: DbTransaction,
+  id: string,
+): Promise<DomainRow | undefined> => {
+  const rows = await tx.execute(sql`
+    DELETE FROM tenant_domains WHERE id = ${id}::uuid RETURNING ${COLUMNS}
+  `);
+
+  const row = [...rows][0] as DomainSqlRow | undefined;
+
+  return row === undefined ? undefined : toDomain(row);
+};
+
+/** How many origins this winery has actually verified. */
+export const countVerifiedDomains = async (tx: DbTransaction): Promise<number> => {
+  const rows = await tx.execute(sql`
+    SELECT count(*)::int AS held FROM tenant_domains WHERE status = 'VERIFIED'
+  `);
+  const row = [...rows][0] as { held?: number } | undefined;
+
+  return row?.held ?? 0;
+};

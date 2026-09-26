@@ -6,6 +6,7 @@ import {
   dnsRefusalMessage,
   InvalidRequestError,
   isOurFault,
+  LAST_DOMAIN_WARNING,
   METHOD_COLUMN,
   NotFoundError,
   ORIGIN_UNAVAILABLE,
@@ -19,8 +20,11 @@ import {
   wellKnownRefusalMessage,
   type VerifyMethod,
 } from '@catalogorosso/core';
-import type { Domain, ProbedDomain } from '@catalogorosso/api-client';
+import type { Domain, DomainRemovedResponse, ProbedDomain } from '@catalogorosso/api-client';
 import {
+  countVerifiedDomains,
+  deleteDomain,
+  endSessionsFor,
   insertDomain,
   insertVerifiedSibling,
   markDomainVerified,
@@ -82,9 +86,17 @@ export interface VerifyDomainResult {
   readonly verifiedOrigins?: readonly ProbedDomain[] | undefined;
 }
 
+export interface RemoveDomainCommand {
+  readonly tenantId: string;
+  readonly domainId: string;
+  /** The seller has read what removing their last verified domain does. */
+  readonly confirmed: boolean;
+}
+
 export interface DomainsPort {
   add(command: AddDomainCommand): Promise<AddDomainResult>;
   verify(command: VerifyDomainCommand): Promise<VerifyDomainResult>;
+  remove(command: RemoveDomainCommand): Promise<DomainRemovedResponse>;
 }
 
 /**
@@ -262,6 +274,66 @@ export const createDomainsPort = ({
     }
 
     return { domain: toResponse(outcome.domain), created: outcome.created };
+  },
+
+  async remove(command) {
+    /*
+     * **One transaction: the delete, the cutoff and the audit row.** A removal
+     * that committed without its cutoff would leave live sessions answering on
+     * an origin the seller can no longer see — which is the failure this row
+     * exists to prevent, arriving by the back door.
+     */
+    const outcome = await withTenant(command.tenantId, async (tx) => {
+      const domain = await readDomainById(tx, command.domainId);
+
+      /* Another winery's id and one that never existed are the same empty
+       * result under RLS, and §3.5 wants the same answer for both. */
+      if (domain === undefined) return { kind: 'missing' } as const;
+
+      /*
+       * **Counted before the delete, and only verified rows count.** A pending
+       * claim is not something a widget is running on, so refusing to remove it
+       * would be a warning about a consequence that does not exist.
+       */
+      const verified = await countVerifiedDomains(tx);
+      const last = domain.status === 'VERIFIED' && verified <= 1;
+
+      if (last && !command.confirmed) return { kind: 'needs-confirmation' } as const;
+
+      const removed = await deleteDomain(tx, command.domainId);
+
+      if (removed === undefined) return { kind: 'missing' } as const;
+
+      /*
+       * **The cutoff outlives the row it came from.** The domain row is deleted
+       * outright — a tombstone would hold the origin against every other winery
+       * for ever (§3.2) — so the thing that ends its sessions has to live
+       * somewhere the delete does not reach.
+       */
+      await endSessionsFor(tx, removed.origin);
+
+      await record(tx, {
+        action: 'domain.removed',
+        target: removed.origin,
+        metadata: { status: removed.status, wasLastVerified: last },
+      });
+
+      return {
+        kind: 'removed',
+        origin: removed.origin,
+        remaining: removed.status === 'VERIFIED' ? verified - 1 : verified,
+      } as const;
+    });
+
+    if (outcome.kind === 'missing') throw new NotFoundError('No such domain.');
+    if (outcome.kind === 'needs-confirmation') throw new ConflictError(LAST_DOMAIN_WARNING);
+
+    return {
+      origin: outcome.origin,
+      removed: true,
+      sessionsEnded: true,
+      verifiedRemaining: outcome.remaining,
+    };
   },
 
   async verify(command) {
@@ -527,4 +599,5 @@ export class DomainsPortNotConfiguredError extends Error {
 export const unconfiguredDomains: DomainsPort = {
   add: () => Promise.reject(new DomainsPortNotConfiguredError()),
   verify: () => Promise.reject(new DomainsPortNotConfiguredError()),
+  remove: () => Promise.reject(new DomainsPortNotConfiguredError()),
 };

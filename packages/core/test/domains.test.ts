@@ -6,6 +6,7 @@ import {
   capFor,
   capMessage,
   DOMAIN_CAPS,
+  LAST_DOMAIN_WARNING,
   METHOD_COLUMN,
   ORIGIN_UNAVAILABLE,
   refusalMessage,
@@ -252,5 +253,28 @@ describe('the other spelling of an origin (P4-05)', () => {
     const www = siblingOrigin(apex, 'winery.com');
 
     expect(siblingOrigin(www ?? '', 'winery.com')).toBe(apex);
+  });
+});
+
+describe('what a seller is told before removing their last domain (P4-06)', () => {
+  it('says what removing it does, in consequences rather than in rules', () => {
+    /*
+     * **A confirmation, not a refusal.** It is their domain and their decision
+     * — what they must not be able to do is make it by accident, and "cannot
+     * remove that domain" tells them neither what would happen nor how to go
+     * ahead.
+     */
+    expect(LAST_DOMAIN_WARNING).toMatch(/only verified domain/iu);
+    expect(LAST_DOMAIN_WARNING).toMatch(/switches the widget off/iu);
+  });
+
+  it('says it happens immediately, because that is the part that surprises people', () => {
+    expect(LAST_DOMAIN_WARNING).toMatch(/immediat/iu);
+  });
+
+  it('says how to go ahead', () => {
+    /* A confirmation that does not say how to confirm is a refusal with extra
+     * steps. */
+    expect(LAST_DOMAIN_WARNING).toMatch(/confirm=true/u);
   });
 });

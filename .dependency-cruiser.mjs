@@ -239,6 +239,15 @@ export default {
           // caller, opening nothing; `products` is tenant-scoped and under
           // policy, and the caller is inside withTenant.
           '|^packages/db/src/embedding-status[.]ts$' +
+          // src/session-cutoffs.ts is exempt from P4-06, and it is two different
+          // shapes in one file. `endSessionsFor` takes the caller's transaction
+          // and opens nothing — the cutoff and the removal it belongs to have to
+          // be one write. `sessionCutoffAt` opens its own, through withTenant
+          // and never a raw connection, because it runs on the widget request
+          // path where there is no caller transaction to join: exactly the shape
+          // `isTokenRevoked` has, for exactly the same reason. Its table carries
+          // the boilerplate tenant policy and no second GUC.
+          '|^packages/db/src/session-cutoffs[.]ts$' +
           // src/domains-write.ts is exempt from P4-01 on products.ts's terms: it
           // writes statements and takes the transaction from its caller, opening
           // nothing. `tenant_domains` carries the boilerplate tenant policy, and

@@ -91,6 +91,9 @@ const appWith = (overrides: Partial<WidgetDependencies> = {}) =>
       ipSecret: randomUUID(),
       tokenKeys: () => Promise.resolve(keys),
       isTokenRevoked: () => Promise.resolve(false),
+      /* No domain removed in these cases (P4-06). The surface fails closed
+       * without this, which is what the guard is for. */
+      sessionCutoffAt: () => Promise.resolve(undefined),
       chat: answering(),
       ...overrides,
     },

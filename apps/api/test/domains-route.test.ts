@@ -7,7 +7,12 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/app.js';
-import type { AddDomainCommand, DomainsPort, VerifyDomainCommand } from '../src/domains.js';
+import type {
+  AddDomainCommand,
+  DomainsPort,
+  RemoveDomainCommand,
+  VerifyDomainCommand,
+} from '../src/domains.js';
 import { fakeAuth, oneMembership, signedIn } from './support/auth.js';
 
 /**
@@ -37,10 +42,19 @@ const verified = {
 };
 
 const checks: VerifyDomainCommand[] = [];
+const removals: RemoveDomainCommand[] = [];
+
+const removed = {
+  origin: 'https://www.winery.com',
+  removed: true as const,
+  sessionsEnded: true as const,
+  verifiedRemaining: 1,
+};
 
 const port = (
   add: DomainsPort['add'],
   verify: DomainsPort['verify'] = () => Promise.resolve(verified),
+  remove: DomainsPort['remove'] = () => Promise.resolve(removed),
 ): DomainsPort => ({
   add: (command) => {
     seen.push(command);
@@ -51,6 +65,11 @@ const port = (
     checks.push(command);
 
     return verify(command);
+  },
+  remove: (command) => {
+    removals.push(command);
+
+    return remove(command);
   },
 });
 
@@ -300,5 +319,77 @@ describe('checking a domain', () => {
     );
 
     expect(response.status).toBe(429);
+  });
+});
+
+describe('removing a domain', () => {
+  const removeWith = (role: 'OWNER' | 'EDITOR', query = '', remove?: DomainsPort['remove']) =>
+    createApp({
+      auth: signedIn(),
+      readMemberships: oneMembership(TENANT, role),
+      domains: port(() => Promise.resolve(created), undefined, remove),
+    }).request(`/v1/dashboard/domains/d1${query}`, { method: 'DELETE' });
+
+  it('answers 200 and says the sessions are over', async () => {
+    removals.length = 0;
+
+    const response = await removeWith('OWNER');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ removed: true, sessionsEnded: true });
+  });
+
+  it('takes the id from the path and the tenant from the membership', async () => {
+    removals.length = 0;
+
+    await removeWith('OWNER');
+
+    expect(removals[0]).toEqual({ tenantId: TENANT, domainId: 'd1', confirmed: false });
+  });
+
+  it('treats a missing confirm as no confirmation', async () => {
+    /* Defaulting the other way would make the one irreversible thing on this
+     * screen the easiest to do by accident. */
+    removals.length = 0;
+
+    await removeWith('OWNER', '?confirm=yes');
+    await removeWith('OWNER', '?confirm=1');
+    await removeWith('OWNER', '?confirm=TRUE');
+
+    expect(removals.every((command) => !command.confirmed)).toBe(true);
+  });
+
+  it('carries an explicit confirmation through', async () => {
+    removals.length = 0;
+
+    await removeWith('OWNER', '?confirm=true');
+
+    expect(removals[0]?.confirmed).toBe(true);
+  });
+
+  it('is closed to an EDITOR', async () => {
+    removals.length = 0;
+
+    const response = await removeWith('EDITOR');
+
+    expect(response.status).toBe(403);
+    expect(removals).toEqual([]);
+  });
+
+  it('answers 404 for a domain that is not this winery', async () => {
+    const response = await removeWith('OWNER', '', () =>
+      Promise.reject(new NotFoundError('No such domain.')),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it('answers 409 when it is the last verified domain', async () => {
+    const response = await removeWith('OWNER', '', () =>
+      Promise.reject(new ConflictError('That is the only verified domain you have.')),
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.text()).toMatch(/only verified domain/iu);
   });
 });
