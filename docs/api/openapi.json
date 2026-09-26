@@ -523,6 +523,31 @@
                         "type": "string",
                         "format": "date-time",
                         "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      },
+                      "previous": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "publicKey": {
+                                "type": "string"
+                              },
+                              "validUntil": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                              }
+                            },
+                            "required": [
+                              "publicKey",
+                              "validUntil"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     },
                     "required": [
@@ -530,7 +555,8 @@
                       "secretKeyPrefix",
                       "secretKeyLast4",
                       "createdAt",
-                      "updatedAt"
+                      "updatedAt",
+                      "previous"
                     ],
                     "additionalProperties": false
                   },
@@ -609,6 +635,31 @@
                         "format": "date-time",
                         "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
                       },
+                      "previous": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "publicKey": {
+                                "type": "string"
+                              },
+                              "validUntil": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                              }
+                            },
+                            "required": [
+                              "publicKey",
+                              "validUntil"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "secretKey": {
                         "type": "string"
                       }
@@ -619,6 +670,7 @@
                       "secretKeyLast4",
                       "createdAt",
                       "updatedAt",
+                      "previous",
                       "secretKey"
                     ],
                     "additionalProperties": false
@@ -630,6 +682,123 @@
                     "createdAt": "2026-09-26T09:00:00.000Z",
                     "updatedAt": "2026-09-26T09:00:00.000Z",
                     "secretKey": "sk_live_…shown once…"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/dashboard/keys/public/rotate": {
+        "post": {
+          "summary": "Replace the public key",
+          "description": "Issues a new public key and keeps the old one resolving for 24 hours, because the old key is in a script tag on the seller's pages until they redeploy — and a window any shorter would break a live storefront the moment the button is pressed. **At most one old key is ever live**: a second rotation ends the first one's grace, since a seller rotates when they think a key has leaked and rotating again must not leave the first leaked key working. The secret key is carried across unchanged; rotating it is its own route. Serialised on the winery's row, so two simultaneous rotations cannot both find the same active key.\n\nRequires the `keys:manage` capability.",
+          "operationId": "postV1DashboardKeysPublicRotate",
+          "x-required-capability": "keys:manage",
+          "responses": {
+            "200": {
+              "description": "Replace the public key",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "publicKey": {
+                        "type": "string"
+                      },
+                      "secretKeyPrefix": {
+                        "type": "string"
+                      },
+                      "secretKeyLast4": {
+                        "type": "string",
+                        "minLength": 4,
+                        "maxLength": 4
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      },
+                      "updatedAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      },
+                      "previous": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "publicKey": {
+                                "type": "string"
+                              },
+                              "validUntil": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                              }
+                            },
+                            "required": [
+                              "publicKey",
+                              "validUntil"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "publicKey",
+                      "secretKeyPrefix",
+                      "secretKeyLast4",
+                      "createdAt",
+                      "updatedAt",
+                      "previous"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "publicKey": "pk_live_…new…",
+                    "secretKeyPrefix": "sk_live_Ab3x",
+                    "secretKeyLast4": "Wq7Z",
+                    "createdAt": "2026-09-26T10:00:00.000Z",
+                    "updatedAt": "2026-09-26T10:00:00.000Z",
+                    "previous": {
+                      "publicKey": "pk_live_…old…",
+                      "validUntil": "2026-09-27T10:00:00.000Z"
+                    }
                   }
                 }
               }
@@ -701,6 +870,31 @@
                         "format": "date-time",
                         "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
                       },
+                      "previous": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "publicKey": {
+                                "type": "string"
+                              },
+                              "validUntil": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                              }
+                            },
+                            "required": [
+                              "publicKey",
+                              "validUntil"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
                       "secretKey": {
                         "type": "string"
                       }
@@ -711,6 +905,7 @@
                       "secretKeyLast4",
                       "createdAt",
                       "updatedAt",
+                      "previous",
                       "secretKey"
                     ],
                     "additionalProperties": false

@@ -213,3 +213,31 @@ export const siblingOrigin = (origin: string, registrableDomain: string): string
 
   return undefined;
 };
+
+/** The characters that end or escape an HTML attribute value. */
+const ATTRIBUTE_ESCAPES: Readonly<Record<string, string>> = {
+  '&': '&amp;',
+  '"': '&quot;',
+  '<': '&lt;',
+  '>': '&gt;',
+};
+
+const attribute = (value: string): string =>
+  value.replace(/[&"<>]/gu, (character) => ATTRIBUTE_ESCAPES[character] ?? character);
+
+/**
+ * The tag a seller pastes into their storefront (P4-08).
+ *
+ * **One definition, so the key shown and the key in the snippet cannot
+ * disagree.** A rotation screen that showed the new key and a snippet built
+ * somewhere else from a stale value would have a seller redeploy the key they
+ * were rotating away from — and find out when the grace window closed.
+ *
+ * `type="module"` because the loader is one (P3-18): a classic script tag
+ * throws on the `import.meta` Vite's preload helper uses. Both values are
+ * attribute-escaped even though a public key is base62: this is markup we tell
+ * somebody to paste into their own site, and it is correct regardless of what
+ * is put in it.
+ */
+export const installSnippet = (publicKey: string, loaderSrc: string): string =>
+  `<script type="module" src="${attribute(loaderSrc)}" data-key="${attribute(publicKey)}" async></script>`;

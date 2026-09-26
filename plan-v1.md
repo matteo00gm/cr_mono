@@ -1376,7 +1376,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-05 | 🔒 Apex + www dual entry | two visible removable entries; probe which responds | P4-02 |
 | ✅ P4-06 | 🔒 Domain removal | immediate effect while uncached; revokes live sessions | P4-01 |
 | ✅ P4-07 | Per-plan domain cap | 1 prod + 1 dev (Cantina) / 2 prod + 2 dev (E-commerce) | P4-01 |
-| P4-08 | 🔒 Public key rotation | 24 h grace, countdown in UI | P0-25 |
+| ✅ P4-08 | 🔒 Public key rotation | 24 h grace, countdown in UI | P0-25 |
 | ✅ P4-09 | 🔒 Secret key create/rotate | SHA-256 (ADR 0025), shown exactly once, prefix+last4 stored | P0-25 |
 | P4-10 | 🔒 Server-minted session endpoint | `sk_` authenticated, the forgery-proof path | P4-09,P2-12 |
 | P4-11 | 🔒 MFA for OWNER + step-up re-auth | on keys, domains, plan, membership changes | P0-45 |
@@ -6499,6 +6499,17 @@ Message names the current plan and the cap, and links to upgrade. Counted per te
 **Tests.** Both keys resolve during grace; only the new one after; the snippet shown contains the new key; `EDITOR` gets 403.
 
 **Files.** `keys.ts`, tests. **~90 lines.**
+
+**As built.** Landed after P4-09, because nothing in production created a key before that row — there was nothing to rotate.
+
+- **The route is `POST /keys/public/rotate`** *(deviation from `/keys/rotate`)*, beside P4-09's `/keys/secret/rotate`. Two keys, two rotations with opposite grace rules; a bare `/keys/rotate` would have to be read to know which it meant.
+- **At most one old key is ever live** *(addition; the row does not say what a second rotation does)*. Rotating again ends the earlier grace immediately. A seller rotates *because* they think a key has leaked, and rotating twice in a day must not leave the first leaked key working beside the second.
+- **Serialised on the winery's own row** *(addition)*. Two simultaneous rotations would otherwise each find the same active key; the second blocks on it, re-checks after the first commits, finds it revoked, updates nothing — and reports that the winery has no keys at all. P4-07's lock, for P4-07's reason.
+- **The secret key is carried across to the new row.** One row holds both keys, and the secret is on the seller's server — rotating the public key must not silently invalidate a secret they did not ask to change. The revoked row keeps its copy of the hash, which is safe only because every secret-key lookup (P4-10) is restricted to `revoked_at IS NULL`; that constraint is written into the statement's comment so P4-10 cannot miss it.
+- **`GET /keys` shows the key in grace with its deadline.** The screen needs the countdown, and the deadline is read with the database clock so what it shows as live is exactly what resolution treats as live.
+- **`installSnippet(publicKey, loaderSrc)`** in `packages/core` *(addition)*: one definition, so the key shown and the key in the paste-this tag cannot disagree — a snippet built elsewhere from a stale value would have a seller redeploy the key they were rotating away from. `type="module"` because the loader is one (P3-18), and both attributes escaped because it is markup we tell somebody to paste into their own site. The dashboard's keys screen, which renders it, is not built yet.
+
+**Verified.** 12 more cases against real Postgres, 8 on the statements, 7 on the port, 4 on the route, 3 on the snippet. **The concurrency test took two rewrites before it could fail**: two concurrent calls passed with the lock removed, as P4-07's first version did; holding the first transaction open *still* passed, because this suite's pool is a single connection — deliberately, to prove tenant context does not survive on a reused connection — so the second transaction could not even begin until the first ended. It now races on its own two-connection pool, and with the lock removed it fails with exactly the predicted symptom: the second rotation finds no active key. A mutation run of 19 mutants killed 19 after three survivors: nothing asserted the new row's tenant came from the GUC; nothing covered a grace that had already ended; and nothing covered two keys in grace at once, which rotation never produces but which the read must still answer correctly.
 
 ---
 

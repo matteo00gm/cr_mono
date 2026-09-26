@@ -2,9 +2,12 @@ import { audit, ConflictError, NotFoundError } from '@catalogorosso/core';
 import {
   insertKeys,
   readActiveKeys,
+  readKeyInGrace,
   replaceSecretKey,
+  rotatePublicKey,
   withTenant,
   type ActiveKeys,
+  type KeyInGrace,
 } from '@catalogorosso/db';
 import {
   hashSecretKey,
@@ -31,6 +34,8 @@ export interface KeysView {
   readonly secretKeyLast4: string;
   readonly createdAt: string;
   readonly updatedAt: string;
+  /** The key rotated away from, while it still resolves (P4-08). */
+  readonly previous: { readonly publicKey: string; readonly validUntil: string } | null;
 }
 
 /** The one response that ever carries a secret key. */
@@ -48,14 +53,19 @@ export interface KeysPort {
   read(tenantId: string): Promise<KeysView>;
   create(tenantId: string): Promise<IssuedKeys>;
   rotateSecret(tenantId: string): Promise<IssuedKeys>;
+  rotatePublic(tenantId: string): Promise<KeysView>;
 }
 
-const view = (keys: ActiveKeys): KeysView => ({
+const view = (keys: ActiveKeys, previous?: KeyInGrace): KeysView => ({
   publicKey: keys.publicKey,
   secretKeyPrefix: keys.secretKeyPrefix,
   secretKeyLast4: keys.secretKeyLast4,
   createdAt: keys.createdAt.toISOString(),
   updatedAt: keys.updatedAt.toISOString(),
+  previous:
+    previous === undefined
+      ? null
+      : { publicKey: previous.publicKey, validUntil: previous.graceUntil.toISOString() },
 });
 
 /** A fresh secret, in the three forms the rest of this file needs. */
@@ -87,11 +97,44 @@ export const createKeysPort = ({
   newPublic = newPublicKey,
 }: KeysDeps = {}): KeysPort => ({
   async read(tenantId) {
-    const keys = await withTenant(tenantId, (tx) => readActiveKeys(tx));
+    const read = await withTenant(tenantId, async (tx) => ({
+      keys: await readActiveKeys(tx),
+      previous: await readKeyInGrace(tx),
+    }));
 
-    if (keys === undefined) throw new NotFoundError('No keys have been issued yet.');
+    if (read.keys === undefined) throw new NotFoundError('No keys have been issued yet.');
 
-    return view(keys);
+    return view(read.keys, read.previous);
+  },
+
+  async rotatePublic(tenantId) {
+    const rotated = await withTenant(tenantId, async (tx) => {
+      const result = await rotatePublicKey(tx, newPublic());
+
+      /*
+       * Both keys named, because the one question an incident review asks of a
+       * rotation is "which key was live when?" — and the old key keeps
+       * resolving for a day, so the answer is not simply "the new one".
+       */
+      if (result !== undefined) {
+        await record(tx, {
+          action: 'keys.public_rotated',
+          target: result.active.publicKey,
+          metadata: {
+            previousPublicKey: result.previous.publicKey,
+            previousValidUntil: result.previous.graceUntil.toISOString(),
+          },
+        });
+      }
+
+      return result;
+    });
+
+    if (rotated === undefined) {
+      throw new NotFoundError('No keys have been issued yet, so there is nothing to rotate.');
+    }
+
+    return view(rotated.active, rotated.previous);
   },
 
   async create(tenantId) {
@@ -181,4 +224,5 @@ export const unconfiguredKeys: KeysPort = {
   read: () => Promise.reject(new KeysPortNotConfiguredError()),
   create: () => Promise.reject(new KeysPortNotConfiguredError()),
   rotateSecret: () => Promise.reject(new KeysPortNotConfiguredError()),
+  rotatePublic: () => Promise.reject(new KeysPortNotConfiguredError()),
 };
