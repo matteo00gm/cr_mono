@@ -12,6 +12,7 @@ import type { ProductsPort } from './products.js';
 import type { RagPort } from './rag.js';
 import { assertEveryRouteDeclared } from './middleware/capability.js';
 import { errorHandler, normaliseThrown, notFoundHandler } from './middleware/error.js';
+import { securityHeaders } from './middleware/security-headers.js';
 import { DASHBOARD_PREFIX, WEBHOOK_PREFIX, WIDGET_PREFIX } from './routes.js';
 import { requestContext } from './middleware/logger.js';
 import { requireOriginSecret } from './middleware/origin-secret.js';
@@ -154,6 +155,12 @@ export const createApp = ({
    * surface-specific, and every request on both surfaces needs it.
    */
   app.use('*', requestContext());
+
+  /*
+   * Directly inside the request context, so the headers land on every response
+   * the app makes — the origin-secret refusal below included (P4-12).
+   */
+  app.use('*', securityHeaders());
 
   /*
    * Second, immediately after the request context and before everything else

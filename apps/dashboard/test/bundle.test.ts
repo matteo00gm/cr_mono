@@ -61,3 +61,38 @@ describe('the dashboard bundle', () => {
     }
   });
 });
+
+describe('the page under a strict CSP (P4-12)', () => {
+  /*
+   * The dashboard's CSP is `script-src 'self'; style-src 'self'` with no
+   * nonce (`infra/headers.ts`), which works only while the page carries no
+   * inline code at all. A Vite plugin or an edit to `index.html` that added
+   * one would ship a page the CSP blanks — so the built page is read here.
+   */
+  const html = (): string => readFileSync(join(DIST, 'index.html'), 'utf8');
+
+  it('has no inline script', () => {
+    const scripts = [...html().matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/giu)];
+
+    expect(scripts.length).toBeGreaterThan(0);
+    for (const [, attributes = '', body = ''] of scripts) {
+      expect(attributes).toMatch(/\bsrc=/u);
+      expect(body.trim()).toBe('');
+    }
+  });
+
+  it('has no inline style, element or attribute', () => {
+    expect(html()).not.toMatch(/<style\b/iu);
+    expect(html()).not.toMatch(/\sstyle=/iu);
+  });
+
+  it('has no inline event handler', () => {
+    expect(html()).not.toMatch(/\son[a-z]+=/iu);
+  });
+
+  it('loads nothing from another origin', () => {
+    for (const [, url = ''] of html().matchAll(/\s(?:src|href)="([^"]+)"/giu)) {
+      expect(url.startsWith('/'), url).toBe(true);
+    }
+  });
+});

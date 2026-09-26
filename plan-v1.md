@@ -1380,7 +1380,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-09 | 🔒 Secret key create/rotate | SHA-256 (ADR 0025), shown exactly once, prefix+last4 stored | P0-25 |
 | ✅ P4-10 | 🔒 Server-minted session endpoint | `sk_` authenticated, the forgery-proof path | P4-09,P2-12 |
 | ✅ P4-11 | 🔒 MFA for OWNER + step-up re-auth | on keys, domains, plan, membership changes | P0-45 |
-| P4-12 | 🔒 Security headers | nonce CSP, HSTS preload, nosniff, referrer, frame-deny | P0-54 |
+| ✅ P4-12 | 🔒 Security headers | nonce CSP, HSTS preload, nosniff, referrer, frame-deny | P0-54 |
 | P4-13 | SST: AWS WAF on CloudFront | managed bot + reputation rules, per-path rate rules | P0-17 |
 | P4-14 | Turnstile hook | per-tenant flag, default off | P2-12 |
 | P4-15 | 🔒 404-not-403 + IDOR matrix | cross-tenant ids return 404 for every endpoint | P0-50 |
@@ -6595,6 +6595,16 @@ Enrolment and disablement both write to `audit_log`, and disabling 2FA is itself
 
 **Files.** `infra/headers.ts`, api middleware, tests. **~90 lines.**
 
+**As built.** Not deployed: the CloudFront policies are synthesised and typechecked against SST's types, and everything else is asserted locally.
+
+- **No nonce, and no `unsafe-inline` either** *(deviation from "nonce-based")*. A nonce is minted per response, and the dashboard is a static SPA CloudFront serves from S3 — nothing runs per response to mint one. It turned out not to need one: Vite emits the bundle as external files, the built `index.html` carries no inline script, style, handler or foreign URL (asserted on the built file), and Preact writes `style={…}` through the CSSOM, which `style-src` does not govern. `script-src 'self'` alone is stricter than a nonce, which admits any inline script that learns it. The policy starts from `default-src 'none'`; `img-src https:` is the one widening, for catalogue images on sellers' own hosts.
+- **The browser test found a real violation on its first run** *(addition)*. It serves the built dashboard under the very string `infra/headers.ts` exports — imported, not copied — and fails on any violation. zod 4 probes `Function('')` to decide whether it may JIT-compile object parsers; under this CSP the probe is refused and zod falls back correctly, but the page would have filed a violation report on every load, and a CSP whose reports are always full is one nobody reads. `zod-config.ts` sets `jitless`, and has to be the entry's **first import**: the probe runs when a schema is constructed, which happens as the API client's modules evaluate, before any code in `main.tsx`. The widget does not use zod. The same suite proves an injected inline script is refused and that a foreign page cannot frame the dashboard.
+- **Two CloudFront policies, because the surfaces want opposite things from framing.** The dashboard's: the CSP, `X-Frame-Options: DENY`, HSTS two years with subdomains and `preload`, `nosniff`, `strict-origin-when-cross-origin`, a `Permissions-Policy` turning off every powerful feature, and `Server` removed. The API's, on every `/v1/*` behaviour: HSTS, `nosniff`, `Server` removed — and **no framing header at all**, because the widget's responses are read by sellers' pages. HSTS `preload` means something only once the custom domain exists (P0-17a).
+- **The API sets its own too** *(addition)*, so what the function answers is right through the Function URL, in `sst dev` and in every test, not only once an edge nobody runs locally has rewritten it. `nosniff` and HSTS on every response; on the dashboard surface only, `X-Frame-Options: DENY` and `default-src 'none'; frame-ancestors 'none'` for JSON nobody should ever render. Set **after `next()`**, so refusals, 404s, unexpected 500s and streams all carry them, and registered directly inside the request context, so the origin-secret refusal does too. A `Response.redirect()` — which Better Auth uses — has immutable headers, so the middleware copies it rather than turning a redirect into a 500.
+- **The seller's directives are recorded against P7-09**, taken from the e2e page that already runs the widget with no `unsafe-inline` and no `unsafe-eval`.
+
+**Verified.** 15 cases on the policies, 11 on the API's headers across surfaces and failure paths, 4 on the built page, 1 on the zod setting, 3 in a real browser. A mutation run of 26 mutants killed 26 — among them, moving the zod setting below the app's imports, which only the browser catches, and registering the middleware below the origin-secret refusal, whose 404 then went out bare.
+
 ---
 
 ### P4-13 · AWS WAF on CloudFront
@@ -7200,6 +7210,8 @@ What remains worth doing is confirming there is no cliff just past the ceiling, 
 **How.** `apps/docs`, published statically. Three pages that actually get read: **Shopify install** (theme extension and script tag, where to find variant ids, cart behaviour), **custom site integration** (the P3-12 adapter contract with working examples, plus the recommended server-minted session flow from P4-10), and **CSP and troubleshooting** (the exact directives a seller needs, why the widget shows nothing, how to read the unauthorized-origin panel). Include the `integrity` attribute for SRI. Write the troubleshooting page from the actual failure modes in this plan — `www` mismatch, unverified domain, disabled tenant, missing variant id — since those are what support will field.
 
 **Files.** `apps/docs/*`. **~200 lines of content.**
+
+**Carried from P4-12 — the directives, already proven.** The widget runs under the e2e suite's `hostile.html`, which carries no `unsafe-inline` and no `unsafe-eval`, so the list is tested rather than guessed. A seller's CSP needs `script-src` to name our CDN (the loader and the lazy bundle), `connect-src` to name the API origin (config, session, chat), and `img-src https:` for the catalogue images on cards. **No `style-src` exception**: the widget styles its shadow root with constructed stylesheets, which `style-src` does not govern. No `frame-src`: the widget is not an iframe.
 
 ---
 

@@ -132,6 +132,9 @@ importers:
       wouter-preact:
         specifier: ^3.10.0
         version: 3.10.0(preact@10.29.8)
+      zod:
+        specifier: ^4.5.4
+        version: 4.5.4
     devDependencies:
       '@preact/preset-vite':
         specifier: ^2.10.6

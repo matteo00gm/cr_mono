@@ -1,3 +1,6 @@
+/* First, before anything that defines a schema: see the module. */
+import './zod-config.js';
+
 import { render } from 'preact';
 
 import { App } from './app.js';
