@@ -6,6 +6,7 @@ import type { MembershipReader } from '@catalogorosso/core';
 import type { AppEnv } from './env.js';
 import type { AuthPort } from './middleware/auth.js';
 import type { DomainsPort } from './domains.js';
+import type { KeysPort } from './keys.js';
 import type { MembersPort } from './members.js';
 import type { ProductsPort } from './products.js';
 import type { RagPort } from './rag.js';
@@ -77,6 +78,9 @@ export interface AppOptions {
    */
   readonly domains?: DomainsPort | undefined;
 
+  /** Keys (P4-09). Optional on the `members` terms. See `src/keys.ts`. */
+  readonly keys?: KeysPort | undefined;
+
   /**
    * The shared secret CloudFront attaches to origin requests (A2).
    *
@@ -130,6 +134,7 @@ export const createApp = ({
   readMemberships,
   members,
   domains,
+  keys,
   products,
   rag,
   originSecret,
@@ -199,7 +204,7 @@ export const createApp = ({
 
   app.route(
     DASHBOARD_PREFIX,
-    createDashboardApp({ auth, readMemberships, members, domains, products, rag }),
+    createDashboardApp({ auth, readMemberships, members, domains, keys, products, rag }),
   );
   app.route(WIDGET_PREFIX, createWidgetApp(widget));
   app.route(WEBHOOK_PREFIX, createWebhookApp({ webhooks, resendWebhookSecret }));

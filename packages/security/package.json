@@ -20,6 +20,10 @@
     "./net": {
       "types": "./dist/net/index.d.ts",
       "default": "./dist/net/index.js"
+    },
+    "./api-keys": {
+      "types": "./dist/api-keys.d.ts",
+      "default": "./dist/api-keys.js"
     }
   },
   "files": [

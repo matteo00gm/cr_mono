@@ -234,6 +234,20 @@ export { readOpenInvitations, revokeInvitation, type PendingInvitation } from '.
  */
 export { endSessionsFor, sessionCutoffAt } from './session-cutoffs.js';
 
+/**
+ * Creating and rotating a winery's keys (P4-09).
+ *
+ * The statements take a hash and a hint, never a secret key: the plaintext is
+ * shown to the seller once, by the caller, and never reaches this package.
+ */
+export {
+  insertKeys,
+  readActiveKeys,
+  replaceSecretKey,
+  type ActiveKeys,
+  type NewKeys,
+} from './widget-keys-write.js';
+
 export {
   countDomains,
   countVerifiedDomains,

@@ -3,6 +3,8 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
+import { insertKeys, readActiveKeys, replaceSecretKey } from '../src/widget-keys-write.js';
+import { withTenant } from '../src/with-tenant.js';
 import { startPostgres } from './support/postgres.js';
 import { createTenant as createScopedTenant } from './support/tenant.js';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
@@ -39,7 +41,7 @@ interface KeyRow {
 }
 
 /**
- * Stands in for the real key minting (P4-07), which hashes with argon2id.
+ * Stands in for the real key minting (P4-09), which hashes with SHA-256 (ADR 0025).
  *
  * SHA-256 here on purpose: this suite is about what the *table* guarantees, and
  * pulling in an argon2 binding to prove a column holds "a hash" would test the
@@ -200,5 +202,180 @@ describe('widget_keys', () => {
       sql`select 1 from widget_keys where tenant_id = ${tenantId}::uuid`,
     );
     expect([...rows]).toHaveLength(0);
+  });
+});
+
+describe('issuing and rotating keys (P4-09)', () => {
+  /*
+   * Against real Postgres because the properties are about what lands in the
+   * columns, and a fake would be asserting itself. The statements are handed a
+   * hash here — which is all they are ever handed — and the assertion is that
+   * nothing else about the secret reached the row.
+   */
+  const secret = (): string => `sk_live_${randomBytes(32).toString('hex').slice(0, 43)}`;
+  const sha = (value: string): string => createHash('sha256').update(value).digest('hex');
+
+  it('stores the hash and the hint, and no column holds the key', async () => {
+    const tenantId = await createTenant(`keys-issue-${randomBytes(3).toString('hex')}`);
+    const key = secret();
+
+    const issued = await withTenant(
+      tenantId,
+      (tx) =>
+        insertKeys(tx, {
+          publicKey: `pk_live_${randomBytes(12).toString('hex')}`,
+          secretKeyHash: sha(key),
+          secretKeyPrefix: key.slice(0, 12),
+          secretKeyLast4: key.slice(-4),
+        }),
+      db,
+    );
+
+    expect(issued?.secretKeyLast4).toBe(key.slice(-4));
+
+    /* Every column of the row, read as the owner would, searched for the key. */
+    const rows = await adminDb.execute(
+      sql`SELECT * FROM widget_keys WHERE tenant_id = ${tenantId}::uuid`,
+    );
+    const everything = JSON.stringify([...rows]);
+
+    expect(everything).not.toContain(key);
+    expect(everything).not.toContain(key.slice(12, 30));
+    expect(everything).toContain(sha(key));
+  });
+
+  it('never selects the hash back out', async () => {
+    /* A hash of a key can be replayed against anything that trusts a hash. It
+     * has no business leaving the database on any path. */
+    const tenantId = await createTenant(`keys-read-${randomBytes(3).toString('hex')}`);
+    const key = secret();
+
+    await withTenant(
+      tenantId,
+      (tx) =>
+        insertKeys(tx, {
+          publicKey: `pk_live_${randomBytes(12).toString('hex')}`,
+          secretKeyHash: sha(key),
+          secretKeyPrefix: key.slice(0, 12),
+          secretKeyLast4: key.slice(-4),
+        }),
+      db,
+    );
+
+    const read = await withTenant(tenantId, (tx) => readActiveKeys(tx), db);
+
+    expect(JSON.stringify(read)).not.toContain(sha(key));
+  });
+
+  it('refuses a second pair rather than replacing the first', async () => {
+    const tenantId = await createTenant(`keys-twice-${randomBytes(3).toString('hex')}`);
+    const make = () =>
+      withTenant(
+        tenantId,
+        (tx) =>
+          insertKeys(tx, {
+            publicKey: `pk_live_${randomBytes(12).toString('hex')}`,
+            secretKeyHash: sha(secret()),
+            secretKeyPrefix: 'sk_live_AAAA',
+            secretKeyLast4: 'ZZZZ',
+          }),
+        db,
+      );
+
+    await expect(make()).resolves.toBeDefined();
+    await expect(make()).resolves.toBeUndefined();
+  });
+
+  it('rotates the secret in place, leaving the public key live', async () => {
+    /*
+     * One row, updated — so the public key on the seller's pages keeps working,
+     * and the old secret's hash is gone the instant this commits. That is the
+     * "no grace" the row asks for.
+     */
+    const tenantId = await createTenant(`keys-rotate-${randomBytes(3).toString('hex')}`);
+    const first = secret();
+    const second = secret();
+    const publicKey = `pk_live_${randomBytes(12).toString('hex')}`;
+
+    await withTenant(
+      tenantId,
+      (tx) =>
+        insertKeys(tx, {
+          publicKey,
+          secretKeyHash: sha(first),
+          secretKeyPrefix: first.slice(0, 12),
+          secretKeyLast4: first.slice(-4),
+        }),
+      db,
+    );
+
+    const rotated = await withTenant(
+      tenantId,
+      (tx) =>
+        replaceSecretKey(tx, {
+          secretKeyHash: sha(second),
+          secretKeyPrefix: second.slice(0, 12),
+          secretKeyLast4: second.slice(-4),
+        }),
+      db,
+    );
+
+    expect(rotated?.publicKey).toBe(publicKey);
+
+    const rows = await adminDb.execute(sql`
+      SELECT secret_key_hash FROM widget_keys WHERE tenant_id = ${tenantId}::uuid
+    `);
+    const hashes = [...rows].map((row) => (row as { secret_key_hash: string }).secret_key_hash);
+
+    expect(hashes).toEqual([sha(second)]);
+    expect(hashes).not.toContain(sha(first));
+  });
+
+  it('rotates nothing for a winery that has no keys', async () => {
+    const tenantId = await createTenant(`keys-none-${randomBytes(3).toString('hex')}`);
+
+    await expect(
+      withTenant(
+        tenantId,
+        (tx) =>
+          replaceSecretKey(tx, {
+            secretKeyHash: sha(secret()),
+            secretKeyPrefix: 'sk_live_AAAA',
+            secretKeyLast4: 'ZZZZ',
+          }),
+        db,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('cannot reach another winery keys', async () => {
+    const owner = await createTenant(`keys-owner-${randomBytes(3).toString('hex')}`);
+    const other = await createTenant(`keys-other-${randomBytes(3).toString('hex')}`);
+
+    await withTenant(
+      owner,
+      (tx) =>
+        insertKeys(tx, {
+          publicKey: `pk_live_${randomBytes(12).toString('hex')}`,
+          secretKeyHash: sha(secret()),
+          secretKeyPrefix: 'sk_live_AAAA',
+          secretKeyLast4: 'ZZZZ',
+        }),
+      db,
+    );
+
+    await expect(withTenant(other, (tx) => readActiveKeys(tx), db)).resolves.toBeUndefined();
+    await expect(
+      withTenant(
+        other,
+        (tx) =>
+          replaceSecretKey(tx, {
+            secretKeyHash: sha(secret()),
+            secretKeyPrefix: 'sk_live_BBBB',
+            secretKeyLast4: 'YYYY',
+          }),
+        db,
+      ),
+    ).resolves.toBeUndefined();
   });
 });

@@ -25,6 +25,7 @@ import {
 } from '@catalogorosso/db';
 
 import { createDomainsPort, type DomainsPort } from './domains.js';
+import { createKeysPort, type KeysPort } from './keys.js';
 import { createMembersPort, type MembersPort } from './members.js';
 import { createProductsPort, type ProductsPort } from './products.js';
 import { createChatPort, type ChatPort } from './chat.js';
@@ -174,6 +175,8 @@ export interface Dependencies {
   readonly members: MembersPort;
   /** Domains (P4-01). */
   readonly domains: DomainsPort;
+  /** Keys (P4-09). */
+  readonly keys: KeysPort;
   /** The catalogue (P1-02). */
   readonly products: ProductsPort;
   /** The retrieval sandbox (P2-37). */
@@ -365,6 +368,10 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
      * *served to* have to be the same set, or a local run adds domains the
      * widget will then refuse.
      */
+    /* Keys (P4-09). No configuration: generation and hashing are local, and
+     * the only thing that could be wrong about them is tested where they live. */
+    keys: createKeysPort(),
+
     domains: createDomainsPort({
       environment: config.stage === 'unknown' ? 'development' : 'production',
       /*

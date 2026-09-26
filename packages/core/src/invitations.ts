@@ -34,9 +34,12 @@ const TOKEN_BYTES = 32;
  * **SHA-256, deliberately not a password KDF.** The token is 32 bytes from a
  * CSPRNG, so there is no dictionary to attack and no low-entropy input to
  * stretch: argon2id would add a hundred milliseconds to every acceptance and
- * buy nothing. That reasoning does *not* transfer to `widget_keys`' secret,
- * which is why that column is argon2id and this one is not — the difference is
- * the entropy of the input, not the sensitivity of the value.
+ * buy nothing.
+ *
+ * This comment used to say the reasoning did not transfer to `widget_keys`'
+ * secret. It does — that key is 32 CSPRNG bytes as well — and ADR 0025 applies
+ * it there too. What decides a KDF is the entropy of the input, not the
+ * sensitivity of the value, and both inputs have the same entropy.
  *
  * Hex rather than base64url so the stored value has one representation. A
  * column that can hold two encodings of the same hash is a column where a

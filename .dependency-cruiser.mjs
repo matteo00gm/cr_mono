@@ -248,6 +248,12 @@ export default {
           // `isTokenRevoked` has, for exactly the same reason. Its table carries
           // the boilerplate tenant policy and no second GUC.
           '|^packages/db/src/session-cutoffs[.]ts$' +
+          // src/widget-keys-write.ts is exempt from P4-09 on products.ts's terms:
+          // it writes statements and takes the transaction from its caller,
+          // opening nothing. `widget_keys` carries the tenant policy with
+          // P2-07's widget-key branch, and every statement here runs inside
+          // withTenant, so only the tenant half of that policy is ever in play.
+          '|^packages/db/src/widget-keys-write[.]ts$' +
           // src/domains-write.ts is exempt from P4-01 on products.ts's terms: it
           // writes statements and takes the transaction from its caller, opening
           // nothing. `tenant_domains` carries the boilerplate tenant policy, and
