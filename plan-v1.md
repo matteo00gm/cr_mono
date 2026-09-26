@@ -515,7 +515,7 @@ Layered defence:
 
 1. **Origin binding.** `pk_` alone authorizes nothing. Every widget request resolves `(pk_, Origin)` and both must agree on one tenant. Browsers set `Origin` on cross-origin requests and page JS cannot override it.
 2. **Origin-bound session tokens.** The minted token carries an `origin` claim; every subsequent call requires `claim.origin === request Origin === a verified origin of the token's tenant`. Lifting a token to another site fails; replaying it from a script with no `Origin` header fails too, because widget tokens require a non-empty matching origin.
-3. **Server-minted sessions (the strong option).** For sellers who want forgery-proof integration, their backend calls `POST /v1/widget/sessions` with the **secret** key `sk_live_…` (server-side only, never in the browser) and passes the resulting token to the page. This is the only path that cannot be spoofed by a page, and it is the recommended integration for proprietary sites and for the top plan tier.
+3. **Server-minted sessions (the strong option).** For sellers who want forgery-proof integration, their backend calls `POST /v1/widget/session/server` *(as built, P4-10)* with the **secret** key `sk_live_…` (server-side only, never in the browser) and the origin the session is for, and passes the resulting token to the page. A request carrying an `Origin` header is refused before the key is read, so a secret pasted into browser code does not work there even before it is rotated. This is the only path that cannot be spoofed by a page, and it is the recommended integration for proprietary sites and for the top plan tier.
 4. **Detection.** A valid `pk_` arriving from an unknown origin is the signature of widget theft. It is logged as `UNAUTHORIZED_ORIGIN`, counted per `(pk_, origin)`, surfaced in the tenant's dashboard, and alerts us above a threshold.
 5. **Blast radius.** Public key rotation is one click with a 24h grace window, so a leaked key is cheap to retire.
 
@@ -1378,7 +1378,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-07 | Per-plan domain cap | 1 prod + 1 dev (Cantina) / 2 prod + 2 dev (E-commerce) | P4-01 |
 | ✅ P4-08 | 🔒 Public key rotation | 24 h grace, countdown in UI | P0-25 |
 | ✅ P4-09 | 🔒 Secret key create/rotate | SHA-256 (ADR 0025), shown exactly once, prefix+last4 stored | P0-25 |
-| P4-10 | 🔒 Server-minted session endpoint | `sk_` authenticated, the forgery-proof path | P4-09,P2-12 |
+| ✅ P4-10 | 🔒 Server-minted session endpoint | `sk_` authenticated, the forgery-proof path | P4-09,P2-12 |
 | P4-11 | 🔒 MFA for OWNER + step-up re-auth | on keys, domains, plan, membership changes | P0-45 |
 | P4-12 | 🔒 Security headers | nonce CSP, HSTS preload, nosniff, referrer, frame-deny | P0-54 |
 | P4-13 | SST: AWS WAF on CloudFront | managed bot + reputation rules, per-path rate rules | P0-17 |
@@ -5109,7 +5109,7 @@ Also supports the §3.2 layer-3 path: if an `Authorization: Bearer sk_live_...` 
 - **`Cache-Control: no-store`**, on top of the `/v1/*` behaviour caching nothing.
 - **`expiresAt` is an ISO instant**, equal to the token's `exp`, whole seconds.
 - **No keyset** answers the session route with a wiring error (500), and `index.ts` warns `widget_token_keys_absent` once per deployed container, on the webhook secret's terms: absent is restrictive, and generating the keyset is operator work. The composition root loads the keyset once per container and keeps a failed load failing.
-- **The `sk_live_` branch is deferred to P4-10**, as the row allows, so there is no flag to leave on. `Authorization` is read only for P2-12a's continuation token; P4-10 tells a secret key apart by its prefix before that.
+- **The `sk_live_` branch is deferred to P4-10**, as the row allows, so there is no flag to leave on. `Authorization` is read only for P2-12a's continuation token. *(P4-10 then took a path of its own, `/session/server`, rather than a branch here — see its as-built note.)*
 - **Open.** The token is verified by nothing yet: P2-13. The attack table is P2-15's.
 
 ---
@@ -6545,6 +6545,18 @@ Message names the current plan and the cap, and links to upgrade. Counted per te
 **Tests.** Valid `sk_` mints a token for a verified origin; an unverified origin in the request is refused; a revoked key is refused; a `pk_` sent as a secret key is refused; the minted token then works from that origin and only that origin.
 
 **Files.** `widget-session.ts` change, tests. **~110 lines.**
+
+**As built.**
+
+- **Its own route, `POST /v1/widget/session/server`** *(deviation from "complete the P2-12 branch")*. The browser mint sits behind the address limit, CORS and the tenant's limits, all written assuming a browser — CORS resolves the tenant from `(pk_, Origin)`, which a server does not send. A branch inside that chain would put a secret-key check between two security middlewares that do not expect one. The new route shares the mint (`mintWidgetSession`) and nothing else, so the token is indistinguishable and every later check — origin binding, revocation, the P4-06 cutoff — applies to it unchanged.
+- **A request carrying an `Origin` is refused, before the key is read** *(addition)*. The row says a server sends no `Origin`; the converse is the useful part. A browser sends one on every cross-origin POST, so its presence means a secret key is in code a browser can read. The refusal (422) tells the seller to rotate, comes before the shape check, and is the same for a real key and an invented one. The route also sends no CORS headers, so in a browser the preflight for `Authorization` fails and the request is never made at all — the e2e suite asserts exactly that.
+- **The seventh RLS scope, `resolveTenantBySecretKey`** *(addition; ADR 0026)*. The key *is* how the tenant is identified, and every table the mint needs is under a forced tenant policy, so a lookup with no context finds nothing. One GUC, `app.secret_key_hash`, and one branch on one table: `widget_keys` admits the single row whose hash matches **and** `revoked_at IS NULL` — load-bearing, because P4-08 carries the hash onto the new row and the revoked row keeps its copy through the grace window. Having read that row, the scope clears the secret GUC and sets `app.tenant_id` in one statement, so everything after is an ordinary tenant read and no other table needed a branch. READ ONLY, refused inside `withTenant`, WITH CHECK tenant-only.
+- **A partial unique index on the active secret hash** (0048). The lookup needs an index, and a unique one: two active rows with one hash would authenticate a key as whichever tenant `LIMIT 1` returned. Partial for the same rotation reason.
+- **The order of the checks is the design**: no `Origin`; the key's shape (a `pk_` or a malformed header costs no hash and no query); the key by its SHA-256; the key's own rate limit, only once it is known whose it is (an unknown key spends no bucket that would belong to nobody); the body, strict, carrying the origin and nothing else; the origin, exact equality against the verified set after normalisation with the stage's environment, as the browser path does. Unknown, revoked and rotated-away keys all get one 401. An unverified origin gets a 403 that names the problem — unlike the browser path, the caller holds the secret, so naming it leaks nothing they do not already have.
+- **Two limits.** 600 sessions a minute per key, generous because a real storefront mints one per page view from a single backend — the per-address widget limits assume a visitor and would throttle a busy shop into failing. And 1,200 a minute per address, counted before anything else (CLAUDE.md's widget invariant), because a well-formed secret costs an indexed lookup whether or not it is real. What bounds the *cost* of a leaked key minting in a loop is the plan cap (P2-36), which every chat still spends.
+- **The dashboard warning is deferred with the keys screen**, which P4-08 and P4-09 also left unbuilt. The route's own OpenAPI description carries the "never in browser code" warning, and P7-09's integration docs carry the flow.
+
+**Verified.** 32 cases on the mint, 11 on the scope's mechanics, 14 on the scope against real Postgres, 6 on the route, 4 in a real browser. **The Postgres suite needed a second connection before it could fail**: seeding goes through `createTenant`, which sets `app.tenant_id` at session level, and a resolution on that connection found its key through the *tenant* branch — every test would have passed with the new branch deleted. The browser test for the binding verifies both origins first, because from an unverified origin CORS refuses before the token's claim is read and the test would pass without the binding being checked. A mutation run of 27 mutants — the scope, the policy, the index, every check in the mint and the route's guards — killed 27. One case was added first: nothing asserted that the mint normalises with the stage's environment, so a mint that treated a local stack as production would have gone unnoticed until somebody ran one.
 
 ---
 

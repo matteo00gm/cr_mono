@@ -337,6 +337,20 @@
       "when": 1788654188582,
       "tag": "0047_session_cutoffs_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1788654188583,
+      "tag": "0048_secret_key_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1788654188584,
+      "tag": "0049_secret_key_rls",
+      "breakpoints": true
     }
   ]
 }

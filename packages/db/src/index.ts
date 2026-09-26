@@ -235,6 +235,19 @@ export { readOpenInvitations, revokeInvitation, type PendingInvitation } from '.
 export { endSessionsFor, sessionCutoffAt } from './session-cutoffs.js';
 
 /**
+ * The seventh RLS scope (P4-10, ADR 0026): a server finds its tenant from a
+ * secret key. It admits one active key row, then hands over to an ordinary
+ * tenant scope in the same read-only transaction.
+ */
+export {
+  InvalidSecretKeyScopeError,
+  NestedSecretKeyContextError,
+  resolveTenantBySecretKey,
+  SECRET_KEY_GUC,
+  type SecretKeyTenant,
+} from './with-secret-key.js';
+
+/**
  * Creating and rotating a winery's keys (P4-09).
  *
  * The statements take a hash and a hint, never a secret key: the plaintext is

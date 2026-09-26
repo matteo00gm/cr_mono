@@ -18,6 +18,7 @@ import {
   insertSecurityEvent,
   isSuppressed,
   isTokenRevoked,
+  resolveTenantBySecretKey,
   sessionCutoffAt,
   readMembershipsForUser,
   resolveTenantByKeyAndOrigin,
@@ -442,6 +443,11 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
        * wiring bug rather than a configuration anybody should choose.
        */
       sessionCutoffAt,
+      /*
+       * The server-to-server mint (P4-10). Supplied unconditionally: without it
+       * the route refuses every key, which is safe and useless.
+       */
+      resolveSecretKey: (hash: string) => resolveTenantBySecretKey(hash),
       /*
        * Where a refused widget request is recorded (P2-16). The middleware
        * reports through a hook that swallows a throw and a rejection alike, so

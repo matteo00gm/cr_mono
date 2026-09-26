@@ -49,9 +49,11 @@ patch will not, because the ORM's own documentation shows the forbidden form.
   which runs before a tenant is known (P0-45). Everything else that looks like
   an exception is a second _scope_, not an escape from scoping: `withUser()`
   (P0-47), `withInvitation()` (P0-51), `withOutbox()` (P1-31), the read-only
-  `withWidgetKey()` (P2-07) and `withLapsedRevocations()` (P2-14), which reaches
-  only revocations past their window, each set a different GUC and read under a
-  policy that admits it. A new one of those is a design change with its own ADR
+  `withWidgetKey()` (P2-07), `withLapsedRevocations()` (P2-14), which reaches
+  only revocations past their window, and the read-only
+  `resolveTenantBySecretKey()` (P4-10), which admits one active key row and then
+  hands over to a tenant scope, each set a different GUC and read under a policy
+  that admits it. A new one of those is a design change with its own ADR
   — every GUC is another way a row becomes visible.
 - Three tables carry **no `tenant_id` and no policy on purpose**, and are
   reached on connections that set nothing: `rate_limit_buckets` (P0-34),

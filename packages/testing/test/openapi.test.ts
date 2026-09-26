@@ -136,6 +136,12 @@ describe('every operation', () => {
        * is why its set is the union of the other two plus that.
        */
       'POST /v1/widget/chat': ['200', '401', '403', '422', '429'],
+      /*
+       * The server mint (P4-10) gives chat's four for its own reasons: a secret
+       * key refused (401), an origin not verified (403), a body naming none or a
+       * request carrying an Origin — a secret key in a browser (422).
+       */
+      'POST /v1/widget/session/server': ['200', '401', '403', '422', '429'],
     });
   });
 

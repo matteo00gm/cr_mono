@@ -248,6 +248,12 @@ export default {
           // `isTokenRevoked` has, for exactly the same reason. Its table carries
           // the boilerplate tenant policy and no second GUC.
           '|^packages/db/src/session-cutoffs[.]ts$' +
+          // src/with-secret-key.ts is exempt from P4-10, and it is the seventh
+          // RLS context — a design change, recorded in ADR 0026. It opens a
+          // READ ONLY transaction, admits one active widget_keys row by the hash
+          // of a presented secret, then clears that GUC and sets the tenant from
+          // the row, so the rest of the transaction is an ordinary tenant scope.
+          '|^packages/db/src/with-secret-key[.]ts$' +
           // src/widget-keys-write.ts is exempt from P4-09 on products.ts's terms:
           // it writes statements and takes the transaction from its caller,
           // opening nothing. `widget_keys` carries the tenant policy with

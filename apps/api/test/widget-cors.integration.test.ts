@@ -54,7 +54,7 @@ const seedTenant = async (slug: string): Promise<SeededTenant> => {
   `);
   await harness.adminDb.execute(sql`
     insert into widget_keys (tenant_id, public_key, secret_key_hash, secret_key_prefix, secret_key_last4)
-    values (${tenantId}::uuid, ${key}, 'argon2id-placeholder', 'sk_test_', 'abcd')
+    values (${tenantId}::uuid, ${key}, md5(random()::text), 'sk_test_', 'abcd')
   `);
   await harness.adminDb.execute(sql`
     insert into tenant_domains (tenant_id, origin, registrable_domain, status)

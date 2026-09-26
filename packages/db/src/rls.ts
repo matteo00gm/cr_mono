@@ -113,6 +113,12 @@ const WIDGET_ORIGIN = "nullif(current_setting('app.widget_origin', true), '')";
 /** The tenant that owns the presented key, read under `widget_keys`' own policy. */
 const WIDGET_KEY_TENANT = `SELECT k.tenant_id FROM widget_keys k WHERE k.public_key = ${WIDGET_KEY}`;
 
+/**
+ * The secret-key scope's one GUC (P4-10, ADR 0026). Set only by
+ * `resolveTenantBySecretKey`, which clears it again as soon as it has read the key's row.
+ */
+const SECRET_KEY_HASH = "nullif(current_setting('app.secret_key_hash', true), '')";
+
 export interface RlsPolicy {
   /** Table the policy is attached to. */
   readonly table: string;
@@ -172,6 +178,7 @@ const HEADERS: Readonly<Record<string, string>> = {
   '0042_widget_key_rls': 'The widget resolves its tenant from a key and an origin (P2-07).',
   '0043_revocation_sweep_rls': 'The sweep deletes lapsed token revocations across tenants (P2-14).',
   '0047_session_cutoffs_rls': 'Row-level security for session cutoffs (P4-06).',
+  '0049_secret_key_rls': 'A server finds its tenant from a secret key (P4-10).',
 };
 
 /** Every migration file this list generates, in first-appearance order. */
@@ -354,6 +361,22 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
       'tenant from (pk_, Origin), so it is read inside an ordinary withTenant, exactly as ' +
       'isTokenRevoked reads token_revocations two checks earlier on the same request. No new ' +
       'GUC, no seventh context: the one thing a new table here could have cost, and did not.',
+  },
+  {
+    table: 'widget_keys',
+    migration: '0049_secret_key_rls',
+    supersedes: true,
+    using: `tenant_id = ${TENANT}
+    OR public_key = ${WIDGET_KEY}
+    OR (secret_key_hash = ${SECRET_KEY_HASH} AND revoked_at IS NULL)`,
+    withCheck: `tenant_id = ${TENANT}`,
+    note:
+      'A server presenting a secret key has no tenant yet, so the boilerplate returns zero rows on ' +
+      'the one path that must find one (P4-10, ADR 0026). The branch admits exactly the active row ' +
+      'whose hash is the one presented — and revoked_at IS NULL is load-bearing, because a public ' +
+      'key rotation carries the hash onto the new row and the revoked one keeps its copy through ' +
+      'the grace window (P4-08). resolveTenantBySecretKey clears the GUC as soon as it has read the row and ' +
+      'continues as an ordinary tenant scope, READ ONLY. WITH CHECK stays tenant-only.',
   },
 ];
 
