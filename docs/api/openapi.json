@@ -3961,7 +3961,7 @@
               }
             },
             "401": {
-              "description": "The token sent to continue a session belongs to another site or another tenant, or was revoked. The same answer whatever the reason; mint again without it to start a new session.",
+              "description": "The token sent to continue a session belongs to another site or another tenant, or was revoked — or, on the server mint, the secret key is unknown, revoked or rotated away. The same answer whatever the reason, so no key can be told apart from another.",
               "content": {
                 "application/json": {
                   "example": {
@@ -3989,7 +3989,7 @@
               }
             },
             "422": {
-              "description": "The body did not match what the route accepts. Chat is the only widget route with one, and it reads nothing but the message: the tenant, the Origin and the session all come from the key, the Origin and the token.",
+              "description": "The body did not match what the route accepts. Chat reads nothing but the message, and the server mint nothing but the origin. The server mint also answers this to any request carrying an Origin header, because a browser sending one means a secret key is in code a browser can read.",
               "content": {
                 "application/json": {
                   "example": {
@@ -4178,7 +4178,7 @@
               }
             },
             "401": {
-              "description": "The token sent to continue a session belongs to another site or another tenant, or was revoked. The same answer whatever the reason; mint again without it to start a new session.",
+              "description": "The token sent to continue a session belongs to another site or another tenant, or was revoked — or, on the server mint, the secret key is unknown, revoked or rotated away. The same answer whatever the reason, so no key can be told apart from another.",
               "content": {
                 "application/json": {
                   "example": {
@@ -4199,6 +4199,101 @@
                     "error": {
                       "code": "forbidden",
                       "message": "This widget is not available on this site.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "429": {
+              "description": "A rate limit or the month refused the request. `Retry-After` says when to try again; a month says nothing about the plan, which is the seller business rather than the visitor.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "rate_limited",
+                      "message": "Too many requests. Try again shortly.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/widget/session/server": {
+        "post": {
+          "summary": "Mint a session from the seller's own server",
+          "description": "**For a server, never a browser.** Send `Authorization: Bearer sk_live_…` and a body naming the origin the session is for. A request carrying an `Origin` header is refused before the key is examined, because a browser sending one means the secret key is in code a browser can read — rotate it. The key is found by its SHA-256 (ADR 0025) under the seventh RLS scope (ADR 0026); unknown, revoked and rotated-away keys all get the same 401. The origin must be one the winery has verified, compared exactly after normalisation. The token that comes back is the same kind the browser path mints and works from that origin and no other. No CORS headers: nothing in a browser can read the answer.\n\nNo capability required. Authenticated by the secret key it carries rather than by a session, because this is where a session comes from. The key is the seller's server proving it is the seller (§3.2 layer 3), and it is verified before anything else is read.",
+          "operationId": "postV1WidgetSessionServer",
+          "responses": {
+            "200": {
+              "description": "Mint a session from the seller's own server",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "token": {
+                        "type": "string"
+                      },
+                      "expiresAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      }
+                    },
+                    "required": [
+                      "token",
+                      "expiresAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "token": "eyJ…",
+                    "expiresAt": "2026-09-26T10:15:00.000Z"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The token sent to continue a session belongs to another site or another tenant, or was revoked — or, on the server mint, the secret key is unknown, revoked or rotated away. The same answer whatever the reason, so no key can be told apart from another.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "unauthenticated",
+                      "message": "This session is no longer valid. Start a new one.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The key and the request's Origin do not belong to one tenant. The same answer whatever the reason, and it carries no CORS headers, so a browser script cannot read it.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This widget is not available on this site.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "The body did not match what the route accepts. Chat reads nothing but the message, and the server mint nothing but the origin. The server mint also answers this to any request carrying an Origin header, because a browser sending one means a secret key is in code a browser can read.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "invalid_request",
+                      "message": "Send a JSON body with a message.",
                       "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
                     }
                   }

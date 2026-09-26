@@ -73,7 +73,7 @@ const INSERTS: Record<string, (tenantId: string, ctx: SeedContext) => SQL> = {
         values (${tenantId}::uuid, ${`https://${tenantId.slice(0, 8)}.example`}, 'example.com')`,
   widget_keys: (tenantId) =>
     sql`insert into widget_keys (tenant_id, public_key, secret_key_hash, secret_key_prefix, secret_key_last4)
-        values (${tenantId}::uuid, ${`pk_${tenantId}`}, 'hash', 'sk_live', 'abcd')`,
+        values (${tenantId}::uuid, ${`pk_${tenantId}`}, md5(random()::text), 'sk_live', 'abcd')`,
   products: (tenantId) =>
     sql`insert into products (tenant_id, sku, name, wine_type, price_cents, currency, stock_status)
         values (${tenantId}::uuid, ${`sku-${tenantId}`}, 'Barolo', 'RED', 100, 'EUR', 'IN_STOCK')`,

@@ -6,9 +6,11 @@ import {
   insertSecurityEvent,
   isTokenRevoked,
   resolveTenantByKeyAndOrigin,
+  resolveTenantBySecretKey,
   sessionCutoffAt,
 } from '@catalogorosso/db';
 import { memoryRateLimiter } from '@catalogorosso/security';
+import { hashSecretKey, newSecretKey } from '@catalogorosso/security/api-keys';
 import { generateWidgetTokenKey, loadWidgetTokenKeys } from '@catalogorosso/security/tokens';
 import {
   bundleDirectory,
@@ -33,6 +35,8 @@ import {
 
 export interface Harness {
   readonly api: E2eApi;
+  /** The winery's secret key, as its server holds it (P4-10). Generated per run. */
+  readonly secretKey: string;
   readonly verified: HostPages;
   readonly unverified: HostPages;
   readonly close: () => Promise<void>;
@@ -49,7 +53,11 @@ export const start = async (): Promise<Harness> => {
     JSON.stringify({ keys: [await generateWidgetTokenKey('e2e')] }),
   );
 
+  /* Generated per run, never written down (P0-56). Only its hash reaches the database. */
+  const secretKey = newSecretKey();
+
   const api = await startE2eApi({
+    secretKeyHash: hashSecretKey(secretKey),
     createApp: (dependencies) =>
       createApp(dependencies as Parameters<typeof createApp>[0]) as unknown as {
         fetch: (request: Request) => Promise<Response>;
@@ -90,6 +98,8 @@ export const start = async (): Promise<Harness> => {
          * and where a hand-rolled stub would have hidden it.
          */
         sessionCutoffAt,
+        /* Real (P4-10): the seventh RLS scope, under the role a deployment runs as. */
+        resolveSecretKey: resolveTenantBySecretKey,
         /*
          * The real recorder (P2-16), so the row a test reads back is the row a
          * deployment would write — including its type, which is the part a
@@ -146,6 +156,7 @@ export const start = async (): Promise<Harness> => {
 
   return {
     api,
+    secretKey,
     verified,
     unverified,
     close: async () => {

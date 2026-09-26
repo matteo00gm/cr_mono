@@ -70,7 +70,7 @@ const seedTenant = async (
         await tx.execute(sql`
           INSERT INTO widget_keys
             (tenant_id, public_key, secret_key_hash, secret_key_prefix, secret_key_last4, revoked_at, grace_until)
-          VALUES (${id}::uuid, ${key}, 'argon2id-placeholder', 'sk_test_', 'abcd', ${revokedAt}, ${graceUntil})
+          VALUES (${id}::uuid, ${key}, md5(random()::text), 'sk_test_', 'abcd', ${revokedAt}, ${graceUntil})
         `);
       }
 

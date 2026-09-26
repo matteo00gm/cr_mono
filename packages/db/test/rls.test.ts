@@ -221,7 +221,11 @@ describe('rls migration', () => {
        * GUC in WITH CHECK would let a write name any tenant the branch admits.
        */
       for (const table of WIDGET_TABLES) {
-        expect(current(table)?.migration, table).toBe('0042_widget_key_rls');
+        /* `widget_keys` was superseded again by P4-10's secret-key branch;
+         * the widget branch is still in it and must still be read-only. */
+        expect(current(table)?.migration, table).toBe(
+          table === 'widget_keys' ? '0049_secret_key_rls' : '0042_widget_key_rls',
+        );
         expect(current(table)?.using, table).toContain('app.widget_');
         expect(current(table)?.withCheck, table).not.toContain('app.widget_');
         expect(current(table)?.withCheck, table).toContain("current_setting('app.tenant_id'");
@@ -261,5 +265,46 @@ describe('rls migration', () => {
       expect(down).not.toContain('app.widget_');
       expect(down).not.toContain('DISABLE ROW LEVEL SECURITY');
     });
+  });
+});
+
+describe('the secret-key scope (P4-10, ADR 0026)', () => {
+  const keys = (): { using: string; withCheck: string } => {
+    const policy = [...RLS_POLICIES].reverse().find((entry) => entry.table === 'widget_keys');
+
+    return { using: policy?.using ?? '', withCheck: policy?.withCheck ?? policy?.using ?? '' };
+  };
+
+  it('admits a key row by its secret hash', () => {
+    expect(keys().using).toContain("current_setting('app.secret_key_hash'");
+  });
+
+  it('admits only the active row, never one rotated away from', () => {
+    /*
+     * **Load-bearing.** A public-key rotation carries the secret hash onto the
+     * new row and the revoked row keeps its copy through the grace window
+     * (P4-08). Without this clause, a secret would still answer on a row that
+     * has stopped being the key.
+     */
+    expect(keys().using).toMatch(
+      /secret_key_hash = nullif\(current_setting\('app\.secret_key_hash', true\), ''\) AND revoked_at IS NULL/u,
+    );
+  });
+
+  it('keeps the secret branch out of WITH CHECK', () => {
+    /* The scope buys a read of one row. A secret GUC in WITH CHECK would let a
+     * write name the tenant the branch admits. */
+    expect(keys().withCheck).not.toContain('app.secret_key_hash');
+    expect(keys().withCheck).toContain("current_setting('app.tenant_id'");
+  });
+
+  it('adds a branch to widget_keys and to no other table', () => {
+    /* It finds the tenant and hands over to the ordinary tenant policy. A
+     * second table with a secret branch would be a second place it could reach. */
+    const others = RLS_POLICIES.filter(
+      (entry) => entry.table !== 'widget_keys' && entry.using.includes('app.secret_key_hash'),
+    );
+
+    expect(others).toEqual([]);
   });
 });

@@ -152,3 +152,44 @@ export const limitUnresolvedWidgetRequest =
 
     await next();
   };
+
+/**
+ * How many server-to-server mint attempts one address may make per minute
+ * (P4-10), counted before any key is looked up.
+ *
+ * **CLAUDE.md's widget invariant, on the one widget route with no browser.** A
+ * well-formed secret key costs an indexed lookup whether or not it is real, so
+ * an address inventing them would get a free query each — and that is exactly
+ * what counting the address first exists to prevent.
+ *
+ * Its own bucket and its own number rather than `unresolvedPerMinute`: that
+ * limit assumes a visitor, and the caller here is a seller's backend minting
+ * one session per page view from a single address. At 120 a minute a busy shop
+ * would be refused; at twice the per-key limit a legitimate server never meets
+ * this, and an address inventing keys is still held to twenty lookups a second.
+ */
+export const SERVER_SESSION_ADDRESS_PER_MINUTE = 1200;
+
+export const limitServerSessionAddress =
+  ({
+    limiter,
+    ipSecret,
+    now = Date.now,
+  }: Omit<UnresolvedLimitOptions, 'limits'>): MiddlewareHandler<AppEnv> =>
+  async (c, next) => {
+    const bucket = visitorBucket(c.req.header('x-forwarded-for'), ipSecret, now());
+    const result = await limiter.check([
+      {
+        key: `ip:${bucket}:server-session`,
+        limit: SERVER_SESSION_ADDRESS_PER_MINUTE,
+        windowSec: 60,
+      },
+    ]);
+
+    if (!result.allowed) {
+      c.header('Retry-After', String(result.retryAfterSec ?? 1));
+      throw new RateLimitedError('Too many requests. Try again shortly.');
+    }
+
+    await next();
+  };

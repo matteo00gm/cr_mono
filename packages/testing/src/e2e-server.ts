@@ -56,6 +56,16 @@ export interface E2eApi {
   readonly endSessions: () => Promise<void>;
   /** Puts the cutoff back in the past, so later tests get live sessions again. */
   readonly restoreSessions: () => Promise<void>;
+  /**
+   * Verifies `:4002` as well, so the winery has two origins (P4-10).
+   *
+   * A token bound to one origin and presented from an unverified one is refused
+   * by CORS before its binding is ever read. Only with *both* origins verified
+   * is the binding the thing under test.
+   */
+  readonly verifySecondOrigin: () => Promise<void>;
+  /** Puts `:4002` back to pending. */
+  readonly unverifySecondOrigin: () => Promise<void>;
   /** Every `security_events` row of a kind, for the assertions P3-18 makes server-side. */
   readonly securityEvents: () => Promise<{ type: string; origin: string | null }[]>;
   readonly close: () => Promise<void>;
@@ -128,6 +138,13 @@ export interface E2eApiOptions {
   readonly createApp: (dependencies: unknown) => { fetch: (request: Request) => Promise<Response> };
   /** The widget dependencies, assembled by the caller so this package imports no app code. */
   readonly dependenciesFor: (seed: E2eSeed) => unknown;
+  /**
+   * The SHA-256 of a secret key the caller generated, for the server mint
+   * (P4-10). The caller holds the key; this package never sees one, so nothing
+   * key-shaped is built or kept here (P0-56). Absent, the row carries a hash no
+   * key produces.
+   */
+  readonly secretKeyHash?: string | undefined;
 }
 
 export interface E2eSeed {
@@ -146,6 +163,7 @@ export interface E2eSeed {
 export const startE2eApi = async ({
   createApp,
   dependenciesFor,
+  secretKeyHash,
 }: E2eApiOptions): Promise<E2eApi> => {
   const database = await startTestDatabase();
 
@@ -187,7 +205,10 @@ export const startE2eApi = async ({
 
   await admin.execute(sql`
     INSERT INTO widget_keys (tenant_id, public_key, secret_key_hash, secret_key_prefix, secret_key_last4)
-    VALUES (${tenantId}, ${WIDGET_KEY}, 'not-a-real-hash', 'sk_test_', 'e2e0')
+    VALUES (
+      ${tenantId}, ${WIDGET_KEY}, coalesce(${secretKeyHash ?? null}, md5(random()::text)),
+      'sk_test_', 'e2e0'
+    )
   `);
 
   const product = makeProduct(0, {
@@ -252,6 +273,20 @@ export const startE2eApi = async ({
       await admin.execute(sql`
         DELETE FROM widget_session_cutoffs
         WHERE tenant_id = ${tenantId} AND origin = ${VERIFIED_ORIGIN}
+      `);
+    },
+
+    verifySecondOrigin: async () => {
+      await admin.execute(sql`
+        UPDATE tenant_domains SET status = 'VERIFIED', verified_at = now()
+        WHERE tenant_id = ${tenantId} AND origin = ${UNVERIFIED_ORIGIN}
+      `);
+    },
+
+    unverifySecondOrigin: async () => {
+      await admin.execute(sql`
+        UPDATE tenant_domains SET status = 'PENDING', verified_at = NULL
+        WHERE tenant_id = ${tenantId} AND origin = ${UNVERIFIED_ORIGIN}
       `);
     },
 

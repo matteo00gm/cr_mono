@@ -347,6 +347,13 @@ describe('wiring', () => {
        * others have no way to give.
        */
       [`POST ${WIDGET_PREFIX}/chat`]: [401, 403, 422, 429],
+      /*
+       * The server mint (P4-10) gives chat's four, for different reasons: 401 for
+       * a secret key it will not accept, 403 for an origin the winery has not
+       * verified, and 422 both for a body that names no origin and for a request
+       * that carries an `Origin` at all — a secret key in a browser.
+       */
+      [`POST ${WIDGET_PREFIX}/session/server`]: [401, 403, 422, 429],
     });
   });
 });

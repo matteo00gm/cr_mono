@@ -31,7 +31,12 @@ import { requireWidgetToken, type RejectedWidgetToken } from '../middleware/widg
 import { routeKey } from '../middleware/capability.js';
 import { widgetCors, type RejectedWidgetRequest, type WidgetResolver } from '../middleware/cors.js';
 import { clientIp, logger } from '../middleware/logger.js';
-import { limitUnresolvedWidgetRequest, limitWidgetRequest } from '../middleware/rate-limit.js';
+import {
+  limitServerSessionAddress,
+  limitUnresolvedWidgetRequest,
+  limitWidgetRequest,
+} from '../middleware/rate-limit.js';
+import { mintServerSession, type ServerSessionDeps } from '../server-session.js';
 import { WIDGET_PREFIX } from '../routes.js';
 import { widgetConfigFor } from '../widget-config.js';
 import { mintWidgetSession } from '../widget-session.js';
@@ -97,6 +102,13 @@ export interface WidgetDependencies {
    * ask has nothing to fail closed on.
    */
   readonly sessionCutoffAt?: SessionCutoffCheck | undefined;
+
+  /**
+   * Finds a tenant from a secret key's hash — `resolveTenantBySecretKey`
+   * (P4-10). Absent, the server path refuses every key: a verifier that cannot
+   * look a key up has nothing to accept it against.
+   */
+  readonly resolveSecretKey?: ServerSessionDeps['resolve'] | undefined;
   /**
    * Which stage this is, as the metric's one dimension (P2-28).
    *
@@ -153,6 +165,17 @@ export const WIDGET_CONFIG_CACHE_CONTROL = 'public, max-age=60';
 
 const CONFIG_PATH = '/config';
 const SESSION_PATH = '/session';
+
+/**
+ * Where a seller's server mints a session with its secret key (P4-10).
+ *
+ * Its own path rather than a branch on `/session`, which §3.4 first sketched.
+ * The browser mint sits behind CORS, and a server sends no `Origin` — so the
+ * two paths need different guard chains, and a branch inside one chain would
+ * put a secret-key check between two security middlewares that were written
+ * assuming a browser.
+ */
+const SERVER_SESSION_PATH = '/session/server';
 const CHAT_PATH = '/chat';
 
 /**
@@ -310,9 +333,50 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
     app.on(['POST', 'OPTIONS'], CHAT_PATH, () => {
       throw new WidgetNotConfiguredError();
     });
+    app.post(SERVER_SESSION_PATH, () => {
+      throw new WidgetNotConfiguredError();
+    });
 
     return app;
   }
+
+  /**
+   * A session minted by the seller's own server (P4-10, §3.2 layer 3).
+   *
+   * **No CORS, deliberately and in both directions.** The route sends no CORS
+   * headers, so no browser can read its answer; and it refuses any request that
+   * *carries* an `Origin`, before looking at the key, because a browser sending
+   * one means a secret key is in code a browser can read. A leaked secret is
+   * then unusable from a page even before the seller rotates it.
+   *
+   * The address is still counted first (CLAUDE.md's widget invariant): a
+   * well-formed secret key costs an indexed lookup whether or not it is real.
+   */
+  app.post(
+    SERVER_SESSION_PATH,
+    limitServerSessionAddress({ limiter: widget.limiter, ipSecret: widget.ipSecret }),
+    async (c) => {
+      const session = await mintServerSession(
+        {
+          originHeader: c.req.header('origin'),
+          authorization: c.req.header('authorization'),
+          body: await readChatJson(c),
+        },
+        {
+          resolve: widget.resolveSecretKey ?? (() => Promise.resolve(undefined)),
+          limiter: widget.limiter,
+          loadKeys:
+            widget.tokenKeys ?? (() => Promise.reject(new WidgetTokenKeysNotConfiguredError())),
+          isRevoked: widget.isTokenRevoked ?? (() => Promise.resolve(true)),
+          environment: widget.environment,
+        },
+      );
+
+      c.header('Cache-Control', WIDGET_SESSION_CACHE_CONTROL);
+
+      return c.json(session);
+    },
+  );
 
   /** The widget's public configuration (P2-10), behind the guards `mountGuarded` gives every route. */
   mountGuarded(
@@ -494,6 +558,30 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
  * reference, which until now was empty.
  */
 export const WIDGET_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, RouteDoc>([
+  [
+    routeKey('POST', `${WIDGET_PREFIX}${SERVER_SESSION_PATH}`),
+    {
+      access: publicRoute(
+        'Authenticated by the secret key it carries rather than by a session, because this is ' +
+          "where a session comes from. The key is the seller's server proving it is the " +
+          'seller (§3.2 layer 3), and it is verified before anything else is read.',
+      ),
+      summary: "Mint a session from the seller's own server",
+      description:
+        '**For a server, never a browser.** Send `Authorization: Bearer sk_live_…` and a body ' +
+        'naming the origin the session is for. A request carrying an `Origin` header is refused ' +
+        'before the key is examined, because a browser sending one means the secret key is in ' +
+        'code a browser can read — rotate it. The key is found by its SHA-256 (ADR 0025) under ' +
+        'the seventh RLS scope (ADR 0026); unknown, revoked and rotated-away keys all get the ' +
+        'same 401. The origin must be one the winery has verified, compared exactly after ' +
+        'normalisation. The token that comes back is the same kind the browser path mints and ' +
+        'works from that origin and no other. No CORS headers: nothing in a browser can read ' +
+        'the answer.',
+      example: { token: 'eyJ…', expiresAt: '2026-09-26T10:15:00.000Z' },
+      response: widgetSessionResponse,
+      refusals: [401, 403, 422, 429],
+    },
+  ],
   [
     routeKey('GET', WIDGET_PREFIX),
     {

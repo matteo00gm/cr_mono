@@ -1,3 +1,5 @@
+import { newSecretKey } from '@catalogorosso/security/api-keys';
+import { SERVER_SESSION_ADDRESS_PER_MINUTE } from '../src/middleware/rate-limit.js';
 import { randomUUID } from 'node:crypto';
 import type { WidgetResolution } from '@catalogorosso/db';
 import { memoryRateLimiter, type RateLimiter } from '@catalogorosso/security';
@@ -129,7 +131,18 @@ const appWith = (overrides: Partial<WidgetDependencies>) =>
 
 /** Only the surface marker is exempt: it resolves nothing and answers the same to everyone. */
 const MARKER = routeKey('GET', WIDGET_PREFIX);
-const GUARDED = [...WIDGET_ROUTE_ACCESS.keys()].filter((key) => key !== MARKER);
+
+/**
+ * The server mint (P4-10) has a different chain, on purpose, and is walked by
+ * its own describe below. A server sends no `Origin`, so CORS cannot be the
+ * thing that resolves its tenant — the secret key is — and it must *refuse* a
+ * request that carries one. Exempted by name, so a new browser route added to
+ * the table is still held to the chain this file walks.
+ */
+const SERVER_MINT = routeKey('POST', `${WIDGET_PREFIX}/session/server`);
+const GUARDED = [...WIDGET_ROUTE_ACCESS.keys()].filter(
+  (key) => key !== MARKER && key !== SERVER_MINT,
+);
 
 describe('the widget route table', () => {
   it('has guarded routes to walk, or every case below is vacuous', () => {
@@ -206,4 +219,109 @@ describe.each(GUARDED)('%s', (key) => {
       expect(asked.some((checkKey) => checkKey.includes(TENANT))).toBe(true);
     });
   }
+});
+
+describe('POST /v1/widget/session/server (P4-10)', () => {
+  /*
+   * Walked on its own because its chain is its own. What must still hold is the
+   * rule CLAUDE.md states for every widget route: **the address is counted
+   * before anything is looked up**, because a well-formed secret key costs an
+   * indexed read whether or not it is real.
+   */
+  const SERVER = `${WIDGET_PREFIX}/session/server`;
+
+  /** Built at runtime, never written into this file (P0-56). */
+  const secret = newSecretKey();
+
+  const post = (built: ReturnType<typeof appWith>, headers: Record<string, string> = {}) =>
+    built.request(SERVER, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': '203.0.113.9',
+        authorization: `Bearer ${secret}`,
+        ...headers,
+      },
+      body: JSON.stringify({ origin: ORIGIN }),
+    });
+
+  const found = {
+    tenantId: TENANT,
+    status: 'ACTIVE' as const,
+    plan: 'CANTINA' as const,
+    locale: 'it',
+    verifiedOrigins: [ORIGIN],
+  };
+
+  it('mints for a known key and a verified origin', async () => {
+    const response = await post(appWith({ resolveSecretKey: () => Promise.resolve(found) }));
+
+    expect(response.status).toBe(200);
+  });
+
+  it('sends no CORS headers, so no browser can read the answer', async () => {
+    const response = await post(appWith({ resolveSecretKey: () => Promise.resolve(found) }));
+
+    expect(response.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('is not cacheable', async () => {
+    const response = await post(appWith({ resolveSecretKey: () => Promise.resolve(found) }));
+
+    expect(response.headers.get('cache-control')).toContain('no-store');
+  });
+
+  it('refuses a browser before resolving anything', async () => {
+    const resolved: string[] = [];
+    const response = await post(
+      appWith({
+        resolveSecretKey: (hash) => {
+          resolved.push(hash);
+
+          return Promise.resolve(found);
+        },
+      }),
+      { origin: ORIGIN },
+    );
+
+    expect(response.status).toBe(422);
+    expect(resolved).toEqual([]);
+  });
+
+  it('refuses an exhausted address before resolving the key', async () => {
+    /*
+     * **The invariant.** The address pays first. Exhaust its bucket and the
+     * next request must be refused without a lookup — otherwise an address
+     * inventing keys gets a free indexed read per key.
+     */
+    const resolved: string[] = [];
+    const limiter = memoryRateLimiter();
+    const built = appWith({
+      limiter,
+      resolveSecretKey: (hash) => {
+        resolved.push(hash);
+
+        return Promise.resolve(undefined);
+      },
+    });
+
+    for (let index = 0; index < SERVER_SESSION_ADDRESS_PER_MINUTE; index += 1) {
+      await post(built);
+    }
+
+    resolved.length = 0;
+
+    const refused = await post(built);
+
+    expect(refused.status).toBe(429);
+    expect(resolved).toEqual([]);
+  });
+
+  it('refuses when nothing can look a key up, rather than accepting one', async () => {
+    /* Absent, the resolver answers nothing for every key: safe, and useless,
+     * which is the right way round for a missing dependency to fail. */
+    const response = await post(appWith({}));
+
+    expect(response.status).toBe(401);
+  });
 });

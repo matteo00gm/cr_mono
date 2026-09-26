@@ -167,7 +167,8 @@ const widgetError = (description, code, message) => ({
 const WIDGET_ERRORS = {
   401: widgetError(
     'The token sent to continue a session belongs to another site or another tenant, or was ' +
-      'revoked. The same answer whatever the reason; mint again without it to start a new session.',
+      'revoked — or, on the server mint, the secret key is unknown, revoked or rotated away. ' +
+      'The same answer whatever the reason, so no key can be told apart from another.',
     'unauthenticated',
     WIDGET_TOKEN_REFUSED,
   ),
@@ -178,9 +179,10 @@ const WIDGET_ERRORS = {
     WIDGET_REFUSED,
   ),
   422: widgetError(
-    'The body did not match what the route accepts. Chat is the only widget route with one, ' +
-      'and it reads nothing but the message: the tenant, the Origin and the session all come ' +
-      'from the key, the Origin and the token.',
+    'The body did not match what the route accepts. Chat reads nothing but the message, and ' +
+      'the server mint nothing but the origin. The server mint also answers this to any ' +
+      'request carrying an Origin header, because a browser sending one means a secret key is ' +
+      'in code a browser can read.',
     'invalid_request',
     CHAT_BODY_EXPECTED,
   ),

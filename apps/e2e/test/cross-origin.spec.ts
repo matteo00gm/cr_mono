@@ -1,5 +1,7 @@
 import { expect, test, type ConsoleMessage, type Page } from '@playwright/test';
 
+import { WIDGET_KEY } from '@catalogorosso/testing';
+
 import { SCRIPTED_REASON, SCRIPTED_REPLY, start, type Harness } from './setup.js';
 
 /**
@@ -403,5 +405,125 @@ test.describe('when a removed domain is verified again (P4-06)', () => {
       .toContainEqual(
         expect.objectContaining({ type: 'INVALID_TOKEN', origin: harness.verified.origin }),
       );
+  });
+});
+
+test.describe("from the seller's own server (P4-10)", () => {
+  test.afterEach(async () => {
+    await harness.api.unverifySecondOrigin();
+  });
+
+  /**
+   * What the seller's backend does: present the secret key and name the origin.
+   * From the test runner, which is a server — it sends no `Origin`.
+   */
+  const mintFromServer = async (origin: string): Promise<string> => {
+    const response = await fetch(`${harness.api.origin}/v1/widget/session/server`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${harness.secretKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ origin }),
+    });
+
+    expect(response.status).toBe(200);
+
+    return ((await response.json()) as { token: string }).token;
+  };
+
+  /** A question asked by a page, with a token its server handed it. */
+  const askFrom = (page: Page, token: string) =>
+    page.evaluate(
+      async ({ api, key, bearer }) => {
+        try {
+          const response = await fetch(`${api}/v1/widget/chat?key=${encodeURIComponent(key)}`, {
+            method: 'POST',
+            headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' },
+            body: JSON.stringify({ message: 'Cosa mi consigli con una bistecca?' }),
+          });
+
+          return { status: response.status, body: await response.text() };
+        } catch (error) {
+          /* A CORS refusal: the browser withholds the response entirely. */
+          return { status: 0, body: String(error) };
+        }
+      },
+      { api: harness.api.origin, key: WIDGET_KEY, bearer: token },
+    );
+
+  test('mints a token the storefront it names can chat with', async ({ page }) => {
+    const token = await mintFromServer(harness.verified.origin);
+
+    await page.goto(harness.verified.origin);
+
+    const answer = await askFrom(page, token);
+
+    expect(answer.status).toBe(200);
+    expect(answer.body).toContain(SCRIPTED_REPLY.slice(0, 16));
+  });
+
+  test('mints a token that works from that origin and no other the winery owns', async ({
+    page,
+  }) => {
+    /*
+     * **Both origins verified, so the binding is the thing under test.** From
+     * an unverified origin CORS would refuse before the token was read, and the
+     * test would pass without the claim being checked at all. Here CORS admits
+     * both pages; only the token's `origin` claim tells them apart.
+     */
+    await harness.api.verifySecondOrigin();
+
+    const forFirst = await mintFromServer(harness.verified.origin);
+    const forSecond = await mintFromServer(harness.unverified.origin);
+
+    await page.goto(harness.unverified.origin);
+
+    /* The page can chat at all, so the refusal below is the binding's. */
+    expect((await askFrom(page, forSecond)).status).toBe(200);
+    expect((await askFrom(page, forFirst)).status).toBe(401);
+  });
+
+  test('refuses an origin the winery has not verified', async () => {
+    const response = await fetch(`${harness.api.origin}/v1/widget/session/server`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${harness.secretKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ origin: harness.unverified.origin }),
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  test('is unusable from a page, even with the key in hand', async ({ page }) => {
+    /*
+     * The leak §3.2 warns about: a secret key pasted into browser code. The
+     * route sends no CORS headers, so the browser's preflight for an
+     * `Authorization` header fails and the request is never made — and were
+     * it made, the `Origin` it carried would be refused before the key was read.
+     */
+    await page.goto(harness.verified.origin);
+
+    const attempt = await page.evaluate(
+      async ({ api, secret, origin }) => {
+        try {
+          const response = await fetch(`${api}/v1/widget/session/server`, {
+            method: 'POST',
+            headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
+            body: JSON.stringify({ origin }),
+          });
+
+          return { status: response.status, body: await response.text() };
+        } catch (error) {
+          return { status: 0, body: String(error) };
+        }
+      },
+      { api: harness.api.origin, secret: harness.secretKey, origin: harness.verified.origin },
+    );
+
+    expect(attempt.status).toBe(0);
+    expect(attempt.body).not.toContain('token');
   });
 });
