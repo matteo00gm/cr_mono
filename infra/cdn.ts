@@ -5,6 +5,7 @@ import { originSecret } from './config';
 import { checkedBehaviourOrder } from './behaviour-order';
 import { SPA_REWRITE_CODE, VIEWER_IP_CODE } from './edge-functions';
 import { apiHeadersPolicyArgs, dashboardHeadersPolicyArgs } from './headers';
+import { webAcl } from './waf';
 import { WIDGET_CONFIG_PATH, widgetConfigCachePolicyArgs } from './widget-cache';
 import { isProtectedStage } from './stage';
 
@@ -209,6 +210,9 @@ export const distribution = new aws.cloudfront.Distribution('Cdn', {
   isIpv6Enabled: true,
   defaultRootObject: 'index.html',
   priceClass: 'PriceClass_100', // US, Canada, Europe (cheapest tier)
+
+  /* The blunt outer layer (P4-13); see `waf-rules.ts`. Count mode until reviewed. */
+  webAclId: webAcl.arn,
 
   origins: [
     {

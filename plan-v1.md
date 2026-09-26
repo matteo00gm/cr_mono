@@ -1381,7 +1381,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-10 | 🔒 Server-minted session endpoint | `sk_` authenticated, the forgery-proof path | P4-09,P2-12 |
 | ✅ P4-11 | 🔒 MFA for OWNER + step-up re-auth | on keys, domains, plan, membership changes | P0-45 |
 | ✅ P4-12 | 🔒 Security headers | nonce CSP, HSTS preload, nosniff, referrer, frame-deny | P0-54 |
-| P4-13 | SST: AWS WAF on CloudFront | managed bot + reputation rules, per-path rate rules | P0-17 |
+| ✅ P4-13 | SST: AWS WAF on CloudFront | managed bot + reputation rules, per-path rate rules | P0-17 |
 | P4-14 | Turnstile hook | per-tenant flag, default off | P2-12 |
 | P4-15 | 🔒 404-not-403 + IDOR matrix | cross-tenant ids return 404 for every endpoint | P0-50 |
 | P4-16 | ⛔ 🔒 Stryker on `packages/security` | mutation score ≥ 90%, CI-gated | P0-07 |
@@ -6614,6 +6614,20 @@ Enrolment and disablement both write to `audit_log`, and disabling 2FA is itself
 **Tests.** Not unit-testable; verify with a deliberate probe and confirm the block plus the logged sample.
 
 **Files.** `infra/waf.ts`. **~70 lines.**
+
+**As built.** Written and typechecked against SST's WAFv2 types; **not deployed**, so the probe below is an open item rather than a result.
+
+- **Rules as data, the resource separate** *(addition)*. `infra/waf-rules.ts` is pure and unit-tested; `infra/waf.ts` places it. The row calls the WAF not unit-testable, and its behaviour at the edge is not — but everything that decides what a probe will find is: the mode, the rule set, and the rate's relation to the application's limits, which the test reads from the application rather than restating.
+- **`WAF_MODE = 'count'`**, the switch the row asks for. In count mode every managed group is overridden to count and the rate rule counts; `block` removes the overrides. Every rule records sampled requests, which is what the week of review reads.
+- **Reputation, known-bad inputs and the common rule set**, reputation first so a known-bad address is dropped before its body is inspected. **Bot Control is written and off** (`WAF_BOT_CONTROL = false`): it carries a monthly fee and a per-request charge, and the row makes it conditional on cost — a decision for whoever owns the budget.
+- **Two common-set rules stay at count even in block mode** *(addition)*: `SizeRestrictions_BODY` refuses bodies over 8 KB, and a catalogue import is up to 5 MB and a webhook routinely exceeds 8 KB; `NoUserAgent_HEADER` refuses requests with no `User-Agent`, which a seller's server calling P4-10's mint may not send.
+- **The rate rule, 3,000 per address per five minutes (600 a minute)**, at least four times the widget's address-wide 120, so a real caller always meets P2-04's 429 and `Retry-After` first. **It never counts `/v1/widget/session/server` or `/v1/webhooks/`** *(addition)*: a seller's backend legitimately mints up to 1,200 sessions a minute from one address by P4-10's own limit, and webhooks arrive in bursts from a few addresses, each signature-verified before it costs anything. A rate rule above the widget's limits but below the server mint's would have blocked the busiest sellers first.
+- **No exclusion for the chat path** *(deviation from "exclude the SSE chat path")*. WAF inspects requests and at most the first part of a body; it never holds a response, so nothing here can buffer the stream.
+- **In `us-east-1`**, through a provider of its own: AWS accepts a `CLOUDFRONT`-scoped web ACL there and nowhere else, and the stack is `eu-west-1`.
+
+**Open, for the first deploy.** Probe with a known-bad input (the Log4j `${jndi:` pattern in a header is in `KnownBadInputs`) and confirm the sampled request shows the count; after a week of reviewed samples, set `WAF_MODE = 'block'` in its own change and probe again for the block.
+
+**Verified.** 14 cases on the rules, and infra typechecks against SST's types. A mutation run of 14 mutants killed 14 — among them, dropping the server-mint exemption, which the test catches by comparing against the application's own limit.
 
 ---
 
