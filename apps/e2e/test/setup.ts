@@ -6,6 +6,7 @@ import {
   insertSecurityEvent,
   isTokenRevoked,
   resolveTenantByKeyAndOrigin,
+  sessionCutoffAt,
 } from '@catalogorosso/db';
 import { memoryRateLimiter } from '@catalogorosso/security';
 import { generateWidgetTokenKey, loadWidgetTokenKeys } from '@catalogorosso/security/tokens';
@@ -81,6 +82,14 @@ export const start = async (): Promise<Harness> => {
         environment: 'development' as const,
         tokenKeys: () => Promise.resolve(keys),
         isTokenRevoked,
+        /*
+         * The real reader (P4-06), not a stub. A verifier that cannot ask
+         * whether an origin's sessions were ended accepts them, so the surface
+         * refuses every token when this is absent — which is how the first
+         * version of this row turned the whole browser suite red, correctly,
+         * and where a hand-rolled stub would have hidden it.
+         */
+        sessionCutoffAt,
         /*
          * The real recorder (P2-16), so the row a test reads back is the row a
          * deployment would write — including its type, which is the part a

@@ -31,16 +31,7 @@ CREATE TABLE "widget_session_cutoffs" (
   "created_at" timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT "widget_session_cutoffs_pkey" PRIMARY KEY ("tenant_id", "origin")
 );
---> statement-breakpoint
-ALTER TABLE "widget_session_cutoffs" ENABLE ROW LEVEL SECURITY;
---> statement-breakpoint
-ALTER TABLE "widget_session_cutoffs" FORCE ROW LEVEL SECURITY;
---> statement-breakpoint
--- The boilerplate tenant policy, and nothing more: no new RLS context, no
--- second GUC. By the time a cutoff is read, CORS has already resolved the
--- tenant from `(pk_, Origin)` — so this is read inside an ordinary
--- `withTenant`, exactly as `isTokenRevoked` reads `token_revocations` two
--- checks earlier on the same request.
-CREATE POLICY "tenant_isolation" ON "widget_session_cutoffs"
-  USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
-  WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+--
+-- Row-level security is 0047, generated from `RLS_POLICIES` like every other
+-- policy here (P0-37) — so `test/rls.test.ts` is what proves this table did not
+-- land without one.
