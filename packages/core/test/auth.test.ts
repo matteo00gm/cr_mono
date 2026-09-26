@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { TWO_FACTOR_PATHS } from '../src/auth-mfa.js';
 import { createAuth, SESSION_COOKIE_CACHE_SECONDS, type AuthOptions } from '../src/auth.js';
 
 /**
@@ -33,7 +34,7 @@ interface ConfiguredAuth {
       defaultCookieAttributes?: { httpOnly?: boolean; sameSite?: string; secure?: boolean };
       ipAddress?: { ipAddressHeaders?: string[] };
     };
-    readonly plugins?: { id: string }[];
+    readonly plugins?: { id: string; options?: Record<string, unknown> }[];
     readonly rateLimit?: {
       enabled?: boolean;
       window?: number;
@@ -193,6 +194,64 @@ describe('the twoFactor plugin', () => {
     // pleasant kind. Registering the plugin now is the other half of that.
     expect(configure().options.plugins?.map((plugin) => plugin.id)).toContain('two-factor');
   });
+
+  it('stores backup codes hashed, not with its default of encrypted (P4-11)', async () => {
+    const twoFactor = configure().options.plugins?.find((plugin) => plugin.id === 'two-factor');
+    const storage = (
+      twoFactor?.options?.backupCodeOptions as
+        { storeBackupCodes?: { encrypt?: (json: string) => Promise<string> } } | undefined
+    )?.storeBackupCodes;
+
+    const stored = await storage?.encrypt?.(JSON.stringify(['ab12c-de34f']));
+
+    expect(stored).toBeDefined();
+    expect(stored).not.toContain('ab12c-de34f');
+  });
+
+  it('is followed by the hardening that closes what it leaves open (P4-11)', () => {
+    /* After, so the plugin's endpoints exist for the hooks to wrap. */
+    const ids = configure().options.plugins?.map((plugin) => plugin.id) ?? [];
+
+    expect(ids.indexOf('mfa-hardening')).toBeGreaterThan(ids.indexOf('two-factor'));
+  });
+
+  it('mounts no endpoint the hardening has not classified (P4-11)', () => {
+    /*
+     * The plugin's real endpoint list against `TWO_FACTOR_PATHS`. An upgrade
+     * that adds a path fails here until somebody decides what it is — rather
+     * than serving it with none of the hardening, which is how `get-totp-uri`
+     * nearly shipped unguarded.
+     */
+    const twoFactor = configure().options.plugins?.find((plugin) => plugin.id === 'two-factor') as
+      { endpoints?: Record<string, { path?: string }> } | undefined;
+    const mounted = Object.values(twoFactor?.endpoints ?? {})
+      .map((endpoint) => endpoint.path)
+      .filter((path): path is string => path?.startsWith('/two-factor/') === true)
+      .sort();
+
+    expect(mounted).toEqual(
+      [
+        ...TWO_FACTOR_PATHS.verify,
+        ...TWO_FACTOR_PATHS.stepUp,
+        ...TWO_FACTOR_PATHS.unconfigured,
+      ].sort(),
+    );
+  });
+
+  it('has no emailed OTP configured, which is what makes those paths inert', () => {
+    const twoFactor = configure().options.plugins?.find((plugin) => plugin.id === 'two-factor');
+
+    expect(twoFactor?.options?.otpOptions).toBeUndefined();
+  });
+
+  it.each([...TWO_FACTOR_PATHS.verify, ...TWO_FACTOR_PATHS.stepUp])(
+    'limits %s tighter than the default',
+    (path) => {
+      const { rateLimit } = configure().options;
+
+      expect(rateLimit?.customRules?.[path]?.max).toBeLessThanOrEqual(10);
+    },
+  );
 });
 
 describe('createAuth', () => {
@@ -209,6 +268,30 @@ describe('createAuth', () => {
 
     expect(typeof auth.handler).toBe('function');
     expect(typeof auth.api.getSession).toBe('function');
+    expect(typeof auth.stepUpState).toBe('function');
+  });
+
+  it('answers a step-up question with nothing when there is no session, asking no store', async () => {
+    /*
+     * No cookie, so no session, so nothing to look up — and the store is not
+     * consulted, because a store asked about an absent token would be asked
+     * about every anonymous request.
+     */
+    const asked: string[] = [];
+    const auth = createAuth(options, {
+      claimTotpCode: () => Promise.resolve(true),
+      isLocked: () => Promise.resolve(false),
+      recordFailure: () => Promise.resolve(),
+      clearFailures: () => Promise.resolve(),
+      markVerified: () => Promise.resolve(),
+      stepUpState: (token) => {
+        asked.push(token);
+        return Promise.resolve(undefined);
+      },
+    });
+
+    await expect(auth.stepUpState(new Headers())).resolves.toBeNull();
+    expect(asked).toEqual([]);
   });
 
   it('is a factory, so importing this module connects to nothing', () => {

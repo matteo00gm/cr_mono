@@ -49,6 +49,8 @@ export const NAV: readonly NavItem[] = [
   { href: '/domini', label: 'Domini', capability: 'domains:manage' },
   { href: '/widget', label: 'Widget', capability: 'widget:configure' },
   { href: '/fatturazione', label: 'Fatturazione', capability: 'billing:manage' },
+  /* Every role: a second factor protects the account, whatever it may do (P4-11). */
+  { href: '/sicurezza', label: 'Sicurezza' },
 ];
 
 /**

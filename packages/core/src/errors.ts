@@ -41,6 +41,17 @@ export const DOMAIN_ERROR_KINDS = [
   'rate_limited',
   /** It exists and the caller may reach it, but it is switched off — a winery's widget, say. */
   'unavailable',
+  /**
+   * Permitted, once the caller has turned on two-factor authentication (P4-11).
+   * Its own kind rather than `forbidden`, so the dashboard can show the
+   * enrolment screen instead of an opaque refusal.
+   */
+  'mfa_required',
+  /**
+   * Permitted, once the caller proves a second factor again (P4-11). The
+   * dashboard answers it with a code prompt and retries.
+   */
+  'step_up_required',
 ] as const;
 
 export type DomainErrorKind = (typeof DOMAIN_ERROR_KINDS)[number];
@@ -119,6 +130,36 @@ export class RateLimitedError extends DomainError {
 export class UnavailableError extends DomainError {
   constructor(message = 'Not available', options?: { cause?: unknown }) {
     super('unavailable', message, options);
+  }
+}
+
+/**
+ * An OWNER who has not turned on two-factor authentication, reaching an
+ * OWNER-only route (P4-11).
+ *
+ * The row is explicit that this must never be an opaque 403: the owner can fix
+ * it themselves in a minute, and the message says how.
+ */
+export class MfaRequiredError extends DomainError {
+  constructor(
+    message = 'Turn on two-factor authentication to manage this winery. Owners need it for keys, ' +
+      'domains, billing and members; the catalogue stays available meanwhile.',
+    options?: { cause?: unknown },
+  ) {
+    super('mfa_required', message, options);
+  }
+}
+
+/**
+ * A sensitive action from a session whose last second factor is too old
+ * (P4-11). Entering a current code makes the same request succeed.
+ */
+export class StepUpRequiredError extends DomainError {
+  constructor(
+    message = 'Confirm it is you: enter a code from your authenticator app to continue.',
+    options?: { cause?: unknown },
+  ) {
+    super('step_up_required', message, options);
   }
 }
 

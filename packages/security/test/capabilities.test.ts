@@ -4,6 +4,7 @@ import {
   ALL_CAPABILITIES,
   CAPABILITIES,
   can,
+  isOwnerOnly,
   publicRoute,
   requires,
   ROLES,
@@ -112,5 +113,28 @@ describe('route access declarations', () => {
       kind: 'capability',
       capability: 'billing:manage',
     });
+  });
+});
+
+describe('which capabilities are OWNER-only (P4-11)', () => {
+  it('is read from the table, so the enrolment rule follows it', () => {
+    /*
+     * Every capability, checked against the roles the table grants. A
+     * capability that became OWNER-only tomorrow would be covered by the
+     * enrolment requirement without anybody editing a second list.
+     */
+    for (const capability of ALL_CAPABILITIES) {
+      expect(isOwnerOnly(capability), capability).toBe(!can('EDITOR', capability));
+    }
+  });
+
+  it('covers the owner things and none of the catalogue', () => {
+    expect(ALL_CAPABILITIES.filter(isOwnerOnly).sort()).toEqual([
+      'billing:manage',
+      'domains:manage',
+      'keys:manage',
+      'members:manage',
+      'widget:configure',
+    ]);
   });
 });

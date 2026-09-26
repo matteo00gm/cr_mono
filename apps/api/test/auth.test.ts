@@ -119,6 +119,21 @@ describe('requireUser', () => {
     expect(await body(response)).toMatchObject({ userId: 'user_matteo' });
   });
 
+  it('reports whether the user has a second factor, from the session (P4-11)', async () => {
+    const report = async (mfa: boolean) =>
+      (
+        (await (
+          await createApp({
+            auth: signedIn('user_matteo', { mfa }),
+            readMemberships: oneMembership(),
+          }).request('/v1/dashboard/me')
+        ).json()) as { twoFactorEnabled?: unknown }
+      ).twoFactorEnabled;
+
+    expect(await report(true)).toBe(true);
+    expect(await report(false)).toBe(false);
+  });
+
   it('puts no role beside the user id', async () => {
     /*
      * The constraint the plan states twice. A role belongs to a *membership*,
@@ -134,7 +149,15 @@ describe('requireUser', () => {
       readMemberships: oneMembership(),
     }).request('/v1/dashboard/me');
 
-    expect(Object.keys(await body(response)).sort()).toEqual(['memberships', 'userId']);
+    const keys = Object.keys(await body(response)).sort();
+
+    /*
+     * `twoFactorEnabled` is the one addition (P4-11), and it passes the test
+     * this assertion exists for: a second factor belongs to the user, covering
+     * every winery they are in, exactly as `userId` does. A role does not.
+     */
+    expect(keys).toEqual(['memberships', 'twoFactorEnabled', 'userId']);
+    expect(keys).not.toContain('role');
   });
 
   it('answers 401 before 404 on an unknown dashboard path', async () => {
@@ -187,6 +210,7 @@ describe('requireUser', () => {
             return Promise.resolve({ user: { id: 'u1' } });
           },
         },
+        stepUpState: () => Promise.resolve(null),
       }),
     );
     app.get('/', (c) => c.text(c.get('userId')));
@@ -261,6 +285,7 @@ describe('a failing session read', () => {
       auth: {
         handler: () => Promise.resolve(new Response()),
         api: { getSession: () => Promise.reject(new Error('connection terminated')) },
+        stepUpState: () => Promise.resolve(null),
       },
       readMemberships: oneMembership(),
     });

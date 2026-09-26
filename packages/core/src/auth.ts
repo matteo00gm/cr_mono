@@ -1,7 +1,19 @@
-import { authSchema, getAuthDb } from '@catalogorosso/db/auth';
+import { authSchema, createMfaStore, getAuthDb } from '@catalogorosso/db/auth';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { twoFactor } from 'better-auth/plugins/two-factor';
+
+import {
+  backupCodeStorage,
+  mfaHardening,
+  STEP_UP_LOCK_SECONDS,
+  STEP_UP_MAX_AGE_SECONDS,
+  STEP_UP_MAX_FAILURES,
+  TOTP_CLAIM_SECONDS,
+  type MfaStore,
+  type StepUpState,
+  type TwoFactorChange,
+} from './auth-mfa.js';
 
 /**
  * Better Auth configuration (P0-45).
@@ -91,6 +103,17 @@ export interface AuthOptions {
    * root is what refuses to deploy without one.
    */
   readonly rateLimitStorage?: RateLimitStorage | undefined;
+
+  /**
+   * Every change to somebody's second factor, for the audit log (P4-11).
+   *
+   * A callback because the audit row belongs to each winery the user is a
+   * member of, and which wineries those are is a tenant-scoped read this file
+   * must not make. It runs after Better Auth has committed the change — the two
+   * cannot share a transaction — so the caller logs rather than throws on a
+   * failed write: the change has happened either way.
+   */
+  readonly onTwoFactorChange?: ((change: TwoFactorChange) => Promise<void>) | undefined;
 }
 
 /**
@@ -154,14 +177,28 @@ export interface AuthInstance {
   /** Better Auth's Fetch-API handler, mounted at `/auth/*` on the dashboard. */
   readonly handler: (request: Request) => Promise<Response>;
   readonly api: {
-    readonly getSession: (input: {
-      headers: Headers;
-    }) => Promise<{ user: { id: string; email: string } } | null>;
+    readonly getSession: (input: { headers: Headers }) => Promise<{
+      user: { id: string; email: string; twoFactorEnabled?: boolean | null | undefined };
+    } | null>;
   };
+  /**
+   * What a sensitive action needs to know, read from the session row rather
+   * than the cookie cache (P4-11). `null` for no session, and for one the table
+   * no longer holds — revoked, or expired — whatever a cached copy says.
+   */
+  readonly stepUpState: (headers: Headers) => Promise<StepUpState | null>;
 }
 
-export const createAuth = (options: AuthOptions): AuthInstance =>
-  betterAuth({
+export const createAuth = (
+  options: AuthOptions,
+  store: MfaStore = createMfaStore({
+    claimSeconds: TOTP_CLAIM_SECONDS,
+    maxFailures: STEP_UP_MAX_FAILURES,
+    lockSeconds: STEP_UP_LOCK_SECONDS,
+    freshSeconds: STEP_UP_MAX_AGE_SECONDS,
+  }),
+): AuthInstance => {
+  const auth = betterAuth({
     secret: options.secret,
     baseURL: options.baseUrl,
     basePath: options.basePath,
@@ -294,6 +331,17 @@ export const createAuth = (options: AuthOptions): AuthInstance =>
         // account.
         '/request-password-reset': { window: 300, max: 5 },
         '/reset-password': { window: 300, max: 10 },
+        /*
+         * A six-digit code with a ±1-step window is three chances in a million
+         * per guess. The account lockout (P4-11) is what bounds guessing; this
+         * bounds the rate at which one address can spend a victim's budget.
+         */
+        '/two-factor/verify-totp': { window: 60, max: 10 },
+        '/two-factor/verify-backup-code': { window: 60, max: 10 },
+        '/two-factor/enable': { window: 60, max: 5 },
+        '/two-factor/disable': { window: 60, max: 5 },
+        '/two-factor/generate-backup-codes': { window: 60, max: 5 },
+        '/two-factor/get-totp-uri': { window: 60, max: 5 },
       },
     },
 
@@ -303,6 +351,25 @@ export const createAuth = (options: AuthOptions): AuthInstance =>
         // Matches P0-23a's table. Without it the plugin looks for `twoFactor`
         // and the adapter throws on the first enrolment.
         twoFactorTable: 'auth_two_factor',
+        /*
+         * Hashed rather than the plugin's default of encrypted (P4-11). A
+         * backup code is password-equivalent, and an encrypted one can be read
+         * back by anybody holding the database and the secret.
+         */
+        backupCodeOptions: { storeBackupCodes: backupCodeStorage(options.secret) },
       }),
+      mfaHardening({ secret: options.secret, store, onChange: options.onTwoFactorChange }),
     ],
   });
+
+  return Object.assign(auth, {
+    stepUpState: async (headers: Headers): Promise<StepUpState | null> => {
+      /* Identity from the session read; everything that matters from the row. */
+      const session = await auth.api.getSession({ headers });
+
+      if (session === null) return null;
+
+      return (await store.stepUpState(session.session.token)) ?? null;
+    },
+  });
+};

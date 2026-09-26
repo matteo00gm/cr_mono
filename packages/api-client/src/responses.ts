@@ -33,6 +33,8 @@ export const surfaceResponse = z.object({ surface: z.literal('dashboard') });
 
 export const meResponse = z.object({
   userId: z.string(),
+  /** Whether the caller has a second factor (P4-11). An owner without one is sent to enrol. */
+  twoFactorEnabled: z.boolean(),
   memberships: z.array(membershipSchema),
 });
 

@@ -352,6 +352,7 @@ describe('the /catalogo route', () => {
         session={{
           status: 'signed-in',
           userId: 'user_matteo',
+          twoFactorEnabled: true,
           memberships: [{ tenantId: TENANT, role: 'OWNER' }],
           active: { tenantId: TENANT, role: 'OWNER' },
         }}

@@ -9,7 +9,7 @@ complete only because raw `fetch` to our own API is forbidden outside
 
 | Endpoint | Called from |
 |---|---|
-| `GET /v1/dashboard/me` | apps/dashboard/src/session.ts:150 |
+| `GET /v1/dashboard/me` | apps/dashboard/src/session.ts:152 |
 | `GET /v1/dashboard/products` | apps/dashboard/src/features/catalog/CatalogScreen.tsx:134<br>apps/dashboard/src/features/catalog/catalogue-export.ts:70 |
 | `PATCH /v1/dashboard/products/:id` | apps/dashboard/src/features/catalog/InlineEdit.tsx:221 |
 | `POST /v1/dashboard/products/:id/reindex` | apps/dashboard/src/features/catalog/IndexStatus.tsx:197 |

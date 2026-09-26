@@ -39,6 +39,8 @@ const { DASHBOARD_ROUTES, responseJsonSchema } =
 const { DASHBOARD_PREFIX, WIDGET_PREFIX } = await import('../apps/api/dist/routes.js');
 const { WIDGET_ROUTES } = await import('../apps/api/dist/surfaces/widget.js');
 const { registeredRoutes, routeKey } = await import('../apps/api/dist/middleware/capability.js');
+const { isStepUpGuard } = await import('../apps/api/dist/middleware/step-up.js');
+const { isOwnerOnly } = await import('../packages/security/dist/capabilities.js');
 const { WIDGET_REFUSED } = await import('../apps/api/dist/middleware/cors.js');
 const { WIDGET_TOKEN_REFUSED } = await import('../apps/api/dist/widget-token.js');
 const { CHAT_BODY_EXPECTED } = await import('../apps/api/dist/surfaces/widget.js');
@@ -47,6 +49,7 @@ const { CHAT_BODY_EXPECTED } = await import('../apps/api/dist/surfaces/widget.js
 const stubAuth = {
   handler: () => Promise.resolve(new Response()),
   api: { getSession: () => Promise.resolve(null) },
+  stepUpState: () => Promise.resolve(null),
 };
 
 const app = createApp({ auth: stubAuth, readMemberships: () => Promise.resolve([]) });
@@ -59,6 +62,18 @@ const app = createApp({ auth: stubAuth, readMemberships: () => Promise.resolve([
  */
 const endpoints = [];
 const seen = new Set();
+
+/**
+ * The routes that need a fresh second factor (P4-11), read off the router
+ * rather than written into each description — so the reference cannot claim a
+ * step-up a route lost, or miss one it gained.
+ */
+const stepUpKeys = new Set(
+  app.routes
+    .filter((route) => isStepUpGuard(route.handler))
+    .map((route) => routeKey(route.method, route.path)),
+);
+
 for (const route of registeredRoutes(app)) {
   const key = routeKey(route.method, route.path);
   if (seen.has(key)) continue;
@@ -231,13 +246,21 @@ const operationFor = (endpoint, doc, errors) => {
       doc.description +
       (capability
         ? `\n\nRequires the \`${capability}\` capability.`
-        : `\n\nNo capability required. ${doc.access.reason}`),
+        : `\n\nNo capability required. ${doc.access.reason}`) +
+      (capability && isOwnerOnly(capability)
+        ? ' An owner without two-factor authentication is refused with code `mfa_required`.'
+        : '') +
+      (stepUpKeys.has(endpoint.key)
+        ? '\n\nNeeds a second factor proved within the last 15 minutes; otherwise 403 with ' +
+          'code `step_up_required`. Verify a code and send the same request again.'
+        : ''),
     operationId: `${endpoint.method.toLowerCase()}${endpoint.path
       .split('/')
       .filter(Boolean)
       .map((part) => part[0].toUpperCase() + part.slice(1))
       .join('')}`,
     ...(capability ? { 'x-required-capability': capability } : {}),
+    ...(stepUpKeys.has(endpoint.key) ? { 'x-requires-step-up': true } : {}),
     responses: sortedEntries({
       200: {
         description: doc.summary,

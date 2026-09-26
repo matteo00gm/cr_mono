@@ -113,7 +113,7 @@
       "/v1/dashboard/domains": {
         "post": {
           "summary": "Add a domain",
-          "description": "Normalises whatever the seller typed into one canonical origin (P2-05) and creates a PENDING row with a verification nonce. An origin another winery already holds is refused with 409 and a message that says only that it is not available: naming the other winery would make this an oracle for enumerating who our customers are. An origin this winery already holds is answered with the row it has, so the screen can show the token again rather than reporting a conflict that is not one. Every attempt is audited, including the refused ones, which are the interesting ones.\n\nRequires the `domains:manage` capability.",
+          "description": "Normalises whatever the seller typed into one canonical origin (P2-05) and creates a PENDING row with a verification nonce. An origin another winery already holds is refused with 409 and a message that says only that it is not available: naming the other winery would make this an oracle for enumerating who our customers are. An origin this winery already holds is answered with the row it has, so the screen can show the token again rather than reporting a conflict that is not one. Every attempt is audited, including the refused ones, which are the interesting ones.\n\nRequires the `domains:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
           "operationId": "postV1DashboardDomains",
           "x-required-capability": "domains:manage",
           "responses": {
@@ -229,9 +229,10 @@
       "/v1/dashboard/domains/:id": {
         "delete": {
           "summary": "Remove a domain",
-          "description": "Deletes the row and, in the same transaction, writes a per-origin session cutoff that ends every live session on it — we never store the `jti`s we issue, so revoking them one by one is impossible by construction and a timestamp does it in one row. The effect is immediate today because the allowlist is uncached, and the cutoff is what keeps it immediate once §5.7 caches it. A real delete, not a tombstone: the unique index on origin is the anti-sharing backbone, and a kept row would hold that origin against every winery for ever. Removing the last **verified** domain needs `?confirm=true`, because it switches the widget off everywhere it is installed. Another winery's id answers 404, never 403.\n\nRequires the `domains:manage` capability.",
+          "description": "Deletes the row and, in the same transaction, writes a per-origin session cutoff that ends every live session on it — we never store the `jti`s we issue, so revoking them one by one is impossible by construction and a timestamp does it in one row. The effect is immediate today because the allowlist is uncached, and the cutoff is what keeps it immediate once §5.7 caches it. A real delete, not a tombstone: the unique index on origin is the anti-sharing backbone, and a kept row would hold that origin against every winery for ever. Removing the last **verified** domain needs `?confirm=true`, because it switches the widget off everywhere it is installed. Another winery's id answers 404, never 403.\n\nRequires the `domains:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.\n\nNeeds a second factor proved within the last 15 minutes; otherwise 403 with code `step_up_required`. Verify a code and send the same request again.",
           "operationId": "deleteV1DashboardDomains:id",
           "x-required-capability": "domains:manage",
+          "x-requires-step-up": true,
           "responses": {
             "200": {
               "description": "Remove a domain",
@@ -309,7 +310,7 @@
       "/v1/dashboard/domains/:id/verify": {
         "post": {
           "summary": "Check a domain's proof",
-          "description": "Takes one of two proofs, whichever the seller can actually produce: a `_somm-verify` TXT record, or a file at `/.well-known/somm-verify-<nonce>.txt` — the nonce is in the path, so the URL is itself unguessable. The file check goes through `guardedFetch` (P4-03a), which validates the address at socket connect, refuses redirects, and allows only https on 443; what it declined to do is recorded and never returned, because a caller who could read it could map our network with it. A verification also creates the other spelling — apex gains its `www` and the reverse — because the proof was of the zone and `www` is inside it, and a `www` mismatch is otherwise the most common support ticket there is. Both are listed and both are individually removable: the allowlist never widens invisibly. Each is probed with a HEAD request through the same guarded agent, and a host that does not answer is flagged rather than deleted. The DNS check resolves the TXT record and compares it, in constant time, against the nonce we issued. **The resolver is a pinned public one rather than the host's**: in a VPC the default resolver answers for internal names and can be reconfigured by anybody with that reach, so a verification that trusted it could be forged for any domain and the forged answer would look real. A record that is absent, wrong, or unreachable answers 200 with `verified: false` and prose saying which — they send a seller to three different places. Attempts are counted per domain, because this route makes a network call on demand. Another winery's id answers 404, never 403.\n\nRequires the `domains:manage` capability.",
+          "description": "Takes one of two proofs, whichever the seller can actually produce: a `_somm-verify` TXT record, or a file at `/.well-known/somm-verify-<nonce>.txt` — the nonce is in the path, so the URL is itself unguessable. The file check goes through `guardedFetch` (P4-03a), which validates the address at socket connect, refuses redirects, and allows only https on 443; what it declined to do is recorded and never returned, because a caller who could read it could map our network with it. A verification also creates the other spelling — apex gains its `www` and the reverse — because the proof was of the zone and `www` is inside it, and a `www` mismatch is otherwise the most common support ticket there is. Both are listed and both are individually removable: the allowlist never widens invisibly. Each is probed with a HEAD request through the same guarded agent, and a host that does not answer is flagged rather than deleted. The DNS check resolves the TXT record and compares it, in constant time, against the nonce we issued. **The resolver is a pinned public one rather than the host's**: in a VPC the default resolver answers for internal names and can be reconfigured by anybody with that reach, so a verification that trusted it could be forged for any domain and the forged answer would look real. A record that is absent, wrong, or unreachable answers 200 with `verified: false` and prose saying which — they send a seller to three different places. Attempts are counted per domain, because this route makes a network call on demand. Another winery's id answers 404, never 403.\n\nRequires the `domains:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
           "operationId": "postV1DashboardDomains:idVerify",
           "x-required-capability": "domains:manage",
           "responses": {
@@ -491,7 +492,7 @@
       "/v1/dashboard/keys": {
         "get": {
           "summary": "Read the winery's keys",
-          "description": "The public key and a hint of the secret one — its prefix and last four characters, enough to answer \"which key is live?\" and not enough to use it. There is no field for the secret key and no way to ask for it: it is shown once, when issued, and never stored anywhere it could be read back from. 404 before any keys have been issued.\n\nRequires the `keys:manage` capability.",
+          "description": "The public key and a hint of the secret one — its prefix and last four characters, enough to answer \"which key is live?\" and not enough to use it. There is no field for the secret key and no way to ask for it: it is shown once, when issued, and never stored anywhere it could be read back from. 404 before any keys have been issued.\n\nRequires the `keys:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
           "operationId": "getV1DashboardKeys",
           "x-required-capability": "keys:manage",
           "responses": {
@@ -602,9 +603,10 @@
         },
         "post": {
           "summary": "Issue the winery's first keys",
-          "description": "Generates a public key and a secret key. **The secret key is in this response and nowhere else, ever**: it is stored as a SHA-256 hash (ADR 0025) and cannot be shown again, so the only remedy for not having copied it is to rotate. Served no-store, because a secret a proxy or the back button could replay is a secret stored somewhere we cannot delete. 409 if the winery already has keys — replacing them here would invalidate a secret the seller may already have deployed.\n\nRequires the `keys:manage` capability.",
+          "description": "Generates a public key and a secret key. **The secret key is in this response and nowhere else, ever**: it is stored as a SHA-256 hash (ADR 0025) and cannot be shown again, so the only remedy for not having copied it is to rotate. Served no-store, because a secret a proxy or the back button could replay is a secret stored somewhere we cannot delete. 409 if the winery already has keys — replacing them here would invalidate a secret the seller may already have deployed.\n\nRequires the `keys:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.\n\nNeeds a second factor proved within the last 15 minutes; otherwise 403 with code `step_up_required`. Verify a code and send the same request again.",
           "operationId": "postV1DashboardKeys",
           "x-required-capability": "keys:manage",
+          "x-requires-step-up": true,
           "responses": {
             "200": {
               "description": "Issue the winery's first keys",
@@ -720,9 +722,10 @@
       "/v1/dashboard/keys/public/rotate": {
         "post": {
           "summary": "Replace the public key",
-          "description": "Issues a new public key and keeps the old one resolving for 24 hours, because the old key is in a script tag on the seller's pages until they redeploy — and a window any shorter would break a live storefront the moment the button is pressed. **At most one old key is ever live**: a second rotation ends the first one's grace, since a seller rotates when they think a key has leaked and rotating again must not leave the first leaked key working. The secret key is carried across unchanged; rotating it is its own route. Serialised on the winery's row, so two simultaneous rotations cannot both find the same active key.\n\nRequires the `keys:manage` capability.",
+          "description": "Issues a new public key and keeps the old one resolving for 24 hours, because the old key is in a script tag on the seller's pages until they redeploy — and a window any shorter would break a live storefront the moment the button is pressed. **At most one old key is ever live**: a second rotation ends the first one's grace, since a seller rotates when they think a key has leaked and rotating again must not leave the first leaked key working. The secret key is carried across unchanged; rotating it is its own route. Serialised on the winery's row, so two simultaneous rotations cannot both find the same active key.\n\nRequires the `keys:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.\n\nNeeds a second factor proved within the last 15 minutes; otherwise 403 with code `step_up_required`. Verify a code and send the same request again.",
           "operationId": "postV1DashboardKeysPublicRotate",
           "x-required-capability": "keys:manage",
+          "x-requires-step-up": true,
           "responses": {
             "200": {
               "description": "Replace the public key",
@@ -837,9 +840,10 @@
       "/v1/dashboard/keys/secret/rotate": {
         "post": {
           "summary": "Replace the secret key",
-          "description": "Effective immediately, with no grace window: a seller rotates a secret when they think it has leaked, and a window in which the old one still works is a window in which the leak still works. The public key is untouched — it is live on the seller's pages, and rotating it is its own route with its own grace (P4-08). The new secret is in this response only.\n\nRequires the `keys:manage` capability.",
+          "description": "Effective immediately, with no grace window: a seller rotates a secret when they think it has leaked, and a window in which the old one still works is a window in which the leak still works. The public key is untouched — it is live on the seller's pages, and rotating it is its own route with its own grace (P4-08). The new secret is in this response only.\n\nRequires the `keys:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.\n\nNeeds a second factor proved within the last 15 minutes; otherwise 403 with code `step_up_required`. Verify a code and send the same request again.",
           "operationId": "postV1DashboardKeysSecretRotate",
           "x-required-capability": "keys:manage",
+          "x-requires-step-up": true,
           "responses": {
             "200": {
               "description": "Replace the secret key",
@@ -955,7 +959,7 @@
       "/v1/dashboard/me": {
         "get": {
           "summary": "The caller and the wineries they belong to",
-          "description": "Authenticated, but resolved before a tenant is chosen - a user who belongs to several wineries cannot pick one from a list they are not allowed to fetch. The memberships returned are scoped by Row Level Security to the caller, so this cannot be used to enumerate anybody else. Send the chosen tenant back on subsequent requests in the active-tenant header.\n\nNo capability required. Authenticated but pre-tenant, by necessity: a user with several memberships cannot choose from a list they are not allowed to fetch. It returns only the caller's own identity and memberships, which RLS scopes to them (P0-47).",
+          "description": "Authenticated, but resolved before a tenant is chosen - a user who belongs to several wineries cannot pick one from a list they are not allowed to fetch. The memberships returned are scoped by Row Level Security to the caller, so this cannot be used to enumerate anybody else. Send the chosen tenant back on subsequent requests in the active-tenant header. `twoFactorEnabled` says whether the caller has a second factor: an owner without one is refused OWNER-only routes with code 'mfa_required' until they enrol.\n\nNo capability required. Authenticated but pre-tenant, by necessity: a user with several memberships cannot choose from a list they are not allowed to fetch. It returns only the caller's own identity and memberships, which RLS scopes to them (P0-47).",
           "operationId": "getV1DashboardMe",
           "responses": {
             "200": {
@@ -968,6 +972,9 @@
                     "properties": {
                       "userId": {
                         "type": "string"
+                      },
+                      "twoFactorEnabled": {
+                        "type": "boolean"
                       },
                       "memberships": {
                         "type": "array",
@@ -995,12 +1002,14 @@
                     },
                     "required": [
                       "userId",
+                      "twoFactorEnabled",
                       "memberships"
                     ],
                     "additionalProperties": false
                   },
                   "example": {
                     "userId": "user_matteo",
+                    "twoFactorEnabled": true,
                     "memberships": [
                       {
                         "tenantId": "9f2c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a",
@@ -1049,7 +1058,7 @@
       "/v1/dashboard/members": {
         "get": {
           "summary": "Who belongs to this winery",
-          "description": "The roster: a name, address, role and join date for each member. Behind `members:manage` rather than a read capability, because who else can reach the catalogue and billing of a winery is not neutral information, and an EDITOR has no action to take on it. Scoped by Row Level Security to the active winery, so it cannot be used to enumerate anybody else.\n\nRequires the `members:manage` capability.",
+          "description": "The roster: a name, address, role and join date for each member. Behind `members:manage` rather than a read capability, because who else can reach the catalogue and billing of a winery is not neutral information, and an EDITOR has no action to take on it. Scoped by Row Level Security to the active winery, so it cannot be used to enumerate anybody else.\n\nRequires the `members:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
           "operationId": "getV1DashboardMembers",
           "x-required-capability": "members:manage",
           "responses": {
@@ -1152,9 +1161,10 @@
       "/v1/dashboard/members/:userId": {
         "delete": {
           "summary": "Remove a member",
-          "description": "The same last-OWNER guard as a role change. Writes an audit row inside the same transaction, which matters more here than anywhere else: the membership row is gone afterwards, so nothing else records that the person was ever a member or who removed them.\n\nRequires the `members:manage` capability.",
+          "description": "The same last-OWNER guard as a role change. Writes an audit row inside the same transaction, which matters more here than anywhere else: the membership row is gone afterwards, so nothing else records that the person was ever a member or who removed them.\n\nRequires the `members:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.\n\nNeeds a second factor proved within the last 15 minutes; otherwise 403 with code `step_up_required`. Verify a code and send the same request again.",
           "operationId": "deleteV1DashboardMembers:userId",
           "x-required-capability": "members:manage",
+          "x-requires-step-up": true,
           "responses": {
             "200": {
               "description": "Remove a member",
@@ -1217,9 +1227,10 @@
         },
         "patch": {
           "summary": "Change a member's role",
-          "description": "Refuses with 409 when it would leave the winery with no OWNER, and the message says how to proceed: promote somebody first. The guard is inside the SQL statement and takes a lock over the whole roster, so two simultaneous demotions cannot both succeed. A user who belongs to another winery answers 404, never 403, so this cannot be used to probe which accounts exist elsewhere.\n\nRequires the `members:manage` capability.",
+          "description": "Refuses with 409 when it would leave the winery with no OWNER, and the message says how to proceed: promote somebody first. The guard is inside the SQL statement and takes a lock over the whole roster, so two simultaneous demotions cannot both succeed. A user who belongs to another winery answers 404, never 403, so this cannot be used to probe which accounts exist elsewhere.\n\nRequires the `members:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.\n\nNeeds a second factor proved within the last 15 minutes; otherwise 403 with code `step_up_required`. Verify a code and send the same request again.",
           "operationId": "patchV1DashboardMembers:userId",
           "x-required-capability": "members:manage",
+          "x-requires-step-up": true,
           "responses": {
             "200": {
               "description": "Change a member's role",
@@ -1356,7 +1367,7 @@
       "/v1/dashboard/members/invitations": {
         "get": {
           "summary": "Invitations still outstanding",
-          "description": "Open invitations only — accepted and revoked ones are history, and listing them would show a growing set of things nobody can act on. Carries no token and no hash, because the hash is what the credential reduces to and returning it would hand a caller material to attack offline, for no gain over revoking and re-inviting.\n\nRequires the `members:manage` capability.",
+          "description": "Open invitations only — accepted and revoked ones are history, and listing them would show a growing set of things nobody can act on. Carries no token and no hash, because the hash is what the credential reduces to and returning it would hand a caller material to attack offline, for no gain over revoking and re-inviting.\n\nRequires the `members:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
           "operationId": "getV1DashboardMembersInvitations",
           "x-required-capability": "members:manage",
           "responses": {
@@ -1466,7 +1477,7 @@
       "/v1/dashboard/members/invitations/:id": {
         "delete": {
           "summary": "Withdraw an invitation",
-          "description": "Stamps the invitation revoked rather than deleting it, so the fact that one was sent and withdrawn survives for an incident review — and so a fresh invitation to the same address succeeds, which the partial unique index allows only once the old row is closed. Answers 404 for an id that is already accepted, already revoked, or never existed: one answer, so this cannot be used to discover which invitation ids are real.\n\nRequires the `members:manage` capability.",
+          "description": "Stamps the invitation revoked rather than deleting it, so the fact that one was sent and withdrawn survives for an incident review — and so a fresh invitation to the same address succeeds, which the partial unique index allows only once the old row is closed. Answers 404 for an id that is already accepted, already revoked, or never existed: one answer, so this cannot be used to discover which invitation ids are real.\n\nRequires the `members:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
           "operationId": "deleteV1DashboardMembersInvitations:id",
           "x-required-capability": "members:manage",
           "responses": {
@@ -1533,9 +1544,10 @@
       "/v1/dashboard/members/invite": {
         "post": {
           "summary": "Invite somebody to this winery",
-          "description": "Creates a single-use invitation and emails it. The role is chosen here, by a caller who holds members:manage - it is never read from the acceptance request, where the sender would be the person who benefits from it. Re-inviting an address that is already a member, or already has an open invitation, answers 200 with `created: false` rather than an error: the intent is already satisfied, and sending again on every click would mail somebody repeatedly through our domain.\n\nRequires the `members:manage` capability.",
+          "description": "Creates a single-use invitation and emails it. The role is chosen here, by a caller who holds members:manage - it is never read from the acceptance request, where the sender would be the person who benefits from it. Re-inviting an address that is already a member, or already has an open invitation, answers 200 with `created: false` rather than an error: the intent is already satisfied, and sending again on every click would mail somebody repeatedly through our domain.\n\nRequires the `members:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.\n\nNeeds a second factor proved within the last 15 minutes; otherwise 403 with code `step_up_required`. Verify a code and send the same request again.",
           "operationId": "postV1DashboardMembersInvite",
           "x-required-capability": "members:manage",
+          "x-requires-step-up": true,
           "responses": {
             "200": {
               "description": "Invite somebody to this winery",

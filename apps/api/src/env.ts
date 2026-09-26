@@ -30,6 +30,14 @@ export interface AppEnv {
     userId: string;
 
     /**
+     * Whether the user has turned on two-factor authentication, set by
+     * `requireUser` from the same session read (P4-11). A property of the user
+     * rather than of a membership, unlike `role`: one authenticator covers
+     * every winery they belong to.
+     */
+    mfaEnabled: boolean;
+
+    /**
      * Set by `resolveTenant`, from a `memberships` row — never from the
      * request. Every database call scopes on this and nothing else.
      */

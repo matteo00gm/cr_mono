@@ -7,8 +7,10 @@ import {
   ForbiddenError,
   InvalidRequestError,
   isDomainError,
+  MfaRequiredError,
   NotFoundError,
   RateLimitedError,
+  StepUpRequiredError,
   UnauthenticatedError,
   UnavailableError,
   type DomainErrorKind,
@@ -33,6 +35,8 @@ describe('the subclasses', () => {
     [ConflictError, 'conflict'],
     [RateLimitedError, 'rate_limited'],
     [UnavailableError, 'unavailable'],
+    [MfaRequiredError, 'mfa_required'],
+    [StepUpRequiredError, 'step_up_required'],
   ];
 
   it.each(cases)('%s carries its kind', (Ctor, kind) => {

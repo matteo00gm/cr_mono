@@ -88,6 +88,11 @@ patch will not, because the ORM's own documentation shows the forbidden form.
   not entitled to ask (P0-55).
 - A cross-tenant id returns 404, not 403. The difference tells an attacker the
   resource exists (§3.5, P0-47).
+- A route that changes who can act for a winery, or how — keys, domain removal,
+  membership — takes `requireStepUp` after its capability guard. It reads the
+  session _row_, never the five-minute cookie cache, and `step-up.test.ts` walks
+  the router for the list; a route that loses it still passes for every caller
+  who happens to be fresh (P4-11, ADR 0027).
 
 **Secrets and logging**
 

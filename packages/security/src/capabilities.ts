@@ -69,6 +69,16 @@ export const can = (role: Role, capability: Capability): boolean =>
   (CAPABILITIES[capability] as readonly Role[]).includes(role);
 
 /**
+ * Whether only an OWNER holds this capability — the routes P4-11 closes to an
+ * owner who has not turned on two-factor authentication.
+ *
+ * Derived from the table rather than listed, so a capability that becomes
+ * OWNER-only later is covered without anybody remembering this rule exists.
+ */
+export const isOwnerOnly = (capability: Capability): boolean =>
+  (CAPABILITIES[capability] as readonly Role[]).every((role) => role === 'OWNER');
+
+/**
  * Why a route may be reached without a capability.
  *
  * Not a boolean and not an absence: an explicit sentence, stored beside the

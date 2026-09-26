@@ -4,6 +4,7 @@ import {
   createAuth,
   assertQueryProviderMatchesIndex,
   createSendEmail,
+  getRequestActor,
   logTransport,
   resendTransport,
   type IndexedEmbedding,
@@ -15,6 +16,7 @@ import { bedrockNovaProvider, titanEmbeddingProvider } from '@catalogorosso/llm'
 import { memoryRateLimiter, type MonthlyCheck, type RateLimiter } from '@catalogorosso/security';
 import { loadWidgetTokenKeys, type WidgetTokenKeys } from '@catalogorosso/security/tokens';
 import {
+  insertAuditRow,
   insertSecurityEvent,
   isSuppressed,
   isTokenRevoked,
@@ -22,12 +24,15 @@ import {
   sessionCutoffAt,
   readMembershipsForUser,
   resolveTenantByKeyAndOrigin,
+  withTenant,
   withUser,
 } from '@catalogorosso/db';
 
 import { createDomainsPort, type DomainsPort } from './domains.js';
 import { createKeysPort, type KeysPort } from './keys.js';
 import { createMembersPort, type MembersPort } from './members.js';
+import { recordTwoFactorChange } from './mfa-audit.js';
+import { logger } from './middleware/logger.js';
 import { createProductsPort, type ProductsPort } from './products.js';
 import { createChatPort, type ChatPort } from './chat.js';
 import { createQuotaPort, type QuotaPort } from './quota.js';
@@ -336,6 +341,33 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
        */
       basePath: AUTH_PUBLIC_PATH,
       sendResetPassword,
+
+      /*
+       * One audit row per winery the user belongs to (P4-11), each written in
+       * that winery's own scope. The address and agent come from the request
+       * context as every audit row's do; the actor is the user whose factor
+       * changed, because on an `/auth` route nobody else is known.
+       */
+      onTwoFactorChange: recordTwoFactorChange({
+        memberships: (userId) => readMembershipsForUser(userId),
+        record: (tenantId, row) =>
+          withTenant(tenantId, async (tx) => {
+            const { ip, userAgent } = getRequestActor();
+
+            await insertAuditRow(tx, {
+              tenantId,
+              actorUserId: row.actorUserId,
+              action: row.action,
+              target: row.target,
+              metadata: undefined,
+              ip,
+              userAgent,
+            });
+          }),
+        onFailure: (error, change) => {
+          logger.error({ err: error, event: change.event }, 'two-factor change not audited');
+        },
+      }),
     }),
 
     readMemberships: readMembershipsForUser,

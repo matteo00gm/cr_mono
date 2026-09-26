@@ -1,4 +1,4 @@
-import { UnauthenticatedError, setRequestUser } from '@catalogorosso/core';
+import { UnauthenticatedError, setRequestUser, type StepUpState } from '@catalogorosso/core';
 import type { Hono, MiddlewareHandler } from 'hono';
 
 import type { AppEnv } from '../env.js';
@@ -34,8 +34,15 @@ export interface AuthPort {
   /** Better Auth's fetch handler, mounted below at `/auth/*`. */
   readonly handler: (request: Request) => Promise<Response>;
   readonly api: {
-    readonly getSession: (input: { headers: Headers }) => Promise<{ user: { id: string } } | null>;
+    readonly getSession: (input: { headers: Headers }) => Promise<{
+      user: { id: string; twoFactorEnabled?: boolean | null | undefined };
+    } | null>;
   };
+  /**
+   * The session as a sensitive action needs it, read from its row rather than
+   * the cookie cache (P4-11). `null` for no session and for a revoked one.
+   */
+  readonly stepUpState: (headers: Headers) => Promise<StepUpState | null>;
 }
 
 /**
@@ -77,6 +84,12 @@ export const requireUser =
     if (!session) throw new UnauthenticatedError();
 
     c.set('userId', session.user.id);
+
+    /*
+     * From the cached read, which is fine for the question it answers: whether
+     * to send an owner to enrol. A step-up reads the row itself (P4-11).
+     */
+    c.set('mfaEnabled', session.user.twoFactorEnabled === true);
 
     // So every log line for the rest of this request carries the user, without
     // any call site downstream knowing about it (P0-55).

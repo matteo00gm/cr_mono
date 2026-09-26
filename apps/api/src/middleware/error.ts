@@ -42,6 +42,13 @@ const STATUS_BY_KIND: Record<DomainErrorKind, ContentfulStatusCode> = {
    * disabled state for a winery that is switched off, and an error for a refusal.
    */
   unavailable: 403,
+  /*
+   * 403 for both, told apart by code (P4-11). Not 401: the caller *is*
+   * authenticated, and a dashboard that treats 401 as "signed out" would send
+   * an owner to the sign-in page when all they need is a code.
+   */
+  mfa_required: 403,
+  step_up_required: 403,
 };
 
 /** What every failing response looks like, for callers and for the typed client (P0-63). */
