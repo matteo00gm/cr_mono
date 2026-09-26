@@ -1379,7 +1379,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-08 | 🔒 Public key rotation | 24 h grace, countdown in UI | P0-25 |
 | ✅ P4-09 | 🔒 Secret key create/rotate | SHA-256 (ADR 0025), shown exactly once, prefix+last4 stored | P0-25 |
 | ✅ P4-10 | 🔒 Server-minted session endpoint | `sk_` authenticated, the forgery-proof path | P4-09,P2-12 |
-| P4-11 | 🔒 MFA for OWNER + step-up re-auth | on keys, domains, plan, membership changes | P0-45 |
+| ✅ P4-11 | 🔒 MFA for OWNER + step-up re-auth | on keys, domains, plan, membership changes | P0-45 |
 | P4-12 | 🔒 Security headers | nonce CSP, HSTS preload, nosniff, referrer, frame-deny | P0-54 |
 | P4-13 | SST: AWS WAF on CloudFront | managed bot + reputation rules, per-path rate rules | P0-17 |
 | P4-14 | Turnstile hook | per-tenant flag, default off | P2-12 |
@@ -6572,6 +6572,19 @@ Enrolment and disablement both write to `audit_log`, and disabling 2FA is itself
 
 **Files.** middleware, dashboard screens, tests. **~120 lines.**
 
+**As built.** Better Auth's `twoFactor` plugin is kept, and hardened around rather than trusted (ADR 0027). Reading its 1.7.2 source against this row found five places where it does less than the row requires, and each is closed in `packages/core/src/auth-mfa.ts` as a second plugin whose hooks wrap the first's endpoints:
+
+- **Backup codes are HMACs, not the plugin's default of encrypted** *(the row's first detail)*. Encrypted is readable by anybody with the database and the secret. Through the plugin's own `storeBackupCodes` seam, keyed with the auth secret — ten characters is a searchable space for an unkeyed hash — and the code a caller sends is hashed by a before-hook so the plugin's comparison compares hashes. Single use was already the plugin's, by compare-and-set; the stored hash presented as a code is refused.
+- **A TOTP code is claimed before it is checked** *(the row's second detail)*. The window was already ±1 step; the replay was not refused — a code signed in as often as it was sent for ninety seconds. `auth_totp_claims` (migration 0050) holds each spent code as an HMAC per user; the primary key makes the claim atomic, and a replay gets the plugin's own `INVALID_CODE`, so it cannot be told from a wrong code.
+- **The session path gets an attempt budget** *(addition)*. With a session the plugin counts nothing — its lockout is sign-in only — so a stolen cookie could guess step-up codes at the path's rate limit forever. Ten consecutive failures lock the account for fifteen minutes, on the plugin's own columns and figures.
+- **Changing the second factor is a step-up action** *(addition)*. For an account already enrolled, `/two-factor/enable` replaces the authenticator and **`/two-factor/get-totp-uri` returns the live secret**, each on a session plus the password — a takeover of the second factor, the second one silent. Both, and regenerating codes and disabling (which the row names), need a fresh verification. Every plugin endpoint is classified, and a test holds the list to the plugin's real endpoints, so an upgrade that adds one fails until somebody decides what it is — which is how `get-totp-uri` was caught, by the test written to prove the classification complete.
+- **`auth_sessions.last_verified_at`, stamped by every accepted code** *(the row's third detail)*, and read **by the session's token in SQL, with the database's clock** — never from the cookie cache. `getSession({ disableCookieCache })` was rejected: `getSessionFromCtx` returns whatever session is already cached on the request context, which is not something to rest a privilege check on. A session the table no longer holds is refused, whatever a cached copy says.
+- **Two new error kinds, `mfa_required` and `step_up_required`**, both 403 and told apart by code — not 401, which a dashboard reads as signed out. `requireCapability` sends an owner without MFA to enrol from any capability that only an OWNER holds (derived from the table, `isOwnerOnly`), after the role check so an EDITOR hears about their role. `requireStepUp` sits after the capability guard on seven routes: key create and both rotations, domain removal, member invite, role change and removal. **Invite is included** *(addition)* because an invitation can make somebody an OWNER. **Plan change has no route yet**; P5 must add `stepUp` to it. The guard is tagged, and `step-up.test.ts` walks the router for the exact list.
+- **Audit: one row per winery the user belongs to** *(deviation from P0-53's shared transaction)*. A second factor belongs to the user, so turning it off weakens every winery they can act for. Better Auth commits the change on its own connection, so the rows follow it rather than sharing it, and a failed write is logged, not thrown. Four events: `mfa.enabled`, `mfa.replaced`, `mfa.backup_codes_regenerated`, `mfa.disabled`.
+- **Dashboard.** `/me` reports `twoFactorEnabled`, and the shell asks an owner without it to enrol before they click into a screen that would refuse them. `/sicurezza` walks enrolment — password, the `otpauth://` link and the setup key, the backup codes shown once, a code to prove it — and `StepUpPrompt` takes a code or a backup code and hands control back only after the server accepted it. **No QR image yet** *(deferred)*: it needs a dependency, and the link plus the setup key cover enrolment; the dashboard polish row adds it. No screen calls a step-up route yet, so the prompt waits for the keys, domains and members screens.
+
+**Verified.** 23 cases against the real library and real Postgres, including the one the row names: the cookie cache was filled a moment before by a fresh session and still vouched for it, only the row went stale, and the step-up refused. 17 on the store's SQL, including a two-connection race on one claim. 39 on the rules, 15 on the configuration, 10 on the guard and its route list, 4 on the audit rows, the capability matrix rerun without a second factor, and 15 on the screens. Core branch coverage fell to 83.8% when the rules lived inside the hooks, which only the integration suite reached; splitting the decisions into plain functions put it back at 92% and made each rule a unit test. A mutation run of 48 mutants — every rule, the wiring, the store's SQL, the guards, the route list and the screens — killed 48; three of them only once tests were added for `/me`'s new field, `requireUser` recording it, and the enrolment banner, which the mutant list showed nothing asserted.
+
 ---
 
 ### P4-12 · Security headers 🔒
@@ -6827,6 +6840,8 @@ Also send the P0-64 payment-failed email on entry to `PAST_DUE`, since the tenan
 **Tests.** Upgrade raises limits after the webhook, not before; downgrade schedules and does not change limits yet; the UI shows the effective date.
 
 **Files.** `billing.ts`, tests. **~100 lines.**
+
+**Carried from P4-11.** A plan change is one of §3's sensitive actions, and its route did not exist when step-up landed: mount `requireStepUp` after the capability guard, and add the route to the list `step-up.test.ts` walks.
 
 ---
 
@@ -7755,7 +7770,7 @@ When: **before launch**, as documentation rather than code.
 
 **C3. No expiry sweep for sessions or verification tokens.** `auth_sessions.expires_at` and `auth_verifications.expires_at` both carry indexes (P0-23a) and nothing scans them. Expiry is enforced *on read*, so this is a storage-growth and hygiene issue rather than a security one — an expired session is refused whether or not its row is still there. A periodic worker job belongs with the other scheduled work in P1.
 
-**C4. TOTP is configured but exercised only at the schema level.** The `twoFactor` plugin is registered and its four columns exist (migration `0028`), but no enrolment or verification path is tested. **P4-11** owns OWNER MFA and carries the three details that matter: backup codes single-use and hashed, a ±1-step window with replay rejected, and the step-up check reading the database rather than the cookie cache.
+**C4. TOTP is configured but exercised only at the schema level.** ✅ **closed (2026-09-26, P4-11)** — enrolment, sign-in, replay, the window, backup codes, the step-up budget and the step-up read are all asserted against the real library in `mfa.integration.test.ts`. The `twoFactor` plugin is registered and its four columns exist (migration `0028`), but no enrolment or verification path is tested. **P4-11** owns OWNER MFA and carries the three details that matter: backup codes single-use and hashed, a ±1-step window with replay rejected, and the step-up check reading the database rather than the cookie cache.
 
 **C5. Every audited action writes its row.** ✅ **closed (2026-09-07)**
 

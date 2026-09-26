@@ -4,8 +4,10 @@ import {
   DomainError,
   ForbiddenError,
   InvalidRequestError,
+  MfaRequiredError,
   NotFoundError,
   RateLimitedError,
+  StepUpRequiredError,
   UnauthenticatedError,
   UnavailableError,
   type DomainErrorKind,
@@ -65,6 +67,8 @@ describe('domain errors', () => {
     [new ConflictError(), 'conflict', 409],
     [new RateLimitedError(), 'rate_limited', 429],
     [new UnavailableError(), 'unavailable', 403],
+    [new MfaRequiredError(), 'mfa_required', 403],
+    [new StepUpRequiredError(), 'step_up_required', 403],
   ];
 
   it.each(cases)('%s maps to its status', async (error, kind, status) => {

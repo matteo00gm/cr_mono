@@ -1,6 +1,7 @@
 import {
   ALL_CAPABILITIES,
   can,
+  isOwnerOnly,
   requires,
   ROLES,
   type Capability,
@@ -37,11 +38,12 @@ const body = async (response: Response): Promise<Record<string, unknown>> =>
 
 describe('requireCapability', () => {
   /** A minimal surface with the real error handler, so statuses are real. */
-  const app = (role: Role, capability: Capability) => {
+  const app = (role: Role, capability: Capability, mfaEnabled = true) => {
     const guarded = new Hono<AppEnv>();
     guarded.onError(errorHandler);
     guarded.use('*', async (c, next) => {
       c.set('role', role);
+      c.set('mfaEnabled', mfaEnabled);
       await next();
     });
     guarded.get('/', requireCapability(capability), (c) => c.text('allowed'));
@@ -93,6 +95,66 @@ describe('requireCapability', () => {
         expect(response.status, `${role} / ${capability}`).toBe(expected);
       }
     }
+  });
+
+  it('runs it again without a second factor, where only OWNER-only routes change', async () => {
+    /*
+     * The P4-11 rule over the whole table: a role that lacks the capability is
+     * told about its role; an owner without MFA is sent to enrol for the
+     * OWNER-only ones and passes everywhere else.
+     */
+    for (const role of ROLES) {
+      for (const capability of ALL_CAPABILITIES) {
+        const response = await app(role, capability, false).request('/');
+        const expected = !can(role, capability)
+          ? 'forbidden'
+          : isOwnerOnly(capability)
+            ? 'mfa_required'
+            : 'allowed';
+
+        if (expected === 'allowed') {
+          expect(response.status, `${role} / ${capability}`).toBe(200);
+        } else {
+          expect(response.status, `${role} / ${capability}`).toBe(403);
+          expect((await body(response)).error, `${role} / ${capability}`).toMatchObject({
+            code: expected,
+          });
+        }
+      }
+    }
+  });
+});
+
+describe('an owner without a second factor (P4-11)', () => {
+  const app = (role: Role, capability: Capability) => {
+    const guarded = new Hono<AppEnv>();
+    guarded.onError(errorHandler);
+    guarded.use('*', async (c, next) => {
+      c.set('role', role);
+      c.set('mfaEnabled', false);
+      await next();
+    });
+    guarded.get('/', requireCapability(capability), (c) => c.text('allowed'));
+    return guarded;
+  };
+
+  it('is sent to enrol from an OWNER-only route, with a reason rather than a bare 403', async () => {
+    const response = await app('OWNER', 'keys:manage').request('/');
+    const { error } = (await body(response)) as { error: { code: string; message: string } };
+
+    expect(response.status).toBe(403);
+    expect(error.code).toBe('mfa_required');
+    expect(error.message).toMatch(/two-factor/iu);
+  });
+
+  it('can still work on the catalogue', async () => {
+    expect((await app('OWNER', 'catalog:write').request('/')).status).toBe(200);
+  });
+
+  it('never tells an EDITOR to enrol for something enrolling would not grant', async () => {
+    const response = await app('EDITOR', 'keys:manage').request('/');
+
+    expect((await body(response)).error).toMatchObject({ code: 'forbidden' });
   });
 });
 

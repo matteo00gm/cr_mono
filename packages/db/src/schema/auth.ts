@@ -1,4 +1,13 @@
-import { boolean, index, integer, pgTable, text, timestamp, unique } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  index,
+  integer,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  unique,
+} from 'drizzle-orm/pg-core';
 
 /**
  * Better Auth's tables (P0-23a).
@@ -99,6 +108,17 @@ export const authSessions = pgTable(
 
     ipAddress: text('ip_address'),
     userAgent: text('user_agent'),
+
+    /**
+     * When this session last proved a second factor (P4-11).
+     *
+     * Null until it does. Set when a TOTP or backup code is accepted — at
+     * sign-in, at enrolment, or on a step-up — and read by the step-up check
+     * **from this row, never from the cookie cache**: a signed copy up to five
+     * minutes old would let a privilege-escalating action trust a verification
+     * that has since gone stale.
+     */
+    lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true, mode: 'date' }),
 
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -252,4 +272,33 @@ export const authTwoFactor = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
   (table) => [index('auth_two_factor_user_idx').on(table.userId)],
+);
+
+/**
+ * `auth_totp_claims` — TOTP codes already spent (P4-11).
+ *
+ * **Better Auth accepts a code for as long as its window lasts, as often as it
+ * is sent.** A ±1-step window at 30 seconds is up to 90 seconds in which a code
+ * read over a shoulder, or relayed by a phishing proxy, signs in a second time.
+ * A code is claimed here before it is checked, and a second claim inside the
+ * window is refused — the primary key makes the claim atomic, so two racing
+ * requests with one code cannot both win.
+ *
+ * `code_hash` is an HMAC keyed with the auth secret, not the code: six digits
+ * are a million guesses, and a plain hash of one is a lookup table.
+ */
+export const authTotpClaims = pgTable(
+  'auth_totp_claims',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => authUsers.id, { onDelete: 'cascade' }),
+
+    codeHash: text('code_hash').notNull(),
+
+    claimedAt: timestamp('claimed_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ name: 'auth_totp_claims_pkey', columns: [table.userId, table.codeHash] }),
+  ],
 );

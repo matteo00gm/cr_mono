@@ -76,6 +76,8 @@ export type SessionState =
   | {
       readonly status: 'signed-in';
       readonly userId: string;
+      /** Whether the user has a second factor (P4-11). */
+      readonly twoFactorEnabled: boolean;
       readonly memberships: readonly Membership[];
       /** The chosen winery, or `undefined` while the user has yet to choose. */
       readonly active: Membership | undefined;
@@ -153,6 +155,7 @@ export const useSession = (client?: ApiClient): SessionState => {
         setState({
           status: 'signed-in',
           userId: me.userId,
+          twoFactorEnabled: me.twoFactorEnabled,
           memberships: me.memberships,
           active: chooseActive(me.memberships, rememberedTenant()),
         });

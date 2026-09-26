@@ -1,5 +1,5 @@
-import { ForbiddenError } from '@catalogorosso/core';
-import { can, type Capability, type RouteAccess } from '@catalogorosso/security';
+import { ForbiddenError, MfaRequiredError } from '@catalogorosso/core';
+import { can, isOwnerOnly, type Capability, type RouteAccess } from '@catalogorosso/security';
 import type { Hono, MiddlewareHandler } from 'hono';
 
 import type { AppEnv } from '../env.js';
@@ -40,6 +40,15 @@ export const requireCapability = (capability: Capability): CapabilityGuard => {
     if (!can(c.get('role'), capability)) {
       throw new ForbiddenError(`This role cannot ${capability.replace(':', ' ')}.`);
     }
+
+    /*
+     * **An OWNER-only route needs an owner with a second factor** (P4-11), and
+     * says so rather than refusing opaquely. After the role check, so an
+     * EDITOR is told about their role and never asked to enrol for something
+     * enrolling would not grant; and only for OWNER-only capabilities, so an
+     * owner who has not enrolled yet can still work on the catalogue.
+     */
+    if (isOwnerOnly(capability) && !c.get('mfaEnabled')) throw new MfaRequiredError();
 
     await next();
   };

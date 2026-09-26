@@ -3,6 +3,7 @@ import { useMemo } from 'preact/hooks';
 import { Link, Route, Switch, useLocation } from 'wouter-preact';
 
 import { CatalogScreen } from './features/catalog/CatalogScreen.js';
+import { EnrolmentScreen } from './features/security/EnrolmentScreen.js';
 import { navFor } from './nav.js';
 import { apiFor, rememberTenant, useSession, type SessionState } from './session.js';
 import type { ApiClient } from '@catalogorosso/api-client';
@@ -150,7 +151,7 @@ export const Layout = ({
    */
   readonly clientFor?: ((tenantId: string) => ApiClient) | undefined;
 }): JSX.Element => {
-  const { active, memberships } = session;
+  const { active, memberships, twoFactorEnabled } = session;
 
   if (!active) {
     /*
@@ -182,6 +183,18 @@ export const Layout = ({
         ))}
       </nav>
 
+      {active.role === 'OWNER' && !twoFactorEnabled ? (
+        /*
+         * Before the owner clicks into a screen that would refuse them
+         * (P4-11). The server's `mfa_required` is the rule; this saves the
+         * click, and says why.
+         */
+        <p class="shell-notice" role="status">
+          Attiva la verifica in due passaggi per gestire chiavi, domini, membri e fatturazione.{' '}
+          <Link href="/sicurezza">Attivala ora</Link>
+        </p>
+      ) : null}
+
       <main class="shell-main">
         <Switch>
           <Route path="/">
@@ -192,6 +205,9 @@ export const Layout = ({
           </Route>
           <Route path="/membri">
             <Placeholder title="Membri" />
+          </Route>
+          <Route path="/sicurezza">
+            <EnrolmentScreen enrolled={twoFactorEnabled} />
           </Route>
           <Route>
             {/* Unknown path. A 404 inside the shell rather than a blank page,

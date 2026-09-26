@@ -351,6 +351,13 @@
       "when": 1788654188584,
       "tag": "0049_secret_key_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1788654188585,
+      "tag": "0050_mfa_step_up",
+      "breakpoints": true
     }
   ]
 }

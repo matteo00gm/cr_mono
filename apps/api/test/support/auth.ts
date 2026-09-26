@@ -30,12 +30,24 @@ export interface FakeAuthOptions {
    * is the state most assertions care about.
    */
   readonly user?: { id: string; email: string } | null;
+
+  /**
+   * Whether the user has a second factor (P4-11). On by default for a signed-in
+   * user, so the suites that are about something else reach OWNER-only routes
+   * as an owner who did what the product requires; the MFA suites turn it off.
+   */
+  readonly mfa?: boolean;
+
+  /** Whether that second factor was proved recently enough for a step-up. */
+  readonly fresh?: boolean;
 }
 
 export const fakeAuth = (options: FakeAuthOptions = {}): FakeAuth => {
   const handled: string[] = [];
   let reads = 0;
   const user = options.user ?? null;
+  const mfa = options.mfa ?? true;
+  const fresh = options.fresh ?? true;
 
   return {
     handled,
@@ -53,15 +65,22 @@ export const fakeAuth = (options: FakeAuthOptions = {}): FakeAuth => {
     api: {
       getSession: () => {
         reads += 1;
-        return Promise.resolve(user === null ? null : { user });
+        return Promise.resolve(user === null ? null : { user: { ...user, twoFactorEnabled: mfa } });
       },
     },
+
+    stepUpState: () =>
+      Promise.resolve(
+        user === null ? null : { userId: user.id, twoFactorEnabled: mfa, fresh: mfa && fresh },
+      ),
   };
 };
 
 /** A signed-in session, for the routes that need one. */
-export const signedIn = (id = 'user_matteo'): FakeAuth =>
-  fakeAuth({ user: { id, email: 'matteo@example.com' } });
+export const signedIn = (
+  id = 'user_matteo',
+  mfa: Pick<FakeAuthOptions, 'mfa' | 'fresh'> = {},
+): FakeAuth => fakeAuth({ user: { id, email: 'matteo@example.com' }, ...mfa });
 
 /**
  * A membership reader backed by a plain array (P0-47).

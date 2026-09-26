@@ -55,6 +55,7 @@ describe('useSession', () => {
       <Probe
         client={clientAnswering({
           userId: 'user_matteo',
+          twoFactorEnabled: true,
           memberships: [{ tenantId: TENANT, role: 'OWNER' }],
         })}
       />,
@@ -90,6 +91,7 @@ describe('useSession', () => {
       <Probe
         client={clientAnswering({
           userId: 'user_matteo',
+          twoFactorEnabled: true,
           memberships: [
             { tenantId: '22222222-2222-2222-2222-222222222222', role: 'EDITOR' },
             { tenantId: TENANT, role: 'OWNER' },
@@ -110,6 +112,7 @@ describe('useSession', () => {
       <Probe
         client={clientAnswering({
           userId: 'user_matteo',
+          twoFactorEnabled: true,
           memberships: [
             { tenantId: TENANT, role: 'OWNER' },
             { tenantId: '22222222-2222-2222-2222-222222222222', role: 'EDITOR' },
@@ -185,6 +188,7 @@ describe('App', () => {
       <App
         client={clientAnswering({
           userId: 'user_matteo',
+          twoFactorEnabled: true,
           memberships: [{ tenantId: TENANT, role: 'OWNER' }],
         })}
       />,

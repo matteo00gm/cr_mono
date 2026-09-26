@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   authAccounts,
   authSessions,
+  authTotpClaims,
   authTwoFactor,
   authUsers,
   authVerifications,
@@ -26,9 +27,14 @@ describe('auth table naming', () => {
      * reference stays quoted, and the first unquoted use returns the database
      * role instead of failing: a silent wrong answer rather than an error.
      */
-    const names = [authUsers, authSessions, authAccounts, authVerifications, authTwoFactor].map(
-      (table) => getTableConfig(table).name,
-    );
+    const names = [
+      authUsers,
+      authSessions,
+      authAccounts,
+      authVerifications,
+      authTwoFactor,
+      authTotpClaims,
+    ].map((table) => getTableConfig(table).name);
 
     expect(names).toEqual([
       'auth_users',
@@ -36,6 +42,7 @@ describe('auth table naming', () => {
       'auth_accounts',
       'auth_verifications',
       'auth_two_factor',
+      'auth_totp_claims',
     ]);
   });
 });
@@ -156,5 +163,29 @@ describe('memberships.user_id', () => {
     );
 
     expect(userFk?.onDelete).toBe('cascade');
+  });
+});
+
+describe('the P4-11 additions', () => {
+  it('lets a session start with no second factor proved', () => {
+    /* Null until a code is accepted; the step-up check reads it as stale. */
+    const column = sessions.columns.find((c) => c.name === 'last_verified_at');
+
+    expect(column?.notNull).toBe(false);
+    expect(column?.getSQLType()).toBe('timestamp with time zone');
+  });
+
+  it('makes a spent code unique per user, which is what makes a claim atomic', () => {
+    const claims = getTableConfig(authTotpClaims);
+
+    expect(claims.primaryKeys.map((key) => key.columns.map((c) => c.name))).toEqual([
+      ['user_id', 'code_hash'],
+    ]);
+  });
+
+  it('carries no tenant_id, like every auth table', () => {
+    const claims = getTableConfig(authTotpClaims);
+
+    expect(claims.columns.map((c) => c.name)).not.toContain('tenant_id');
   });
 });

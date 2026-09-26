@@ -59,6 +59,7 @@ import {
 
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
+import { requireStepUp } from '../middleware/step-up.js';
 import { requireCapability, routeKey } from '../middleware/capability.js';
 import { logger } from '../middleware/logger.js';
 import { resolveTenant } from '../middleware/tenant.js';
@@ -493,6 +494,14 @@ export const createDashboardApp = ({
    */
   app.use('*', requireUser(auth));
 
+  /*
+   * Fresh second factor for the actions that change who can act for a winery,
+   * or how (P4-11): keys, domain removal, and membership. A stolen session can
+   * browse; it cannot hand itself the winery. Plan change joins this list with
+   * its route (P5).
+   */
+  const stepUp = requireStepUp(auth);
+
   /**
    * Who the caller is, and which wineries they belong to.
    *
@@ -509,7 +518,16 @@ export const createDashboardApp = ({
   app.get('/me', async (c) => {
     const memberships = await readMemberships(c.get('userId'));
 
-    return c.json({ userId: c.get('userId'), memberships });
+    /*
+     * `twoFactorEnabled` so the shell can tell an owner to enrol before they
+     * click into a screen that would refuse them (P4-11). A property of the
+     * user, like `userId`, so it sits beside it and not inside a membership.
+     */
+    return c.json({
+      userId: c.get('userId'),
+      twoFactorEnabled: c.get('mfaEnabled'),
+      memberships,
+    });
   });
 
   /**
@@ -582,7 +600,7 @@ export const createDashboardApp = ({
    * their authority. What must never be read from a request is the role at
    * **acceptance**, where the sender is the person who benefits from it.
    */
-  app.post('/members/invite', requireCapability('members:manage'), async (c) => {
+  app.post('/members/invite', requireCapability('members:manage'), stepUp, async (c) => {
     const parsed = inviteBody.safeParse(await readJson(c));
 
     if (!parsed.success) {
@@ -1163,7 +1181,7 @@ export const createDashboardApp = ({
    * what lets a server mint sessions on the winery's behalf (P4-10), and that is
    * closer to a password than to a setting.
    */
-  app.post('/keys', requireCapability('keys:manage'), async (c) =>
+  app.post('/keys', requireCapability('keys:manage'), stepUp, async (c) =>
     c.json(await keys.create(c.get('tenantId')), 201),
   );
 
@@ -1175,7 +1193,7 @@ export const createDashboardApp = ({
    * still works is a window in which the leak still works. They control their
    * own server's deployment; the moment they rotate is the moment it changes.
    */
-  app.post('/keys/secret/rotate', requireCapability('keys:manage'), async (c) =>
+  app.post('/keys/secret/rotate', requireCapability('keys:manage'), stepUp, async (c) =>
     c.json(await keys.rotateSecret(c.get('tenantId'))),
   );
 
@@ -1188,7 +1206,7 @@ export const createDashboardApp = ({
    * rotates because they think a key has leaked, and rotating again must not
    * leave the first leaked key working beside the second.
    */
-  app.post('/keys/public/rotate', requireCapability('keys:manage'), async (c) =>
+  app.post('/keys/public/rotate', requireCapability('keys:manage'), stepUp, async (c) =>
     c.json(await keys.rotatePublic(c.get('tenantId'))),
   );
 
@@ -1208,7 +1226,7 @@ export const createDashboardApp = ({
    * a confirmation rather than a refusal: it is their domain and their
    * decision, and what they must not be able to do is make it by accident.
    */
-  app.delete('/domains/:id', requireCapability('domains:manage'), async (c) =>
+  app.delete('/domains/:id', requireCapability('domains:manage'), stepUp, async (c) =>
     c.json(
       await domains.remove({
         /* From a `memberships` row, never from the body (P0-48). */
@@ -1286,7 +1304,7 @@ export const createDashboardApp = ({
    * would invite somebody to send `tenantId` in it, which is exactly the thing
    * P0-48 exists to make impossible.
    */
-  app.patch('/members/:userId', requireCapability('members:manage'), async (c) => {
+  app.patch('/members/:userId', requireCapability('members:manage'), stepUp, async (c) => {
     const parsed = roleChangeBody.safeParse(await readJson(c));
 
     if (!parsed.success) {
@@ -1320,7 +1338,7 @@ export const createDashboardApp = ({
    * the `memberships` row is gone afterwards and nothing else records that the
    * person was ever a member.
    */
-  app.delete('/members/:userId', requireCapability('members:manage'), async (c) => {
+  app.delete('/members/:userId', requireCapability('members:manage'), stepUp, async (c) => {
     const userId = c.req.param('userId');
 
     assertMemberWriteSucceeded(await members.remove({ tenantId: c.get('tenantId'), userId }));
@@ -1432,9 +1450,12 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'several wineries cannot pick one from a list they are not allowed to fetch. The ' +
         'memberships returned are scoped by Row Level Security to the caller, so this ' +
         'cannot be used to enumerate anybody else. Send the chosen tenant back on ' +
-        'subsequent requests in the active-tenant header.',
+        'subsequent requests in the active-tenant header. `twoFactorEnabled` says whether ' +
+        'the caller has a second factor: an owner without one is refused OWNER-only routes ' +
+        "with code 'mfa_required' until they enrol.",
       example: {
         userId: 'user_matteo',
+        twoFactorEnabled: true,
         memberships: [
           { tenantId: '9f2c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a', role: 'OWNER' },
           { tenantId: 'c3d5a881-6b12-4f77-9a10-6b124f779a10', role: 'EDITOR' },

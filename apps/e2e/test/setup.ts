@@ -69,6 +69,7 @@ export const start = async (): Promise<Harness> => {
         api: {
           getSession: () => Promise.resolve(null),
         },
+        stepUpState: () => Promise.resolve(null),
       },
       readMemberships: () => Promise.resolve([]),
 

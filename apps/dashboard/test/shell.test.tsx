@@ -26,6 +26,7 @@ const signedIn = (
 ): Extract<SessionState, { status: 'signed-in' }> => ({
   status: 'signed-in',
   userId: 'user_matteo',
+  twoFactorEnabled: true,
   memberships,
   active: { tenantId: TENANT_A, role },
 });
@@ -134,6 +135,35 @@ describe('the navigation gate', () => {
   });
 });
 
+describe('the enrolment banner (P4-11)', () => {
+  /*
+   * UX, like the nav gate: the server's `mfa_required` is the rule. This saves
+   * an owner the click into a screen that would refuse them, and says why.
+   */
+  const banner = () => screen.queryByRole('status');
+
+  it('asks an owner without a second factor to turn one on', () => {
+    render(<Layout session={{ ...signedIn('OWNER'), twoFactorEnabled: false }} />);
+
+    const shown = screen.getByRole('status');
+
+    expect(shown.textContent).toContain('verifica in due passaggi');
+    expect(within(shown).getByRole('link').getAttribute('href')).toBe('/sicurezza');
+  });
+
+  it('says nothing to an owner who has one', () => {
+    render(<Layout session={signedIn('OWNER')} />);
+
+    expect(banner()).toBeNull();
+  });
+
+  it('says nothing to an editor, whom enrolling would not let into those screens', () => {
+    render(<Layout session={{ ...signedIn('EDITOR'), twoFactorEnabled: false }} />);
+
+    expect(banner()).toBeNull();
+  });
+});
+
 describe('choosing a winery', () => {
   it('needs no choice when there is one membership', () => {
     expect(chooseActive([{ tenantId: TENANT_A, role: 'OWNER' }], undefined)).toEqual({
@@ -181,6 +211,7 @@ describe('choosing a winery', () => {
         session={{
           status: 'signed-in',
           userId: 'user_matteo',
+          twoFactorEnabled: true,
           memberships: [
             { tenantId: TENANT_A, role: 'OWNER' },
             { tenantId: TENANT_B, role: 'EDITOR' },
@@ -214,6 +245,7 @@ describe('choosing a winery', () => {
         session={{
           status: 'signed-in',
           userId: 'user_matteo',
+          twoFactorEnabled: true,
           memberships: [
             { tenantId: TENANT_A, role: 'OWNER' },
             { tenantId: TENANT_B, role: 'EDITOR' },
