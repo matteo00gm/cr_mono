@@ -8003,13 +8003,13 @@ A pass over the whole codebase for security, reliability and efficiency, after P
 
 **R3. A conversation read back in the wrong order when two turns shared a timestamp.** ✅ **closed (review)** — see P2-30's note. The flaky `keeps the recent end` was this, and it is now reproduced deterministically and fixed with `messages.seq` (migration 0052).
 
-**R4. A password reset leaves every existing session alive.** Better Auth's `revokeSessionsOnPasswordReset` is off by default and was not set, so a stolen session outlives the reset its victim does to get rid of it.
+**R4. A password reset leaves every existing session alive.** ✅ **closed (review)** — Better Auth's `revokeSessionsOnPasswordReset` is off by default and was not set, so a stolen session outlived the reset its victim did to get rid of it. Now set, and proved against the real library: with it off, two sessions survive a reset. The cookie cache still vouches for a revoked session for up to five minutes on a read (D1); every step-up action reads the row (P4-11).
 
-**R5. The dashboard's own routes rely on `SameSite=Lax` alone against CSRF.** Lax stops cross-*site* requests; once the dashboard has a custom domain, a compromised sibling subdomain is same-site. An `Origin` check on state-changing requests closes it.
+**R5. The dashboard's own routes relied on `SameSite=Lax` alone against CSRF.** ✅ **closed (review)** — Lax stops cross-*site* requests; once the dashboard has a custom domain, a compromised sibling subdomain is same-site. `requireSameOrigin` refuses a state-changing request whose `Origin` is not the dashboard's, or that the browser marks `cross-site` or `same-site`, in front of Better Auth's routes and ours alike. A caller sending neither header is not a browser and cannot be a CSRF victim, so it passes. The composition root always supplies the origin, from `AUTH_BASE_URL`.
 
-**R6. The public widget routes parse any body the platform accepts, up to 6 MB, before validating a 500-character message.** Rate-limited per address, so low — but a body limit on the widget surface is one line.
+**R6. The public widget routes parsed any body the platform accepts, up to 6 MB.** ✅ **closed (review)** — every widget body is now refused over 16 KB: by its declared length before it is read, and by its real size before it is parsed.
 
-**R7. The chat path embeds the visitor's question with the worker's retry policy**: four attempts, backoff to five seconds, no per-attempt timeout — inside a request with a 60-second budget and a visitor waiting.
+**R7. The chat path embedded the visitor's question with the worker's retry policy.** ✅ **closed (review)** — four attempts, backoff to five seconds, no per-attempt timeout, inside a request with a 60-second budget and a visitor waiting. The Titan provider takes a per-attempt `timeoutMs`, and retries an attempt it abandoned; the API's query paths use two attempts of three seconds. The worker keeps its own policy.
 
 **R8. The API reference is not held to the API.** Route examples are never parsed against their response schemas (a P4-10 example carried a field the contract does not have); every success is documented as 200, while five routes answer 201 or 202; the widget's 422 example names a code, `invalid_request`, that the API never sends.
 

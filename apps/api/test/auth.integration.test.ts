@@ -26,7 +26,7 @@ import { AUTH_PUBLIC_PATH, DASHBOARD_PREFIX, WIDGET_PREFIX } from '../src/routes
 
 let harness: TestDatabase | undefined;
 let app: ReturnType<typeof createApp>;
-const resetEmails: { to: string; url: string }[] = [];
+const resetEmails: { to: string; url: string; token: string }[] = [];
 
 const post = async (path: string, payload: unknown): Promise<Response> =>
   // `app.request` is typed as `Response | Promise<Response>`; awaiting
@@ -59,8 +59,8 @@ beforeAll(async () => {
       secret: 'integration-suite-secret-value-not-used-anywhere-real',
       baseUrl: 'http://localhost',
       basePath: AUTH_PUBLIC_PATH,
-      sendResetPassword: ({ to, url }) => {
-        resetEmails.push({ to, url });
+      sendResetPassword: ({ to, url, token }) => {
+        resetEmails.push({ to, url, token });
         return Promise.resolve();
       },
     }),
@@ -212,6 +212,52 @@ describe('password reset', () => {
 
     expect(response.status).toBe(200);
     expect(resetEmails).toHaveLength(0);
+  });
+});
+
+describe('a completed password reset (review, R4)', () => {
+  it('ends every session the account had', async () => {
+    /*
+     * A reset is what somebody does when they think their password is known,
+     * so the session of whoever knew it must not survive it. Its own account,
+     * so the suite's shared one keeps its password.
+     */
+    const account = {
+      name: 'Giulia',
+      email: `giulia-${String(Date.now())}@cantina-colpetrone.example`,
+      password: 'a-first-password-long-enough-for-better-auth',
+    };
+
+    await post(`${AUTH_PUBLIC_PATH}/sign-up/email`, account);
+    await post(`${AUTH_PUBLIC_PATH}/sign-in/email`, {
+      email: account.email,
+      password: account.password,
+    });
+
+    const sessions = async () =>
+      [
+        ...((await harness?.adminDb.execute(sql`
+          SELECT s.id FROM auth_sessions s JOIN auth_users u ON u.id = s.user_id
+          WHERE u.email = ${account.email}
+        `)) ?? []),
+      ].length;
+
+    expect(await sessions()).toBeGreaterThan(0);
+
+    resetEmails.length = 0;
+    await post(`${AUTH_PUBLIC_PATH}/request-password-reset`, {
+      email: account.email,
+      redirectTo: 'http://localhost/reset',
+    });
+    const [email] = resetEmails;
+
+    const reset = await post(`${AUTH_PUBLIC_PATH}/reset-password`, {
+      token: email?.token,
+      newPassword: 'a-second-password-long-enough-for-better-auth',
+    });
+
+    expect(reset.status).toBe(200);
+    expect(await sessions()).toBe(0);
   });
 });
 

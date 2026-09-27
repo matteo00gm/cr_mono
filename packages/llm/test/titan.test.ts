@@ -320,3 +320,66 @@ describe('its defaults', () => {
     expect(send).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('a per-attempt timeout (review, R7)', () => {
+  /** An attempt that never answers until it is aborted, as a hung Bedrock would. */
+  const hanging = (sent: AbortSignal[]) =>
+    vi.fn((_command: Sent, options?: { abortSignal?: AbortSignal }) => {
+      if (options?.abortSignal !== undefined) sent.push(options.abortSignal);
+
+      return new Promise((_resolve, reject) => {
+        options?.abortSignal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        });
+      });
+    });
+
+  it('abandons a slow attempt, and gives up after the attempts it was given', async () => {
+    const signals: AbortSignal[] = [];
+    const send = hanging(signals);
+
+    await expect(
+      provider(send, { timeoutMs: 20, maxAttempts: 2 }).embed(['una domanda']),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(signals).toHaveLength(2);
+  });
+
+  it('retries an abandoned attempt and keeps the answer that came back', async () => {
+    const signals: AbortSignal[] = [];
+    const slow = hanging(signals);
+    let calls = 0;
+    const send = vi.fn((command: Sent, options?: { abortSignal?: AbortSignal }) => {
+      calls += 1;
+      return calls === 1
+        ? slow(command, options)
+        : Promise.resolve(respond({ embedding: vector(1) }));
+    });
+
+    const [embedded] = await provider(send, { timeoutMs: 20, maxAttempts: 2 }).embed(['ciao']);
+
+    expect(embedded?.[0]).toBe(1);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('passes no signal and never abandons without one, as the worker runs', async () => {
+    const send = vi.fn((_command: Sent, options?: { abortSignal?: AbortSignal }) => {
+      expect(options).toBeUndefined();
+      return Promise.resolve(respond({ embedding: vector(0) }));
+    });
+
+    await provider(send).embed(['ciao']);
+
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat an abort it did not ask for as a timeout to retry', async () => {
+    /* No timeout configured: an AbortError is somebody else's, and not ours to repeat. */
+    const send = vi.fn(() => Promise.reject(Object.assign(new Error('x'), { name: 'AbortError' })));
+
+    await expect(provider(send, { maxAttempts: 3 }).embed(['ciao'])).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+});

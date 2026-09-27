@@ -237,6 +237,13 @@ export const createAuth = (
 
     emailAndPassword: {
       enabled: true,
+      /*
+       * **A reset ends every session the account had** (review, R4). Better
+       * Auth's default keeps them, and a reset is what somebody does when they
+       * think their password is known — so the default leaves the session of
+       * whoever knew it alive through the very step meant to remove them.
+       */
+      revokeSessionsOnPasswordReset: true,
       sendResetPassword: async ({ user, url, token }) => {
         await options.sendResetPassword({ to: user.email, url, token, userId: user.id });
       },

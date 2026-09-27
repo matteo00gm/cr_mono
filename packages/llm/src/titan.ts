@@ -80,6 +80,15 @@ export interface TitanOptions {
   readonly onTruncate?:
     ((info: { readonly from: number; readonly to: number }) => void) | undefined;
   readonly maxAttempts?: number | undefined;
+  /**
+   * How long one attempt may take before it is abandoned (review, R7).
+   *
+   * Absent — the worker's case — and an attempt runs until the SDK or the
+   * Lambda gives up, which a queue can afford. A visitor waiting on the chat
+   * path cannot, so the API sets one; and an attempt it abandoned is retried
+   * like a throttle, since a slow answer is transient in the same way.
+   */
+  readonly timeoutMs?: number | undefined;
 }
 
 /**
@@ -131,6 +140,12 @@ const isRetryable = (error: unknown): boolean => {
   return typeof name === 'string' && RETRYABLE.has(name);
 };
 
+/** An attempt this provider abandoned for its own timeout, whichever way the SDK reports it. */
+const isAbandoned = (error: unknown): boolean => {
+  const name = (error as { name?: unknown } | undefined)?.name;
+  return name === 'TimeoutError' || name === 'AbortError';
+};
+
 /**
  * Full jitter, which is what the injected random source is for.
  *
@@ -152,6 +167,7 @@ export const titanEmbeddingProvider = (options: TitanOptions = {}): EmbeddingPro
       }));
   const random = options.random ?? Math.random;
   const maxAttempts = options.maxAttempts ?? 4;
+  const { timeoutMs } = options;
 
   const embedOne = async (text: string): Promise<number[]> => {
     const body = JSON.stringify({
@@ -177,6 +193,7 @@ export const titanEmbeddingProvider = (options: TitanOptions = {}): EmbeddingPro
             accept: 'application/json',
             body,
           }),
+          timeoutMs === undefined ? undefined : { abortSignal: AbortSignal.timeout(timeoutMs) },
         );
 
         const parsed = JSON.parse(new TextDecoder().decode(response.body)) as {
@@ -195,7 +212,9 @@ export const titanEmbeddingProvider = (options: TitanOptions = {}): EmbeddingPro
          * before landing the message in the DLQ looking like a provider problem
          * — which is precisely the confusion P1-50 exists to resolve.
          */
-        if (attempt + 1 >= maxAttempts || !isRetryable(error)) throw error;
+        const abandoned = timeoutMs !== undefined && isAbandoned(error);
+
+        if (attempt + 1 >= maxAttempts || !(isRetryable(error) || abandoned)) throw error;
 
         await sleep(backoffMs(attempt, random));
       }

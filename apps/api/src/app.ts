@@ -98,6 +98,13 @@ export interface AppOptions {
   readonly originSecret?: string | undefined;
 
   /**
+   * The dashboard's own origin, which state-changing dashboard requests must
+   * come from (review, R5). Absent — a suite, a local run — and no origin is
+   * checked; the composition root always supplies it.
+   */
+  readonly dashboardOrigin?: string | undefined;
+
+  /**
    * The catalogue (P1-02). Optional on the `members` terms: absent refuses
    * every call with a wiring error rather than answering plausibly.
    */
@@ -144,6 +151,7 @@ export const createApp = ({
   products,
   rag,
   originSecret,
+  dashboardOrigin,
   webhooks,
   resendWebhookSecret,
   widget,
@@ -225,6 +233,7 @@ export const createApp = ({
       turnstileSettings,
       products,
       rag,
+      dashboardOrigin,
     }),
   );
   app.route(WIDGET_PREFIX, createWidgetApp(widget));

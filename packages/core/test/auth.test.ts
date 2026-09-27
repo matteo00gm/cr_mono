@@ -35,6 +35,7 @@ interface ConfiguredAuth {
       ipAddress?: { ipAddressHeaders?: string[] };
     };
     readonly plugins?: { id: string; options?: Record<string, unknown> }[];
+    readonly emailAndPassword?: { revokeSessionsOnPasswordReset?: boolean };
     readonly rateLimit?: {
       enabled?: boolean;
       window?: number;
@@ -184,6 +185,12 @@ describe('client IP resolution', () => {
      * service wearing a protection's clothes.
      */
     expect(configure().options.advanced?.ipAddress?.ipAddressHeaders).toEqual(['x-forwarded-for']);
+  });
+});
+
+describe('a password reset (review, R4)', () => {
+  it('ends every session the account had, rather than Better Auth’s default of keeping them', () => {
+    expect(configure().options.emailAndPassword?.revokeSessionsOnPasswordReset).toBe(true);
   });
 });
 
