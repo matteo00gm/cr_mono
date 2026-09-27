@@ -38,6 +38,16 @@ const authBaseUrl = new sst.Secret('AuthBaseUrl', 'https://localhost');
 const resendApiKey = new sst.Secret('ResendApiKey', '');
 
 /**
+ * Cloudflare Turnstile (P4-14). Empty on every stage until an operator creates
+ * a widget in Cloudflare's dashboard — and empty is read as absent, so no
+ * winery can turn the challenge on until both are set. The site key is public
+ * (it ships in every widget config that asks for a challenge); it is a secret
+ * here only because `sst.Secret` is this app's per-stage operator value.
+ */
+const turnstileSiteKey = new sst.Secret('TurnstileSiteKey', '');
+const turnstileSecretKey = new sst.Secret('TurnstileSecretKey', '');
+
+/**
  * The `From` header. Its domain must be the authenticated one (E6).
  *
  * A secret for the same reason `AuthBaseUrl` is one — not because an address is
@@ -194,6 +204,10 @@ const environment = {
    * suppression list is indistinguishable from a domain with no bounces.
    */
   RESEND_WEBHOOK_SECRET: resendWebhookSecret.value,
+
+  /* Both or neither; see the declarations above (P4-14). */
+  TURNSTILE_SITE_KEY: turnstileSiteKey.value,
+  TURNSTILE_SECRET_KEY: turnstileSecretKey.value,
 
   /**
    * The widget token keyset (P2-11), read once per container when P2-12's

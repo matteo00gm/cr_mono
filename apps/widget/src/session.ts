@@ -39,6 +39,11 @@ export interface SessionOptions {
   readonly fetch?: typeof globalThis.fetch | undefined;
   /** Injected so a test can reach an expiry without waiting fifteen minutes. */
   readonly now?: (() => number) | undefined;
+  /**
+   * A fresh Turnstile token for each mint, for a winery that turned the
+   * challenge on (P4-14). Absent — the default — and the mint sends no body.
+   */
+  readonly challenge?: (() => Promise<string>) | undefined;
 }
 
 /**
@@ -207,6 +212,7 @@ export const createSession = ({
   key,
   fetch: fetch_ = globalThis.fetch,
   now = () => Date.now(),
+  challenge,
 }: SessionOptions): Session => {
   /** The live token and when it stops being one. Never written anywhere durable. */
   let held: { token: string; expiresAt: number | undefined } | undefined;
@@ -222,6 +228,9 @@ export const createSession = ({
   let minting: Promise<string> | undefined;
 
   const mint = async (previous: string | undefined): Promise<string> => {
+    /* Solved before the request, so a challenge that fails costs no mint. */
+    const turnstileToken = challenge === undefined ? undefined : await challenge();
+
     const response = await fetch_(`${api}${SESSION_PATH}?key=${encodeURIComponent(key)}`, {
       method: 'POST',
       /* This surface accepts no cookies, and asking is how CORS fails (P2-08). */
@@ -235,7 +244,9 @@ export const createSession = ({
          * halfway through a visitor's sentence.
          */
         ...(previous === undefined ? {} : { authorization: `Bearer ${previous}` }),
+        ...(turnstileToken === undefined ? {} : { 'content-type': 'application/json' }),
       },
+      ...(turnstileToken === undefined ? {} : { body: JSON.stringify({ turnstileToken }) }),
     });
 
     if (!response.ok) throw new SessionRefused(response.status, await codeIn(response));

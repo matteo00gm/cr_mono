@@ -263,6 +263,12 @@ export {
   type KeyInGrace,
   type NewKeys,
 } from './widget-keys-write.js';
+export {
+  readTurnstileState,
+  setTurnstileEnabled,
+  type TurnstileSignals,
+  type TurnstileState,
+} from './turnstile.js';
 
 export {
   countDomains,

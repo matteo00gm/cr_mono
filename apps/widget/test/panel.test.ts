@@ -25,6 +25,7 @@ const config: WidgetConfigResponse = {
   welcomeMessage: 'Posso consigliarle un vino?',
   cartUrl: 'https://cantina-rossi.example/cart',
   quotaState: 'ok',
+  turnstileSiteKey: null,
 };
 
 const API = 'https://api.example';
@@ -322,12 +323,19 @@ describe('a token the server has stopped accepting', () => {
     return { fetch_, mints: () => mints, asks: () => asks };
   };
 
-  const answer = async (chat: readonly Response[]) => {
+  const answer = async (chat: readonly Response[], config_ = config) => {
     const route = routing(chat);
 
     vi.stubGlobal('fetch', route.fetch_);
 
-    const panel = mountPanel({ shadow, launcher, adoptStyles, config, api: API, key: KEY });
+    const panel = mountPanel({
+      shadow,
+      launcher,
+      adoptStyles,
+      config: config_,
+      api: API,
+      key: KEY,
+    });
     const input = panel.body.querySelector('.composer-input');
     const form = panel.body.querySelector('form');
 
@@ -348,6 +356,43 @@ describe('a token the server has stopped accepting', () => {
 
     return { panel, ...route };
   };
+
+  it('solves the challenge before the mint for a winery that asks for one (P4-14)', async () => {
+    /*
+     * The composition the panel does itself: a site key in the config becomes
+     * a challenge, and its token rides on the mint. Cloudflare is a stand-in
+     * global here, as a loaded script would leave one.
+     */
+    const rendered: string[] = [];
+    const stand = globalThis as { turnstile?: unknown };
+
+    stand.turnstile = {
+      render: (
+        _container: HTMLElement,
+        options: { sitekey: string; callback: (t: string) => void },
+      ) => {
+        rendered.push(options.sitekey);
+        queueMicrotask(() => {
+          options.callback('solved');
+        });
+        return 'widget-1';
+      },
+      remove: () => undefined,
+    };
+
+    try {
+      const { fetch_ } = await answer([stream('Un Barolo.')], {
+        ...config,
+        turnstileSiteKey: 'site-key',
+      });
+      const mint = fetch_.mock.calls.find(([url]) => (url as string).includes('/session'));
+
+      expect(rendered).toEqual(['site-key']);
+      expect(mint?.[1]?.body).toBe(JSON.stringify({ turnstileToken: 'solved' }));
+    } finally {
+      delete stand.turnstile;
+    }
+  });
 
   it('refreshes once and replays the question', async () => {
     const { panel, mints, asks } = await answer([refused(401), stream('Un Barolo.')]);

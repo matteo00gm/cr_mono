@@ -24,6 +24,7 @@ const config: WidgetConfigResponse = {
   welcomeMessage: 'Posso consigliarle un vino?',
   cartUrl: 'https://cantina-rossi.example/cart',
   quotaState: 'ok',
+  turnstileSiteKey: null,
 };
 
 /** What the loader captured from the seller's script tag, and passes straight through. */

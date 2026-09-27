@@ -49,6 +49,7 @@ const FOUND: WidgetResolution = {
   status: 'ACTIVE',
   plan: 'CANTINA',
   locale: 'it',
+  turnstile: false,
 };
 const UNKNOWN: WidgetResolution = { found: false, reason: 'unknown_key' };
 
@@ -250,6 +251,7 @@ describe('POST /v1/widget/session/server (P4-10)', () => {
     status: 'ACTIVE' as const,
     plan: 'CANTINA' as const,
     locale: 'it',
+    turnstile: false,
     verifiedOrigins: [ORIGIN],
   };
 

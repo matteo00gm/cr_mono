@@ -13,6 +13,7 @@ import {
   invitationRevokedResponse,
   issuedKeysResponse,
   keysResponse,
+  turnstileSettingsResponse,
   inviteResponse,
   meResponse,
   memberRemovedResponse,
@@ -65,6 +66,10 @@ import { logger } from '../middleware/logger.js';
 import { resolveTenant } from '../middleware/tenant.js';
 import { unconfiguredDomains, type DomainsPort } from '../domains.js';
 import { unconfiguredKeys, type KeysPort } from '../keys.js';
+import {
+  unconfiguredTurnstileSettings,
+  type TurnstileSettingsPort,
+} from '../turnstile-settings.js';
 import { unconfiguredMembers, type MembersPort } from '../members.js';
 import {
   countImportOutcomes,
@@ -132,6 +137,8 @@ export interface DashboardOptions {
    * a key a seller will paste into their server.
    */
   readonly keys?: KeysPort | undefined;
+  /** The Turnstile setting (P4-14). */
+  readonly turnstileSettings?: TurnstileSettingsPort | undefined;
 }
 
 /**
@@ -316,6 +323,9 @@ const inviteBody = z.object({
  */
 const roleChangeBody = z.object({ role: z.enum(ROLES) }).strict();
 
+/** The Turnstile switch (P4-14): on or off, and nothing else. */
+const turnstileBody = z.object({ enabled: z.boolean() }).strict();
+
 /**
  * The acceptance body, and what it does **not** carry.
  *
@@ -461,6 +471,7 @@ export const createDashboardApp = ({
   rag = unconfiguredRag,
   domains = unconfiguredDomains,
   keys = unconfiguredKeys,
+  turnstileSettings = unconfiguredTurnstileSettings,
 }: DashboardOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
@@ -1181,6 +1192,31 @@ export const createDashboardApp = ({
    * what lets a server mint sessions on the winery's behalf (P4-10), and that is
    * closer to a password than to a setting.
    */
+  /* ---- Turnstile (P4-14) ------------------------------------------------ */
+
+  /**
+   * Whether this winery's session mint asks for a challenge, and whether the
+   * last hour's refusals suggest it should.
+   */
+  app.get('/widget/turnstile', requireCapability('widget:configure'), async (c) =>
+    c.json(await turnstileSettings.read(c.get('tenantId'))),
+  );
+
+  /**
+   * Turn it on or off. No step-up: it changes how visitors are checked, not
+   * who can act for the winery, and an owner switching it on under attack
+   * should not be slowed by a code prompt.
+   */
+  app.put('/widget/turnstile', requireCapability('widget:configure'), async (c) => {
+    const parsed = turnstileBody.safeParse(await readJson(c));
+
+    if (!parsed.success) {
+      throw new InvalidRequestError('Send a JSON body carrying enabled: true or false.');
+    }
+
+    return c.json(await turnstileSettings.set(c.get('tenantId'), parsed.data.enabled));
+  });
+
   app.post('/keys', requireCapability('keys:manage'), stepUp, async (c) =>
     c.json(await keys.create(c.get('tenantId')), 201),
   );
@@ -2064,6 +2100,48 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         previous: { publicKey: 'pk_live_…old…', validUntil: '2026-09-27T10:00:00.000Z' },
       },
       response: keysResponse,
+    },
+  ],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/widget/turnstile`),
+    {
+      access: requires('widget:configure'),
+      summary: "The winery's Turnstile setting, and whether turning it on is suggested",
+      description:
+        "Whether the session mint asks this winery's visitors for a Turnstile challenge (§3.6). " +
+        'Off by default, and the default widget loads nothing from a third party. `suggested` ' +
+        "is true when the last hour's refusals — a key presented from origins it does not " +
+        'belong to, or requests refused for rate — cross the line that looks like abuse; the ' +
+        'signals it was decided from are returned beside it. `available` is false when this ' +
+        'service has no Turnstile set up, and then it cannot be turned on.',
+      example: {
+        enabled: false,
+        available: true,
+        suggested: true,
+        signals: { unauthorizedOrigins: 212, rateLimited: 4 },
+      },
+      response: turnstileSettingsResponse,
+    },
+  ],
+  [
+    routeKey('PUT', `${DASHBOARD_PREFIX}/widget/turnstile`),
+    {
+      access: requires('widget:configure'),
+      summary: 'Turn the Turnstile challenge on or off',
+      description:
+        'Body `{"enabled": true}` or `{"enabled": false}`. While on, every widget session mint ' +
+        'needs a Turnstile token solved on the origin being served, verified with Cloudflare ' +
+        'server-side; a mint without one, or with one that does not verify, is refused. The ' +
+        'server-minted path (P4-10) never asks: the secret key is the stronger proof. Turning ' +
+        'it on where Turnstile is not set up is a 409; turning it off is always allowed. ' +
+        'Audited.',
+      example: {
+        enabled: true,
+        available: true,
+        suggested: false,
+        signals: { unauthorizedOrigins: 212, rateLimited: 4 },
+      },
+      response: turnstileSettingsResponse,
     },
   ],
   [

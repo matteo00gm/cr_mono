@@ -137,6 +137,12 @@ export const mintServerSession = async (
     plan: tenant.plan,
     status: tenant.status,
     locale: tenant.locale,
+    /*
+     * Never on the server path: the secret key is a stronger proof than any
+     * challenge a browser could solve, and there is no browser here to solve
+     * one (P4-14).
+     */
+    turnstile: false,
   };
 
   /*

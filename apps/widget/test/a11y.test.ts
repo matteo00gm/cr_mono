@@ -29,6 +29,7 @@ const config: WidgetConfigResponse = {
   welcomeMessage: 'Posso consigliarle un vino?',
   cartUrl: '/cart',
   quotaState: 'ok',
+  turnstileSiteKey: null,
 };
 
 const API = 'https://api.example';

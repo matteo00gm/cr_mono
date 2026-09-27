@@ -45,6 +45,7 @@ const found = (overrides: Partial<Found> = {}): Found => ({
   status: 'ACTIVE',
   plan: 'CANTINA',
   locale: 'it',
+  turnstile: false,
   ...overrides,
 });
 
@@ -114,9 +115,37 @@ describe('the response', () => {
       welcomeMessage: 'Ciao! Sono il sommelier di questa cantina. Che vino stai cercando?',
       cartUrl: '/cart',
       quotaState: 'ok',
+      turnstileSiteKey: null,
     });
     expect(JSON.stringify(body)).not.toContain(TENANT);
     expect(JSON.stringify(body)).not.toContain('CANTINA');
+  });
+
+  describe('the Turnstile site key (P4-14)', () => {
+    const SITE_KEY = 'site-key-for-this-deployment';
+    const turnstile = { siteKey: SITE_KEY, verify: () => Promise.resolve(true) };
+    const keyOf = async (built: ReturnType<typeof app>) =>
+      widgetConfigResponse.parse(await (await getConfig(built)).json()).turnstileSiteKey;
+
+    it('is named for a winery that turned the challenge on', async () => {
+      const on = app({
+        turnstile,
+        resolve: () => Promise.resolve(found({ turnstile: true })),
+      });
+
+      expect(await keyOf(on)).toBe(SITE_KEY);
+    });
+
+    it('is null for one that did not, so the widget loads nothing from a third party', async () => {
+      expect(await keyOf(app({ turnstile }))).toBeNull();
+    });
+
+    it('is null when this deployment cannot verify a token at all', async () => {
+      /* A challenge the server cannot check would lead a visitor nowhere. */
+      const unverifiable = app({ resolve: () => Promise.resolve(found({ turnstile: true })) });
+
+      expect(await keyOf(unverifiable)).toBeNull();
+    });
   });
 
   it('greets in the tenant’s locale', async () => {

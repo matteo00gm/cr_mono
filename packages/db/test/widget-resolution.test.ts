@@ -61,6 +61,15 @@ describe('the outcomes', () => {
       status: 'ACTIVE',
       plan: 'CANTINA',
       locale: 'it',
+      turnstile: false,
+    });
+  });
+
+  it("carries the winery's Turnstile flag through (P4-14)", async () => {
+    const { db } = fakeDb([row({ turnstile_enabled: true })]);
+
+    await expect(resolveTenantByKeyAndOrigin(KEY, ORIGIN, db)).resolves.toMatchObject({
+      turnstile: true,
     });
   });
 

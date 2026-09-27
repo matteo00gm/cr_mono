@@ -145,6 +145,28 @@ if (stage !== 'unknown' && widgetTokenKeys === undefined) {
 }
 
 /**
+ * Cloudflare Turnstile (P4-14), both halves or neither.
+ *
+ * Absent is restrictive in the direction that matters: no winery can turn the
+ * challenge on, so no visitor is ever sent through one the API cannot verify.
+ * Half-set is a misconfiguration, said once per container and treated as
+ * absent — a site key the server cannot check leads visitors nowhere.
+ */
+const turnstileSiteKey = optionalEnvironment('TURNSTILE_SITE_KEY');
+const turnstileSecretKey = optionalEnvironment('TURNSTILE_SECRET_KEY');
+const turnstile =
+  turnstileSiteKey !== undefined && turnstileSecretKey !== undefined
+    ? { siteKey: turnstileSiteKey, secretKey: turnstileSecretKey }
+    : undefined;
+
+if ((turnstileSiteKey === undefined) !== (turnstileSecretKey === undefined)) {
+  logger.warn(
+    { kind: 'turnstile_half_configured' },
+    'Only one of TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY is set, so Turnstile is off (P4-14)',
+  );
+}
+
+/**
  * Exported for `streaming.ts`, which is a second *function* over the same app
  * (P2-29). Building them twice would be two composition roots, and the second
  * would be the one that drifts.
@@ -163,6 +185,7 @@ export const dependencies = buildDependencies({
   ...(rateLimiter === undefined ? {} : { rateLimiter, readUsage: rateLimiter.peek }),
   ...(resendWebhookSecret === undefined ? {} : { resendWebhookSecret }),
   ...(widgetTokenKeys === undefined ? {} : { widgetTokenKeys }),
+  ...(turnstile === undefined ? {} : { turnstile }),
 
   emailFrom: optionalEnvironment('EMAIL_FROM') ?? 'AI Sommelier <noreply@localhost>',
   resendApiKey: optionalEnvironment('RESEND_API_KEY'),

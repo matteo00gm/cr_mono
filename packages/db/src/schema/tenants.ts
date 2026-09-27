@@ -1,4 +1,13 @@
-import { customType, pgEnum, pgTable, smallint, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  customType,
+  pgEnum,
+  pgTable,
+  smallint,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
 
 /**
  * `tenants` — the root table (P0-22).
@@ -72,6 +81,16 @@ export const tenants = pgTable('tenants', {
 
   locale: text('locale').notNull().default('it'),
   currency: text('currency').notNull().default('EUR'),
+
+  /**
+   * Whether this winery's session mint asks for a Turnstile token (P4-14).
+   *
+   * Off by default (§3.6): the default widget loads nothing from a third party,
+   * which matters for a visitor's privacy and for the bundle. An owner turns it
+   * on, usually when the dashboard suggests it because their widget is being
+   * abused.
+   */
+  turnstileEnabled: boolean('turnstile_enabled').notNull().default(false),
 
   /**
    * The embedding generation this tenant's retrieval reads (P1-49).

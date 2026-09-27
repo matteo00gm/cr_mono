@@ -62,6 +62,7 @@ const found = (over: Partial<Found> = {}): Found => ({
   status: 'ACTIVE',
   plan: 'CANTINA',
   locale: 'it',
+  turnstile: false,
   ...over,
 });
 

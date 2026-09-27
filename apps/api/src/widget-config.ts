@@ -56,6 +56,7 @@ const WELCOME = {
 export const widgetConfigFor = (
   tenant: WidgetTenant,
   quotaState: QuotaState,
+  turnstileSiteKey?: string,
 ): WidgetConfigResponse => ({
   status: isServiceable(tenant.status) ? 'ACTIVE' : 'DISABLED',
   locale: tenant.locale,
@@ -63,4 +64,10 @@ export const widgetConfigFor = (
   welcomeMessage: tenant.locale === 'en' ? WELCOME.en : WELCOME.it,
   cartUrl: DEFAULT_CART_URL,
   quotaState,
+  /*
+   * Only for a winery that turned it on, and only when this deployment can
+   * verify a token at all — a site key the server cannot check would send
+   * every visitor through a challenge that leads nowhere.
+   */
+  turnstileSiteKey: tenant.turnstile && turnstileSiteKey !== undefined ? turnstileSiteKey : null,
 });

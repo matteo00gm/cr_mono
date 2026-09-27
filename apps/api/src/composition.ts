@@ -30,6 +30,8 @@ import {
 
 import { createDomainsPort, type DomainsPort } from './domains.js';
 import { createKeysPort, type KeysPort } from './keys.js';
+import { createTurnstileVerifier } from './turnstile.js';
+import { createTurnstileSettingsPort, type TurnstileSettingsPort } from './turnstile-settings.js';
 import { createMembersPort, type MembersPort } from './members.js';
 import { recordTwoFactorChange } from './mfa-audit.js';
 import { logger } from './middleware/logger.js';
@@ -155,6 +157,14 @@ export interface RuntimeConfig {
    * wiring error, which is restrictive: nothing is minted without a key.
    */
   readonly widgetTokenKeys?: string | undefined;
+
+  /**
+   * Cloudflare Turnstile (P4-14): the public site key the widget renders the
+   * challenge with, and the secret the API verifies a token with. Both or
+   * neither — absent, no winery can turn the challenge on, which is the
+   * default everywhere until an operator sets them.
+   */
+  readonly turnstile?: { readonly siteKey: string; readonly secretKey: string } | undefined;
 }
 
 /**
@@ -183,6 +193,7 @@ export interface Dependencies {
   readonly domains: DomainsPort;
   /** Keys (P4-09). */
   readonly keys: KeysPort;
+  readonly turnstileSettings: TurnstileSettingsPort;
   /** The catalogue (P1-02). */
   readonly products: ProductsPort;
   /** The retrieval sandbox (P2-37). */
@@ -405,6 +416,9 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
      * the only thing that could be wrong about them is tested where they live. */
     keys: createKeysPort(),
 
+    /* The Turnstile switch (P4-14), refusing to turn on where it cannot verify. */
+    turnstileSettings: createTurnstileSettingsPort({ available: config.turnstile !== undefined }),
+
     domains: createDomainsPort({
       environment: config.stage === 'unknown' ? 'development' : 'production',
       /*
@@ -467,6 +481,14 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
       ...(config.widgetTokenKeys === undefined
         ? {}
         : { tokenKeys: keysLoader(config.widgetTokenKeys) }),
+      ...(config.turnstile === undefined
+        ? {}
+        : {
+            turnstile: {
+              siteKey: config.turnstile.siteKey,
+              verify: createTurnstileVerifier({ secret: config.turnstile.secretKey }),
+            },
+          }),
       isTokenRevoked,
       /*
        * Supplied unconditionally, like `isTokenRevoked`. A verifier that cannot

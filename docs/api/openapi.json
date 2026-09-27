@@ -3754,6 +3754,196 @@
             }
           }
         }
+      },
+      "/v1/dashboard/widget/turnstile": {
+        "get": {
+          "summary": "The winery's Turnstile setting, and whether turning it on is suggested",
+          "description": "Whether the session mint asks this winery's visitors for a Turnstile challenge (§3.6). Off by default, and the default widget loads nothing from a third party. `suggested` is true when the last hour's refusals — a key presented from origins it does not belong to, or requests refused for rate — cross the line that looks like abuse; the signals it was decided from are returned beside it. `available` is false when this service has no Turnstile set up, and then it cannot be turned on.\n\nRequires the `widget:configure` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
+          "operationId": "getV1DashboardWidgetTurnstile",
+          "x-required-capability": "widget:configure",
+          "responses": {
+            "200": {
+              "description": "The winery's Turnstile setting, and whether turning it on is suggested",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "enabled": {
+                        "type": "boolean"
+                      },
+                      "available": {
+                        "type": "boolean"
+                      },
+                      "suggested": {
+                        "type": "boolean"
+                      },
+                      "signals": {
+                        "type": "object",
+                        "properties": {
+                          "unauthorizedOrigins": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "rateLimited": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "unauthorizedOrigins",
+                          "rateLimited"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "enabled",
+                      "available",
+                      "suggested",
+                      "signals"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "enabled": false,
+                    "available": true,
+                    "suggested": true,
+                    "signals": {
+                      "unauthorizedOrigins": 212,
+                      "rateLimited": 4
+                    }
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "put": {
+          "summary": "Turn the Turnstile challenge on or off",
+          "description": "Body `{\"enabled\": true}` or `{\"enabled\": false}`. While on, every widget session mint needs a Turnstile token solved on the origin being served, verified with Cloudflare server-side; a mint without one, or with one that does not verify, is refused. The server-minted path (P4-10) never asks: the secret key is the stronger proof. Turning it on where Turnstile is not set up is a 409; turning it off is always allowed. Audited.\n\nRequires the `widget:configure` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
+          "operationId": "putV1DashboardWidgetTurnstile",
+          "x-required-capability": "widget:configure",
+          "responses": {
+            "200": {
+              "description": "Turn the Turnstile challenge on or off",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "enabled": {
+                        "type": "boolean"
+                      },
+                      "available": {
+                        "type": "boolean"
+                      },
+                      "suggested": {
+                        "type": "boolean"
+                      },
+                      "signals": {
+                        "type": "object",
+                        "properties": {
+                          "unauthorizedOrigins": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "rateLimited": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "unauthorizedOrigins",
+                          "rateLimited"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "enabled",
+                      "available",
+                      "suggested",
+                      "signals"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "enabled": true,
+                    "available": true,
+                    "suggested": false,
+                    "signals": {
+                      "unauthorizedOrigins": 212,
+                      "rateLimited": 4
+                    }
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -4095,6 +4285,12 @@
                           "near",
                           "exceeded"
                         ]
+                      },
+                      "turnstileSiteKey": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
                       }
                     },
                     "required": [
@@ -4103,7 +4299,8 @@
                       "theme",
                       "welcomeMessage",
                       "cartUrl",
-                      "quotaState"
+                      "quotaState",
+                      "turnstileSiteKey"
                     ],
                     "additionalProperties": false
                   },
@@ -4117,7 +4314,8 @@
                     },
                     "welcomeMessage": "Ciao! Sono il sommelier di questa cantina. Che vino stai cercando?",
                     "cartUrl": "/cart",
-                    "quotaState": "ok"
+                    "quotaState": "ok",
+                    "turnstileSiteKey": null
                   }
                 }
               }

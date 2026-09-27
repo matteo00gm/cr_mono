@@ -1382,7 +1382,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-11 | 🔒 MFA for OWNER + step-up re-auth | on keys, domains, plan, membership changes | P0-45 |
 | ✅ P4-12 | 🔒 Security headers | nonce CSP, HSTS preload, nosniff, referrer, frame-deny | P0-54 |
 | ✅ P4-13 | SST: AWS WAF on CloudFront | managed bot + reputation rules, per-path rate rules | P0-17 |
-| P4-14 | Turnstile hook | per-tenant flag, default off | P2-12 |
+| ✅ P4-14 | Turnstile hook | per-tenant flag, default off | P2-12 |
 | P4-15 | 🔒 404-not-403 + IDOR matrix | cross-tenant ids return 404 for every endpoint | P0-50 |
 | P4-16 | ⛔ 🔒 Stryker on `packages/security` | mutation score ≥ 90%, CI-gated | P0-07 |
 | P4-18 | 🔒 Domain claim challenge | DNS proof to claim a held origin; **immediate if incumbent lapsed, 72h notice if paying** | P4-02 |
@@ -6639,6 +6639,17 @@ Enrolment and disablement both write to `audit_log`, and disabling 2FA is itself
 
 **Files.** `turnstile.ts`, widget change, tests. **~110 lines.**
 
+**As built.** Not deployed; Turnstile stays unavailable on every stage until an operator sets the `TurnstileSiteKey` and `TurnstileSecretKey` secrets.
+
+- **`tenants.turnstile_enabled`, off for everyone** (migration 0051), carried through widget resolution into the widget tenant. The config names the site key only for a winery that turned it on **and** a deployment that can verify a token — a site key the server cannot check would send visitors through a challenge that leads nowhere. `turnstileSiteKey: null` is the default and the widget then loads nothing from Cloudflare.
+- **The mint asks for a token on every mint while the flag is on**, a refresh included: Turnstile tokens are single-use and a session is only as fresh as its last proof. The token travels in the JSON body, which CORS already allows, not a custom header it would have to. A mint with no token is refused before the verifier is asked; one that does not verify, or a winery with the flag on where no verifier is configured, is refused too — one 403 for every reason. The server-minted path (P4-10) never asks: the secret key is the stronger proof.
+- **The verifier binds the token to the origin** *(addition)*. Cloudflare's `success` alone would accept a token solved on any page that embeds our site key — every seller's — so the reported `hostname` must be the origin CORS verified, and the `action` must be `session`. **It fails closed**: unreachable, slow past three seconds, a non-200 or an unreadable answer is a refusal, because this is switched on under attack and a check that waves requests through when the checker is down is one an attacker can switch off.
+- **"Automatic enable, human confirms" is a suggestion computed on read** *(deviation)*. `GET /v1/dashboard/widget/turnstile` counts the last hour of this winery's own `UNAUTHORIZED_ORIGIN` (50) and `RATE_LIMITED` (100) refusals from `security_events`, which P2-16 already writes, and returns `suggested` with the signals it was decided from; `PUT` is the owner's confirmation. No job, no rollup, and no scope that reads across wineries. **Not pushed**: telling an owner who is not looking needs the cross-tenant job this avoided, and belongs with P5-12's notifications. Turning it on where Turnstile is not set up is a 409; turning it off always works. Audited on the change's own transaction; `widget:configure`, so OWNER-only and MFA-gated (P4-11). No step-up: it changes how visitors are checked, not who can act for the winery.
+- **The widget** adds Cloudflare's script once, on the first mint that needs it, and renders the challenge `interaction-only` inside the panel, fresh for each mint, removed once answered. A page that already has Turnstile is used as it is; a failed script load is not cached.
+- **The dashboard screen is not built** — there is no widget settings screen yet (§2.3); the routes are what it will call.
+
+**Verified.** 19 cases on the verifier and the mint, 10 on the switch and its routes, 7 against Postgres (the flag as resolution reads it, audit rows, the suggestion's window and tenant scope), 6 on the statements, 3 on the config, 2 on the composition, and 12 in the widget. A mutation run of 31 mutants killed 31 — among them, dropping the hostname check, failing open when Cloudflare is unreachable, and the panel never building a challenge.
+
 ---
 
 ### P4-15 · 404-not-403 and the IDOR matrix 🔒
@@ -7225,7 +7236,7 @@ What remains worth doing is confirming there is no cliff just past the ceiling, 
 
 **Files.** `apps/docs/*`. **~200 lines of content.**
 
-**Carried from P4-12 — the directives, already proven.** The widget runs under the e2e suite's `hostile.html`, which carries no `unsafe-inline` and no `unsafe-eval`, so the list is tested rather than guessed. A seller's CSP needs `script-src` to name our CDN (the loader and the lazy bundle), `connect-src` to name the API origin (config, session, chat), and `img-src https:` for the catalogue images on cards. **No `style-src` exception**: the widget styles its shadow root with constructed stylesheets, which `style-src` does not govern. No `frame-src`: the widget is not an iframe.
+**Carried from P4-12 — the directives, already proven.** The widget runs under the e2e suite's `hostile.html`, which carries no `unsafe-inline` and no `unsafe-eval`, so the list is tested rather than guessed. A seller's CSP needs `script-src` to name our CDN (the loader and the lazy bundle), `connect-src` to name the API origin (config, session, chat), and `img-src https:` for the catalogue images on cards. **No `style-src` exception**: the widget styles its shadow root with constructed stylesheets, which `style-src` does not govern. No `frame-src`: the widget is not an iframe. **A winery that turns Turnstile on (P4-14)** also needs `https://challenges.cloudflare.com` in `script-src` and `frame-src`; the troubleshooting page should say so beside "why the widget shows nothing".
 
 ---
 

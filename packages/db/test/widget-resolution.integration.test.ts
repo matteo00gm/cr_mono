@@ -126,6 +126,7 @@ describe('the outcomes the row lists', () => {
       status: 'ACTIVE',
       plan: 'CANTINA',
       locale: 'it',
+      turnstile: false,
     });
   });
 

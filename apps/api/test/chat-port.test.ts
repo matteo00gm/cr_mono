@@ -62,6 +62,7 @@ const tenant: WidgetTenant = {
   plan: 'CANTINA',
   status: 'ACTIVE',
   locale: 'it',
+  turnstile: false,
 };
 
 const embeddings: EmbeddingProvider = {

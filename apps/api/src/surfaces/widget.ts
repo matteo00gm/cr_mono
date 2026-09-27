@@ -14,7 +14,7 @@ import {
   type WidgetEndpoint,
 } from '@catalogorosso/security';
 import type { WidgetTokenKeys } from '@catalogorosso/security/tokens';
-import { InvalidRequestError } from '@catalogorosso/core';
+import { ForbiddenError, InvalidRequestError } from '@catalogorosso/core';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { Hono, type Context, type Handler, type MiddlewareHandler } from 'hono';
@@ -39,6 +39,7 @@ import {
 import { mintServerSession, type ServerSessionDeps } from '../server-session.js';
 import { WIDGET_PREFIX } from '../routes.js';
 import { widgetConfigFor } from '../widget-config.js';
+import { TURNSTILE_REFUSED, type TurnstileVerifier } from '../turnstile.js';
 import { mintWidgetSession } from '../widget-session.js';
 import {
   bearerTokenOf,
@@ -109,6 +110,14 @@ export interface WidgetDependencies {
    * look a key up has nothing to accept it against.
    */
   readonly resolveSecretKey?: ServerSessionDeps['resolve'] | undefined;
+
+  /**
+   * Turnstile, for the wineries that turn it on (P4-14): the public site key
+   * the widget renders the challenge with, and the server-side verifier.
+   * Absent, no config names a site key — and a winery with the flag on has
+   * every mint refused, because a challenge nobody can verify is not passed.
+   */
+  readonly turnstile?: { readonly siteKey: string; readonly verify: TurnstileVerifier } | undefined;
   /**
    * Which stage this is, as the metric's one dimension (P2-28).
    *
@@ -390,7 +399,9 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
 
       c.header('Cache-Control', WIDGET_CONFIG_CACHE_CONTROL);
 
-      return c.json(widgetConfigFor(tenant, quotaStateOf(used, cap.limit)));
+      return c.json(
+        widgetConfigFor(tenant, quotaStateOf(used, cap.limit), widget.turnstile?.siteKey),
+      );
     },
   );
 
@@ -410,10 +421,34 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
     { methods: ['POST', 'OPTIONS'], path: SESSION_PATH, endpoint: 'session' },
     async (c) => {
       const { tokenKeys } = widget;
+      const tenant = c.get('widgetTenant');
+
+      /*
+       * **The challenge, for a winery that turned it on** (P4-14). After the
+       * guards, so an abuser has already been counted and resolved; before the
+       * mint, so no token exists for a request that failed it. Every mint, a
+       * refresh included: a Turnstile token is single-use, and a session is
+       * only as fresh as its last proof.
+       */
+      if (tenant.turnstile) {
+        const body = (await readChatJson(c)) as { turnstileToken?: unknown } | null;
+        const token = typeof body?.turnstileToken === 'string' ? body.turnstileToken : undefined;
+        /* No token is a refusal before anything is asked, whatever a verifier would say. */
+        const passed =
+          token !== undefined &&
+          widget.turnstile !== undefined &&
+          (await widget.turnstile.verify({
+            token,
+            origin: c.get('widgetOrigin'),
+            remoteIp: clientIp(c.req.header('x-forwarded-for')).ip,
+          }));
+
+        if (!passed) throw new ForbiddenError(TURNSTILE_REFUSED);
+      }
 
       const session = await mintWidgetSession({
         loadKeys: tokenKeys ?? (() => Promise.reject(new WidgetTokenKeysNotConfiguredError())),
-        tenant: c.get('widgetTenant'),
+        tenant,
         origin: c.get('widgetOrigin'),
         previous: bearerTokenOf(c.req.header('authorization')),
         isRevoked: widget.isTokenRevoked,
@@ -622,6 +657,7 @@ export const WIDGET_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, Rout
         welcomeMessage: 'Ciao! Sono il sommelier di questa cantina. Che vino stai cercando?',
         cartUrl: '/cart',
         quotaState: 'ok',
+        turnstileSiteKey: null,
       },
       response: widgetConfigResponse,
       refusals: [403, 429],

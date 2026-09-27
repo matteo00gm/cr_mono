@@ -80,4 +80,6 @@ export interface WidgetTenant {
   /** The tenant's own status; the widget shows it only as enabled or disabled. */
   readonly status: Resolved['status'];
   readonly locale: string;
+  /** Whether the session mint asks for a Turnstile token (P4-14). */
+  readonly turnstile: boolean;
 }
