@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { claimWebhookEvent, withWebhookEvent } from '../src/webhooks.js';
 import type { Database } from '../src/client.js';
 import type { DbTransaction } from '../src/with-tenant.js';
+import { text } from './support/sql-text.js';
 
 /**
  * The webhook ledger's statements, without a database (P0-64b).
@@ -18,18 +19,6 @@ import type { DbTransaction } from '../src/with-tenant.js';
  * the branch a container cannot produce cheaply: the second delivery of an
  * event, which must not run the work again.
  */
-
-/** The literal SQL of a statement, with its bound values elided. */
-const text = (statement: unknown): string =>
-  ((statement as { queryChunks?: unknown[] }).queryChunks ?? [])
-    .flatMap((chunk) =>
-      typeof chunk === 'object' &&
-      chunk !== null &&
-      Array.isArray((chunk as { value?: unknown[] }).value)
-        ? ((chunk as { value: unknown[] }).value as string[])
-        : [],
-    )
-    .join(' ');
 
 const capturing = (...responses: unknown[][]) => {
   const statements: unknown[] = [];

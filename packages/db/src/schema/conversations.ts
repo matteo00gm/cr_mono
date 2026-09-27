@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   check,
   index,
   integer,
@@ -119,10 +120,24 @@ export const messages = pgTable(
     latencyMs: integer('latency_ms'),
 
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+
+    /**
+     * The order messages were written in (review).
+     *
+     * `created_at` is transaction time, so two turns written in one
+     * transaction share it, and a clock step can put a later turn before an
+     * earlier one. A conversation read in `created_at` order then groups both
+     * questions before both answers. An identity is assigned in the order rows
+     * are inserted — and a turn's question is inserted before its answer, in
+     * one statement — so it orders a conversation without asking the clock.
+     */
+    seq: bigint('seq', { mode: 'number' }).notNull().generatedAlwaysAsIdentity(),
   },
   (table) => [
     index('messages_tenant_created_idx').on(table.tenantId, table.createdAt.desc()),
     /** Loading a conversation in order — the widget's own read path. */
     index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
+    /** Loading it in the order it was written, which is what the history reads. */
+    index('messages_conversation_seq_idx').on(table.conversationId, table.seq),
   ],
 );

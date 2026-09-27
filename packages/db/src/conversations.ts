@@ -97,10 +97,8 @@ export const recordTurn = async (tx: DbTransaction, turn: TurnToRecord): Promise
 
   /*
    * Both messages in one statement, so a concurrent turn cannot interleave
-   * between them. They share a `created_at` — `now()` is transaction time — so
-   * the order within a turn is not recoverable from the timestamp alone, and
-   * `readConversation` below orders by `role` after it. The enum is declared
-   * `USER, ASSISTANT, SYSTEM`, which is the order a turn happens in.
+   * between them — and question first, so its `seq` is the lower of the two.
+   * That is the order `readConversation` reads them back in.
    */
   await tx.execute(sql`
     insert into messages
@@ -125,11 +123,12 @@ export interface RecordedMessage {
 /**
  * A session's conversation, oldest first (P2-30, for P2-35's history).
  *
- * **Ordered by `created_at` and then `role`.** The two messages of one turn are
- * written in a single statement and share a transaction timestamp, so ordering
- * by time alone can put the answer before the question — a history in which the
- * model appears to have spoken first, which is exactly the thing a model will
- * try to make sense of.
+ * **Ordered by `seq`, the order the rows were written** (review). It was
+ * `created_at` and then `role`, which is right within a turn and wrong across
+ * two: transaction time ties for turns written together and reverses across a
+ * clock step, and then both questions sort before both answers — a history in
+ * which the visitor asked twice and the model answered twice, which a model
+ * will try to make sense of.
  *
  * **The newest `limit` turns, returned oldest first.** P2-35 caps how much
  * history a prompt carries, and the cap has to keep the *recent* end.
@@ -142,15 +141,15 @@ export const readConversation = async (
   const rows = await tx.execute(sql`
     select role, content, retrieved_product_ids
     from (
-      select m.role, m.content, m.retrieved_product_ids, m.created_at
+      select m.role, m.content, m.retrieved_product_ids, m.seq
       from messages m
       join conversations c on c.id = m.conversation_id
       where c.session_id = ${sessionId}
         and c.tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
-      order by m.created_at desc, m.role desc
+      order by m.seq desc
       limit ${limit}
     ) recent
-    order by created_at, role
+    order by seq
   `);
 
   return [...rows].map((row) => {

@@ -15,6 +15,7 @@ import {
   reissueVerification,
 } from '../src/domains-write.js';
 import type { DbTransaction } from '../src/with-tenant.js';
+import { text } from './support/sql-text.js';
 
 /**
  * The domain statements, without a database (P4-01).
@@ -45,18 +46,6 @@ const capturing = (...responses: unknown[][]) => {
 
   return { statements, execute, tx: { execute } as unknown as DbTransaction };
 };
-
-/** The literal SQL of a statement, with its bound values elided. */
-const text = (statement: unknown): string =>
-  ((statement as { queryChunks?: unknown[] }).queryChunks ?? [])
-    .flatMap((chunk) =>
-      typeof chunk === 'object' &&
-      chunk !== null &&
-      Array.isArray((chunk as { value?: unknown[] }).value)
-        ? ((chunk as { value: unknown[] }).value as string[])
-        : [],
-    )
-    .join(' ');
 
 const raw = {
   id: 'd1',
@@ -512,10 +501,16 @@ describe('the pair a verification earns (P4-05)', () => {
     );
 
     const sql = text(statements[0]);
+    /*
+     * The columns it *writes*. The statement also reads `verification_token`
+     * back in its RETURNING list, which a one-level helper never saw — so this
+     * assertion used to pass on the whole statement for the wrong reason.
+     */
+    const written = sql.slice(0, sql.indexOf('VALUES'));
 
     expect(sql).toMatch(/'VERIFIED'/u);
-    expect(sql).toMatch(/verified_at/u);
-    expect(sql).not.toMatch(/verification_token/u);
+    expect(written).toMatch(/verified_at/u);
+    expect(written).not.toMatch(/verification_token/u);
   });
 
   it('takes its tenant from the GUC like every other write', () => {
