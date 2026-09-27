@@ -80,6 +80,14 @@ describe('every operation', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  /** The one 2xx an operation documents. Exactly one, or the reference is ambiguous. */
+  const successOf = (op: { responses?: Record<string, unknown> }): string => {
+    const successes = Object.keys(op.responses ?? {}).filter((status) => status.startsWith('2'));
+
+    expect(successes).toHaveLength(1);
+    return successes[0] ?? '';
+  };
+
   it('documents a success and both refusals, except on the marker, which refuses nothing', () => {
     /*
      * The contract stands for every route a session or a capability guards. The
@@ -89,8 +97,11 @@ describe('every operation', () => {
      */
     for (const [path, method, op] of operations(doc.dashboard)) {
       const where = `${method.toUpperCase()} ${path}`;
-      const expected = where === 'GET /v1/dashboard' ? ['200'] : ['200', '401', '403'];
+      /* The route's own success — 201 for a creation, 202 for queued work (review, R8). */
+      const success = successOf(op);
+      const expected = where === 'GET /v1/dashboard' ? [success] : [success, '401', '403'];
 
+      expect(success, where).toMatch(/^20[0-2]$/u);
       expect(Object.keys(op.responses ?? {}), where).toEqual(expected);
     }
   });
@@ -101,7 +112,7 @@ describe('every operation', () => {
      * supplied one, and it teaches a reader nothing about what the field holds.
      */
     for (const [path, method, op] of operations(doc.dashboard)) {
-      const example = op.responses?.['200']?.content as
+      const example = op.responses?.[successOf(op)]?.content as
         { 'application/json'?: { example?: unknown } } | undefined;
       const value = example?.['application/json']?.example;
 

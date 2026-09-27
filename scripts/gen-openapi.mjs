@@ -119,6 +119,25 @@ for (const endpoint of endpoints) {
   if (!doc.description?.trim()) problems.push(`${endpoint.key}: empty description`);
   if (doc.example === undefined) problems.push(`${endpoint.key}: no example`);
   if (!doc.response) problems.push(`${endpoint.key}: no response schema`);
+
+  /*
+   * **The example is held to the contract it illustrates** (review, R8). Eight
+   * examples had drifted from their schemas — fields a later row added, an enum
+   * that grew — and each was published as what the API returns. A reader who
+   * copies an example should get something a client built on the schema accepts.
+   */
+  if (doc.example !== undefined && doc.response) {
+    const parsed = doc.response.safeParse(doc.example);
+
+    if (!parsed.success) {
+      problems.push(
+        `${endpoint.key}: the example does not match its response schema — ` +
+          parsed.error.issues
+            .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
+            .join('; '),
+      );
+    }
+  }
 }
 
 for (const key of [...DASHBOARD_ROUTES.keys(), ...WIDGET_ROUTES.keys()]) {
@@ -198,7 +217,8 @@ const WIDGET_ERRORS = {
       'the server mint nothing but the origin. The server mint also answers this to any ' +
       'request carrying an Origin header, because a browser sending one means a secret key is ' +
       'in code a browser can read.',
-    'invalid_request',
+    /* The code the API sends: a DomainError's kind, `invalid` (R8). */
+    'invalid',
     CHAT_BODY_EXPECTED,
   ),
   429: widgetError(
@@ -262,7 +282,8 @@ const operationFor = (endpoint, doc, errors) => {
     ...(capability ? { 'x-required-capability': capability } : {}),
     ...(stepUpKeys.has(endpoint.key) ? { 'x-requires-step-up': true } : {}),
     responses: sortedEntries({
-      200: {
+      /* The status the route really answers with: 201 for a creation, 202 for queued work (R8). */
+      [doc.status ?? 200]: {
         description: doc.summary,
         content: {
           'application/json': {
