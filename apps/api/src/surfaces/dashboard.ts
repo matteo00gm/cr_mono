@@ -1463,6 +1463,12 @@ export interface RouteDoc {
    * reader looking for a guard that is not there.
    */
   readonly refusals?: readonly number[];
+  /**
+   * The success status, when it is not 200 (review, R8): 201 for a creation,
+   * 202 for work queued rather than done. The reference published every
+   * success as 200 until this existed.
+   */
+  readonly status?: 201 | 202 | undefined;
 }
 
 export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, RouteDoc>([
@@ -1538,7 +1544,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'address that is already a member, or already has an open invitation, answers 200 ' +
         'with `created: false` rather than an error: the intent is already satisfied, and ' +
         'sending again on every click would mail somebody repeatedly through our domain.',
-      example: { email: 'anna@cantinarossi.example', created: true },
+      example: { email: 'anna@cantinarossi.example', created: true, outcome: 'invited' },
       response: inviteResponse,
     },
   ],
@@ -1596,6 +1602,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         foodPairings: ['brasato al Barolo', 'formaggi stagionati'],
         alcoholPct: '14.50',
         priceCents: 4500,
+        completeness: 85,
         currency: 'EUR',
         stockStatus: 'IN_STOCK',
         stockQty: 24,
@@ -1608,6 +1615,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         updatedAt: '2026-09-08T09:14:00.000Z',
       },
       response: productCreatedResponse,
+      status: 201,
     },
   ],
   [
@@ -1640,6 +1648,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         foodPairings: ['brasato al Barolo', 'formaggi stagionati'],
         alcoholPct: '14.50',
         priceCents: 4900,
+        completeness: 85,
         currency: 'EUR',
         stockStatus: 'IN_STOCK',
         stockQty: 18,
@@ -1721,6 +1730,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
             foodPairings: ['brasato al Barolo'],
             alcoholPct: '14.50',
             priceCents: 4500,
+            completeness: 85,
             currency: 'EUR',
             stockStatus: 'IN_STOCK',
             stockQty: 24,
@@ -1757,6 +1767,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'a handle to poll - read each wine embeddingState instead.',
       example: { batchId: '0f7c1b7e-4a30-4c1a-9f2e-1b7e4a304c1a', queued: 1284 },
       response: catalogueReindexedResponse,
+      status: 202,
     },
   ],
   [
@@ -1915,6 +1926,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         queued: true,
       },
       response: productReindexedResponse,
+      status: 202,
     },
   ],
   [
@@ -2017,11 +2029,13 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
           registrableDomain: 'winery.com',
           status: 'PENDING',
           verificationToken: null,
+          verificationExpiresAt: '2026-10-03T09:00:00.000Z',
           createdAt: '2026-09-25T09:00:00.000Z',
         },
         created: true,
       },
       response: domainAddedResponse,
+      status: 201,
     },
   ],
   [
@@ -2040,6 +2054,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         secretKeyLast4: 'Wq7Z',
         createdAt: '2026-09-26T09:00:00.000Z',
         updatedAt: '2026-09-26T09:00:00.000Z',
+        previous: null,
       },
       response: keysResponse,
     },
@@ -2062,9 +2077,11 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         secretKeyLast4: 'Wq7Z',
         createdAt: '2026-09-26T09:00:00.000Z',
         updatedAt: '2026-09-26T09:00:00.000Z',
+        previous: null,
         secretKey: 'sk_live_…shown once…',
       },
       response: issuedKeysResponse,
+      status: 201,
     },
   ],
   [
@@ -2084,6 +2101,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         secretKeyLast4: 'x9Rd',
         createdAt: '2026-09-26T09:00:00.000Z',
         updatedAt: '2026-09-26T09:30:00.000Z',
+        previous: null,
         secretKey: 'sk_live_…shown once…',
       },
       response: issuedKeysResponse,
