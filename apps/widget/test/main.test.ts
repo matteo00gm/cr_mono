@@ -22,6 +22,7 @@ const config: WidgetConfigResponse = {
   welcomeMessage: 'Posso consigliarle un vino?',
   cartUrl: 'https://cantina-rossi.example/cart',
   quotaState: 'ok',
+  turnstileSiteKey: null,
 };
 
 let mounted: Mounted;

@@ -36,6 +36,7 @@ const FOUND_A: WidgetResolution = {
   status: 'ACTIVE',
   plan: 'CANTINA',
   locale: 'it',
+  turnstile: false,
 };
 
 /**
@@ -124,7 +125,13 @@ describe('an allowed request', () => {
     const response = await request(app, { origin: ORIGIN_A, key: KEY_A });
 
     expect(await response.json()).toEqual({
-      tenant: { tenantId: TENANT_A, plan: 'CANTINA', status: 'ACTIVE', locale: 'it' },
+      tenant: {
+        tenantId: TENANT_A,
+        plan: 'CANTINA',
+        status: 'ACTIVE',
+        locale: 'it',
+        turnstile: false,
+      },
     });
   });
 

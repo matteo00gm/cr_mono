@@ -52,6 +52,7 @@ const found = (over: Partial<Found> = {}): Found => ({
   status: 'ACTIVE',
   plan: 'CANTINA',
   locale: 'it',
+  turnstile: false,
   ...over,
 });
 
@@ -281,7 +282,13 @@ describe('mintWidgetSession', () => {
 
     const session = await mintWidgetSession({
       loadKeys: () => Promise.resolve(keys),
-      tenant: { tenantId: TENANT, plan: 'ECOMMERCE', status: 'ACTIVE', locale: 'en' },
+      tenant: {
+        tenantId: TENANT,
+        plan: 'ECOMMERCE',
+        status: 'ACTIVE',
+        locale: 'en',
+        turnstile: false,
+      },
       origin: ORIGIN,
       now,
       newId: () => ids.shift() ?? 'no-more-ids',
@@ -300,7 +307,13 @@ describe('mintWidgetSession', () => {
     expect(session.expiresAt).toBe('2026-09-15T10:15:00.000Z');
   });
 
-  const TENANT_ROW = { tenantId: TENANT, plan: 'CANTINA', status: 'ACTIVE', locale: 'it' } as const;
+  const TENANT_ROW = {
+    tenantId: TENANT,
+    plan: 'CANTINA',
+    status: 'ACTIVE',
+    locale: 'it',
+    turnstile: false,
+  } as const;
   const notRevoked = () => Promise.resolve(false);
 
   it('continues a session until its window closes, and not a second after (P2-12a)', async () => {

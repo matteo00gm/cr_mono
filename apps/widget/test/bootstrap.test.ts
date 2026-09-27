@@ -19,6 +19,7 @@ const config = (over: Partial<WidgetConfigResponse> = {}): WidgetConfigResponse 
   welcomeMessage: 'Posso consigliarle un vino?',
   cartUrl: 'https://cantina-rossi.example/cart',
   quotaState: 'ok',
+  turnstileSiteKey: null,
   ...over,
 });
 

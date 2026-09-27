@@ -7,6 +7,7 @@ import type { AppEnv } from './env.js';
 import type { AuthPort } from './middleware/auth.js';
 import type { DomainsPort } from './domains.js';
 import type { KeysPort } from './keys.js';
+import type { TurnstileSettingsPort } from './turnstile-settings.js';
 import type { MembersPort } from './members.js';
 import type { ProductsPort } from './products.js';
 import type { RagPort } from './rag.js';
@@ -82,6 +83,9 @@ export interface AppOptions {
   /** Keys (P4-09). Optional on the `members` terms. See `src/keys.ts`. */
   readonly keys?: KeysPort | undefined;
 
+  /** The Turnstile setting (P4-14). Optional on the same terms. */
+  readonly turnstileSettings?: TurnstileSettingsPort | undefined;
+
   /**
    * The shared secret CloudFront attaches to origin requests (A2).
    *
@@ -136,6 +140,7 @@ export const createApp = ({
   members,
   domains,
   keys,
+  turnstileSettings,
   products,
   rag,
   originSecret,
@@ -211,7 +216,16 @@ export const createApp = ({
 
   app.route(
     DASHBOARD_PREFIX,
-    createDashboardApp({ auth, readMemberships, members, domains, keys, products, rag }),
+    createDashboardApp({
+      auth,
+      readMemberships,
+      members,
+      domains,
+      keys,
+      turnstileSettings,
+      products,
+      rag,
+    }),
   );
   app.route(WIDGET_PREFIX, createWidgetApp(widget));
   app.route(WEBHOOK_PREFIX, createWebhookApp({ webhooks, resendWebhookSecret }));

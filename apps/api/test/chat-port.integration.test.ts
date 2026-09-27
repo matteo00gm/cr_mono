@@ -35,6 +35,7 @@ const tenant = (id: string): WidgetTenant => ({
   plan: 'CANTINA',
   status: 'ACTIVE',
   locale: 'it',
+  turnstile: false,
 });
 
 const embeddings: EmbeddingProvider = {

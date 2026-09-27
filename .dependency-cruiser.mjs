@@ -266,6 +266,9 @@ export default {
           // the insert names no tenant at all — it reads the GUC, which is why a
           // caller outside withTenant writes nothing rather than writing wrongly.
           '|^packages/db/src/domains-write[.]ts$' +
+          // src/turnstile.ts is exempt from P4-14 on the same terms: statements on
+          // the caller's transaction, every one under the tenant policy.
+          '|^packages/db/src/turnstile[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
           '|^packages/core/src/auth[.]ts$' +

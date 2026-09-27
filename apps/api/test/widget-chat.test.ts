@@ -48,6 +48,7 @@ const FOUND: WidgetResolution = {
   status: 'ACTIVE',
   plan: 'CANTINA',
   locale: 'it',
+  turnstile: false,
 };
 
 let keys: WidgetTokenKeys;

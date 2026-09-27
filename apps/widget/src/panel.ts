@@ -13,6 +13,7 @@ import { catalogues, localeFor } from './i18n/index.js';
 import { LocaleContext, MessagesContext } from './i18n/useT.js';
 import { ask, ChatRefused } from './send.js';
 import { anonId, createSession } from './session.js';
+import { createChallenge } from './turnstile.js';
 
 /**
  * The widget itself — everything the loader does *not* carry (P3-04).
@@ -191,8 +192,8 @@ const accentRule = (primaryColor: string): string => {
  * hands down two strings and nothing else, which is what keeps `send.ts`,
  * `session.ts` and Preact out of the 5 KB that runs on every page (§1.1).
  */
-const asker = (api: string, key: string): Asker => {
-  const session = createSession({ api, key });
+const asker = (api: string, key: string, challenge: (() => Promise<string>) | undefined): Asker => {
+  const session = createSession({ api, key, challenge });
 
   return async function* (message, signal) {
     /*
@@ -307,7 +308,23 @@ export const mountPanel = ({
         MessagesContext.Provider,
         { value: catalogues[locale] },
         h(Chat, {
-          ask: ask_ ?? asker(api, key),
+          ask:
+            ask_ ??
+            asker(
+              api,
+              key,
+              /*
+               * Only for a winery that turned it on (P4-14): otherwise no
+               * challenge exists and nothing is loaded from Cloudflare.
+               */
+              config.turnstileSiteKey === null
+                ? undefined
+                : createChallenge({
+                    siteKey: config.turnstileSiteKey,
+                    container: body,
+                    document: document_,
+                  }),
+            ),
           status: config.status,
           cart: cartPort ?? cartFor(cart),
           cartUrl: config.cartUrl,

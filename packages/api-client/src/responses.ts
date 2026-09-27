@@ -284,6 +284,25 @@ export type DomainVerifiedResponse = z.infer<typeof domainVerifiedResponse>;
 export type ProbedDomain = z.infer<typeof probedDomainSchema>;
 export type DomainRemovedResponse = z.infer<typeof domainRemovedResponse>;
 export type KeysResponse = z.infer<typeof keysResponse>;
+
+/**
+ * A winery's Turnstile setting, and whether turning it on is suggested (P4-14).
+ *
+ * `available` says whether this service can verify a challenge at all; the
+ * signals are the last hour's refusals `suggested` was decided from, so the
+ * owner sees why rather than only that.
+ */
+export const turnstileSettingsResponse = z.strictObject({
+  enabled: z.boolean(),
+  available: z.boolean(),
+  suggested: z.boolean(),
+  signals: z.strictObject({
+    unauthorizedOrigins: z.number().int().nonnegative(),
+    rateLimited: z.number().int().nonnegative(),
+  }),
+});
+
+export type TurnstileSettingsResponse = z.infer<typeof turnstileSettingsResponse>;
 export type IssuedKeysResponse = z.infer<typeof issuedKeysResponse>;
 export type Product = z.infer<typeof productSchema>;
 
@@ -739,6 +758,12 @@ export const widgetConfigResponse = z.strictObject({
   welcomeMessage: z.string(),
   cartUrl: z.string(),
   quotaState: z.enum(['ok', 'near', 'exceeded']),
+  /**
+   * The Turnstile site key, when this winery asks for a challenge before a
+   * session (P4-14) — and `null` otherwise, which is the default. Only when it
+   * is set does the widget load anything from a third party.
+   */
+  turnstileSiteKey: z.string().nullable(),
 });
 
 export type WidgetConfigResponse = z.infer<typeof widgetConfigResponse>;

@@ -358,6 +358,13 @@
       "when": 1788654188585,
       "tag": "0050_mfa_step_up",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1788654188586,
+      "tag": "0051_turnstile_flag",
+      "breakpoints": true
     }
   ]
 }

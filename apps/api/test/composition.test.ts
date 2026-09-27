@@ -334,3 +334,24 @@ describe('the widget session keys (P2-12)', () => {
     await expect(tokenKeys()).rejects.toThrow(/not JSON/);
   });
 });
+
+describe('Turnstile (P4-14)', () => {
+  it('is off, and cannot be turned on, until both halves are configured', async () => {
+    const deps = buildDependencies(config);
+
+    expect(deps.widget.turnstile).toBeUndefined();
+    await expect(deps.turnstileSettings.set('t1', true)).rejects.toMatchObject({
+      kind: 'conflict',
+    });
+  });
+
+  it('hands the widget surface the site key and a verifier once they are', () => {
+    const deps = buildDependencies({
+      ...config,
+      turnstile: { siteKey: 'the-site-key', secretKey: 'the-secret-key' },
+    });
+
+    expect(deps.widget.turnstile?.siteKey).toBe('the-site-key');
+    expect(typeof deps.widget.turnstile?.verify).toBe('function');
+  });
+});

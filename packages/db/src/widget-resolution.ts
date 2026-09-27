@@ -27,6 +27,8 @@ export type WidgetResolution =
       readonly status: TenantStatus;
       readonly plan: TenantPlan | null;
       readonly locale: string;
+      /** Whether the session mint asks for a Turnstile token (P4-14). */
+      readonly turnstile: boolean;
     }
   /**
    * No usable key: never issued, or revoked and past its grace window.
@@ -48,6 +50,7 @@ interface ResolutionRow {
   readonly status: TenantStatus | null;
   readonly plan: TenantPlan | null;
   readonly locale: string | null;
+  readonly turnstile_enabled: boolean | null;
 }
 
 export const resolveTenantByKeyAndOrigin = (
@@ -77,7 +80,8 @@ export const resolveTenantByKeyAndOrigin = (
           d.id AS domain_id,
           t.status,
           t.plan,
-          t.locale
+          t.locale,
+          t.turnstile_enabled
         FROM widget_keys k
         LEFT JOIN tenant_domains d
           ON d.tenant_id = k.tenant_id
@@ -118,6 +122,7 @@ export const resolveTenantByKeyAndOrigin = (
         status: row.status,
         plan: row.plan,
         locale: row.locale,
+        turnstile: row.turnstile_enabled === true,
       };
     },
     db,
