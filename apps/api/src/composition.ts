@@ -183,10 +183,21 @@ const keysLoader = (serialized: string): (() => Promise<WidgetTokenKeys>) => {
   };
 };
 
+/**
+ * How the API embeds a visitor's question (review, R7): two attempts of at most
+ * three seconds each, against the worker's four unbounded ones. The worker has
+ * a queue behind it and nobody watching; this runs inside a chat request with a
+ * 60-second budget and a visitor waiting on the first word, so a slow Bedrock
+ * becomes a prompt error rather than a quarter of the budget spent retrying.
+ */
+export const QUERY_EMBEDDING = { maxAttempts: 2, timeoutMs: 3_000 } as const;
+
 export interface Dependencies {
   readonly auth: AuthPort;
   /** Passed through to `createApp`; absent means the guard is not installed. */
   readonly originSecret?: string | undefined;
+  /** Where state-changing dashboard requests must come from (review, R5). */
+  readonly dashboardOrigin?: string | undefined;
   readonly readMemberships: MembershipReader;
   readonly members: MembersPort;
   /** Domains (P4-01). */
@@ -271,7 +282,10 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
    * place that keeps that cost in check.
    */
   const chat = createChatPort({
-    embeddings: assertQueryProviderMatchesIndex(titanEmbeddingProvider(), INDEXED_EMBEDDING),
+    embeddings: assertQueryProviderMatchesIndex(
+      titanEmbeddingProvider(QUERY_EMBEDDING),
+      INDEXED_EMBEDDING,
+    ),
     providers: {
       base: (onUsage) => bedrockNovaProvider({ modelId: CHAT_MODELS.base, onUsage }),
       strong: (onUsage) => bedrockNovaProvider({ modelId: CHAT_MODELS.strong, onUsage }),
@@ -386,6 +400,13 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
     ...(config.originSecret === undefined ? {} : { originSecret: config.originSecret }),
 
     /*
+     * The dashboard is served from the auth base URL's origin — CloudFront
+     * puts the SPA and the API on one host (P0-17a) — so that is where every
+     * state-changing dashboard request must come from (review, R5).
+     */
+    dashboardOrigin: new URL(config.authBaseUrl).origin,
+
+    /*
      * The invite path checks the suppression list inside the transaction it
      * already holds (see `members.ts`), which is both cheaper and better —
      * an invitation for an undeliverable address is never created at all. So
@@ -447,7 +468,10 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
      * fails the deployment and the previous version keeps answering.
      */
     rag: createRagPort({
-      provider: assertQueryProviderMatchesIndex(titanEmbeddingProvider(), INDEXED_EMBEDDING),
+      provider: assertQueryProviderMatchesIndex(
+        titanEmbeddingProvider(QUERY_EMBEDDING),
+        INDEXED_EMBEDDING,
+      ),
     }),
 
     /*

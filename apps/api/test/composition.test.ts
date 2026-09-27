@@ -7,7 +7,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app.js';
-import { buildDependencies } from '../src/composition.js';
+import { buildDependencies, QUERY_EMBEDDING } from '../src/composition.js';
 import { unconfiguredMembers } from '../src/members.js';
 import { ORIGIN_SECRET_HEADER } from '../src/middleware/origin-secret.js';
 
@@ -353,5 +353,32 @@ describe('Turnstile (P4-14)', () => {
 
     expect(deps.widget.turnstile?.siteKey).toBe('the-site-key');
     expect(typeof deps.widget.turnstile?.verify).toBe('function');
+  });
+});
+
+describe('the dashboard origin (review, R5)', () => {
+  it('is the auth base URL’s origin, so the cross-origin check is always installed', async () => {
+    const deps = buildDependencies(config);
+
+    expect(deps.dashboardOrigin).toBe('https://app.example');
+
+    const app = createApp(deps);
+    const response = await app.request('/v1/dashboard/widget/turnstile', {
+      method: 'PUT',
+      headers: { origin: 'https://evil.example', 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+
+    expect(response.status).toBe(403);
+  });
+});
+
+describe('embedding a visitor’s question (review, R7)', () => {
+  it('gives up well inside the chat budget, where the worker would keep trying', () => {
+    /* The streaming function has 60 seconds; retrieval must leave most of it for the answer. */
+    const worstCase = QUERY_EMBEDDING.maxAttempts * QUERY_EMBEDDING.timeoutMs;
+
+    expect(QUERY_EMBEDDING.maxAttempts).toBeLessThanOrEqual(2);
+    expect(worstCase).toBeLessThanOrEqual(10_000);
   });
 });

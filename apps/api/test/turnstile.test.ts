@@ -5,7 +5,11 @@ import { generateWidgetTokenKey, loadWidgetTokenKeys } from '@catalogorosso/secu
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/app.js';
-import type { WidgetDependencies } from '../src/surfaces/widget.js';
+import {
+  WIDGET_BODY_MAX_BYTES,
+  WIDGET_BODY_TOO_LARGE,
+  type WidgetDependencies,
+} from '../src/surfaces/widget.js';
 import type { WidgetResolution } from '@catalogorosso/db';
 import {
   createTurnstileVerifier,
@@ -262,5 +266,53 @@ describe('the session mint', () => {
     const response = await mint(mintApp(true), { turnstileToken: TOKEN });
 
     expect(response.status).toBe(403);
+  });
+});
+
+describe('the size of a widget body (review, R6)', () => {
+  const huge = JSON.stringify({ turnstileToken: 'x'.repeat(WIDGET_BODY_MAX_BYTES) });
+
+  it('is refused by its declared length alone, before the body is read', async () => {
+    /*
+     * A small body declaring a large one: only the declared-length check can
+     * refuse this, so the test cannot pass on the real-size check below it.
+     */
+    const { seen, turnstile } = recording(true);
+
+    const response = await mintApp(true, { turnstile }).request(
+      `/v1/widget/session?key=${encodeURIComponent(KEY)}`,
+      {
+        method: 'POST',
+        headers: {
+          origin: ORIGIN,
+          'content-type': 'application/json',
+          'content-length': String(WIDGET_BODY_MAX_BYTES + 1),
+        },
+        body: JSON.stringify({ turnstileToken: TOKEN }),
+      },
+    );
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ error: { message: WIDGET_BODY_TOO_LARGE } });
+    expect(seen).toEqual([]);
+  });
+
+  it('is refused by its real size when it declares nothing, before it is parsed', async () => {
+    const { seen, turnstile } = recording(true);
+
+    const response = await mint(mintApp(true, { turnstile }), JSON.parse(huge));
+
+    expect(response.status).toBe(422);
+    expect(seen).toEqual([]);
+  });
+
+  it('lets an ordinary token through', async () => {
+    const { turnstile } = recording(true);
+
+    const response = await mint(mintApp(true, { turnstile }), {
+      turnstileToken: 'x'.repeat(TURNSTILE_TOKEN_MAX),
+    });
+
+    expect(response.status).toBe(200);
   });
 });

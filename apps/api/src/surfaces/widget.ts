@@ -198,10 +198,41 @@ const chatRequest = z.object({ message: z.string().trim().min(1).max(500) }).str
 
 export const CHAT_BODY_EXPECTED = 'Send a JSON body with a message.';
 
-/** A body, or null when there is not one — the dashboard surface's argument, on this surface. */
-const readChatJson = async (c: { req: { json: () => Promise<unknown> } }): Promise<unknown> => {
+/**
+ * The most any widget body may be (review, R6): a 500-character message, a
+ * Turnstile token of at most 2 KB, an origin. Sixteen kilobytes is all of that
+ * several times over — and far short of the 6 MB the platform would otherwise
+ * hand a public, unauthenticated route to parse.
+ */
+export const WIDGET_BODY_MAX_BYTES = 16 * 1024;
+
+export const WIDGET_BODY_TOO_LARGE = `A widget request body may be at most ${String(
+  WIDGET_BODY_MAX_BYTES / 1024,
+)} KB.`;
+
+/**
+ * A body, or null when there is not one — the dashboard surface's argument, on
+ * this surface. Refused before it is parsed when it is larger than any widget
+ * request needs: the declared length first, so an honest oversized request is
+ * not read at all, and the real size after, so a dishonest one is not parsed.
+ */
+const readChatJson = async (c: {
+  req: { text: () => Promise<string>; header: (name: string) => string | undefined };
+}): Promise<unknown> => {
+  const declared = Number(c.req.header('content-length'));
+
+  if (Number.isFinite(declared) && declared > WIDGET_BODY_MAX_BYTES) {
+    throw new InvalidRequestError(WIDGET_BODY_TOO_LARGE);
+  }
+
+  const raw = await c.req.text();
+
+  if (new TextEncoder().encode(raw).byteLength > WIDGET_BODY_MAX_BYTES) {
+    throw new InvalidRequestError(WIDGET_BODY_TOO_LARGE);
+  }
+
   try {
-    return await c.req.json();
+    return JSON.parse(raw) as unknown;
   } catch {
     return null;
   }

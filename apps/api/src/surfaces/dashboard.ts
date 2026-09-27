@@ -60,6 +60,7 @@ import {
 
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
+import { requireSameOrigin } from '../middleware/same-origin.js';
 import { requireStepUp } from '../middleware/step-up.js';
 import { requireCapability, routeKey } from '../middleware/capability.js';
 import { logger } from '../middleware/logger.js';
@@ -139,6 +140,8 @@ export interface DashboardOptions {
   readonly keys?: KeysPort | undefined;
   /** The Turnstile setting (P4-14). */
   readonly turnstileSettings?: TurnstileSettingsPort | undefined;
+  /** Where state-changing requests must come from (review, R5). */
+  readonly dashboardOrigin?: string | undefined;
 }
 
 /**
@@ -469,6 +472,7 @@ export const createDashboardApp = ({
   members = unconfiguredMembers,
   products = unconfiguredProducts,
   rag = unconfiguredRag,
+  dashboardOrigin,
   domains = unconfiguredDomains,
   keys = unconfiguredKeys,
   turnstileSettings = unconfiguredTurnstileSettings,
@@ -493,6 +497,14 @@ export const createDashboardApp = ({
   app.get('/', (c) => c.json({ surface: 'dashboard' as const }));
 
   /** Sign-in, sign-up, reset, verification, TOTP — all of Better Auth. */
+  /*
+   * **Before the auth routes as well as ours** (review, R5): a forged sign-out
+   * or a forged 2FA change is as much a CSRF as a forged key rotation. Better
+   * Auth checks origins on its own too; this is the same rule for every route
+   * on the surface, in one place.
+   */
+  if (dashboardOrigin !== undefined) app.use('*', requireSameOrigin(dashboardOrigin));
+
   mountAuthRoutes(app, auth, AUTH_ROUTE_PREFIX);
 
   /*
