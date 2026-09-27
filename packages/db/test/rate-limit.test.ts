@@ -8,6 +8,7 @@ import {
   pruneClosedWindows,
 } from '../src/rate-limit.js';
 import type { DbTransaction } from '../src/with-tenant.js';
+import { text } from './support/sql-text.js';
 
 /**
  * The limiter's statements, without a database (P2-02).
@@ -35,25 +36,6 @@ const capturing = (...responses: unknown[][]) => {
 
   return { statements, execute, tx: { execute } as unknown as DbTransaction };
 };
-
-/**
- * The literal SQL of a statement, with its bound values elided.
- *
- * Recursive, because the window bounds are composed as nested fragments (P2-04):
- * flattening only the top level would drop exactly the SQL these tests exist to
- * pin, and every `toContain` below would fail — or, written the other way round,
- * pass for the wrong reason.
- */
-const text = (statement: unknown): string =>
-  ((statement as { queryChunks?: unknown[] }).queryChunks ?? [])
-    .flatMap((chunk): string[] => {
-      if (typeof chunk !== 'object' || chunk === null) return [];
-      if (Array.isArray((chunk as { value?: unknown[] }).value)) {
-        return (chunk as { value: string[] }).value;
-      }
-      return 'queryChunks' in chunk ? [text(chunk)] : [];
-    })
-    .join(' ');
 
 const window60 = (key: string, limit: number) => [{ key, limit, windowSec: 60 }];
 

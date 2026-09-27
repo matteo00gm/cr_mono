@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { countOwners, removeMember, setMemberRole } from '../src/members-write.js';
 import { readRoster } from '../src/memberships.js';
 import type { DbTransaction } from '../src/with-tenant.js';
+import { text } from './support/sql-text.js';
 
 /**
  * The membership writes, without a database (P0-52).
@@ -30,18 +31,6 @@ const capturing = (...responses: unknown[][]) => {
 
   return { statements, execute, tx: { execute } as unknown as DbTransaction };
 };
-
-/** The literal SQL of a statement, with its bound values elided. */
-const text = (statement: unknown): string =>
-  ((statement as { queryChunks?: unknown[] }).queryChunks ?? [])
-    .flatMap((chunk) =>
-      typeof chunk === 'object' &&
-      chunk !== null &&
-      Array.isArray((chunk as { value?: unknown[] }).value)
-        ? ((chunk as { value: unknown[] }).value as string[])
-        : [],
-    )
-    .join(' ');
 
 /** lock, exists, write — the three statements each write issues, in order. */
 const LOCK = 0;

@@ -9,6 +9,7 @@ import {
   VECTOR_CANDIDATE_LIMIT,
 } from '../src/retrieval.js';
 import type { DbTransaction } from '../src/with-tenant.js';
+import { text } from './support/sql-text.js';
 
 /**
  * The vector search statement, without a database (P2-18).
@@ -19,18 +20,6 @@ import type { DbTransaction } from '../src/with-tenant.js';
  * Each produces rows either way — just the wrong ones, or the same wine several
  * times.
  */
-
-/** The literal SQL of a statement, with its bound values elided. */
-const text = (statement: unknown): string =>
-  ((statement as { queryChunks?: unknown[] }).queryChunks ?? [])
-    .flatMap((chunk): string[] => {
-      if (typeof chunk !== 'object' || chunk === null) return [];
-      if (Array.isArray((chunk as { value?: unknown[] }).value)) {
-        return (chunk as { value: string[] }).value;
-      }
-      return 'queryChunks' in chunk ? [text(chunk)] : [];
-    })
-    .join(' ');
 
 /** Answers each statement in turn, so a fallback can be told from a first attempt. */
 const capturing = (...responses: unknown[][]) => {

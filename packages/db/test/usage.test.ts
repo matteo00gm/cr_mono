@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { countUsage, recordUsage } from '../src/usage.js';
 import type { DbTransaction } from '../src/with-tenant.js';
+import { text } from './support/sql-text.js';
 
 /**
  * The statements the ledger issues (P2-31).
@@ -13,17 +14,6 @@ import type { DbTransaction } from '../src/with-tenant.js';
  * policy changes would be gone with nothing to show for it. Only the statement
  * text can say whether it is still there.
  */
-
-const text = (statement: unknown): string =>
-  ((statement as { queryChunks?: unknown[] }).queryChunks ?? [])
-    .flatMap((chunk): string[] => {
-      if (typeof chunk !== 'object' || chunk === null) return [];
-      if (Array.isArray((chunk as { value?: unknown[] }).value)) {
-        return (chunk as { value: string[] }).value;
-      }
-      return 'queryChunks' in chunk ? [text(chunk)] : [];
-    })
-    .join(' ');
 
 const capturing = (...responses: unknown[][]) => {
   const statements: unknown[] = [];

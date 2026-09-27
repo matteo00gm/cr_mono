@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { readConversation, recordTurn, type TurnToRecord } from '../src/conversations.js';
 import type { DbTransaction } from '../src/with-tenant.js';
+import { text } from './support/sql-text.js';
 
 /**
  * The statements a turn issues (P2-30).
@@ -12,17 +13,6 @@ import type { DbTransaction } from '../src/with-tenant.js';
  * round trips would pass every one of those cases, and a chat request pays for
  * each one while a visitor waits.
  */
-
-const text = (statement: unknown): string =>
-  ((statement as { queryChunks?: unknown[] }).queryChunks ?? [])
-    .flatMap((chunk): string[] => {
-      if (typeof chunk !== 'object' || chunk === null) return [];
-      if (Array.isArray((chunk as { value?: unknown[] }).value)) {
-        return (chunk as { value: string[] }).value;
-      }
-      return 'queryChunks' in chunk ? [text(chunk)] : [];
-    })
-    .join(' ');
 
 const capturing = (...responses: unknown[][]) => {
   const statements: unknown[] = [];
@@ -113,19 +103,20 @@ describe('recording a turn', () => {
 });
 
 describe('reading a conversation back', () => {
-  it('breaks the timestamp tie by role, so the question comes first', async () => {
+  it('orders by the sequence rows were written in, never by the clock (review)', async () => {
     /*
-     * Both messages of a turn are written in one statement and share `now()`.
-     * Ordering by time alone can put the answer before the question — a history
-     * in which the model spoke first, which is exactly the thing a model will
-     * try to make sense of.
+     * Time and then role is right within a turn and wrong across two: turns
+     * written in one transaction tie, a clock step reverses them, and then both
+     * questions sort before both answers. `seq` is insertion order, and a
+     * turn's question is inserted first.
      */
     const { statements, tx } = capturing([]);
 
     await readConversation(tx, 'sess-1', 6);
 
-    expect(text(statements[0])).toContain('order by m.created_at desc, m.role desc');
-    expect(text(statements[0])).toContain('order by created_at, role');
+    expect(text(statements[0])).toContain('order by m.seq desc');
+    expect(text(statements[0])).toMatch(/order by seq\s*$/u);
+    expect(text(statements[0])).not.toMatch(/order by[^)]*created_at/u);
   });
 
   it('is scoped to the tenant as well as the session', async () => {

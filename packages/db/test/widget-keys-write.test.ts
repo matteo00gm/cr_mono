@@ -8,6 +8,7 @@ import {
   rotatePublicKey,
 } from '../src/widget-keys-write.js';
 import type { DbTransaction } from '../src/with-tenant.js';
+import { text } from './support/sql-text.js';
 
 /**
  * The key statements, without a database (P4-09).
@@ -28,28 +29,6 @@ const capturing = (rows: unknown[] = []) => {
 
   return { statements, tx: { execute } as unknown as DbTransaction };
 };
-
-/**
- * The literal SQL of a statement, with its bound values elided.
- *
- * **Recursive, and it has to be.** A fragment like `VISIBLE` is embedded as a
- * nested `sql` object rather than as a string chunk, so a flat walk skips it —
- * and the first version of this helper did, which meant every assertion about
- * which columns a statement selects was checking nothing. The mutation that
- * added `secret_key_hash` to the selected columns survived that version.
- */
-const text = (statement: unknown): string =>
-  ((statement as { queryChunks?: unknown[] }).queryChunks ?? [])
-    .flatMap((chunk): string[] => {
-      if (typeof chunk !== 'object' || chunk === null) return [];
-      if (Array.isArray((chunk as { value?: unknown[] }).value)) {
-        return (chunk as { value: unknown[] }).value as string[];
-      }
-      if (Array.isArray((chunk as { queryChunks?: unknown[] }).queryChunks)) return [text(chunk)];
-
-      return [];
-    })
-    .join(' ');
 
 const raw = {
   id: 'k1',

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Database } from '../src/client.js';
 import { insertSecurityEvent } from '../src/security-events.js';
 import type { DbTransaction } from '../src/with-tenant.js';
+import { text } from './support/sql-text.js';
 
 /**
  * The `security_events` statement, without a database (P2-16).
@@ -14,18 +15,6 @@ import type { DbTransaction } from '../src/with-tenant.js';
  * back. Whether the policy then admits it is a question only Postgres can
  * answer, and the integration suite beside this one asks it.
  */
-
-/** The literal SQL of a statement, with its bound values elided. */
-const text = (statement: unknown): string =>
-  ((statement as { queryChunks?: unknown[] }).queryChunks ?? [])
-    .flatMap((chunk): string[] => {
-      if (typeof chunk !== 'object' || chunk === null) return [];
-      if (Array.isArray((chunk as { value?: unknown[] }).value)) {
-        return (chunk as { value: string[] }).value;
-      }
-      return 'queryChunks' in chunk ? [text(chunk)] : [];
-    })
-    .join(' ');
 
 const capturing = () => {
   const statements: unknown[] = [];

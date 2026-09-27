@@ -414,6 +414,41 @@ describe('readConversation', () => {
     expect(history.map((message) => message.role)).toEqual(['USER', 'ASSISTANT']);
   });
 
+  it('orders turns by when they were written, even when their timestamps tie (review)', async () => {
+    /*
+     * The flake, made deterministic. `created_at` is transaction time, so two
+     * turns written in one transaction share it exactly — as two turns can
+     * across a clock step, which is how this failed once under load. Ordered
+     * by time and then role, both answers sort together and "the latest two
+     * messages" came back as two answers.
+     */
+    const tied = `sess-tied-${randomUUID()}`;
+    const inSession = (question: string, reply: string) => ({
+      ...turn(question, reply),
+      sessionId: tied,
+    });
+
+    await withTenant(
+      tenantId,
+      async (tx) => {
+        await recordTurn(tx, inSession('prima', 'prima risposta'));
+        await recordTurn(tx, inSession('dopo', 'dopo risposta'));
+      },
+      db,
+    );
+
+    const all = await withTenant(tenantId, (tx) => readConversation(tx, tied, 10), db);
+    const latest = await withTenant(tenantId, (tx) => readConversation(tx, tied, 2), db);
+
+    expect(all.map((message) => message.content)).toEqual([
+      'prima',
+      'prima risposta',
+      'dopo',
+      'dopo risposta',
+    ]);
+    expect(latest.map((message) => message.content)).toEqual(['dopo', 'dopo risposta']);
+  });
+
   it('keeps the recent end when it has to choose', async () => {
     // P2-35 caps how much history a prompt carries, and a cap that kept the
     // oldest messages would send the model the opening of a conversation it is

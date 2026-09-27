@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { endSessionsFor } from '../src/session-cutoffs.js';
 import type { DbTransaction } from '../src/with-tenant.js';
+import { text } from './support/sql-text.js';
 
 /**
  * Ending the sessions a removed domain left behind, without a database (P4-06).
@@ -22,17 +23,6 @@ const capturing = () => {
 
   return { statements, tx: { execute } as unknown as DbTransaction };
 };
-
-const text = (statement: unknown): string =>
-  ((statement as { queryChunks?: unknown[] }).queryChunks ?? [])
-    .flatMap((chunk) =>
-      typeof chunk === 'object' &&
-      chunk !== null &&
-      Array.isArray((chunk as { value?: unknown[] }).value)
-        ? ((chunk as { value: unknown[] }).value as string[])
-        : [],
-    )
-    .join(' ');
 
 describe('writing a cutoff', () => {
   it('takes its tenant from the GUC, never from an argument', async () => {

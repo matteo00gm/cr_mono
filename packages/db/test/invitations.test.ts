@@ -13,6 +13,7 @@ import { readUserEmail } from '../src/users.js';
 import { withInvitation } from '../src/with-invitation.js';
 import type { Database } from '../src/client.js';
 import type { DbTransaction } from '../src/with-tenant.js';
+import { text } from './support/sql-text.js';
 
 /**
  * The invitation statements, without a database (P0-51).
@@ -50,17 +51,6 @@ const params = (statement: unknown): unknown[] =>
         Array.isArray((chunk as { value?: unknown }).value)
       ),
   );
-
-const text = (statement: unknown): string =>
-  ((statement as { queryChunks?: unknown[] }).queryChunks ?? [])
-    .flatMap((chunk) =>
-      typeof chunk === 'object' &&
-      chunk !== null &&
-      Array.isArray((chunk as { value?: unknown[] }).value)
-        ? ((chunk as { value: unknown[] }).value as string[])
-        : [],
-    )
-    .join(' ');
 
 describe('insertInvitation', () => {
   const invitation = {
