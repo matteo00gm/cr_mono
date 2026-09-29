@@ -309,16 +309,19 @@ export const createDomainClaims = ({
        */
       if (claim === undefined) throw new NotFoundError('No such claim.');
 
-      /* Settled or withdrawn: say so, idempotently. */
-      if (claim.status === 'TRANSFERRED' || claim.status === 'CANCELED') return standing(claim);
-
       /*
-       * Proven already, or on notice: nothing to look up. Settling again is
-       * what lands a claim a full cap once refused, and what moves a notice
-       * that has run out — and the policy, not this line, decides whether it
-       * has (ADR 0028).
+       * Settled, withdrawn, or on notice: say so, idempotently.
+       *
+       * **A notice is never settled from here**, even once it has run out. It
+       * moves the origin away from a paying winery, and that is only safe once
+       * the winery has actually been told — which is P4-18b's sweep, not the
+       * claimant pressing a button. Settling here would make the claimant's
+       * patience the only thing between a paying holder and its origin.
        */
-      if (claim.status !== 'PENDING') return answer(command.tenantId, command.claimId);
+      if (claim.status !== 'PENDING' && claim.status !== 'PROVEN') return standing(claim);
+
+      /* Proven, and refused at the cap last time: nothing to look up, settle again. */
+      if (claim.status === 'PROVEN') return answer(command.tenantId, command.claimId);
 
       const token = claim.verificationToken;
 

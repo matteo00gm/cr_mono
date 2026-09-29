@@ -463,21 +463,38 @@ describe('checking a claim', () => {
     },
   );
 
-  it('settles a proven or noticed claim again without a second lookup', async () => {
-    const transferAt = new Date('2026-10-02T09:00:00.000Z');
-    state.claims = [
-      claimRow({ status: 'NOTICE', verificationToken: null, transferAt }),
-      claimRow({ status: 'NOTICE', verificationToken: null, transferAt }),
-    ];
+  it('never settles a notice, even one that has run out', async () => {
+    /*
+     * **A notice moves a paying winery's origin, and only once it has been
+     * told** (P4-18b's sweep). Settling here would make the claimant's patience
+     * the only thing between that winery and its origin.
+     */
+    const transferAt = new Date(NOW - 1);
+    state.claims = [claimRow({ status: 'NOTICE', verificationToken: null, transferAt })];
 
-    const result = await port({ settlement: { kind: 'unsettleable' } }).verifyClaim({
-      tenantId: 't1',
-      claimId: 'c1',
-    });
+    const result = await port().verifyClaim({ tenantId: 't1', claimId: 'c1' });
 
     expect(calls).not.toContain('resolveTxt');
+    expect(calls).not.toContain('settle');
+    expect(result).toMatchObject({
+      verified: true,
+      transferred: false,
+      transferAt: transferAt.toISOString(),
+      reason: CLAIM_NOTICED,
+    });
+  });
+
+  it('settles a proven claim again without a second lookup', async () => {
+    state.claims = [
+      claimRow({ status: 'PROVEN', verificationToken: null }),
+      claimRow({ status: 'TRANSFERRED', verificationToken: null }),
+    ];
+
+    await expect(port().verifyClaim({ tenantId: 't1', claimId: 'c1' })).resolves.toMatchObject({
+      transferred: true,
+    });
+    expect(calls).not.toContain('resolveTxt');
     expect(calls).toContain('settle');
-    expect(result).toMatchObject({ transferred: false, transferAt: transferAt.toISOString() });
   });
 
   it('describes a proven claim with no notice as verified and waiting', async () => {

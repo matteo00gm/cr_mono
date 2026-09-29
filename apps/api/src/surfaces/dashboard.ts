@@ -2331,8 +2331,9 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'live sessions are cut off, and both wineries’ audit logs record it. A paying holder is ' +
         'put on 72 hours’ notice instead and keeps the origin until then — `transferred: false` ' +
         'with `transferAt` — because moving a live customer’s origin on one DNS check is how a ' +
-        'hostile contractor or a compromised registrar kills a widget unannounced. Checking again ' +
-        'after the notice has run out settles it. A record that is absent or wrong answers 200 ' +
+        'hostile contractor or a compromised registrar kills a widget unannounced. A notice is ' +
+        'never settled from this route, even once it has run out: it moves only after the holder ' +
+        'has been told (P4-18b). A record that is absent or wrong answers 200 ' +
         "with `verified: false`. Attempts are counted per claim. Another winery's id, including " +
         'the claimant’s id seen from the holder’s side, answers 404, never 403.',
       example: {
