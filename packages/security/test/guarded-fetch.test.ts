@@ -64,9 +64,12 @@ describe('the address a socket is given', () => {
   });
 
   it('is refused when it is the metadata endpoint', async () => {
-    const { error } = await lookupResult(answering(PRIVATE));
+    const { error, address } = await lookupResult(answering(PRIVATE));
 
     expect(error).toMatchObject({ reason: 'blocked_address' });
+    /* Nothing to connect to, either: a caller that ignored the error would
+     * still have no address in hand, least of all the one that was refused. */
+    expect(address).toBe('');
   });
 
   it.each([
@@ -110,9 +113,10 @@ describe('the address a socket is given', () => {
   });
 
   it('is refused when the resolver answers with nothing', async () => {
-    const { error } = await lookupResult(answering([]));
+    const { error, address } = await lookupResult(answering([]));
 
     expect(error).toMatchObject({ reason: 'dns_failure' });
+    expect(address).toBe('');
   });
 
   it('is refused when the resolver fails', async () => {
@@ -238,11 +242,14 @@ const fakeRequest = (
   fail?: { readonly event: 'timeout' | 'error'; readonly error?: Error },
 ) => {
   const outgoing = Object.assign(new EventEmitter(), {
-    destroy: () => undefined,
+    destroyed: false,
+    destroy: () => {
+      outgoing.destroyed = true;
+    },
     end: () => undefined,
   });
 
-  return (_options: unknown, handler?: (response: FakeResponse) => void) => {
+  const send = (_options: unknown, handler?: (response: FakeResponse) => void) => {
     outgoing.end = () => {
       queueMicrotask(() => {
         if (fail !== undefined) {
@@ -266,10 +273,13 @@ const fakeRequest = (
 
     return outgoing;
   };
+
+  /* The request is exposed so a test can see whether it was torn down. */
+  return Object.assign(send, { outgoing });
 };
 
 const fetchWith = async (
-  request: ReturnType<typeof fakeRequest>,
+  request: (options: unknown, handler?: (response: FakeResponse) => void) => unknown,
   url = 'https://winery.example/.well-known/somm-verify-abc.txt',
 ) =>
   guardedFetch(url, {
@@ -353,6 +363,9 @@ describe('the request itself', () => {
     const request = fakeRequest(() => undefined, { event: 'timeout' });
 
     await expect(fetchWith(request)).rejects.toMatchObject({ reason: 'timeout' });
+    /* A timeout event only reports; the socket stays open until somebody
+     * closes it, and a host that trickles bytes would keep it open forever. */
+    expect(request.outgoing.destroyed).toBe(true);
   });
 
   it('reports a connection failure as a network failure', async () => {
@@ -378,7 +391,9 @@ describe('the request itself', () => {
   it('refuses a response with no status at all', async () => {
     /* `statusCode` is optional on an `IncomingMessage`, and defaulting it to
      * zero is how a response nothing can be decided from becomes a 200. */
+    let seen: FakeResponse | undefined;
     const request = fakeRequest((response) => {
+      seen = response;
       response.emit('end');
     });
 
@@ -389,7 +404,34 @@ describe('the request itself', () => {
       });
 
     await expect(fetchWith(statusless)).rejects.toMatchObject({ reason: 'network' });
+    expect(seen?.destroyed).toBe(true);
   });
+
+  const withStatus =
+    (status: number) => (options: unknown, handler?: (response: FakeResponse) => void) =>
+      fakeRequest((response) => {
+        if (!response.destroyed) response.emit('end');
+      })(options, (response) => {
+        response.statusCode = status;
+        handler?.(response);
+      });
+
+  it.each([300, 301, 302, 303, 307, 308, 399])('refuses a %s as a redirect', async (status) => {
+    /* The whole 3xx class, including the two ends of it: a check that began at
+     * 301 or stopped at 308 would follow the ones it forgot. */
+    await expect(fetchWith(withStatus(status))).rejects.toMatchObject({
+      reason: 'blocked_redirect',
+    });
+  });
+
+  it.each([200, 204, 299, 400, 404, 500])(
+    'hands a %s back for the caller to judge',
+    async (status) => {
+      /* Not a redirect, so not this function's to refuse: a verifier reading a
+       * 404 says "no file there", which is the useful answer. */
+      await expect(fetchWith(withStatus(status))).resolves.toEqual({ status, body: '' });
+    },
+  );
 
   it('reports a body that fails part way through as a network failure', async () => {
     const request = fakeRequest((response) => {
@@ -425,6 +467,16 @@ describe('the request itself', () => {
   it('holds the timeout and the cap where the row put them', () => {
     expect(GUARDED_TIMEOUT_MS).toBe(5000);
     expect(MAX_BODY_BYTES).toBe(1024);
+  });
+
+  it('refuses with an error that names itself and its reason, and nothing else', () => {
+    /* The log line is where a refusal is read, and the serialiser keeps
+     * `type` and `message`. Neither carries the URL or an address: those are
+     * the seller's, and the reason is all an operator needs. */
+    const refusal = new GuardedFetchRefused('blocked_address');
+
+    expect(refusal.name).toBe('GuardedFetchRefused');
+    expect(refusal.message).toBe('The request was refused: blocked_address.');
   });
 });
 

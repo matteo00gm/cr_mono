@@ -19,26 +19,38 @@ const clean = (message: string): string => redactPii(message).text;
 
 describe('what is removed', () => {
   it.each([
-    ['an email address', 'Mandami la lista a mario.rossi@example.com grazie'],
-    ['an email with a plus tag', 'scrivimi a mario+vini@example.co.uk'],
-    ['an email with accented letters', 'scrivi a josé@bodegas.es'],
-    ['an Italian mobile', 'Chiamami al 333 123 4567'],
-    ['an international number', 'il mio numero è +39 02 1234 5678'],
-    ['a number written with dots', 'chiama 02.1234.5678'],
-    ['a number written with dashes', 'chiama 055-123-4567'],
-    ['a codice fiscale', 'il mio CF è RSSMRA85T10A562S'],
-    ['a card-like digit run', 'la carta è 4111111111111111'],
-  ])('removes %s', (_name, message) => {
+    [
+      'an email address',
+      'Mandami la lista a mario.rossi@example.com grazie',
+      'Mandami la lista a [omesso] grazie',
+    ],
+    ['an email with a plus tag', 'scrivimi a mario+vini@example.co.uk', 'scrivimi a [omesso]'],
+    ['an email with accented letters', 'scrivi a josé@bodegas.es', 'scrivi a [omesso]'],
+    ['an Italian mobile', 'Chiamami al 333 123 4567', 'Chiamami al [omesso]'],
+    ['an international number', 'il mio numero è +39 02 1234 5678', 'il mio numero è [omesso]'],
+    ['an international number run together', 'numero +390212345678.', 'numero [omesso].'],
+    ['an international number with dashes', 'o +39-02-1234-5678 grazie', 'o [omesso] grazie'],
+    ['a number written with dots', 'chiama 02.1234.5678', 'chiama [omesso]'],
+    ['a number written with dashes', 'chiama 055-123-4567', 'chiama [omesso]'],
+    ['a codice fiscale', 'il mio CF è RSSMRA85T10A562S', 'il mio CF è [omesso]'],
+    ['a card-like digit run', 'la carta è 4111111111111111', 'la carta è [omesso]'],
+  ])('removes %s, all of it', (_name, message, expected) => {
+    /*
+     * **The whole result, not a search for the marker.** A pattern that took
+     * the first half of a number and left the rest would still leave a marker
+     * behind — beside the digits it was there to remove.
+     */
     const { text, removed } = redactPii(message);
 
-    expect(text).toContain(OMITTED);
-    expect(removed).toBeGreaterThan(0);
+    expect(text).toBe(expected);
+    expect(removed).toBe(1);
   });
 
   it('leaves the sentence readable', () => {
     // Replaced rather than deleted: "Chiama il" on its own is a fragment, and a
     // model will do its best with it.
-    expect(clean('Chiama il 333 123 4567 per favore')).toBe(`Chiama il ${OMITTED} per favore`);
+    expect(clean('Chiama il 333 123 4567 per favore')).toBe('Chiama il [omesso] per favore');
+    expect(OMITTED).toBe('[omesso]');
   });
 
   it('removes several things from one message', () => {

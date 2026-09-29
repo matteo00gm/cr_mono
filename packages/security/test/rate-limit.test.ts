@@ -75,7 +75,13 @@ describe('the memory limiter', () => {
     // Degenerate, and worth pinning: an empty array must not be read as "deny".
     // The Postgres implementation throws on it instead, because there a caller
     // reaching the database with nothing to check is a bug worth surfacing.
-    expect((await memoryRateLimiter().check([])).allowed).toBe(true);
+    expect(await memoryRateLimiter(() => 5_000).check([])).toEqual({
+      allowed: true,
+      remaining: 0,
+      resetAt: new Date(5_000),
+      limit: 0,
+      key: '',
+    });
   });
 });
 

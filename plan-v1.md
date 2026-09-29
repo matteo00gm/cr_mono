@@ -1124,7 +1124,7 @@ Anti-rot checks in CI, each cheap:
 
 - **A PR is not done without its tests.** The *Test gate* column is part of the PR, never a follow-up. This is the single rule that makes the coverage bars in Part 6 achievable instead of aspirational.
 - **Branch/PR naming:** `p0-07-ci-coverage-gates`. The ID makes the dependency graph readable in the PR list.
-- **`🔒` marks security-critical tasks** — these land in `packages/security`, carry 100% branch coverage, and are included in the Stryker mutation gate (P4-16).
+- **`🔒` marks security-critical tasks** — these land in `packages/security`, carry 100% branch coverage, and are included in the Stryker mutation gate (P4-16). *(As built, the gate covers `packages/security` alone, as P4-16's own row scopes it. 🔒 rows that landed elsewhere, such as the MFA hardening in `packages/core`, are held by their per-PR mutation runs; see the open items.)*
 - **`⛔` marks hard blockers** — a broad set of later work cannot start until these merge.
 - Rows within a phase that share no dependency can go in parallel.
 
@@ -1384,7 +1384,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-13 | SST: AWS WAF on CloudFront | managed bot + reputation rules, per-path rate rules | P0-17 |
 | ✅ P4-14 | Turnstile hook | per-tenant flag, default off | P2-12 |
 | ✅ P4-15 | 🔒 404-not-403 + IDOR matrix | cross-tenant ids return 404 for every endpoint | P0-50 |
-| P4-16 | ⛔ 🔒 Stryker on `packages/security` | mutation score ≥ 90%, CI-gated | P0-07 |
+| ✅ P4-16 | ⛔ 🔒 Stryker on `packages/security` | mutation score ≥ 90%, CI-gated | P0-07 |
 | P4-18 | 🔒 Domain claim challenge | DNS proof to claim a held origin; **immediate if incumbent lapsed, 72h notice if paying** | P4-02 |
 | P4-19 | 🔒 Staging + development origins | `.myshopify.com` via OAuth, 24h-expiring localhost dev mode, staging outside the plan cap | P4-01 |
 | P4-17 | 🔒 T1–T10 suite assembly | one named spec per threat-model row | P4-16 |
@@ -2795,7 +2795,7 @@ Migration `0028` is safe precisely because these tables are still empty, which i
 
 **What.** The adversarial suite for self-hosted authentication.
 
-**Why.** Self-hosting means these failure modes are ours. Better Auth's defaults are sound, but *defaults* are a starting point and configuration drifts — this suite is what makes the choice in P0-45 defensible rather than hopeful. It carries the `packages/security` bar: 100% branch coverage on our auth wiring, and included in P4-16's mutation run.
+**Why.** Self-hosting means these failure modes are ours. Better Auth's defaults are sound, but *defaults* are a starting point and configuration drifts — this suite is what makes the choice in P0-45 defensible rather than hopeful. It carries the `packages/security` bar: 100% branch coverage on our auth wiring, and included in P4-16's mutation run. *(As built, the auth wiring is in `packages/core`, outside P4-16's gate; see the open items.)*
 
 **How.** Grouped by attack:
 
@@ -6368,6 +6368,7 @@ Then the rest: **redirects disabled entirely** (a 302 to an internal address is 
 - **`systemResolveAll` normalises Node's missing answer** *(defect found while writing the test that covers it)*. `dns.lookup` calls back with **no addresses argument at all** on failure, whatever the types say, so destructuring it threw a `TypeError` inside a callback nothing was there to catch. The first version of this row shipped that bug; the test that resolves `a..b` — an empty label, which `getaddrinfo` rejects locally in milliseconds and without a network — is what found it and is what keeps it fixed.
 - **The port check compares against `''` alone** *(deviation from the obvious form)*. `new URL()` drops a scheme's default port, so `https://host:443/` never arrives here as `'443'` and the second comparison every implementation writes is unreachable. The mutation run is what proved it: the mutant that deleted it survived.
 - **The 5 s timeout and the 1 KB cap are exported constants**, asserted against the row rather than left as literals a later edit could quietly widen.
+- **P4-16 widened the IPv6 refusal to all of `::/8`** *(later deviation)*. The mutation run showed the loopback rule stopped at `::` and `::1` and let `::7f00:1`, the IPv4-compatible `127.0.0.1`, through. The reasoning is in P4-16's note.
 
 **Verified.** 123 cases across the two files, `packages/security` at 100% lines, statements, functions and branches — the bar this package is held to. A mutation run of 47 mutants killed 47, after three survivors were each fixed rather than explained away: an octet above 255 outside the leading position was reachable (the leading-position case was caught by the multicast rule and hid it), a resolver that reported an error *and* returned records was trusted, and the dead port comparison above.
 
@@ -6731,6 +6732,20 @@ On transfer, in one transaction: delete the incumbent's row, invalidate their li
 **Tests.** The gate itself.
 
 **Files.** `stryker.conf.json`, CI job. **~60 lines + test fixes.**
+
+**As built.** `packages/security/stryker.config.json` *(renamed: Stryker's current name for the file)*, a `vitest.stryker.config.ts` beside it that runs this package's suite alone, `pnpm --filter @catalogorosso/security mutation`, and `.github/workflows/mutation.yml`.
+
+- **Its own workflow rather than a job in `ci.yml`.** It runs on pull requests that touch `packages/security/**`, the lockfile or the workflow itself, nightly, and by hand. A run takes about two minutes where the rest of CI takes seconds, and only a change to this package can move the score — or a dependency bump underneath unchanged code, which is what the nightly run catches. The break threshold is 90, as the row says.
+- **In place, with the runner plugin named by path** *(two workarounds, both recorded in the config)*. A sandbox copy of one pnpm workspace package loses its workspace links, and Stryker looks for plugins beside its own package, where pnpm does not link the vitest runner.
+- **The first run scored 87.37%**: 143 survivors of 1,132 mutants. Most were what the row predicted. Assertions searched for `[redacted]` instead of comparing the whole line, so a pattern that matched a secret's first character and stopped still passed. Nothing pinned the log allowlist, so any one name could be emptied. And no test sat on a boundary: a 253-character host, a 300 or a 399 status, the redaction depth cap exactly.
+- **Some survivors were in the code, not the tests**: a check standing in front of another check that already decided. Each was removed rather than tested around. The IPv6 parser had a character-class screen and a `::` count in front of the per-group hex check, which already refused everything they did and hid that check from every test. `guardedFetch` kept a `settled` flag beside a promise that already settles once. `normalizeOrigin` had an empty-input check and `url.search`/`url.hash` comparisons that the parse and the raw `?`/`#` test already decided. The token verifier checked a missing `kid` before a map lookup that refuses it anyway. Smaller ones went too: an `'utf8'` argument that is the default, a `u` flag on an ASCII pattern, and an `''` fallback nobody reads.
+- **One survivor was a hole.** The NAT64 case, `64:ff9b::1.1.1.1`, passed because the parser could not read it, not because NAT64 was refused: deleting the NAT64 comparison failed nothing. Looking at why showed that the unspecified/loopback rule protected exactly `::` and `::1` and accepted the rest of `::/8`, including `::7f00:1`, which is the deprecated IPv4-compatible way to write `127.0.0.1`. **`isPublicUnicast` now refuses all of `::/8`** *(deviation from P4-03a's range list, which named loopback and unspecified only)*. The IETF reserves that block, no public host lives in it, and one rule replaces two. NAT64 is now tested as a resolver writes it, `64:ff9b::101:101`.
+- **The key generator's rejection sampling is tested with bytes the test chooses** *(addition)*: `api-keys-sampling.test.ts` mocks `node:crypto` in that file only. A bias of one part in 248 cannot show up in any sample of real keys, which is why the `<` → `<=` mutant survived every statistical case.
+- **The limiter conformance suite has a tie case** *(addition)*: when two dimensions are equally tight, both implementations name the first one passed. The `<=` mutant showed that nothing pinned which dimension a caller is shown, or so which reset.
+- **The gate covers `packages/security` and nothing else**, as the row scopes it. That is narrower than two earlier lines of this plan: the 🔒 legend and P0-46 both say their code is in the mutation gate. The 🔒 code that landed in `packages/core` (the MFA hardening, the auth wiring) and in `apps/api` middleware is held by the hand mutation run each of those PRs recorded, not by this job. Widening the gate is an open item.
+- **Two `Stryker disable` comments.** Each covers one mutator on one line, with its reason beside it. One is the key generator's batch size: `length * 2` against `length / 2` changes how many draws a key costs, never which characters it gets. The other is `systemResolveAll`'s `addresses ?? []`: Node leaves the list out only when it also passes an error, and the lookup refuses on the error before it reads a record.
+
+**Verified.** Final run: **100%**: all 1,045 scored mutants detected, 1,038 killed and 7 by timeout, with none surviving. Two more are ignored, for the reasons above. `packages/security` stays at 100% on lines, statements, functions and branches. The gate was proved by failing it: the first run exited non-zero at 87.37%.
 
 ---
 
@@ -7663,6 +7678,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Streamed text is not checked for leaked instructions | **closed (2026-09-22)** | `withoutLeakedInstructions` (P2-32) holds back any tail that could still become a marker or a delimiter, so nothing recognisable is released; P2-29's chat route wraps its stream in it. The fixed-window first attempt leaked 22 of the marker's 26 characters and the mutation run caught it. |
 | Escalation-rate alarm needs a denominator | **closed (2026-09-22)** | `ChatEscalationRate` in `infra/api.ts`, over an EMF line the chat route writes: turns and escalations from one log, divided. The expression withholds a rate under twenty turns an hour, because a rate over two turns is a statistic about nothing — and `notBreaching` is what makes that silence mean quiet. Numbers in `infra/chat-metrics.ts`, and the two halves' names are held together by a test that imports both. |
 | The plan cap is counted twice | **closed (2026-09-22)** | Both counters stay and the stricter wins, which over-refuses by the chat error rate — the safe direction. The alternative was tried and reverted: dropping the limiter's bucket gives up atomicity, so at the cap every concurrent request passes. **ADR 0024** has the argument and names the signal that would reopen it. |
+| Mutation gate covers `packages/security` only | later | P4-16 scopes Stryker to one package. The 🔒 code in `packages/core` (MFA hardening, auth wiring) and `apps/api` middleware relies on the hand mutation run each PR recorded, and nothing re-runs those. Closing it means a second Stryker config over the named core files, with its own threshold. |
 | OSV gate is informational | later | `osv-scanner scan` cannot filter by severity, so it reports rather than blocks. Make it blocking by filtering its JSON output to high/critical. |
 | Branch protection configured | **closed (2026-09-06)** | All five checks required on `main` — `Format, lint, typecheck`, `Test and coverage gates`, `Integration tests (Postgres)`, `Secret scan`, `Dependency audit` — with `enforce_admins: true`, 0 approvals (1 would deadlock a solo maintainer) and `strict: false` (so a stacked chain does not need rebasing between merges). Verified by attempting a direct push to `main` and being refused. See **E4**. |
 | `packages/rag` has no bar yet | P1 | §6.2 sets ≥90% for it, but `THRESHOLDS` deliberately omits packages that do not exist — a bar naming a missing package is itself a hard error. Creating the package will fail CI until its entry is added, which is the intended prompt. |

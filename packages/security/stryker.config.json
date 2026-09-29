@@ -1,0 +1,27 @@
+{
+  "$schema": "../../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": "P4-16. Mutation testing for packages/security only: coverage proves the code ran, a killed mutant proves a test would fail if it were wrong. In place, because a sandbox copy of one pnpm workspace package loses its workspace links; nothing else may run against this package while it does.",
+  "packageManager": "pnpm",
+  "testRunner": "vitest",
+  "plugins": ["./node_modules/@stryker-mutator/vitest-runner/dist/src/index.js"],
+  "vitest": {
+    "configFile": "vitest.stryker.config.ts"
+  },
+  "checkers": [],
+  "coverageAnalysis": "perTest",
+  "inPlace": true,
+  "mutate": ["src/**/*.ts"],
+  "thresholds": {
+    "high": 95,
+    "low": 90,
+    "break": 90
+  },
+  "reporters": ["clear-text", "progress", "json"],
+  "jsonReporter": {
+    "fileName": "reports/mutation/mutation.json"
+  },
+  "tempDirName": ".stryker-tmp",
+  "concurrency": 4,
+  "timeoutMS": 10000,
+  "_plugins": "Named by path: under pnpm, Stryker looks for plugins beside its own package, where this one is not linked."
+}

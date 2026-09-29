@@ -195,12 +195,6 @@ const loadKey = async (jwk: Ed25519Jwk): Promise<LoadedKey> => {
   }
 };
 
-/** The `kid` a token names, or a refusal: a token without one cannot be matched to a key. */
-const kidOf = (header: { readonly kid?: string | undefined }): string => {
-  if (header.kid === undefined || header.kid === '') throw new UnknownWidgetTokenKeyError();
-  return header.kid;
-};
-
 /**
  * Loads a serialised keyset — `{ "keys": [<Ed25519 private JWK>, …] }`, one or
  * two entries, the first signing.
@@ -213,10 +207,18 @@ export const loadWidgetTokenKeys = async (serialized: string): Promise<WidgetTok
   const signer = await loadKey(first);
   const others = await Promise.all(rest.map(loadKey));
 
-  const verifyingKeys = new Map([signer, ...others].map((key) => [key.kid, key.verifying]));
+  /*
+   * Keyed to take `undefined` as well, so a header that names no key is simply
+   * a key this set does not hold: one lookup and one refusal, rather than a
+   * separate check in front of the lookup for the two to disagree about. An
+   * empty `kid` is refused the same way, since no key here has one.
+   */
+  const verifyingKeys = new Map<string | undefined, ImportedKey>(
+    [signer, ...others].map((key) => [key.kid, key.verifying]),
+  );
 
   const keyFor = (header: { readonly kid?: string | undefined }): ImportedKey => {
-    const key = verifyingKeys.get(kidOf(header));
+    const key = verifyingKeys.get(header.kid);
     if (key === undefined) throw new UnknownWidgetTokenKeyError();
     return key;
   };
@@ -243,7 +245,7 @@ export const loadWidgetTokenKeys = async (serialized: string): Promise<WidgetTok
         .sign(signer.signing);
     },
 
-    verify: async (token, { issuer, audience, now, expiredWithinSec = 0 }) => {
+    verify: async (token, { issuer, audience, now = new Date(), expiredWithinSec = 0 }) => {
       if (!Number.isInteger(expiredWithinSec) || expiredWithinSec < 0) {
         throw new RangeError(
           `expiredWithinSec must be a whole number of seconds, not ${String(expiredWithinSec)}`,
@@ -258,10 +260,11 @@ export const loadWidgetTokenKeys = async (serialized: string): Promise<WidgetTok
         // The skew, or the continuation window when one is asked for — never less than the skew.
         clockTolerance: Math.max(CLOCK_TOLERANCE_SEC, expiredWithinSec),
         requiredClaims: ['exp', 'iat'],
-        ...(now === undefined ? {} : { currentDate: now }),
+        currentDate: now,
       });
 
-      return { payload, kid: kidOf(protectedHeader) };
+      /* `keyFor` found a key under this `kid`, or there would be no payload. */
+      return { payload, kid: String(protectedHeader.kid) };
     },
   };
 

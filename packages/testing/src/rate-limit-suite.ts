@@ -263,6 +263,32 @@ export const describeRateLimiter = (
       expect(await limiter.check(both())).toMatchObject({ allowed: false, key: tight, limit: 2 });
     });
 
+    it('names the first of two equally tight dimensions, whichever backend answers', async () => {
+      const { limiter, freshKey } = await makeFixture();
+      const [first, second] = [freshKey(), freshKey()];
+      const minute = { limit: 5, windowSec: 60 };
+      const hour = { limit: 5, windowSec: 3600 };
+
+      /*
+       * A tie still has to name one dimension, and its window decides the
+       * reset a caller is shown. Both implementations keep the earlier, so the
+       * headers do not depend on which limiter served the request — asserted
+       * both ways round, so it is the order that decides and not the keys.
+       */
+      expect(
+        await limiter.check([
+          { key: first, ...minute },
+          { key: second, ...hour },
+        ]),
+      ).toMatchObject({ key: first, remaining: 4 });
+      expect(
+        await limiter.check([
+          { key: second, ...hour },
+          { key: first, ...minute },
+        ]),
+      ).toMatchObject({ key: second, remaining: 3 });
+    });
+
     it('gives a retry-after that agrees with the window it names', async () => {
       const { limiter, freshKey } = await makeFixture();
       const key = freshKey();

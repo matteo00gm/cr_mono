@@ -55,23 +55,22 @@ const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const MAX_HOSTNAME = 253;
 
 /**
- * An IPv4 literal, after `URL` has normalised it.
+ * Whether a host `URL` has normalised is an IPv4 literal.
  *
  * The parser rewrites every legacy form — `0x7f.1`, `2130706433`, `127.1` — to
- * a dotted quad, so matching the dotted quad here catches all of them.
+ * a dotted quad, and a name whose last label is a number it either reads as an
+ * address or refuses outright. So once it has run, a host made of digit labels
+ * is an address and a host with any other label is a name — `2019.winery.it`
+ * included.
  */
-const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+const isIpv4Literal = (labels: readonly string[]): boolean =>
+  labels.every((label) => /^\d+$/.test(label));
 
 const refuse = (reason: NormalizeFailure): NormalizeResult => ({ ok: false, reason });
 
 /** `URL` throws on input it cannot parse; a refusal is the answer, not an exception. */
-const parseUrl = (input: string): URL | undefined => {
-  try {
-    return new URL(input);
-  } catch {
-    return undefined;
-  }
-};
+const parseUrl = (input: string): URL | undefined =>
+  URL.canParse(input) ? new URL(input) : undefined;
 
 /** Scheme, host and a non-default port — no trailing slash, as a browser sends `Origin`. */
 const serialise = (protocol: string, host: string, port: string): string =>
@@ -79,18 +78,18 @@ const serialise = (protocol: string, host: string, port: string): string =>
 
 export const normalizeOrigin = (
   input: string,
-  { environment = 'production' }: NormalizeOptions = {},
+  { environment }: NormalizeOptions = {},
 ): NormalizeResult => {
+  /* Production unless told otherwise, so leaving the option out is the strict answer. */
   const development = environment === 'development';
   const trimmed = input.trim();
-
-  if (trimmed === '') return refuse('invalid_url');
 
   /*
    * A scheme is recognised only by `://`. `winery.com:8443` has a colon too, and
    * reading it as a scheme called `winery.com` would refuse a legitimate origin
    * with a port — while `javascript:alert(1)`, given `https://` in front, stops
-   * parsing as a URL at all.
+   * parsing as a URL at all. An empty input becomes `https://`, which does
+   * not parse either.
    */
   const url = parseUrl(trimmed.includes('://') ? trimmed : `https://${trimmed}`);
   if (url === undefined) return refuse('invalid_url');
@@ -107,12 +106,11 @@ export const normalizeOrigin = (
 
   /*
    * A domain with a path, query or fragment is a misunderstanding rather than
-   * something to strip silently (§3.3). `URL` reports an empty query for a bare
-   * `?`, so the raw input is checked for the delimiters as well.
+   * something to strip silently (§3.3). The query and fragment are looked for
+   * in the raw input rather than on the parsed URL, which reports an empty
+   * query for a bare `?` — and neither can exist without its delimiter.
    */
-  if (url.pathname !== '/' || url.search !== '' || url.hash !== '' || /[?#]/.test(trimmed)) {
-    return refuse('has_path');
-  }
+  if (url.pathname !== '/' || /[?#]/.test(trimmed)) return refuse('has_path');
 
   /*
    * One trailing dot is the fully qualified form of the same name, so
@@ -120,8 +118,9 @@ export const normalizeOrigin = (
    * label, and the label check refuses it.
    */
   const host = url.hostname.endsWith('.') ? url.hostname.slice(0, -1) : url.hostname;
+  const labels = host.split('.');
 
-  if (host.startsWith('[') || IPV4.test(host)) return refuse('ip_literal');
+  if (host.startsWith('[') || isIpv4Literal(labels)) return refuse('ip_literal');
 
   if (host === 'localhost' || host.endsWith('.localhost')) {
     return development
@@ -129,7 +128,6 @@ export const normalizeOrigin = (
       : refuse('localhost');
   }
 
-  const labels = host.split('.');
   if (host.length > MAX_HOSTNAME || !labels.every((label) => LABEL.test(label))) {
     return refuse('invalid_url');
   }

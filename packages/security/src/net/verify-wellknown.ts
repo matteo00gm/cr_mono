@@ -78,8 +78,8 @@ const DEFAULT_FETCHER: Fetcher = guardedFetch;
  * that `===` on a secret stops at the first differing byte.
  */
 const sameSecret = (left: string, right: string): boolean => {
-  const a = Buffer.from(left, 'utf8');
-  const b = Buffer.from(right, 'utf8');
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
 
   return a.length === b.length && timingSafeEqual(a, b);
 };

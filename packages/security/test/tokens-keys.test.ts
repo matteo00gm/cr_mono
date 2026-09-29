@@ -82,7 +82,9 @@ describe('a round trip', () => {
     const keys = await loadFresh('k1');
 
     for (const ttlSec of [0, -60, 1.5]) {
-      await expect(keys.sign({}, { ...OPTIONS, ttlSec })).rejects.toThrow(RangeError);
+      await expect(keys.sign({}, { ...OPTIONS, ttlSec })).rejects.toThrow(
+        new RangeError(`ttlSec must be a positive whole number, not ${String(ttlSec)}`),
+      );
     }
   });
 });
@@ -134,6 +136,15 @@ describe('what a verifier refuses', () => {
     await expect(
       keys.verify(`${noKid}.${payload ?? ''}.${signature ?? ''}`, OPTIONS),
     ).rejects.toThrow(UnknownWidgetTokenKeyError);
+  });
+
+  it('under its own name, and without saying which keys there are', async () => {
+    const keys = await loadFresh('k1');
+    const stranger = await loadFresh('k9');
+    const failure = await failureOf(keys.verify(await stranger.sign({}, OPTIONS), OPTIONS));
+
+    expect(failure.name).toBe('UnknownWidgetTokenKeyError');
+    expect(failure.message).toBe('The token was signed with a key this service does not hold.');
   });
 
   it('an empty key id', async () => {
@@ -214,7 +225,9 @@ describe('what a verifier refuses', () => {
 
     for (const expiredWithinSec of [-1, 1.5, Number.NaN]) {
       await expect(keys.verify(token, { ...OPTIONS, expiredWithinSec })).rejects.toThrow(
-        RangeError,
+        new RangeError(
+          `expiredWithinSec must be a whole number of seconds, not ${String(expiredWithinSec)}`,
+        ),
       );
     }
   });
@@ -249,6 +262,12 @@ describe('loading a keyset', () => {
     [
       'an entry that is not an object',
       () => Promise.resolve('{"keys":["k1"]}'),
+      /key 1 is not an object/,
+    ],
+    ['an entry that is null', () => Promise.resolve('{"keys":[null]}'), /key 1 is not an object/],
+    [
+      'an entry that is an array',
+      () => Promise.resolve('{"keys":[["k1"]]}'),
       /key 1 is not an object/,
     ],
     [
@@ -304,7 +323,24 @@ describe('loading a keyset', () => {
     const failure = await failureOf(loadWidgetTokenKeys(three));
 
     expect(MAX_ACTIVE_KEYS).toBe(2);
-    expect(failure.message).toMatch(/3 keys, and at most 2/);
+    expect(failure.message).toMatch(
+      /3 keys, and at most 2 may be active — the newest, which signs, and the one before it/,
+    );
+  });
+
+  it('says what the refusal is, and how to make a keyset that is not refused', async () => {
+    /*
+     * This message is what an operator reads when a container will not start,
+     * and the fix is one command. The name is what the log serialiser keeps as
+     * `type`, so it has to be this class's own rather than `Error`.
+     */
+    const failure = await failureOf(loadWidgetTokenKeys('not json'));
+
+    expect(failure.name).toBe('InvalidWidgetTokenKeysError');
+    expect(failure.message).toBe(
+      'The widget token keyset is unusable: it is not JSON. ' +
+        'Generate one with `node scripts/widget-token-key.mjs` (P2-11).',
+    );
   });
 
   it('refuses a private half pasted beside another key’s public half', async () => {
