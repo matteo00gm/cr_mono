@@ -1383,7 +1383,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-12 | 🔒 Security headers | nonce CSP, HSTS preload, nosniff, referrer, frame-deny | P0-54 |
 | ✅ P4-13 | SST: AWS WAF on CloudFront | managed bot + reputation rules, per-path rate rules | P0-17 |
 | ✅ P4-14 | Turnstile hook | per-tenant flag, default off | P2-12 |
-| P4-15 | 🔒 404-not-403 + IDOR matrix | cross-tenant ids return 404 for every endpoint | P0-50 |
+| ✅ P4-15 | 🔒 404-not-403 + IDOR matrix | cross-tenant ids return 404 for every endpoint | P0-50 |
 | P4-16 | ⛔ 🔒 Stryker on `packages/security` | mutation score ≥ 90%, CI-gated | P0-07 |
 | P4-18 | 🔒 Domain claim challenge | DNS proof to claim a held origin; **immediate if incumbent lapsed, 72h notice if paying** | P4-02 |
 | P4-19 | 🔒 Staging + development origins | `.myshopify.com` via OAuth, 24h-expiring localhost dev mode, staging outside the plan cap | P4-01 |
@@ -6661,6 +6661,15 @@ Enrolment and disablement both write to `audit_log`, and disabling 2FA is itself
 **Tests.** This is the test; plus a test asserting every id-taking route is covered, so a new route cannot skip it.
 
 **Files.** `apps/api/test/idor-matrix.spec.ts`. **~140 test lines.**
+
+**As built.** `apps/api/test/idor-matrix.integration.test.ts` *(renamed: this repository's integration suffix)*, against real Postgres and the real ports — only the session is faked.
+
+- **Eight routes take an id today**, read off `DASHBOARD_ROUTES`; the first test fails if the matrix and the table disagree, so a new id route cannot skip it by being new.
+- **Each is asked three times.** As winery B for winery A's real resource, which must answer **404**; as B for an id that never existed, whose body must be **identical** to the first, request id aside; and as A for its own resource, which must **not** be a 404 — so the refusal is proved to be about the tenant, and not about a mistyped id or a body the route never accepted (a PATCH with no valid body would 422 before it ever looked anything up).
+- **The centralisation the row asks for was already the design**: every read runs under the tenant policy, so another winery's row is no row, and each port turns "no row" into its not-found outcome. The matrix is what holds it there.
+- No step-up or MFA stands in the way of the test by accident: the session is an owner with a fresh second factor, so every refusal the matrix sees is the resource's.
+
+**Verified.** 9 cases. A mutation run turned each route's not-found into a 409 or a 403, and made one not-found message echo the id it was asked for; the matrix caught all 7.
 
 ---
 
