@@ -92,6 +92,8 @@ being in the policy is what makes it one.
   has to be told when the domain will be theirs. Nothing else about the holder is disclosed.
 - Every query on `tenant_domains` now evaluates one more `OR` branch. With the GUC unset, the
   subquery matches no claim.
-- P4-18b builds on this without another policy change. The holder's view and withdrawal use the
-  policy's holder half, and the sweep that moves origins after 72 hours settles each due claim
-  through this same scope.
+- P4-18b's holder view and withdrawal need no further policy change: they use the policy's holder
+  half. **Its sweep does need one.** Settling a due notice goes through this same scope, but
+  _finding_ the due notices is a read across every winery's claims, and nothing here admits that.
+  P4-18b will add a flag-guarded branch on `domain_claims` that admits only `NOTICE` rows past
+  `transfer_at`, on ADR 0023's pattern, and record it as an amendment to this ADR.
