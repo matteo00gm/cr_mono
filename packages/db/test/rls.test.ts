@@ -223,8 +223,11 @@ describe('rls migration', () => {
       for (const table of WIDGET_TABLES) {
         /* `widget_keys` was superseded again by P4-10's secret-key branch;
          * the widget branch is still in it and must still be read-only. */
+        /* And `tenant_domains` by P4-18's claim branch; likewise. */
         expect(current(table)?.migration, table).toBe(
-          table === 'widget_keys' ? '0049_secret_key_rls' : '0042_widget_key_rls',
+          { widget_keys: '0049_secret_key_rls', tenant_domains: '0054_domain_claims_rls' }[
+            table as string
+          ] ?? '0042_widget_key_rls',
         );
         expect(current(table)?.using, table).toContain('app.widget_');
         expect(current(table)?.withCheck, table).not.toContain('app.widget_');
@@ -306,5 +309,42 @@ describe('the secret-key scope (P4-10, ADR 0026)', () => {
     );
 
     expect(others).toEqual([]);
+  });
+});
+
+describe('the claim scope (P4-18, ADR 0028)', () => {
+  const current = (table: string) => [...RLS_POLICIES].reverse().find((p) => p.table === table);
+  const domains = (): string => current('tenant_domains')?.using ?? '';
+
+  it('admits a domain only through a claim that has been proved, or whose notice has run out', () => {
+    /*
+     * **The deadline is in the policy.** A claim awaiting its TXT record and a
+     * notice with time left admit nothing, so a sweep that ran early or a
+     * claimant pressing the button again cannot reach the holder's row.
+     */
+    expect(domains()).toContain("current_setting('app.domain_claim', true)");
+    expect(domains()).toContain("c.status = 'PROVEN'");
+    expect(domains()).toContain("c.status = 'NOTICE' AND c.transfer_at <= now()");
+  });
+
+  it('keeps the claim branch out of WITH CHECK', () => {
+    expect(current('tenant_domains')?.withCheck).not.toContain('app.domain_claim');
+    expect(current('tenant_domains')?.withCheck).toContain("current_setting('app.tenant_id'");
+  });
+
+  it('adds a branch to tenant_domains and to no other table', () => {
+    const others = RLS_POLICIES.filter(
+      (entry) => entry.table !== 'tenant_domains' && entry.using.includes('app.domain_claim'),
+    );
+
+    expect(others).toEqual([]);
+  });
+
+  it('lets a holder write a claim only as a withdrawal', () => {
+    /* The holder's half of WITH CHECK: a CANCELED row, and nothing live. */
+    expect(current('domain_claims')?.using).toContain('incumbent_tenant_id =');
+    expect(current('domain_claims')?.withCheck).toMatch(
+      /incumbent_tenant_id = nullif\(current_setting\('app\.tenant_id', true\), ''\)::uuid AND status = 'CANCELED'/u,
+    );
   });
 });

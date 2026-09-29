@@ -490,6 +490,321 @@
           }
         }
       },
+      "/v1/dashboard/domains/claims": {
+        "post": {
+          "summary": "Claim a domain another winery holds",
+          "description": "The way through when adding a domain answers \"not available\" (P4-18): a winery that churned, a business that was sold, an agency rebuilding a site under a new workspace. Normalises the input as adding does and opens a claim carrying a fresh nonce for the `_somm-verify` TXT record — the same proof a first verification takes. Opened whether or not anybody holds the origin, because this route cannot tell and saying either way would be the enumeration oracle adding refuses to be. A second attempt answers with the claim already open, so the record a seller published stays valid. Refused with 409 for an origin this winery already holds, and for a winery already at its plan cap.\n\nRequires the `domains:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
+          "operationId": "postV1DashboardDomainsClaims",
+          "x-required-capability": "domains:manage",
+          "responses": {
+            "201": {
+              "description": "Claim a domain another winery holds",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "claim": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "origin": {
+                            "type": "string"
+                          },
+                          "registrableDomain": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "PENDING",
+                              "PROVEN",
+                              "NOTICE",
+                              "TRANSFERRED",
+                              "CANCELED"
+                            ]
+                          },
+                          "verificationToken": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "verificationExpiresAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "transferAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "origin",
+                          "registrableDomain",
+                          "status",
+                          "verificationToken",
+                          "verificationExpiresAt",
+                          "transferAt",
+                          "createdAt"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "created": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "claim",
+                      "created"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "claim": {
+                      "id": "5b2e8c1d-3f4a-4e6b-8c9d-0a1b2c3d4e5f",
+                      "origin": "https://www.winery.com",
+                      "registrableDomain": "winery.com",
+                      "status": "PENDING",
+                      "verificationToken": "3f9a0c5e…",
+                      "verificationExpiresAt": "2026-10-06T09:00:00.000Z",
+                      "transferAt": null,
+                      "createdAt": "2026-09-29T09:00:00.000Z"
+                    },
+                    "created": true
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/dashboard/domains/claims/:id/verify": {
+        "post": {
+          "summary": "Check a claim's proof, and settle it",
+          "description": "Resolves the `_somm-verify` TXT record through the pinned public resolver and compares it, in constant time, with the claim’s own nonce. DNS only: a file on a storefront proves control of a web server, which is exactly what a former contractor may still have after the zone has moved on. On success the claim is settled in its own RLS scope (ADR 0028), and what happens depends on the holder, who is never named. An origin nobody holds, one the holder never verified, or one held by a winery that is disabled, cancelled or never finished signing up moves at once: the holder’s row is deleted, its live sessions are cut off, and both wineries’ audit logs record it. A paying holder is put on 72 hours’ notice instead and keeps the origin until then — `transferred: false` with `transferAt` — because moving a live customer’s origin on one DNS check is how a hostile contractor or a compromised registrar kills a widget unannounced. Checking again after the notice has run out settles it. A record that is absent or wrong answers 200 with `verified: false`. Attempts are counted per claim. Another winery's id, including the claimant’s id seen from the holder’s side, answers 404, never 403.\n\nRequires the `domains:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
+          "operationId": "postV1DashboardDomainsClaims:idVerify",
+          "x-required-capability": "domains:manage",
+          "responses": {
+            "200": {
+              "description": "Check a claim's proof, and settle it",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "claim": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "origin": {
+                            "type": "string"
+                          },
+                          "registrableDomain": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "PENDING",
+                              "PROVEN",
+                              "NOTICE",
+                              "TRANSFERRED",
+                              "CANCELED"
+                            ]
+                          },
+                          "verificationToken": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "verificationExpiresAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "transferAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "origin",
+                          "registrableDomain",
+                          "status",
+                          "verificationToken",
+                          "verificationExpiresAt",
+                          "transferAt",
+                          "createdAt"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "verified": {
+                        "type": "boolean"
+                      },
+                      "transferred": {
+                        "type": "boolean"
+                      },
+                      "transferAt": {
+                        "type": "string"
+                      },
+                      "reason": {
+                        "type": "string"
+                      },
+                      "domain": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "origin": {
+                            "type": "string"
+                          },
+                          "registrableDomain": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "PENDING",
+                              "VERIFIED"
+                            ]
+                          },
+                          "verificationToken": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "verificationExpiresAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "origin",
+                          "registrableDomain",
+                          "status",
+                          "verificationToken",
+                          "verificationExpiresAt",
+                          "createdAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "claim",
+                      "verified",
+                      "transferred"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "claim": {
+                      "id": "5b2e8c1d-3f4a-4e6b-8c9d-0a1b2c3d4e5f",
+                      "origin": "https://www.winery.com",
+                      "registrableDomain": "winery.com",
+                      "status": "NOTICE",
+                      "verificationToken": null,
+                      "verificationExpiresAt": null,
+                      "transferAt": "2026-10-02T09:00:00.000Z",
+                      "createdAt": "2026-09-29T09:00:00.000Z"
+                    },
+                    "verified": true,
+                    "transferred": false,
+                    "transferAt": "2026-10-02T09:00:00.000Z",
+                    "reason": "We found your record. The domain is in use, so its current holder has been given 72 hours to respond. If they do not, it moves to your account automatically."
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/keys": {
         "get": {
           "summary": "Read the winery's keys",

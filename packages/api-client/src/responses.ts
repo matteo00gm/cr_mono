@@ -260,6 +260,51 @@ export const domainVerifiedResponse = z.object({
 });
 
 /**
+ * A claim on a domain another winery holds, as its claimant sees it (P4-18).
+ *
+ * **Nothing about the holder**, and the contract is strict so a field added on
+ * the server cannot quietly start carrying one: proving control of a zone
+ * entitles a seller to the origin, not to learn who our customer was.
+ *
+ * `verificationToken` is the claimant's own nonce for the `_somm-verify` TXT
+ * record, and null once it has been used. `transferAt` is set only while a
+ * paying holder is on notice.
+ */
+export const domainClaimSchema = z.strictObject({
+  id: z.string(),
+  origin: z.string(),
+  registrableDomain: z.string(),
+  status: z.enum(['PENDING', 'PROVEN', 'NOTICE', 'TRANSFERRED', 'CANCELED']),
+  verificationToken: z.string().nullable(),
+  verificationExpiresAt: z.string().nullable(),
+  transferAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+
+/** What opening a claim gives back. `created` is false for a claim already open. */
+export const domainClaimOpenedResponse = z.strictObject({
+  claim: domainClaimSchema,
+  created: z.boolean(),
+});
+
+/**
+ * What checking a claim gives back.
+ *
+ * A 200 whether or not the record was there, for P4-02's reason. `transferred`
+ * says whether the origin is the claimant's now; a paying holder's notice is
+ * `transferred: false` with `transferAt` saying when it will be. `domain` is
+ * the claimant's new row, once there is one.
+ */
+export const domainClaimCheckedResponse = z.strictObject({
+  claim: domainClaimSchema,
+  verified: z.boolean(),
+  transferred: z.boolean(),
+  transferAt: z.string().optional(),
+  reason: z.string().optional(),
+  domain: domainSchema.optional(),
+});
+
+/**
  * What redeeming an invitation gives back.
  *
  * The membership as written, so the dashboard can switch straight into the new
@@ -283,6 +328,9 @@ export type DomainAddedResponse = z.infer<typeof domainAddedResponse>;
 export type DomainVerifiedResponse = z.infer<typeof domainVerifiedResponse>;
 export type ProbedDomain = z.infer<typeof probedDomainSchema>;
 export type DomainRemovedResponse = z.infer<typeof domainRemovedResponse>;
+export type DomainClaim = z.infer<typeof domainClaimSchema>;
+export type DomainClaimOpenedResponse = z.infer<typeof domainClaimOpenedResponse>;
+export type DomainClaimCheckedResponse = z.infer<typeof domainClaimCheckedResponse>;
 export type KeysResponse = z.infer<typeof keysResponse>;
 
 /**

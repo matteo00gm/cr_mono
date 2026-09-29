@@ -134,6 +134,16 @@ const INSERTS: Record<string, (tenantId: string, ctx: SeedContext) => SQL> = {
   import_runs: (tenantId) =>
     sql`insert into import_runs (tenant_id, idempotency_key, request_hash)
         values (${tenantId}::uuid, gen_random_uuid()::text, 'h')`,
+  /*
+   * P4-18, fresh on every call for the reason `invitations` gives: one open
+   * claim per winery per origin is a unique index, so a fixed origin would
+   * make B's attempted write fail on the index rather than on the policy.
+   * No incumbent, so only the claimant's half of the policy is in play — the
+   * holder's half has its own cases in `with-domain-claim.integration`.
+   */
+  domain_claims: (tenantId) =>
+    sql`insert into domain_claims (tenant_id, origin, registrable_domain)
+        values (${tenantId}::uuid, 'https://c' || md5(random()::text) || '.example', 'example.com')`,
 };
 
 /** `tenants` is scoped by its own id; everything else by `tenant_id`. */

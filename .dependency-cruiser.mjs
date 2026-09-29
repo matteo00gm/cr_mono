@@ -269,6 +269,19 @@ export default {
           // src/turnstile.ts is exempt from P4-14 on the same terms: statements on
           // the caller's transaction, every one under the tenant policy.
           '|^packages/db/src/turnstile[.]ts$' +
+          // src/domain-claims.ts is exempt from P4-18 on domains-write.ts's
+          // terms: the claimant's statements, on the caller's withTenant
+          // transaction, each naming the claimant's tenant as well as relying
+          // on the policy — whose other half admits the holder a notice was
+          // served on, and a holder must not act through the claimant's routes.
+          '|^packages/db/src/domain-claims[.]ts$' +
+          // src/with-domain-claim.ts is exempt from P4-18, and it is the eighth
+          // RLS context — a design change, recorded in ADR 0028. It opens a
+          // transaction, sets app.domain_claim for the one statement that reads
+          // the holder of a proven claim's origin, clears it, and continues
+          // under the holder's and then the claimant's ordinary tenant scope.
+          // A closed operation: it hands no transaction to a caller.
+          '|^packages/db/src/with-domain-claim[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
           '|^packages/core/src/auth[.]ts$' +

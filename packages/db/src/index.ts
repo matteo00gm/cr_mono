@@ -289,6 +289,33 @@ export {
 } from './domains-write.js';
 
 /**
+ * Claiming an origin another winery holds (P4-18). The claimant's statements
+ * run in its own `withTenant`; settling a proven claim is the eighth RLS scope
+ * (ADR 0028), which reaches the holder's one row and then hands over to the
+ * holder's ordinary tenant scope, in one transaction.
+ */
+export {
+  ClaimChangedError,
+  insertClaim,
+  markClaimProven,
+  readClaimById,
+  reissueClaimVerification,
+  type DomainClaimRow,
+  type DomainClaimStatus,
+  type NewDomainClaim,
+} from './domain-claims.js';
+export {
+  CLAIM_GUC,
+  ClaimRacedError,
+  NestedClaimContextError,
+  settleDomainClaim,
+  type ClaimActor,
+  type ClaimSettlement,
+  type SettleClaim,
+  type TransferBasis,
+} from './with-domain-claim.js';
+
+/**
  * The Postgres rate limiter (P2-02), which is what closes A1.
  *
  * Here rather than in `packages/security` where P2-02's Files line puts it, and

@@ -52,8 +52,9 @@ patch will not, because the ORM's own documentation shows the forbidden form.
   `withWidgetKey()` (P2-07), `withLapsedRevocations()` (P2-14), which reaches
   only revocations past their window, and the read-only
   `resolveTenantBySecretKey()` (P4-10), which admits one active key row and then
-  hands over to a tenant scope, each set a different GUC and read under a policy
-  that admits it. A new one of those is a design change with its own ADR
+  hands over to a tenant scope, and `settleDomainClaim()` (P4-18), which reaches
+  the holder of an origin only behind a claim proven by DNS or past its notice,
+  each set a different GUC and read under a policy that admits it. A new one of those is a design change with its own ADR
   — every GUC is another way a row becomes visible.
 - Three tables carry **no `tenant_id` and no policy on purpose**, and are
   reached on connections that set nothing: `rate_limit_buckets` (P0-34),
