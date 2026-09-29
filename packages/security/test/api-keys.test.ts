@@ -26,6 +26,7 @@ import { scrubString } from '../src/redact.js';
 
 describe('a secret key', () => {
   it('carries our prefix, so a scanner and a person can both recognise it', () => {
+    expect(SECRET_KEY_PREFIX).toBe('sk_live_');
     expect(newSecretKey().startsWith(SECRET_KEY_PREFIX)).toBe(true);
   });
 
@@ -120,6 +121,7 @@ describe('a public key', () => {
   it('carries its own prefix, never the secret one', () => {
     const key = newPublicKey();
 
+    expect(PUBLIC_KEY_PREFIX).toBe('pk_live_');
     expect(key.startsWith(PUBLIC_KEY_PREFIX)).toBe(true);
     expect(key.startsWith(SECRET_KEY_PREFIX)).toBe(false);
   });

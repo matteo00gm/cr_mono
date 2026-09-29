@@ -80,8 +80,8 @@ export const publicResolveTxt = (): ResolveTxt => {
  * first difference, which is a prefix oracle for anyone patient enough.
  */
 const sameSecret = (left: string, right: string): boolean => {
-  const a = Buffer.from(left, 'utf8');
-  const b = Buffer.from(right, 'utf8');
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
 
   return a.length === b.length && timingSafeEqual(a, b);
 };
@@ -96,8 +96,9 @@ const sameSecret = (left: string, right: string): boolean => {
  */
 const ABSENT = new Set(['ENOTFOUND', 'ENODATA', 'NXDOMAIN']);
 
-const codeOf = (error: unknown): string =>
-  typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+/** Whether a resolver's error is one of those. An error with no code is ours. */
+const isAbsent = (error: unknown): boolean =>
+  typeof error === 'object' && error !== null && 'code' in error && ABSENT.has(String(error.code));
 
 /**
  * Looks for the nonce in the domain's TXT records.
@@ -117,7 +118,7 @@ export const verifyDnsToken = async (
   try {
     records = await resolveTxt(`${VERIFY_LABEL}.${registrableDomain}`);
   } catch (error) {
-    return { ok: false, reason: ABSENT.has(codeOf(error)) ? 'no_record' : 'resolver_error' };
+    return { ok: false, reason: isAbsent(error) ? 'no_record' : 'resolver_error' };
   }
 
   if (records.length === 0) return { ok: false, reason: 'no_record' };

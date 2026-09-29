@@ -27,21 +27,19 @@
  * `fe80::1%eth0` is a link-local address carrying the interface it is scoped
  * to, and the part that matters is in front of the `%`.
  */
-const withoutZone = (address: string): string => address.replace(/%.*$/u, '');
+const withoutZone = (address: string): string => address.replace(/%.*/u, '');
 
 /** A parsed IPv4 address, as four octets. */
 const ipv4Octets = (address: string): readonly number[] | undefined => {
   const parts = address.split('.');
 
-  if (parts.length !== 4) return undefined;
+  /* One to three digits and nothing else — no sign, no `0x`, no space — so the
+   * only thing a parsed octet can still get wrong is its size. */
+  if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/u.test(part))) return undefined;
 
-  const octets = parts.map((part) =>
-    /^\d{1,3}$/u.test(part) ? Number.parseInt(part, 10) : Number.NaN,
-  );
+  const octets = parts.map((part) => Number.parseInt(part, 10));
 
-  return octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255)
-    ? octets
-    : undefined;
+  return octets.every((octet) => octet <= 255) ? octets : undefined;
 };
 
 /**
@@ -84,32 +82,42 @@ const isPublicIpv4 = (octets: readonly number[]): boolean => {
   return true;
 };
 
-/** Expands an IPv6 address to its eight groups, or nothing. */
+/** Colon-separated groups, each one to four hex digits or `undefined` where it is not. */
+const hexGroups = (text: string): (number | undefined)[] =>
+  text === ''
+    ? []
+    : text
+        .split(':')
+        .map((group) => (/^[0-9a-f]{1,4}$/iu.test(group) ? Number.parseInt(group, 16) : undefined));
+
+/** The groups either side of a `::`, with the zeros it stands for between them. */
+const expand = (
+  left: readonly (number | undefined)[],
+  right: readonly (number | undefined)[],
+): (number | undefined)[] => [
+  ...left,
+  ...Array.from({ length: 8 - left.length - right.length }, () => 0),
+  ...right,
+];
+
+/**
+ * Expands an IPv6 address to its eight groups, or nothing.
+ *
+ * **Each group is checked on its own, and that check is the whole parse.** A
+ * stray character, a second `::`, a lone leading or trailing `:` and an
+ * embedded dotted quad each leave behind a group that is not one to four hex
+ * digits — so there is no screen in front of it for the two to disagree about.
+ */
 const ipv6Groups = (address: string): readonly number[] | undefined => {
   const bare = withoutZone(address);
-
-  if (!/^[0-9a-f:.]+$/iu.test(bare) || (bare.match(/::/gu) ?? []).length > 1) return undefined;
 
   /* Split on the elision by index rather than `split`, which would hand back a
    * `string | undefined` head that can never actually be undefined. */
   const elision = bare.indexOf('::');
-  const head = elision === -1 ? bare : bare.slice(0, elision);
-  const tail = elision === -1 ? undefined : bare.slice(elision + 2);
-  const parse = (text: string): (number | undefined)[] =>
-    text === ''
-      ? []
-      : text
-          .split(':')
-          .map((group) =>
-            /^[0-9a-f]{1,4}$/iu.test(group) ? Number.parseInt(group, 16) : undefined,
-          );
-
-  const left = parse(head);
-  const right = tail === undefined ? [] : parse(tail);
   const groups =
-    tail === undefined
-      ? left
-      : [...left, ...Array.from({ length: 8 - left.length - right.length }, () => 0), ...right];
+    elision === -1
+      ? hexGroups(bare)
+      : expand(hexGroups(bare.slice(0, elision)), hexGroups(bare.slice(elision + 2)));
 
   /* `every` narrows the array itself, so nothing here needs an assertion. */
   return groups.length === 8 && groups.every((group) => group !== undefined) ? groups : undefined;
@@ -143,8 +151,15 @@ export const mappedIpv4 = (address: string): string | undefined => {
 const isPublicIpv6 = (groups: readonly number[]): boolean => {
   const [first = 0] = groups;
 
-  /* :: (unspecified) and ::1 (loopback). */
-  if (groups.every((group, index) => (index === 7 ? group <= 1 : group === 0))) return false;
+  /*
+   * ::/8 — reserved by the IETF, and nothing in it is a public host. It holds
+   * `::` (unspecified), `::1` (loopback), the deprecated IPv4-compatible
+   * `::a.b.c.d` — so `::7f00:1` is a loopback in yet another coat — and
+   * 64:ff9b::/96, NAT64, which embeds an IPv4 address we would then not be
+   * checking. The IPv4-mapped block lives here too, and is unwrapped and
+   * checked as IPv4 before this is reached.
+   */
+  if ((first & 0xff00) === 0x0000) return false;
 
   /* fc00::/7 — unique local, the IPv6 RFC1918. */
   if ((first & 0xfe00) === 0xfc00) return false;
@@ -158,9 +173,9 @@ const isPublicIpv6 = (groups: readonly number[]): boolean => {
   /* 2001:db8::/32 — documentation. Not routable, and a common test value. */
   if (first === 0x2001 && groups[1] === 0x0db8) return false;
 
-  /* 64:ff9b::/96 and 2002::/16 — NAT64 and 6to4, both of which embed an IPv4
-   * address we would then not be checking. */
-  if (first === 0x0064 || first === 0x2002) return false;
+  /* 2002::/16 — 6to4, which, like NAT64 above, embeds an IPv4 address we would
+   * then not be checking. */
+  if (first === 0x2002) return false;
 
   return true;
 };

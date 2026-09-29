@@ -88,27 +88,95 @@ describe('the key allowlist', () => {
       expect(SAFE_KEYS.has(forbidden), forbidden).toBe(false);
     }
   });
+
+  it('is exactly this list, so a change to it is a change to this file too', () => {
+    /*
+     * **The allowlist is a decision per name, and this makes each one visible
+     * in review.** A name added in `redact.ts` alone opens it at every depth for
+     * every caller without anybody reading about it here; a name dropped makes
+     * a field vanish from every log line. Both have to show up as a diff to
+     * this list, beside the reason the list gives.
+     */
+    expect([...SAFE_KEYS].sort()).toEqual(
+      [
+        'archived',
+        'attempt',
+        'count',
+        'created',
+        'duplicateSku',
+        'durationMs',
+        'durationMsTotal',
+        'entryPoint',
+        'err',
+        'filename',
+        'hostname',
+        'kind',
+        'level',
+        'limit',
+        'method',
+        'msg',
+        'pid',
+        'remaining',
+        'requestId',
+        'route',
+        'stack',
+        'status',
+        'tenantId',
+        'time',
+        'traceId',
+        'type',
+        'unchanged',
+        'updated',
+        'userId',
+        'v',
+        'xffEntries',
+      ].sort(),
+    );
+  });
+
+  it('marks what it removed with a word a person can search for', () => {
+    expect(REDACTED).toBe('[redacted]');
+    expect(redactValue({ password: 'hunter2' })).toEqual({ password: '[redacted]' });
+  });
 });
 
 describe('the value patterns', () => {
+  /* Low entropy and built here, so nothing in this file is shaped like a key. */
+  const opaque = ['opaque', 'bearer', 'value'].join('-');
+
   it.each([
-    ['a secret key', secretKey],
-    ['a publishable key', publishableKey],
-    ['a JWT', jwt],
-    ['a bearer header', `Bearer ${jwt}`],
-    ['an email address', 'matteo@cantina-colpetrone.it'],
-    ['a connection string', connectionStringFixture()],
-  ])('scrubs %s out of an allowed string', (_label, secret) => {
+    ['a secret key', secretKey, REDACTED],
+    ['a publishable key', publishableKey, REDACTED],
+    ['a JWT', jwt, REDACTED],
+    ['a bearer header', `Bearer ${jwt}`, `Bearer ${REDACTED}`],
+    ['an opaque bearer token', `Bearer ${opaque}`, `Bearer ${REDACTED}`],
+    ['a padded bearer token', `Bearer ${opaque}==`, `Bearer ${REDACTED}`],
+    ['a bearer token after two spaces', `Bearer  ${opaque}`, `Bearer ${REDACTED}`],
+    ['a bearer token in any case', `bearer ${opaque}`, `Bearer ${REDACTED}`],
+    ['an email address', 'matteo@cantina-colpetrone.it', REDACTED],
+    ['an email address on a subdomain', 'matteo@mail.cantina-colpetrone.it', REDACTED],
+    [
+      'a connection string',
+      connectionStringFixture(),
+      `postgres://${REDACTED}@db.internal:5432/sommelier`,
+    ],
+    [
+      'credentials under a scheme ending in a digit',
+      's3://reader:hunter2@bucket',
+      `s3://${REDACTED}@bucket`,
+    ],
+    ['credentials under a one-letter scheme', 'x://reader:hunter2@host', `x://${REDACTED}@host`],
+  ])('scrubs %s out of an allowed string, and only that', (_label, secret, replaced) => {
     /*
      * The second layer, and it is not redundant. An allowed key can still carry
      * a secret: `msg` is allowed, and `"failed with token sk_live_…"` is a line
      * somebody will write.
+     *
+     * **The whole line is compared, not searched for the marker.** A pattern
+     * that matched the first character of a secret and stopped would still
+     * leave a marker behind — beside the rest of the secret.
      */
-    const scrubbed = scrubString(`before ${secret} after`);
-
-    expect(scrubbed).toContain('before');
-    expect(scrubbed).toContain('after');
-    expect(scrubbed).toContain(REDACTED);
+    expect(scrubString(`before ${secret} after`)).toBe(`before ${replaced} after`);
   });
 
   it('removes the password from a connection string and leaves it readable', () => {
@@ -164,6 +232,16 @@ describe('serialiseError', () => {
     };
 
     expect(result.cause.message).toBe(REDACTED);
+  });
+
+  it('adds nothing an error does not have', () => {
+    /* No `cause: undefined` and no `kind: undefined` — a log line with empty
+     * fields in it reads as though something were withheld. */
+    expect(Object.keys(serialiseError(new Error('plain')) as object)).toEqual([
+      'type',
+      'message',
+      'stack',
+    ]);
   });
 
   it('carries the domain kind, so a log line says which failure this was', () => {
@@ -254,6 +332,23 @@ describe('structures that would otherwise crash the logger', () => {
   it('stops at a depth cap', () => {
     let deep: Record<string, unknown> = { type: 'bottom' };
     for (let i = 0; i < 20; i += 1) deep = { err: deep };
+
+    expect(JSON.stringify(redactValue(deep))).toContain('[too deep]');
+  });
+
+  it('walks eight levels and stops at the ninth', () => {
+    /* The cap exactly, from both sides: eight objects are walked, and what the
+     * eighth holds is replaced rather than opened. */
+    const nest = (levels: number, bottom: unknown): unknown =>
+      levels === 0 ? bottom : { err: nest(levels - 1, bottom) };
+
+    expect(redactValue(nest(8, { type: 'bottom' }))).toEqual(nest(8, '[too deep]'));
+    expect(redactValue(nest(7, { type: 'bottom' }))).toEqual(nest(7, { type: 'bottom' }));
+  });
+
+  it('counts arrays towards the cap, not only objects', () => {
+    let deep: unknown = 'bottom';
+    for (let i = 0; i < 20; i += 1) deep = [deep];
 
     expect(JSON.stringify(redactValue(deep))).toContain('[too deep]');
   });

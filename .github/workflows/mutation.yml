@@ -1,0 +1,58 @@
+name: Mutation
+
+# P4-16. Stryker over packages/security, the package whose tests are the
+# evidence that the CORS check, the token verifier and the redaction actually
+# reject what they should: coverage proves the code ran, a killed mutant proves
+# a test would have failed had the code been wrong. The score must stay at or
+# above 90%; `stryker.config.json` sets that as its break threshold, so a lower
+# score fails this job.
+#
+# Not in ci.yml: a run takes minutes rather than seconds, and only a change to
+# this package can move the score. So it runs on pull requests that touch the
+# package — or its test tooling — and nightly, which catches a dependency bump
+# changing behaviour underneath unchanged code.
+on:
+  pull_request:
+    paths:
+      - 'packages/security/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/mutation.yml'
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  TURBO_TELEMETRY_DISABLED: 1
+  DO_NOT_TRACK: 1
+
+jobs:
+  security:
+    name: Mutation score (packages/security)
+    runs-on: ubuntu-latest
+    # A full run is well under this; the cap is a hang guard.
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The suite imports workspace packages by name, which resolve to `dist`.
+      - run: pnpm build
+
+      - name: Run Stryker (breaks below 90%)
+        run: pnpm --filter @catalogorosso/security mutation

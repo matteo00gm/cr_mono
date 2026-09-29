@@ -135,6 +135,28 @@ describe('the table (P2-06)', () => {
     expect(accepted(input).origin).toBe(origin);
   });
 
+  it.each<[string, string]>([
+    ['2019.winery.it', 'a vintage as a subdomain'],
+    ['1.2.3.4.winery.it', 'a name that starts like an address'],
+    ['vino1.cantina2', 'labels that end in digits'],
+    ['1vino.2cantina', 'labels that start with them'],
+    ['w.winery.it', 'a label of one character'],
+  ])('accepts %j, which is a name (%s)', (input) => {
+    /* An address is a host made of numbers and nothing else. A check that
+     * refused any of these would be refusing sellers, not addresses. */
+    expect(accepted(input).origin).toBe(`https://${input}`);
+  });
+
+  it('accepts a name of exactly 253 characters, which is DNS’s ceiling, and not one more', () => {
+    const longest = `${'a.'.repeat(125)}com`;
+    const tooLong = `${'a.'.repeat(124)}bb.com`;
+
+    expect(longest).toHaveLength(253);
+    expect(tooLong).toHaveLength(254);
+    expect(accepted(longest).origin).toBe(`https://${longest}`);
+    expect(refusal(tooLong)).toBe('invalid_url');
+  });
+
   it.each<[string, NormalizeFailure]>([
     ['com', 'public_suffix'],
     ['co.uk', 'public_suffix'],

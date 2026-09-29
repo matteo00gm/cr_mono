@@ -52,6 +52,9 @@ const randomBody = (length: number): string => {
   let body = '';
 
   while (body.length < length) {
+    /* Stryker disable next-line ArithmeticOperator: equivalent. The batch size
+     * decides how many draws a key costs, never which characters it gets — the
+     * bytes are consumed in order whatever size they arrive in. */
     for (const byte of randomBytes(length * 2)) {
       if (byte < UNBIASED_CEILING) body += ALPHABET.charAt(byte % ALPHABET.length);
       if (body.length === length) break;
@@ -102,4 +105,4 @@ export const secretKeyHint = (
  * costing a database read.
  */
 export const looksLikeSecretKey = (value: string): boolean =>
-  new RegExp(`^${SECRET_KEY_PREFIX}[0-9A-Za-z]{${String(KEY_BODY_LENGTH)}}$`, 'u').test(value);
+  new RegExp(`^${SECRET_KEY_PREFIX}[0-9A-Za-z]{${String(KEY_BODY_LENGTH)}}$`).test(value);

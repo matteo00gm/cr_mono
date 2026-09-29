@@ -45,7 +45,30 @@ describe('addresses a public host answers on', () => {
     'fbff:ffff::1',
     'fe7f::1',
     'fec0::1',
+    '2606:4700:4700:0:0:0:0:1',
+    '2606:4700::',
+    '2606:db8::1',
   ])('accepts %s', (address) => {
+    expect(isPublicUnicast(address)).toBe(true);
+  });
+
+  it.each([
+    ['13.20.0.1', '172.16.0.0/12'],
+    ['11.168.0.1', '192.168.0.0/16'],
+    ['12.254.0.1', '169.254.0.0/16'],
+    ['14.100.0.1', '100.64.0.0/10'],
+    ['15.18.0.1', '198.18.0.0/15'],
+    ['16.19.0.1', '198.18.0.0/15'],
+    ['17.51.0.1', '198.51.100.0/24'],
+    ['198.17.0.1', '198.18.0.0/15, from below'],
+    ['198.20.0.1', '198.18.0.0/15, from above'],
+    ['198.52.0.1', '198.51.100.0/24, from above'],
+  ])('accepts %s, whose second octet only means %s after another first', (address) => {
+    /*
+     * **Each range is a pair of octets, not a second octet alone.** A check
+     * that tested `b` and forgot `a` would refuse every one of these — a
+     * twentieth of the internet, and every seller hosted on it.
+     */
     expect(isPublicUnicast(address)).toBe(true);
   });
 });
@@ -68,6 +91,7 @@ describe('the ranges that are ours, or belong to nobody', () => {
     ['192.0.0.1', 'IETF protocol assignments'],
     ['192.0.2.1', 'TEST-NET-1'],
     ['198.18.0.1', 'benchmarking'],
+    ['198.19.255.255', 'the top of benchmarking, which is a /15'],
     ['198.51.100.1', 'TEST-NET-2'],
     ['203.0.113.1', 'TEST-NET-3'],
     ['224.0.0.1', 'multicast'],
@@ -88,7 +112,12 @@ describe('the ranges that are ours, or belong to nobody', () => {
     ['ff02::1', 'multicast'],
     ['2001:db8::1', 'documentation'],
     ['64:ff9b::1.1.1.1', 'NAT64, which embeds an address we would not check'],
+    ['64:ff9b::101:101', 'NAT64 again, written the way a resolver writes it'],
     ['2002::1', '6to4, likewise'],
+    ['::2', 'the rest of ::/8, which the IETF reserves'],
+    ['::7f00:1', 'the IPv4-compatible 127.0.0.1: a loopback in another coat'],
+    ['1::1', 'still ::/8'],
+    ['ff:ffff::1', 'the top of ::/8'],
   ])('refuses %s (%s)', (address) => {
     expect(isPublicUnicast(address)).toBe(false);
   });
@@ -117,18 +146,39 @@ describe('the IPv4-mapped bypass', () => {
     expect(isPublicUnicast('0:0:0:0:0:ffff:a9fe:a9fe')).toBe(false);
   });
 
-  it('still accepts a mapped public address', () => {
-    expect(isPublicUnicast('::ffff:1.1.1.1')).toBe(true);
+  it.each(['::ffff:1.1.1.1', '::ffff:93.184.216.34'])(
+    'still accepts a mapped public address, %s',
+    (address) => {
+      expect(isPublicUnicast(address)).toBe(true);
+    },
+  );
+
+  it.each([
+    ['::ffff:256.1.1.1', 'an octet no address has'],
+    ['::ffff:1.1.1.1.5', 'a fifth octet, which is not an address'],
+  ])('refuses %s (%s)', (address) => {
+    expect(isPublicUnicast(address)).toBe(false);
   });
 
   it('reads the address out of the mapping', () => {
     expect(mappedIpv4('::ffff:127.0.0.1')).toBe('127.0.0.1');
+    expect(mappedIpv4('::ffff:169.254.169.254')).toBe('169.254.169.254');
     expect(mappedIpv4('::ffff:7f00:1')).toBe('127.0.0.1');
   });
 
-  it('is not a mapping when the prefix is not the mapping prefix', () => {
-    expect(mappedIpv4('2606:4700::1')).toBeUndefined();
-    expect(mappedIpv4('::fffe:7f00:1')).toBeUndefined();
+  it.each([
+    '2606:4700::1',
+    '::fffe:7f00:1',
+    '1::ffff:127.0.0.1',
+    '1:0:0:0:0:ffff:7f00:1',
+    '0:1:0:0:0:ffff:7f00:1',
+    '0:0:1:0:0:ffff:7f00:1',
+    '0:0:0:1:0:ffff:7f00:1',
+    '0:0:0:0:1:ffff:7f00:1',
+  ])('is not a mapping when the prefix is not ::ffff:0:0/96, as in %s', (address) => {
+    /* Eighty zero bits and then sixteen ones, exactly. A check that skipped
+     * any one group would read an ordinary address as an IPv4 one. */
+    expect(mappedIpv4(address)).toBeUndefined();
   });
 
   it('is not a mapping when it is not an address at all', () => {
@@ -155,6 +205,9 @@ describe('what it does with input it cannot read', () => {
     'ff:ff:ff:ff:ff:ff',
     '::1::1',
     'gggg::1',
+    '12345::1',
+    '1234x::1',
+    ':1:2:3:4:5:6:7',
     '1.1.1.1 ',
     ' 1.1.1.1',
     '01.1.1.1x',
@@ -169,6 +222,15 @@ describe('what it does with input it cannot read', () => {
   it('refuses an address with too many groups', () => {
     expect(isPublicUnicast('1:2:3:4:5:6:7:8:9')).toBe(false);
   });
+
+  it.each(['2606:4700::1:zz', '2606:4700:4700:0:0:0:0:gggg'])(
+    'refuses %s, eight groups behind a public prefix with one that is not hex',
+    (address) => {
+      /* The group check has to hold for every group. Anything short of that
+       * reads this as 2606:4700::…, which is public, and connects. */
+      expect(isPublicUnicast(address)).toBe(false);
+    },
+  );
 });
 
 describe('the spellings a resolver never produces, and a string might', () => {

@@ -82,6 +82,10 @@ export type ResolveAll = (
  */
 const systemResolveAll: ResolveAll = (hostname, callback) => {
   systemLookup(hostname, { all: true }, (error, addresses: LookupAddress[] | undefined) => {
+    /* Stryker disable next-line ArrayDeclaration: equivalent. Node leaves
+     * `addresses` out only when it passes an error, and `guardedLookup` refuses
+     * on the error before it looks at a single record — so what stands in for
+     * the missing list is never read, only kept from throwing. */
     callback(error, addresses ?? []);
   });
 };
@@ -195,13 +199,14 @@ export const guardedFetch = async (
     timeout: timeoutMs,
   };
 
+  /*
+   * Several paths below can fire for one request — a stream that errors after
+   * ending, a timeout after a body. A promise settles once and ignores the
+   * rest, which is the whole of the handling they need: the first outcome
+   * stands, and nothing here keeps a flag that would have to agree with it.
+   */
   return new Promise<GuardedResponse>((resolve, reject) => {
-    let settled = false;
-
     const fail = (reason: GuardedFailure): void => {
-      if (settled) return;
-
-      settled = true;
       reject(new GuardedFetchRefused(reason));
     };
 
@@ -251,9 +256,6 @@ export const guardedFetch = async (
       });
 
       response.on('end', () => {
-        if (settled) return;
-
-        settled = true;
         resolve({ status, body: Buffer.concat(chunks).toString('utf8') });
       });
 
