@@ -1389,7 +1389,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-18b | 🔒 Domain claim: notice, withdrawal, sweep | holder sees and withdraws a claim; both sides emailed; a due notice transfers unattended | P4-18a |
 | ✅ P4-19a | 🔒 Staging origins + zone cover | staging outside the plan cap (own cap of 2, lower rate limit); subdomains of a DNS-proved zone need no new record; `.myshopify.com` refused with a pointer | P4-01 |
 | ✅ P4-19b | 🔒 Development mode | 24h-expiring, OWNER-only, one exact `localhost` origin | P4-19a |
-| P4-17 | 🔒 T1–T10 suite assembly | one named spec per threat-model row | P4-16 |
+| ✅ P4-17 | 🔒 T1–T10 suite assembly | one named spec per threat-model row | P4-16 |
 
 ### P5 — Billing
 
@@ -6813,6 +6813,18 @@ On transfer, in one transaction: delete the incumbent's row, invalidate their li
 **Tests.** This is the test aggregation.
 
 **Files.** `test/threats/*`, script, docs. **~150 lines.**
+
+**As built.**
+
+- **Index, not re-import** *(deviation from "re-exports and orchestration")*. The evidence for ten threats lives in five packages, two runners and three environments: node, jsdom, Postgres through Testcontainers, and Playwright. Importing those suites into one file would run them twice, outside their own mocks and containers. So `packages/security/test/threats/threats.json` is the matrix, naming each threat's control and its evidence files with the runner each needs. Each named suite, `T1-widget-theft.test.ts` through `T10-cross-tenant-exfiltration.test.ts` (*renamed*: this repository's test suffix is `.test.ts`, and `.spec.ts` is Playwright's), is the index a reviewer opens. It proves every listed file exists, runs where the manifest says, and holds a test, and it shows each gap as a `todo` in every run. `threats.test.ts` holds the matrix to the plan: T1–T10 in order, with goals and controls word for word as §3.0 has them.
+- **`pnpm test:security` runs exactly the listed files**: 24 unit targets including the suites, and 14 Postgres targets. The browser evidence is listed and runs in the cross-origin job. There is a **Security matrix (T1–T10)** CI job, and `threats:check` keeps `docs/security/threat-coverage.md`, generated from the same manifest, from drifting.
+- **Every "covers" line was checked against the file it names**, and five were wrong on the first draft. `candidates.test.ts` caps the candidate set; it does not isolate tenants, so `retrieval.integration` replaced it. The last-owner guard is `last-owner.integration`, not the members port. The product-card suite does not show that a card comes only from the catalogue; `chat-port.test` does. A manifest that overstated its evidence would be worse than none.
+- **The gaps the mapping exposed**, as the row expected:
+  1. **T7: the widget had silently lost P0-63's raw-fetch ban.** ESLint flat config replaces a rule configured again rather than merging it, and the widget's `innerHTML` block re-configured `no-restricted-syntax` over files the fetch ban already covered. That is exactly the trap the config's own comment warns about. It is fixed, and T7 asserts both rules in **the configuration ESLint computes for a widget file**, not the config text. Reading the text would have shown both present. Verified by reverting the fix and watching T7 fail.
+  2. **T6: the billing half does not exist yet.** P5-03, P5-04 and P5-06 are named as `todo`s. What can be held today is held: T6 scans every production source and fails on any write to `tenants.status` or `tenants.plan`, in raw SQL (`UPDATE`/`INSERT`) or Drizzle's builder, outside `ALLOWED_WRITERS`, which is empty until P5-05's webhook handler joins it. It is a guard that can fail: four write shapes are caught and four look-alikes are not.
+  3. **T4: no load test.** The k6 abuse scenario is P7-04's, and it is a named `todo`.
+
+**Verified.** `pnpm test:security`: 809 unit tests pass with 4 todos, and 285 Postgres tests pass. The T7 fix was reverted once to watch the suite fail. `threats:check`, lint, typecheck and format are clean.
 
 ---
 

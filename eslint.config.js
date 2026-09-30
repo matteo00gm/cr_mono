@@ -304,7 +304,16 @@ export default tseslint.config(
     },
   },
 
-  // Widget-specific: ban innerHTML and dangerouslySetInnerHTML
+  /*
+   * Widget-specific: ban innerHTML and dangerouslySetInnerHTML.
+   *
+   * **It carries the raw-fetch prohibition as well**, for the reason the block
+   * above gives: flat config *replaces* a rule configured again, and this block
+   * matches files the one above already covers. Without these two selectors the
+   * widget had quietly lost P0-63's rule — found by P4-17's threat mapping, and
+   * held by `T7-storefront-xss.test.ts`, which reads the config ESLint actually
+   * computes for a widget file.
+   */
   {
     files: ['apps/widget/**/*.{ts,tsx}'],
     rules: {
@@ -317,6 +326,15 @@ export default tseslint.config(
         {
           selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']",
           message: 'dangerouslySetInnerHTML is banned in the widget. Use text nodes only (§3.7).',
+        },
+        {
+          selector: "CallExpression[callee.name='fetch'] > Literal[value=/\\/v1\\//]",
+          message: 'Use @catalogorosso/api-client instead of calling our own API directly (P0-63).',
+        },
+        {
+          selector:
+            "CallExpression[callee.name='fetch'] > TemplateLiteral > TemplateElement[value.raw=/\\/v1\\//]",
+          message: 'Use @catalogorosso/api-client instead of calling our own API directly (P0-63).',
         },
       ],
     },
