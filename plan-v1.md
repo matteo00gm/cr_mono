@@ -1405,7 +1405,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P5-05a | 🔒 Payment-failure blocking | **no grace** — `PAST_DUE` blocks the widget on first failure; dashboard stays open; Stripe retries restore automatically (§5.2b) | P5-05 |
 | ✅ P5-06 | 🔒 Webhook fixture test suite | every transition; unsigned and mis-signed rejected | P5-05 |
 | ✅ P5-07 | Test: DISABLED propagation split | chat refused immediately; `/config` may lag 60 s | P5-05,P2-13 |
-| P5-08 | Customer Portal link endpoint | | P5-02 |
+| ✅ P5-08 | Customer Portal link endpoint | | P5-02 |
 | P5-09 | Upgrade (prorated) / downgrade (period end) | | P5-05 |
 | P5-10 | Downgrade guard | blocked when catalog (>300/2,500 SKUs) or domains exceed target plan | P5-09 |
 | P5-11 | Quota enforcement wiring | hard cap at 100% messages; zero model calls past cap | P2-36 |
@@ -7137,6 +7137,15 @@ Also send the P0-64 payment-failed email on entry to `PAST_DUE`, since the tenan
 **Tests.** Returns a portal URL for a tenant with a customer; a tenant without one gets a clear error; `EDITOR` gets 403.
 
 **Files.** `billing.ts`, tests. **~60 lines.**
+
+**As built (2026-10-01).** `POST /v1/dashboard/billing/portal` (`billing:manage`, step-up), `portal` on the billing port.
+
+- **The winery's own customer, returning to Fatturazione**, in its language. A winery that has never bought anything has no customer and is refused with a 409 that says so and what to do — Stripe is not asked.
+- **⚠ A portal that lets the customer change plan is refused** *(addition)*. Plan switching in Stripe's portal is a Dashboard setting, and a portal with it on would walk around P5-09's proration and P5-10's downgrade guard entirely. The session is opened with its configuration expanded and checked every time rather than trusted: switching on, the owner is told payments are unavailable and the operator gets `stripe_portal_allows_plan_changes`. **Operator:** configure the portal with plan changes off — payment method, invoices and cancellation at period end on.
+- **Step-up** *(addition, P4-11)*: the portal can cancel the subscription, which switches the widget off, and change who is charged; `step-up.test.ts` now lists the route.
+- **A past-due winery's way back**: P5-02 refuses it a second subscription, and this is where it updates the card. The dashboard stays open for it (P5-05a).
+
+**Verified.** The port and the route; 7 mutants, 7 killed — a portal that switches plans handed out, the configuration not expanded, a winery with no customer sent to Stripe, the portal returning elsewhere, no key still asking Stripe, no step-up, and an editor admitted.
 
 ---
 

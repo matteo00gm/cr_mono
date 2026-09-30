@@ -8,6 +8,7 @@ import {
   ALREADY_SUBSCRIBED,
   BILLING_UNAVAILABLE,
   createBillingPort,
+  NO_BILLING_ACCOUNT,
   type BillingPort,
 } from '../src/billing.js';
 import { logger } from '../src/middleware/logger.js';
@@ -186,6 +187,11 @@ describe('the route', () => {
 
         return Promise.resolve({ url: 'https://checkout.stripe.com/c/pay/cs_test_1' });
       },
+      portal: (tenantId) => {
+        asked.push(`${tenantId}:portal`);
+
+        return Promise.resolve({ url: 'https://billing.stripe.com/p/session/test_1' });
+      },
     };
 
     return { asked, billing };
@@ -230,5 +236,152 @@ describe('the route', () => {
       'Send a JSON body naming the plan: {\\"plan\\": \\"CANTINA\\"} or {\\"plan\\": \\"ECOMMERCE\\"}.',
     );
     expect(asked).toEqual([]);
+  });
+});
+
+describe('the Billing Portal (P5-08)', () => {
+  /** A Stripe that opens portal sessions under a configuration that may or may not switch plans. */
+  const portalStripe = (switchesPlans: boolean) => {
+    const calls: Call[] = [];
+    const stripe: StripeClient = {
+      get: () => Promise.reject(new Error('the portal asks Stripe nothing by GET')),
+      post: <T>(path: string, params: unknown, schema: z.ZodType<T>) => {
+        calls.push({ verb: 'post', path, params });
+
+        return Promise.resolve(
+          schema.parse({
+            url: 'https://billing.stripe.com/p/session/test_1',
+            configuration: { features: { subscription_update: { enabled: switchesPlans } } },
+          }),
+        );
+      },
+    };
+
+    return { stripe, calls };
+  };
+
+  const portalPort = (state: BillingState | undefined, stripe = portalStripe(false)) => ({
+    ...stripe,
+    port: createBillingPort({
+      stripe: stripe.stripe,
+      dashboardOrigin: 'https://app.catalogorosso.com',
+      readState: () => Promise.resolve(state),
+    }),
+  });
+
+  const customer: BillingState = { ...fresh, stripeCustomerId: 'cus_mine', locale: 'en' };
+
+  it('opens the portal for the winery’s own customer, returning to Fatturazione', async () => {
+    const { port, calls } = portalPort(customer);
+
+    expect(await port.portal(TENANT)).toEqual({
+      url: 'https://billing.stripe.com/p/session/test_1',
+    });
+    expect(calls).toEqual([
+      {
+        verb: 'post',
+        path: '/v1/billing_portal/sessions',
+        params: {
+          customer: 'cus_mine',
+          return_url: 'https://app.catalogorosso.com/fatturazione',
+          locale: 'en',
+          expand: ['configuration'],
+        },
+      },
+    ]);
+  });
+
+  it('shows the portal in Italian for any winery that is not English', async () => {
+    const { port, calls } = portalPort({ ...customer, locale: 'de' });
+
+    await port.portal(TENANT);
+
+    expect(calls[0]?.params).toMatchObject({ locale: 'it' });
+  });
+
+  it('refuses plainly, asking Stripe nothing, for a winery that has never bought a plan', async () => {
+    const { port, calls } = portalPort(fresh);
+
+    await expect(port.portal(TENANT)).rejects.toThrow(new ConflictError(NO_BILLING_ACCOUNT));
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses a portal that lets the customer change plan, and tells the operator', async () => {
+    /*
+     * A plan switched in the portal would walk around P5-09's proration and
+     * P5-10's downgrade guard. It is a Dashboard setting, so it is checked
+     * every time rather than trusted.
+     */
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const { port } = portalPort(customer, portalStripe(true));
+
+    await expect(port.portal(TENANT)).rejects.toThrow(new ConflictError(BILLING_UNAVAILABLE));
+    expect(error).toHaveBeenCalledWith(
+      { kind: 'stripe_portal_allows_plan_changes' },
+      expect.stringContaining('Dashboard'),
+    );
+  });
+
+  it('refuses plainly where this service has no Stripe key', async () => {
+    const port = createBillingPort({
+      dashboardOrigin: 'https://app.catalogorosso.com',
+      readState: () => Promise.resolve(customer),
+    });
+
+    await expect(port.portal(TENANT)).rejects.toThrow(new ConflictError(BILLING_UNAVAILABLE));
+  });
+
+  it('answers not found when the winery is gone', async () => {
+    const { port } = portalPort(undefined);
+
+    await expect(port.portal(TENANT)).rejects.toThrow(NotFoundError);
+  });
+
+  describe('the route', () => {
+    const portal = (role: 'OWNER' | 'EDITOR', freshFactor = true) => {
+      const asked: string[] = [];
+      const billing: BillingPort = {
+        checkout: () => Promise.reject(new Error('not this route')),
+        portal: (tenantId) => {
+          asked.push(tenantId);
+          return Promise.resolve({ url: 'https://billing.stripe.com/p/session/test_1' });
+        },
+      };
+      const app = createApp({
+        auth: signedIn(undefined, { fresh: freshFactor }),
+        readMemberships: oneMembership(TENANT, role),
+        billing,
+      });
+
+      return {
+        asked,
+        request: () => app.request('/v1/dashboard/billing/portal', { method: 'POST' }),
+      };
+    };
+
+    it('answers the owner with the portal, for the session’s own winery', async () => {
+      const { asked, request } = portal('OWNER');
+      const response = await request();
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ url: 'https://billing.stripe.com/p/session/test_1' });
+      expect(asked).toEqual([TENANT]);
+    });
+
+    it('refuses an editor', async () => {
+      const { asked, request } = portal('EDITOR');
+
+      expect((await request()).status).toBe(403);
+      expect(asked).toEqual([]);
+    });
+
+    it('asks an owner whose second factor is not fresh to confirm it is them (P4-11)', async () => {
+      const { asked, request } = portal('OWNER', false);
+      const response = await request();
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ error: { code: 'step_up_required' } });
+      expect(asked).toEqual([]);
+    });
   });
 });

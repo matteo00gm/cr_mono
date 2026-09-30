@@ -102,6 +102,69 @@
           }
         }
       },
+      "/v1/dashboard/billing/portal": {
+        "post": {
+          "summary": "Manage the winery's subscription",
+          "description": "Answers with the URL of a Stripe-hosted Billing Portal page for the winery’s account: the payment method, invoices and cancellation. Send the owner there; they come back to the Fatturazione screen. Changing plan is not there — that is a change to the subscription made here. Needs a fresh second factor, because the portal can end the service. A winery that has never bought a plan has no account yet and is refused with a 409, as is a service where payments are not set up.\n\nRequires the `billing:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.\n\nNeeds a second factor proved within the last 15 minutes; otherwise 403 with code `step_up_required`. Verify a code and send the same request again.",
+          "operationId": "postV1DashboardBillingPortal",
+          "x-required-capability": "billing:manage",
+          "x-requires-step-up": true,
+          "responses": {
+            "200": {
+              "description": "Manage the winery's subscription",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "url": {
+                        "type": "string",
+                        "format": "uri"
+                      }
+                    },
+                    "required": [
+                      "url"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "url": "https://billing.stripe.com/p/session/test_a1b2c3"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/context": {
         "get": {
           "summary": "The resolved tenant and role for this request",

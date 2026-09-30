@@ -117,6 +117,7 @@ describe('unconfiguredWebhooks', () => {
 describe('unconfiguredBilling', () => {
   const calls: Record<keyof BillingPort, () => Promise<unknown>> = {
     checkout: () => unconfiguredBilling.checkout('11111111-1111-1111-1111-111111111111', 'CANTINA'),
+    portal: () => unconfiguredBilling.portal('11111111-1111-1111-1111-111111111111'),
   };
 
   it.each(Object.keys(calls) as (keyof BillingPort)[])(

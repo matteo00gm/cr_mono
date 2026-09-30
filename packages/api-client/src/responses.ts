@@ -407,6 +407,17 @@ export const billingCheckoutResponse = z.strictObject({
 });
 
 export type BillingCheckoutResponse = z.infer<typeof billingCheckoutResponse>;
+
+/**
+ * Where to send the owner to manage what they already pay for (P5-08): the
+ * payment method, invoices, cancellation. A Stripe-hosted page, good for a few
+ * minutes; plan changes are not there, they are P5-09's.
+ */
+export const billingPortalResponse = z.strictObject({
+  url: z.url({ protocol: /^https$/u }),
+});
+
+export type BillingPortalResponse = z.infer<typeof billingPortalResponse>;
 export type IssuedKeysResponse = z.infer<typeof issuedKeysResponse>;
 export type Product = z.infer<typeof productSchema>;
 
@@ -829,6 +840,7 @@ export const DASHBOARD_RESPONSES = {
   'GET /v1/dashboard/domains/claims/served': servedClaimsResponse,
   'POST /v1/dashboard/domains/claims/:id/withdraw': claimWithdrawnResponse,
   'POST /v1/dashboard/billing/checkout': billingCheckoutResponse,
+  'POST /v1/dashboard/billing/portal': billingPortalResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;
