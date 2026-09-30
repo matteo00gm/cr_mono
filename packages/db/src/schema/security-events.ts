@@ -28,6 +28,12 @@ export const securityEventType = pgEnum('security_event_type', [
   'RATE_LIMITED',
   'QUOTA_EXCEEDED',
   'REPLAYED_WEBHOOK',
+  /**
+   * A webhook delivery whose signature did not verify (P5-03): somebody
+   * posting billing or mail events without the provider's key. Which provider,
+   * and why it failed, go in `metadata`.
+   */
+  'INVALID_WEBHOOK_SIGNATURE',
 ]);
 
 export const securityEvents = pgTable(

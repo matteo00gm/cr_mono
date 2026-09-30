@@ -252,6 +252,33 @@ describe('insertSecurityEvent (P2-16)', () => {
 
     expect([...rows][0]).toMatchObject({ type: 'INVALID_TOKEN', metadata: { reason: 'revoked' } });
   });
+
+  it('records a refused webhook under the type migration 0060 added, attributed to nobody', async () => {
+    // A forged event names a winery in its body; a body that did not verify is
+    // not believed about anything, so the row carries no tenant (P5-03).
+    const marker = randomUUID();
+
+    await insertSecurityEvent(
+      {
+        type: 'INVALID_WEBHOOK_SIGNATURE',
+        metadata: { provider: 'stripe', reason: 'no-match', marker },
+      },
+      db,
+    );
+
+    const rows = await adminDb.execute(
+      sql`select type::text as type, tenant_id, metadata from security_events
+          where metadata->>'marker' = ${marker}`,
+    );
+
+    expect([...rows]).toEqual([
+      {
+        type: 'INVALID_WEBHOOK_SIGNATURE',
+        tenant_id: null,
+        metadata: { provider: 'stripe', reason: 'no-match', marker },
+      },
+    ]);
+  });
 });
 
 describe('countSecurityEvents (P2-16)', () => {

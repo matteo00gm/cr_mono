@@ -36,7 +36,7 @@ describe('api test wiring', () => {
 const COLD_START_MS = 60_000;
 
 /**
- * A local run. The last three are stubbed *empty* rather than left alone:
+ * A local run. The last four are stubbed *empty* rather than left alone:
  * `index.ts` reads empty as absent, and a developer with `SST_STAGE` exported
  * in their shell would otherwise watch these fail for a reason that is not the
  * code.
@@ -48,6 +48,7 @@ const LOCAL = {
   SST_STAGE: '',
   ORIGIN_SECRET: '',
   RESEND_WEBHOOK_SECRET: '',
+  STRIPE_WEBHOOK_SECRET: '',
   WIDGET_TOKEN_KEYS: '',
 };
 
@@ -254,6 +255,35 @@ describe('the Lambda entry point', () => {
         });
 
         expect(warned()).not.toContain('webhook_secret_absent');
+      },
+      COLD_START_MS,
+    );
+
+    it(
+      'warns, under a kind of its own, when the Stripe signing secret is absent (P5-03)',
+      async () => {
+        /*
+         * Its own kind, not Resend's: on a stage that sells plans this is an
+         * outage of the thing that switches widgets on and off, and an alarm
+         * filtering on bounces must not be the one that pages for it.
+         */
+        const { warned } = await load({ SST_STAGE: 'review', ORIGIN_SECRET: randomUUID() });
+
+        expect(warned()).toContain('stripe_webhook_secret_absent');
+      },
+      COLD_START_MS,
+    );
+
+    it(
+      'says nothing about the Stripe secret once it is set',
+      async () => {
+        const { warned } = await load({
+          SST_STAGE: 'review',
+          ORIGIN_SECRET: randomUUID(),
+          STRIPE_WEBHOOK_SECRET: `whsec_${randomUUID()}`,
+        });
+
+        expect(warned()).not.toContain('stripe_webhook_secret_absent');
       },
       COLD_START_MS,
     );

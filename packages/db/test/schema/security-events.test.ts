@@ -11,9 +11,11 @@ const config = getTableConfig(securityEvents);
 const columns = new Map(config.columns.map((c) => [c.name, c]));
 
 describe('security_events schema', () => {
-  it('declares the rejection types from §Data Model, and the one P2-16 added', () => {
+  it('declares the rejection types from §Data Model, and the two added since', () => {
     // `INVALID_TOKEN` joined them with migration 0044: the six describe a key
     // and an origin, and none of them describes a token that did not verify.
+    // `INVALID_WEBHOOK_SIGNATURE` joined with 0060 (P5-03): a forged billing or
+    // mail event, which describes neither.
     expect(securityEventType.enumValues).toEqual([
       'UNAUTHORIZED_ORIGIN',
       'INVALID_KEY',
@@ -22,6 +24,7 @@ describe('security_events schema', () => {
       'RATE_LIMITED',
       'QUOTA_EXCEEDED',
       'REPLAYED_WEBHOOK',
+      'INVALID_WEBHOOK_SIGNATURE',
     ]);
   });
 

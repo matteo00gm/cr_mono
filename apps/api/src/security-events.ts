@@ -1,6 +1,7 @@
 import type { SecurityEvent, SecurityEventType } from '@catalogorosso/db';
 
 import type { RejectedWidgetRequest } from './middleware/cors.js';
+import type { SignatureRejection } from './surfaces/webhooks.js';
 import type { RejectedWidgetToken } from './middleware/widget-auth.js';
 import type { TokenRefusal } from './widget-token.js';
 
@@ -71,3 +72,16 @@ export const refusalRecorders = (write: SecurityEventWriter): RefusalRecorders =
       metadata: { reason: event.reason },
     }),
 });
+
+/**
+ * A webhook delivery refused for its signature (P5-03), as a row.
+ *
+ * No tenant, deliberately: a forged Stripe event names a winery in its body,
+ * and a body that did not verify is not believed about anything — attributing
+ * the row to the winery it named would let a forger write into that winery's
+ * security log at will.
+ */
+export const webhookRejectionRecorder =
+  (write: SecurityEventWriter) =>
+  ({ provider, reason }: SignatureRejection): Promise<void> =>
+    write({ type: 'INVALID_WEBHOOK_SIGNATURE', metadata: { provider, reason } });

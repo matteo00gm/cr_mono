@@ -164,3 +164,90 @@ export const verifySvixSignature = ({
     ? { ok: true }
     : { ok: false, reason: 'no-match' };
 };
+
+/* ----------------------------------------------------------------- Stripe */
+
+export interface StripeVerifyOptions {
+  /** The endpoint secret, `whsec_…`, from Stripe's dashboard. Used whole. */
+  readonly secret: string;
+  /** `Stripe-Signature`: `t=<unix>,v1=<hex>[,v1=<hex>…]`. */
+  readonly header: string | undefined;
+  /** The body exactly as received, before any parse. */
+  readonly body: string;
+  /** Injected so the tolerance is testable without waiting five minutes. */
+  readonly now?: () => number;
+}
+
+/**
+ * The timestamp and every `v1` signature in a `Stripe-Signature` header.
+ *
+ * **Every `v1`, for Svix's reason**: while a secret is being rolled Stripe
+ * signs with both, and a verifier that read only the first would reject every
+ * delivery on the day somebody rolls it. `v0` and anything unknown are
+ * dropped — `v0` is Stripe's test-mode legacy scheme, and an unknown scheme is
+ * how a future algorithm arrives. A `v1` that is not hex is dropped too, rather
+ * than decoded into something shorter that can never match.
+ */
+const parseStripeHeader = (
+  header: string,
+): { readonly timestamp: string | undefined; readonly signatures: readonly Buffer[] } => {
+  let timestamp: string | undefined;
+  const signatures: Buffer[] = [];
+
+  for (const part of header.split(',')) {
+    const at = part.indexOf('=');
+
+    if (at === -1) continue;
+
+    const scheme = part.slice(0, at).trim();
+    const value = part.slice(at + 1).trim();
+
+    if (scheme === 't') timestamp = value;
+    if (scheme === 'v1' && /^(?:[0-9a-f]{2})+$/iu.test(value)) {
+      signatures.push(Buffer.from(value, 'hex'));
+    }
+  }
+
+  return { timestamp, signatures };
+};
+
+/**
+ * Stripe's webhook signature (P5-03), beside Svix's and sharing its tolerance
+ * and its comparison, as the header of this file asked of it.
+ *
+ * **The secret is used whole**, `whsec_` and all — the opposite of Svix, whose
+ * prefix is display and whose remainder is base64. Getting this backwards
+ * fails closed on every delivery, which is the failure that ends with somebody
+ * switching verification off.
+ *
+ * The signed content is `t.body`: the timestamp is inside it, so a captured
+ * delivery cannot be re-sent with a fresh `t` to beat the tolerance. The event
+ * id is inside the body, so it is signed too, and safe as the idempotency key.
+ */
+export const verifyStripeSignature = ({
+  secret,
+  header,
+  body,
+  now = Date.now,
+}: StripeVerifyOptions): SignatureResult => {
+  if (header === undefined) return { ok: false, reason: 'missing-headers' };
+
+  const { timestamp, signatures } = parseStripeHeader(header);
+
+  if (timestamp === undefined || !/^\d+$/u.test(timestamp)) {
+    return { ok: false, reason: 'malformed-timestamp' };
+  }
+
+  /* Both directions, for the reason given in `verifySvixSignature`. */
+  if (Math.abs(now() / 1000 - Number(timestamp)) > TIMESTAMP_TOLERANCE_SEC) {
+    return { ok: false, reason: 'timestamp-outside-tolerance' };
+  }
+
+  if (signatures.length === 0) return { ok: false, reason: 'no-signatures' };
+
+  const expected = createHmac('sha256', secret).update(`${timestamp}.${body}`).digest();
+
+  return signatures.some((candidate) => matches(candidate, expected))
+    ? { ok: true }
+    : { ok: false, reason: 'no-match' };
+};

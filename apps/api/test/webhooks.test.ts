@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/app.js';
 import { WEBHOOK_PREFIX } from '../src/routes.js';
+import type { SignatureRejection } from '../src/surfaces/webhooks.js';
 import type { DeliveryEvent, WebhooksPort } from '../src/webhooks.js';
 import { fakeAuth } from './support/auth.js';
 
@@ -61,12 +62,18 @@ const port = (overrides: Partial<WebhooksPort> = {}): WebhooksPort => ({
   ...overrides,
 });
 
+const refused: SignatureRejection[] = [];
+
 const app = (options: { secret?: string | undefined; webhooks?: WebhooksPort } = {}) =>
   createApp({
     auth: fakeAuth(),
     readMemberships: () => Promise.resolve([]),
     resendWebhookSecret: 'secret' in options ? options.secret : SECRET,
     webhooks: options.webhooks ?? port(),
+    onSignatureRejected: (rejection) => {
+      refused.push(rejection);
+      return Promise.resolve();
+    },
   });
 
 const post = (built: ReturnType<typeof createApp>, body: string, headers: Record<string, string>) =>
@@ -332,5 +339,17 @@ describe('the surface itself', () => {
      * would be reachable by the whole internet with no session in the way.
      */
     expect(() => app()).not.toThrow();
+  });
+});
+
+describe('a refused Resend delivery (P5-03)', () => {
+  it('is recorded as a security event too, like a refused Stripe one', async () => {
+    refused.length = 0;
+    const body = JSON.stringify(bouncePayload);
+
+    const response = await post(app(), body, { 'content-type': 'application/json' });
+
+    expect(response.status).toBe(401);
+    expect(refused).toEqual([{ provider: 'resend', reason: 'missing-headers' }]);
   });
 });

@@ -7,9 +7,11 @@
  */
 export {
   TIMESTAMP_TOLERANCE_SEC,
+  verifyStripeSignature,
   verifySvixSignature,
   type SignatureFailure,
   type SignatureResult,
+  type StripeVerifyOptions,
   type SvixHeaders,
   type VerifyOptions,
 } from './signature.js';

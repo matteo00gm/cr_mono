@@ -421,6 +421,13 @@
       "when": 1788654188594,
       "tag": "0059_dev_mode_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1788654188595,
+      "tag": "0060_webhook_signature_event",
+      "breakpoints": true
     }
   ]
 }
