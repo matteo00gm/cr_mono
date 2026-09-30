@@ -1132,7 +1132,7 @@ Anti-rot checks in CI, each cheap:
 
 **P1, as of 2026-09-15: every row is merged except two.**
 
-- **P1-05 is deferred to P2-20, by decision.** There is no retrieval function to assert through yet, and a query written for the test is what the row rules out. P2-20 carries the assertion.
+- **P1-05 is deferred to P2-20, by decision.** There is no retrieval function to assert through yet, and a query written for the test is what the row rules out. P2-20 carries the assertion. *(Closed later, as P1-05's own row records: P2-20 carried half of it.)*
 - **P1-47 is half done.** The runbook, `docs/runbooks/pairing-bake-off.md`, is merged. The bake-off has not been run and no default model is chosen, because it needs things no commit can supply: Gemini and Anthropic keys exported in a shell, Bedrock model access, an agreed spend, a hand-rated sample and the decision itself. **P1 closes when that ADR lands.**
 
 P1-34 and P1-36 have no pull request of their own: they landed inside P1-33 (#99) and P1-35 (#100). **P2-01, P2-02 and P2-03 are merged as well**, pulled forward by **A1**. What follows this paragraph is the record of P0 at `6a3d2b0` and is kept as it was.
@@ -1247,7 +1247,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P1-02 | Product create endpoint | + `outbox` row in the same tx | P0-54,36 |
 | ✅ P1-03 | Product update endpoint | | P1-02 |
 | ✅ P1-04 | Product delete | soft-delete row, **hard-delete vectors**, tombstone | P1-02 |
-| P1-05 | Test: deleted product unretrievable | asserted through the retrieval path, not just the table | P1-04 |
+| ✅ P1-05 | Test: deleted product unretrievable | asserted through the retrieval path, not just the table | P1-04 |
 | ✅ P1-06 | Catalog list endpoint | server-side pagination + sort | P1-02 |
 | ✅ P1-07 | Migration + search: `tsvector` | `italian` config, generated column, GIN index | P0-26 |
 | ✅ P1-08 | Catalog search endpoint | name, producer, sku, grape, region | P1-07 |
@@ -3575,6 +3575,10 @@ The first diagnosis was that `pgErrorCode` read the SQLSTATE only from `error.ca
 
 **Status — deferred to P2-20, taking the row's first option** *(decision)*. There is no retrieval function to call yet, and a stub would be exactly what the row rules out: a query written for the test, asserting that the stub cannot find what the stub was written not to find — a test that passes whatever the real retrieval does. What can be asserted without retrieval already is: P1-04's integration test proves the vectors are deleted in the same transaction as the archive, that the cascade is not doing the work, and that a rolled-back archive deletes nothing. **P2-20 carries this row**: seed and index a product, confirm retrieval returns it, archive it, confirm retrieval does not, through the real function, and assert the vector rows are gone so a regression is diagnosable.
 
+
+**As built (closed after P2-20).** P2-20 carried half the assertion, not all of it. Its case seeds a wine that is **already archived** and shows retrieval ignores it — which proves the status filter, not that deleting a wine takes it out of retrieval, and it never shows retrieval finding the wine beforehand. The row's test is now in `packages/db/test/retrieval.integration.test.ts` *(renamed and moved: the retrieval function and the archive statement both live in `packages/db`, and the path a delete takes is `archiveProduct`, which `DELETE /products/:id` calls)*: a wine is found by `fusedSearch`, archived through `archiveProduct`, not found by `fusedSearch`, and its vector rows are counted at zero so a regression says which half broke.
+
+**Verified.** Two hand mutants, each killed: an archive that leaves the status alone (the wine is found again), and one that keeps the vectors (the count is not zero).
 ---
 
 ### P1-06 · Catalog list endpoint

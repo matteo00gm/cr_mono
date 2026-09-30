@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
+import { archiveProduct } from '../src/products.js';
 import { fusedSearch, lexicalSearch, vectorSearch } from '../src/retrieval.js';
 import { withTenant } from '../src/with-tenant.js';
 import { startPostgres } from './support/postgres.js';
@@ -407,6 +408,41 @@ describe('fused retrieval (P2-20)', () => {
     const found = await fuse(fusedTenant);
 
     expect(found.map((candidate) => candidate.productId)).not.toContain(archived);
+  });
+
+  it('finds a wine, and after it is deleted through the real path, cannot find it (P1-05)', async () => {
+    /*
+     * **The row's assertion, whole.** The case above seeds a wine already
+     * archived, which shows retrieval ignores the status — not that deleting a
+     * wine takes it out of retrieval. This one is found first, deleted through
+     * `archiveProduct` (what `DELETE /products/:id` calls), and then looked for
+     * again through the same function retrieval uses. The vector rows are
+     * asserted too, so a regression says which half broke.
+     */
+    const doomed = await addWine(fusedTenant, {
+      name: 'Barolo Cannubi',
+      index: 0,
+      producer: 'Giacomo Conterno',
+    });
+
+    expect((await fuse(fusedTenant)).map((candidate) => candidate.productId)).toContain(doomed);
+
+    await expect(
+      withTenant(fusedTenant, (tx) => archiveProduct(tx, doomed), db),
+    ).resolves.toMatchObject({ outcome: 'archived' });
+
+    expect((await fuse(fusedTenant)).map((candidate) => candidate.productId)).not.toContain(doomed);
+
+    const vectors = await withTenant(
+      fusedTenant,
+      (tx) =>
+        tx.execute(
+          sql`SELECT count(*)::int AS n FROM product_embeddings WHERE product_id = ${doomed}::uuid`,
+        ),
+      db,
+    );
+
+    expect(([...vectors][0] as { n: number }).n).toBe(0);
   });
 
   it('reaches the trigram fallback when the words match nothing', async () => {
