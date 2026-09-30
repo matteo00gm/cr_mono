@@ -9,19 +9,26 @@ import { describeThreat, REPO } from './manifest.js';
  * T6 — Get free premium tier (§3.0, P4-17).
  *
  * A tenant's status and plan are never taken from a request, and nothing but a
- * verified billing event may ever change them. **The billing half is not built
- * yet** — the signed webhook, its idempotency and the transitions it drives are
- * P5-03, P5-04 and P5-06, and the todos below say so in every run.
+ * verified billing event — or the first verified domain, which starts the
+ * card-free trial — may ever change them. The signed webhook and its
+ * idempotency are P5-03 and P5-04; the transitions end to end are P5-06, and
+ * the todo below says so in every run.
  *
- * What can be held today is the other half, and this file holds it: **no
- * production code writes `tenants.status` or `tenants.plan` at all.** The day
- * P5-05's webhook handler does, it goes on `ALLOWED_WRITERS` — the one place
- * such a write may be — and a second writer anywhere else fails here.
+ * This file holds the other half: **production code writes `tenants.status`
+ * and `tenants.plan` in one file only.** P5-05's statements are there, and a
+ * second writer anywhere else fails here.
  */
 describeThreat('T6');
 
-/** The files allowed to set a tenant's status or plan. Empty until P5-05. */
-const ALLOWED_WRITERS: readonly string[] = [];
+/**
+ * The files allowed to set a tenant's status or plan.
+ *
+ * `packages/db/src/billing.ts`, since P5-05: `writeBillingChange`, which only
+ * the state machine's effect calls, on a claimed and verified event's
+ * transaction; and `startTrial`, which moves `PENDING_VERIFICATION` to
+ * `TRIALING` and nothing else, on the transaction that verifies a domain.
+ */
+const ALLOWED_WRITERS: readonly string[] = ['packages/db/src/billing.ts'];
 
 /**
  * The shapes a write to either column takes: raw SQL, in an `UPDATE` or an

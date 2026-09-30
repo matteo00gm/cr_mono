@@ -43,13 +43,12 @@ const insert = async (values: { name: string; slug: string; status?: string }) =
   await useTenant(db, id);
 
   return db.execute(sql`
-    insert into tenants (id, name, slug, status)
+    insert into tenants (id, name, slug, status, stripe_subscription_id, trial_ends_at)
     values (
       ${id}::uuid,
       ${values.name},
       ${values.slug},
-      coalesce(${values.status ?? null}, 'PENDING_VERIFICATION')::tenant_status
-    )
+      coalesce(${values.status ?? null}, 'PENDING_VERIFICATION')::tenant_status, CASE WHEN coalesce(${values.status ?? null}, 'PENDING_VERIFICATION')::tenant_status = 'ACTIVE' THEN 'sub_' || gen_random_uuid() END, CASE WHEN coalesce(${values.status ?? null}, 'PENDING_VERIFICATION')::tenant_status = 'TRIALING' THEN now() + interval '14 days' END)
     returning id, status, plan, locale, currency
   `);
 };

@@ -183,8 +183,8 @@ export const startE2eApi = async ({
   const admin = database.adminDb;
 
   await admin.execute(sql`
-    INSERT INTO tenants (id, name, slug, status, plan, locale)
-    VALUES (${tenantId}, ${tenant.name}, ${tenant.slug}, 'ACTIVE', ${tenant.plan}, 'it')
+    INSERT INTO tenants (id, name, slug, status, plan, locale, stripe_subscription_id)
+    VALUES (${tenantId}, ${tenant.name}, ${tenant.slug}, 'ACTIVE', ${tenant.plan}, 'it', 'sub_' || gen_random_uuid())
   `);
 
   /* The origin the storefront is served from, and the only verified one. */

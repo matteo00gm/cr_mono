@@ -44,8 +44,8 @@ const winery = async (): Promise<string> => {
   const tenantId = randomUUID();
 
   await adminDb.execute(sql`
-    INSERT INTO tenants (id, name, slug, status)
-    VALUES (${tenantId}::uuid, 'Cantina', ${`tw-${tenantId}`}, 'TRIALING')
+    INSERT INTO tenants (id, name, slug, status, trial_ends_at)
+    VALUES (${tenantId}::uuid, 'Cantina', ${`tw-${tenantId}`}, 'TRIALING', now() + interval '14 days')
   `);
 
   return tenantId;

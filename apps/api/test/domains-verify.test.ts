@@ -36,6 +36,8 @@ const state = {
   sibling: undefined as Row | undefined,
   held: [] as Row[],
   committed: true,
+  /** What `startTrial` answers: when a trial it started ends, or nothing. */
+  trialEndsAt: undefined as Date | undefined,
 };
 
 const row = (overrides: Partial<Row> = {}): Row => ({
@@ -90,6 +92,11 @@ vi.mock('@catalogorosso/db', () => ({
   readDomainByOrigin: () => Promise.resolve(undefined),
   insertDomain: () => Promise.resolve({ outcome: 'taken' }),
   readTenantPlan: () => Promise.resolve(null),
+  startTrial: (_tx: unknown, days: number) => {
+    calls.push(`startTrial(${String(days)})`);
+
+    return Promise.resolve(state.trialEndsAt);
+  },
 }));
 
 const { createDomainsPort, unconfiguredDomains } = await import('../src/domains.js');
@@ -174,6 +181,7 @@ beforeEach(() => {
     row({ id: 'd3', origin: 'https://shop.winery.com', status: 'PENDING' }),
   ];
   state.committed = true;
+  state.trialEndsAt = undefined;
 });
 
 describe('a domain whose record is published', () => {
@@ -806,4 +814,49 @@ describe('a Shopify store’s own address (P4-19)', () => {
       ]);
     },
   );
+});
+
+describe('the card-free trial (P5-05)', () => {
+  it('starts with the first verified domain, for the trial’s days, and is audited', async () => {
+    state.trialEndsAt = new Date('2026-10-14T09:00:00.000Z');
+
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
+
+    expect(calls).toContain('startTrial(14)');
+    expect(written.map((entry) => entry.action)).toContain('billing.trial_started');
+    expect(written.find((entry) => entry.action === 'billing.trial_started')?.target).toBe(
+      'tenant:t1',
+    );
+  });
+
+  it('starts nothing for a winery that has had its trial, and says nothing', async () => {
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
+
+    expect(calls).toContain('startTrial(14)');
+    expect(written.map((entry) => entry.action)).not.toContain('billing.trial_started');
+  });
+
+  it('is not tried when another request verified the domain first', async () => {
+    state.marked = undefined;
+
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
+
+    expect(calls.some((call) => call.startsWith('startTrial'))).toBe(false);
+  });
+
+  it('starts on the verification’s own transaction, after the domain is marked', async () => {
+    state.trialEndsAt = new Date('2026-10-14T09:00:00.000Z');
+
+    await port([['the-nonce']]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
+
+    const marked = calls.indexOf('markDomainVerified(d1,DNS_TXT)');
+    const trial = calls.indexOf('startTrial(14)');
+    const opened = calls.lastIndexOf('withTenant(t1)', marked);
+
+    expect(marked).toBeGreaterThan(-1);
+    expect(trial).toBeGreaterThan(marked);
+    expect(calls.slice(opened + 1, trial).some((call) => call.startsWith('withTenant'))).toBe(
+      false,
+    );
+  });
 });

@@ -48,7 +48,7 @@ describe('the plans we sell', () => {
       { messagesPerMonth: 1_500, skuCap: 300, productionDomains: 1 },
       { messagesPerMonth: 6_000, skuCap: 2_500, productionDomains: 2 },
     ]);
-    expect(TRIAL).toEqual({ name: 'trial', messagesPerMonth: 150, productionDomains: 1 });
+    expect(TRIAL).toEqual({ name: 'trial', days: 14, messagesPerMonth: 150, productionDomains: 1 });
   });
 
   it('file each plan under its own id', () => {

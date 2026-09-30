@@ -17,6 +17,7 @@ export * from './billing/stripe-catalog.js';
 export * from './billing/stripe-form.js';
 export * from './billing/checkout.js';
 export * from './billing/stripe-events.js';
+export * from './billing/state.js';
 export * from './domains.js';
 export * from './domain-claims.js';
 export * from './dev-mode.js';

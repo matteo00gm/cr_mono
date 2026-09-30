@@ -88,8 +88,10 @@ export const planForLookupKey = (key: string | null | undefined): PlanId | undef
  * plan until P5-10, and a trial's is a commercial choice nobody has made; the
  * import ceiling (`MAX_IMPORT_ROWS`) is the only bound it has today.
  */
-export const TRIAL: PlanLimits & { readonly name: string } = {
+export const TRIAL: PlanLimits & { readonly name: string; readonly days: number } = {
   name: 'trial',
+  /** From the first verified domain (P5-05). */
+  days: 14,
   messagesPerMonth: 150,
   productionDomains: 1,
 };

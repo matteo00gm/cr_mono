@@ -146,7 +146,7 @@ const signUp = async (): Promise<Owner> => {
   const tenantId = randomUUID();
 
   await admin().execute(sql`
-    INSERT INTO tenants (id, name, slug, status) VALUES (${tenantId}, 'Cantina', ${`c-${tenantId}`}, 'ACTIVE')
+    INSERT INTO tenants (id, name, slug, status, stripe_subscription_id) VALUES (${tenantId}, 'Cantina', ${`c-${tenantId}`}, 'ACTIVE', 'sub_' || gen_random_uuid())
   `);
   await admin().execute(sql`
     INSERT INTO memberships (tenant_id, user_id, role) VALUES (${tenantId}, ${user?.id ?? ''}, 'OWNER')

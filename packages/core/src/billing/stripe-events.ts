@@ -1,6 +1,9 @@
 import { z } from 'zod';
 
-import { STRIPE_TENANT_KEY } from './checkout.js';
+import { PLAN_IDS, planForLookupKey, type PlanId } from '../plans.js';
+
+import { STRIPE_PLAN_KEY, STRIPE_TENANT_KEY } from './checkout.js';
+import type { BillingEvent } from './state.js';
 
 /**
  * Reading Stripe events (P5-04, P5-05).
@@ -68,4 +71,153 @@ export const tenantOfStripeEvent = (payload: unknown): string | undefined => {
   if (named.some((value) => value !== first)) return undefined;
 
   return first;
+};
+
+/* ------------------------------------------------------------------ events */
+
+/** Every event the machine acts on, and the event it becomes. Anything else is not read. */
+export const BILLING_EVENT_TYPES = [
+  'checkout.session.completed',
+  'checkout.session.async_payment_succeeded',
+  'customer.subscription.created',
+  'customer.subscription.updated',
+  'customer.subscription.deleted',
+  'invoice.payment_failed',
+  'invoice.paid',
+  'invoice.payment_succeeded',
+] as const;
+
+const envelope = z.object({
+  type: z.string(),
+  created: z.number().int().nonnegative(),
+  livemode: z.boolean(),
+  data: z.object({ object: z.unknown() }),
+});
+
+/** Ids arrive as strings in a webhook; an expanded object is not something we asked for. */
+const id = z.string().min(1);
+
+const session = z.object({
+  mode: z.string(),
+  customer: id,
+  subscription: id,
+  payment_status: z.enum(['paid', 'unpaid', 'no_payment_required']),
+  metadata: z.record(z.string(), z.string()).nullish(),
+});
+
+const subscription = z.object({
+  id,
+  customer: id,
+  status: z.string(),
+  items: z.object({
+    data: z.array(z.object({ price: z.object({ lookup_key: z.string().nullish() }) })),
+  }),
+});
+
+/**
+ * An invoice's subscription, where the pinned API version carries it
+ * (`parent.subscription_details`), or where older versions did.
+ */
+const invoice = z.object({
+  customer: id,
+  subscription: id.nullish(),
+  parent: z.object({ subscription_details: z.object({ subscription: id }).nullish() }).nullish(),
+});
+
+export interface ReadBillingEvent {
+  readonly event: BillingEvent;
+  /** Test mode or live: the effect refuses the wrong one for its stage (§5.2b). */
+  readonly livemode: boolean;
+}
+
+/**
+ * A verified Stripe event, as the state machine reads it — or `undefined` for
+ * a type it does not act on, a Checkout that is not a subscription's (P5-11a's
+ * top-ups are paid in `payment` mode), or a shape it cannot read.
+ *
+ * `undefined` is not an error: the effect acknowledges it and changes nothing.
+ * A shape it cannot read for a type it *does* act on is worth an alarm, and
+ * the effect logs those apart.
+ */
+export const readBillingEvent = (payload: unknown): ReadBillingEvent | undefined => {
+  const outer = envelope.safeParse(payload);
+
+  if (!outer.success) return undefined;
+
+  const { type, created, livemode, data } = outer.data;
+  const occurredAt = new Date(created * 1000);
+  const read = (event: BillingEvent): ReadBillingEvent => ({ event, livemode });
+
+  switch (type) {
+    case 'checkout.session.completed':
+    case 'checkout.session.async_payment_succeeded': {
+      const parsed = session.safeParse(data.object);
+
+      if (!parsed.success || parsed.data.mode !== 'subscription') return undefined;
+
+      const { customer, subscription: subscriptionId, payment_status, metadata } = parsed.data;
+      const plan = metadata?.[STRIPE_PLAN_KEY];
+
+      return read({
+        kind: 'checkout_completed',
+        occurredAt,
+        customerId: customer,
+        subscriptionId,
+        plan: PLAN_IDS.includes(plan as PlanId) ? (plan as PlanId) : undefined,
+        paid: payment_status !== 'unpaid',
+      });
+    }
+
+    case 'customer.subscription.created':
+    case 'customer.subscription.updated':
+    case 'customer.subscription.deleted': {
+      const parsed = subscription.safeParse(data.object);
+
+      if (!parsed.success) return undefined;
+
+      const { id: subscriptionId, customer, status, items } = parsed.data;
+
+      if (type === 'customer.subscription.deleted') {
+        return read({
+          kind: 'subscription_ended',
+          occurredAt,
+          customerId: customer,
+          subscriptionId,
+        });
+      }
+
+      return read({
+        kind: 'subscription_changed',
+        occurredAt,
+        customerId: customer,
+        subscriptionId,
+        stripeStatus: status,
+        plan: planForLookupKey(items.data[0]?.price.lookup_key),
+      });
+    }
+
+    case 'invoice.payment_failed':
+    case 'invoice.paid':
+    case 'invoice.payment_succeeded': {
+      const parsed = invoice.safeParse(data.object);
+
+      if (!parsed.success) return undefined;
+
+      const subscriptionId =
+        parsed.data.parent?.subscription_details?.subscription ?? parsed.data.subscription;
+
+      /* An invoice for no subscription — a one-off — is not the machine's. */
+      if (subscriptionId === undefined || subscriptionId === null) return undefined;
+
+      return read({
+        kind: type === 'invoice.payment_failed' ? 'payment_failed' : 'payment_succeeded',
+        occurredAt,
+        customerId: parsed.data.customer,
+        subscriptionId,
+      });
+    }
+
+    default:
+      return undefined;
+  }
 };

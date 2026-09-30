@@ -41,7 +41,7 @@ const winery = async () => {
   const origin = `https://www.w${tenantId.slice(0, 8)}.example`;
 
   await admin().execute(sql`
-    INSERT INTO tenants (id, name, slug, status) VALUES (${tenantId}, 'Cantina', ${`c-${tenantId}`}, 'ACTIVE')
+    INSERT INTO tenants (id, name, slug, status, stripe_subscription_id) VALUES (${tenantId}, 'Cantina', ${`c-${tenantId}`}, 'ACTIVE', 'sub_' || gen_random_uuid())
   `);
   await admin().execute(sql`
     INSERT INTO tenant_domains (tenant_id, origin, registrable_domain, status, verified_at)

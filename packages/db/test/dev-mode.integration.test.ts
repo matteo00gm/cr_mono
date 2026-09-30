@@ -51,7 +51,7 @@ const winery = async (): Promise<{ tenantId: string; key: string }> => {
   const key = publicKey();
 
   await adminDb.execute(sql`
-    INSERT INTO tenants (id, name, slug, status) VALUES (${tenantId}::uuid, 'Cantina', ${`dev-${tenantId}`}, 'ACTIVE')
+    INSERT INTO tenants (id, name, slug, status, stripe_subscription_id) VALUES (${tenantId}::uuid, 'Cantina', ${`dev-${tenantId}`}, 'ACTIVE', 'sub_' || gen_random_uuid())
   `);
   await adminDb.execute(sql`
     INSERT INTO widget_keys (tenant_id, public_key, secret_key_hash, secret_key_prefix, secret_key_last4)

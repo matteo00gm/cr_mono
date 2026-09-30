@@ -272,7 +272,16 @@ export {
   type TurnstileSignals,
   type TurnstileState,
 } from './turnstile.js';
-export { readBillingState, type BillingState } from './billing.js';
+export {
+  readBillingSnapshot,
+  readBillingState,
+  startTrial,
+  writeBillingChange,
+  type BillingChangeRow,
+  type BillingSnapshotRow,
+  type BillingState,
+  type BillingWriteRefusal,
+} from './billing.js';
 
 export {
   countDomains,
