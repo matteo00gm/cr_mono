@@ -418,6 +418,19 @@ export const billingPortalResponse = z.strictObject({
 });
 
 export type BillingPortalResponse = z.infer<typeof billingPortalResponse>;
+
+/**
+ * A plan change, asked for (P5-09). `now` is an upgrade — prorated, with the
+ * new limits as soon as Stripe confirms the payment; `period_end` is a
+ * downgrade, which takes effect at `effectiveAt` and not before.
+ */
+export const billingPlanChangeResponse = z.strictObject({
+  plan: z.enum(['CANTINA', 'ECOMMERCE']),
+  effective: z.enum(['now', 'period_end']),
+  effectiveAt: z.iso.datetime().nullable(),
+});
+
+export type BillingPlanChangeResponse = z.infer<typeof billingPlanChangeResponse>;
 export type IssuedKeysResponse = z.infer<typeof issuedKeysResponse>;
 export type Product = z.infer<typeof productSchema>;
 
@@ -841,6 +854,7 @@ export const DASHBOARD_RESPONSES = {
   'POST /v1/dashboard/domains/claims/:id/withdraw': claimWithdrawnResponse,
   'POST /v1/dashboard/billing/checkout': billingCheckoutResponse,
   'POST /v1/dashboard/billing/portal': billingPortalResponse,
+  'POST /v1/dashboard/billing/plan': billingPlanChangeResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

@@ -1,9 +1,15 @@
-import type { BillingCheckoutResponse, BillingPortalResponse } from '@catalogorosso/api-client';
+import type {
+  BillingCheckoutResponse,
+  BillingPlanChangeResponse,
+  BillingPortalResponse,
+} from '@catalogorosso/api-client';
 import {
   BILLING_PATH,
   checkoutSessionParams,
   ConflictError,
   NotFoundError,
+  PLAN_IDS,
+  planForLookupKey,
   PLANS,
   type PlanId,
 } from '@catalogorosso/core';
@@ -45,8 +51,20 @@ export const NO_BILLING_ACCOUNT =
   'This winery has not bought a plan yet, so there is no billing account to manage. ' +
   'Choose a plan on the Fatturazione screen first.';
 
+/** A plan change needs a subscription to change (P5-09). */
+export const NO_SUBSCRIPTION =
+  'This winery has no subscription to change. Choose a plan on the Fatturazione screen first.';
+
+export const SAME_PLAN = 'This winery is already on that plan.';
+
 export interface BillingPort {
   readonly checkout: (tenantId: string, plan: PlanId) => Promise<BillingCheckoutResponse>;
+  /**
+   * Move to another plan (P5-09): an upgrade now, prorated; a downgrade at the
+   * end of the period already paid for. Either way our plan record moves only
+   * when Stripe's webhook confirms it (P5-05).
+   */
+  readonly changePlan: (tenantId: string, plan: PlanId) => Promise<BillingPlanChangeResponse>;
   /** Stripe's Billing Portal, for the payment method, invoices and cancellation (P5-08). */
   readonly portal: (tenantId: string) => Promise<BillingPortalResponse>;
 }
@@ -64,6 +82,7 @@ export class BillingPortNotConfiguredError extends Error {
 
 export const unconfiguredBilling: BillingPort = {
   checkout: () => Promise.reject(new BillingPortNotConfiguredError()),
+  changePlan: () => Promise.reject(new BillingPortNotConfiguredError()),
   portal: () => Promise.reject(new BillingPortNotConfiguredError()),
 };
 
@@ -81,6 +100,63 @@ const priceList = z.object({
 });
 
 const checkoutSession = z.object({ id: z.string(), url: z.url() });
+
+/**
+ * A subscription, as far as a plan change reads it: its one item — the price
+ * and the period it is paid to, which the pinned version carries on the item —
+ * and the schedule a pending downgrade left on it.
+ */
+const subscriptionItem = z.object({
+  id: z.string(),
+  current_period_end: z.number().int(),
+  price: z.object({ id: z.string(), lookup_key: z.string().nullable() }),
+});
+
+/** At least one of each: a tuple with a rest, so the type knows what the parse checked. */
+const subscription = z.object({
+  id: z.string(),
+  schedule: z.string().nullable(),
+  items: z.object({ data: z.tuple([subscriptionItem], subscriptionItem) }),
+});
+
+const phase = z.object({ start_date: z.number().int(), end_date: z.number().int() });
+
+const schedule = z.object({ id: z.string(), phases: z.tuple([phase], phase) });
+
+const acknowledged = z.object({ id: z.string() });
+
+/** Where a plan sits in the ladder: `PLAN_IDS` is ordered cheapest first. */
+const rank = (plan: PlanId): number => PLAN_IDS.indexOf(plan);
+
+/**
+ * The active price under a plan's lookup key (P5-01), or a refusal that tells
+ * the owner payments are unavailable and the operator what to run.
+ */
+const currentPriceId = async (stripe: StripeClient, plan: PlanId): Promise<string> => {
+  const { lookupKey } = PLANS[plan];
+  const prices = await stripe.get(
+    '/v1/prices',
+    { lookup_keys: [lookupKey], active: true, limit: 1 },
+    priceList,
+  );
+  const price = prices.data.find((candidate) => candidate.lookup_key === lookupKey);
+
+  if (price === undefined) {
+    /*
+     * The account has never had `stripe-setup.mjs --apply` run against it.
+     * The seller is told what they can act on; the operator is told what to
+     * run, by a log line an alarm can match.
+     */
+    logger.error(
+      { kind: 'stripe_price_missing', type: plan },
+      'no active Stripe price under a plan lookup key; run scripts/stripe-setup.mjs (P5-01)',
+    );
+
+    throw new ConflictError(BILLING_UNAVAILABLE);
+  }
+
+  return price.id;
+};
 
 /**
  * A portal session, with the configuration it was opened under expanded — the
@@ -110,34 +186,14 @@ export const createBillingPort = ({
 
     if (state.stripeSubscriptionId !== null) throw new ConflictError(ALREADY_SUBSCRIBED);
 
-    const { lookupKey } = PLANS[plan];
-    const prices = await stripe.get(
-      '/v1/prices',
-      { lookup_keys: [lookupKey], active: true, limit: 1 },
-      priceList,
-    );
-    const price = prices.data.find((candidate) => candidate.lookup_key === lookupKey);
-
-    if (price === undefined) {
-      /*
-       * The account has never had `stripe-setup.mjs --apply` run against it.
-       * The seller is told what they can act on; the operator is told what to
-       * run, by a log line an alarm can match.
-       */
-      logger.error(
-        { kind: 'stripe_price_missing', type: plan },
-        'no active Stripe price under a plan lookup key; run scripts/stripe-setup.mjs (P5-01)',
-      );
-
-      throw new ConflictError(BILLING_UNAVAILABLE);
-    }
+    const priceId = await currentPriceId(stripe, plan);
 
     const session = await stripe.post(
       '/v1/checkout/sessions',
       checkoutSessionParams({
         tenantId,
         plan,
-        priceId: price.id,
+        priceId,
         customerId: state.stripeCustomerId,
         locale: state.locale,
         dashboardOrigin,
@@ -146,6 +202,102 @@ export const createBillingPort = ({
     );
 
     return { url: session.url };
+  },
+
+  async changePlan(tenantId, plan) {
+    if (stripe === undefined) throw new ConflictError(BILLING_UNAVAILABLE);
+
+    const state = await readState(tenantId);
+
+    if (state === undefined) throw new NotFoundError();
+    if (state.stripeSubscriptionId === null) throw new ConflictError(NO_SUBSCRIPTION);
+
+    const live = await stripe.get(
+      `/v1/subscriptions/${encodeURIComponent(state.stripeSubscriptionId)}`,
+      {},
+      subscription,
+    );
+    /* The schema's tuple: a subscription with no item is a response we cannot read. */
+    const [item] = live.items.data;
+
+    /*
+     * The plan the winery is on, as Stripe bills it: our record moves only on
+     * the webhook, so a change made a moment ago is Stripe's before it is ours.
+     */
+    const current = planForLookupKey(item.price.lookup_key) ?? state.plan;
+
+    if (current === plan) throw new ConflictError(SAME_PLAN);
+
+    const priceId = await currentPriceId(stripe, plan);
+
+    /*
+     * **Any pending downgrade is released first**, whichever way this goes: an
+     * upgrade replaces it, and a second downgrade is built afresh rather than
+     * patched onto a schedule whose phases we would have to read and trust.
+     */
+    if (live.schedule !== null) {
+      await stripe.post(
+        `/v1/subscription_schedules/${encodeURIComponent(live.schedule)}/release`,
+        {},
+        acknowledged,
+      );
+    }
+
+    if (current === null || rank(plan) > rank(current)) {
+      /*
+       * **Up, now, prorated**: the winery pays the difference for the rest of
+       * the period and gets the higher limits when Stripe's webhook confirms
+       * it — not before, so our limits never exceed what Stripe agrees is paid.
+       */
+      await stripe.post(
+        `/v1/subscriptions/${encodeURIComponent(live.id)}`,
+        {
+          items: [{ id: item.id, price: priceId }],
+          proration_behavior: 'create_prorations',
+        },
+        acknowledged,
+      );
+
+      return { plan, effective: 'now', effectiveAt: null };
+    }
+
+    /*
+     * **Down, at the end of the period already paid for**, and never refunded:
+     * a schedule whose first phase is what the winery has now, to the end of
+     * its period, and whose second is the lower price. Stripe moves it on the
+     * day, and the webhook that follows moves our record.
+     */
+    const created = await stripe.post(
+      '/v1/subscription_schedules',
+      { from_subscription: live.id },
+      schedule,
+    );
+    const [paidPhase] = created.phases;
+
+    await stripe.post(
+      `/v1/subscription_schedules/${encodeURIComponent(created.id)}`,
+      {
+        end_behavior: 'release',
+        phases: [
+          {
+            items: [{ price: item.price.id, quantity: 1 }],
+            start_date: paidPhase.start_date,
+            end_date: paidPhase.end_date,
+          },
+          {
+            items: [{ price: priceId, quantity: 1 }],
+            proration_behavior: 'none',
+          },
+        ],
+      },
+      acknowledged,
+    );
+
+    return {
+      plan,
+      effective: 'period_end',
+      effectiveAt: new Date(item.current_period_end * 1000).toISOString(),
+    };
   },
 
   async portal(tenantId) {

@@ -102,6 +102,95 @@
           }
         }
       },
+      "/v1/dashboard/billing/plan": {
+        "post": {
+          "summary": "Change plan",
+          "description": "Body `{\"plan\": \"CANTINA\"}` or `{\"plan\": \"ECOMMERCE\"}`. Up is now: the difference for the rest of the period is charged, and the higher limits apply as soon as Stripe confirms it. Down is at the end of the period already paid for (`effectiveAt`), with nothing refunded; until then the winery keeps what it has. A downgrade asked for again, or an upgrade after one, replaces the one pending. Needs a fresh second factor. A winery with no subscription, or already on the plan, is refused with a 409.\n\nRequires the `billing:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.\n\nNeeds a second factor proved within the last 15 minutes; otherwise 403 with code `step_up_required`. Verify a code and send the same request again.",
+          "operationId": "postV1DashboardBillingPlan",
+          "x-required-capability": "billing:manage",
+          "x-requires-step-up": true,
+          "responses": {
+            "200": {
+              "description": "Change plan",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "plan": {
+                        "type": "string",
+                        "enum": [
+                          "CANTINA",
+                          "ECOMMERCE"
+                        ]
+                      },
+                      "effective": {
+                        "type": "string",
+                        "enum": [
+                          "now",
+                          "period_end"
+                        ]
+                      },
+                      "effectiveAt": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "plan",
+                      "effective",
+                      "effectiveAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "plan": "CANTINA",
+                    "effective": "period_end",
+                    "effectiveAt": "2026-11-01T00:00:00.000Z"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/billing/portal": {
         "post": {
           "summary": "Manage the winery's subscription",

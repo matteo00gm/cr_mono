@@ -1406,7 +1406,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P5-06 | 🔒 Webhook fixture test suite | every transition; unsigned and mis-signed rejected | P5-05 |
 | ✅ P5-07 | Test: DISABLED propagation split | chat refused immediately; `/config` may lag 60 s | P5-05,P2-13 |
 | ✅ P5-08 | Customer Portal link endpoint | | P5-02 |
-| P5-09 | Upgrade (prorated) / downgrade (period end) | | P5-05 |
+| ✅ P5-09 | Upgrade (prorated) / downgrade (period end) | | P5-05 |
 | P5-10 | Downgrade guard | blocked when catalog (>300/2,500 SKUs) or domains exceed target plan | P5-09 |
 | P5-11 | Quota enforcement wiring | hard cap at 100% messages; zero model calls past cap | P2-36 |
 | P5-11a | Message top-up purchase | €15 for 1,000 extra messages one-time checkout + credit counter | P5-11 |
@@ -7158,6 +7158,16 @@ Also send the P0-64 payment-failed email on entry to `PAST_DUE`, since the tenan
 **Files.** `billing.ts`, tests. **~100 lines.**
 
 **Carried from P4-11.** A plan change is one of §3's sensitive actions, and its route did not exist when step-up landed: mount `requireStepUp` after the capability guard, and add the route to the list `step-up.test.ts` walks.
+
+**As built (2026-10-01).** `POST /v1/dashboard/billing/plan` (`billing:manage`, step-up — P4-11's carried item, and on the list `step-up.test.ts` walks), `changePlan` on the billing port.
+
+- **Up, now, prorated**: the subscription's one item moves to the higher price with `create_prorations`. **Down, at period end, nothing refunded**: a subscription schedule is made from the subscription, its first phase what the winery has now until its period ends, its second the lower price with `proration_behavior: 'none'`, and `end_behavior: 'release'` so the schedule lets go once it has moved. The answer says which: `effective: 'now'`, or `'period_end'` with `effectiveAt` — the period end, which the pinned API version carries on the subscription item.
+- **Never our record**: the plan moves only when the webhook reports the new price (P5-05), so our limits never exceed what Stripe agrees is paid and there is one writer to test.
+- **"The plan the winery is on" is Stripe's**, read from the subscription's price, not our record — which lags a moment behind any change just made. Asking for that plan again is a 409, and so is a winery with no subscription (Checkout is the way in).
+- **A pending downgrade is released first**, whichever way the next change goes: an upgrade replaces it, and a second downgrade is built afresh rather than patched onto phases we would have to read and trust.
+- **The dashboard's effective-date display** is P5-12's screen; the route returns the date it shows.
+
+**Verified.** The port against a scripted Stripe and the route; 11 mutants, 11 killed — an upgrade not prorated, a downgrade applied now, every change treated as a downgrade, a pending downgrade kept, a downgrade refunding, the schedule cancelling instead of releasing, our lagging record trusted over Stripe, the same plan bought again, no subscription sent to Stripe, the effective date not the period end, and no step-up.
 
 ---
 
