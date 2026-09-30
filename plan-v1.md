@@ -1400,7 +1400,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P5-02a | Italian tax metadata fields on Checkout | collects optional P.IVA/CF, Codice Destinatario SdI or PEC | P5-02 |
 | ✅ P5-03 | 🔒 Webhook: raw-body signature verify | before any body parser touches it | P5-01 |
 | P5-03a | 🔒 SdI / FatturaPA e-invoicing bridge | async job on `invoice.paid` → Fatture in Cloud API to emit FatturaPA XML | P5-03,P5-04 |
-| P5-04 | 🔒 Webhook idempotency | `processed_webhooks`, replay is a no-op | P5-03 |
+| ✅ P5-04 | 🔒 Webhook idempotency | `processed_webhooks`, replay is a no-op | P5-03 |
 | P5-05 | ⛔ Status state machine | TRIALING→ACTIVE→PAST_DUE→DISABLED→CANCELED; **adds `tenants.trial_ends_at`** and the `tenant_status_coherent` CHECK that reads it (§5.2b); `livemode` + customer↔tenant binding | P5-04 |
 | P5-05a | 🔒 Payment-failure blocking | **no grace** — `PAST_DUE` blocks the widget on first failure; dashboard stays open; Stripe retries restore automatically (§5.2b) | P5-05 |
 | P5-06 | 🔒 Webhook fixture test suite | every transition; unsigned and mis-signed rejected | P5-05 |
@@ -7003,6 +7003,23 @@ Save these fields to `tenants` (`vat_id`, `sdi_code`, `pec_address` columns, nul
 **Tests.** Replaying an event is a no-op returning 200; concurrent duplicate deliveries apply once (run two in parallel against real Postgres).
 
 **Files.** `webhooks/stripe.ts`, tests. **~70 lines.**
+
+**As built (2026-09-30).** `withTenantWebhookEvent` in `packages/db/src/webhooks.ts`, `tenantOfStripeEvent` in `packages/core/src/billing/stripe-events.ts`, `createStripeEventsPort` in `apps/api/src/stripe-events.ts`, and **ADR 0029**.
+
+- **⚠ The claim moves inside the winery's transaction** *(design, ADR 0029)*. The row asks for the claim and the state change in one transaction, and the state change is on `tenants`, under RLS — while `withWebhookEvent` is un-scoped on purpose and says a handler reaching a tenant table from inside it would get nothing back. So the Stripe variant is `withTenant` for the winery the verified event names, with the claim as its first statement. `processed_webhooks` has no policy, so the claim behaves as it does un-scoped; the effect runs under the tenant policy like any other write. **Not a new scope and no new GUC.**
+- **⚠ The winery comes from the event, which P0-48 forbids in general** — and CLAUDE.md's invariant now names this as its one exception, with the ADR. We wrote the id at Checkout (P5-02), from the session's own tenant; the signature proves Stripe is repeating it. `tenantOfStripeEvent` reads `client_reference_id` and `metadata.tenant_id` only (on the object, or on an invoice's `parent.subscription_details`), a UUID and nothing else, and names nobody when those places disagree. P5-05 still binds it to the customer on file before applying anything.
+- **An event that names nobody is never claimed**: there is no winery transaction to claim it in, and nothing it could change. It is acknowledged (200) and logged as `stripe_event_unattributed` with its type, which is also what an alarm should watch — Stripe moving where it carries metadata would show up there, not as a misapplied event.
+- **A winery that no longer exists** has no row for the effect to reach; the claim records the event as handled, which it was.
+- **The port requires its effect**, so it cannot be built to claim and do nothing — the one state the ledger must never reach. **It is not wired in the composition root yet**: P5-05 wires it with the state machine, and until then a verified event stays a 500 that Stripe retries (P5-03).
+- **T6's P5-04 gap is closed** in the threat matrix.
+
+**Verified.** Against real Postgres as `app_rw`: the effect reaches the named winery and no other; a redelivery does not re-run it; an effect that throws leaves nothing claimed and the redelivery applies; **twenty simultaneous deliveries apply once**; a winery that is gone is claimed with nothing changed; a malformed id is refused before any claim; Resend's and Stripe's ids share one ledger without colliding. Through the port with its default claim: a replay is answered as a duplicate and changes nothing, ten simultaneous copies apply once, and an unattributed event leaves no row in `processed_webhooks`. 10 mutants, 10 killed.
+
+| Mutation | Caught by |
+|---|---|
+| Any string taken for a winery · disagreeing places believed · each of the three places ignored | `stripe-events.test.ts` (core) |
+| The scoped claim skipped · the effect run before the claim | `tenant-webhooks.integration.test.ts` |
+| The wrong provider claimed · an unattributed event applied · a duplicate reported as applied | `stripe-events.test.ts` (api) |
 
 ---
 

@@ -16,7 +16,9 @@ Hono on Lambda. Two route surfaces, one function.
   route throws while the container is initialising (P0-49).
 - Never read a tenant id from request input. An ESLint rule catches the common
   shapes; `middleware/tenant.ts` is its single exception, because it reads a
-  _selection_ among rows the database already agrees exist (P0-48).
+  _selection_ among rows the database already agrees exist (P0-48). A verified
+  Stripe event names its winery through `tenantOfStripeEvent`, which ADR 0029
+  allows and nothing else may copy.
 - Tenant and role come from the same `memberships` row, together. A role cached
   per user grants somebody who is EDITOR on one winery and OWNER on another the
   higher role on both (P0-47).

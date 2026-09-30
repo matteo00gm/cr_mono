@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 
 import { getDb, type Database } from './client.js';
 import type { Connection } from './email-suppressions.js';
-import type { DbTransaction } from './with-tenant.js';
+import { withTenant, type DbTransaction } from './with-tenant.js';
 
 /**
  * The inbound-webhook idempotency ledger (P0-64b, and P0-33 after it).
@@ -91,3 +91,36 @@ export const withWebhookEvent = async <T>(
 
     return { claimed: true, result: await apply(tx) };
   });
+
+/**
+ * `withWebhookEvent`, inside a winery's scope (P5-04, ADR 0029).
+ *
+ * For a provider whose events change a tenant table — Stripe's move
+ * `tenants.status`. The claim is the transaction's first statement and the
+ * effect follows it, exactly as above, so a failed effect rolls the claim back
+ * and the redelivery applies cleanly. The difference is the transaction:
+ * `withTenant` for the winery the verified event names, so the effect runs
+ * under the tenant policy like any other write. `processed_webhooks` has no
+ * policy, so the claim behaves as it does un-scoped.
+ *
+ * **Not a new scope and no new GUC.** It is `withTenant`, with the ledger's
+ * claim as its first statement. Which winery to open is the caller's to decide
+ * from the verified event (`tenantOfStripeEvent`), and a winery that does not
+ * exist has no row for the effect to reach: the claim then records that the
+ * event was handled, which it was.
+ */
+export const withTenantWebhookEvent = <T>(
+  tenantId: string,
+  event: WebhookEvent,
+  apply: (tx: DbTransaction) => Promise<T>,
+  database: Database = getDb(),
+): Promise<ClaimedRun<T>> =>
+  withTenant(
+    tenantId,
+    async (tx): Promise<ClaimedRun<T>> => {
+      if (!(await claimWebhookEvent(tx, event))) return { claimed: false };
+
+      return { claimed: true, result: await apply(tx) };
+    },
+    database,
+  );
