@@ -1,0 +1,323 @@
+{
+  "_comment": "P4-17. The T1-T10 matrix: for each §3.0 threat, the control and the tests that are its evidence. One source for the named spec files beside this, for `pnpm test:security`, and for docs/security/threat-coverage.md. `runner` is how a file is run: `unit` (vitest.config.ts), `integration` (vitest.integration.config.ts, Docker) or `e2e` (Playwright, its own CI job). `gaps` are named, never hidden: each is work a later row owns.",
+  "threats": [
+    {
+      "id": "T1",
+      "slug": "widget-theft",
+      "goal": "Embed a stolen `pk_` on their own site",
+      "control": "Global-unique verified origin + server-side `Origin` check + origin-bound token",
+      "evidence": [
+        {
+          "path": "apps/api/test/widget-cors.test.ts",
+          "runner": "unit",
+          "covers": "Origin checked server-side, exact echo, one refusal for every wrong pair"
+        },
+        {
+          "path": "apps/api/test/widget-cors.integration.test.ts",
+          "runner": "integration",
+          "covers": "the same check over the real accessor and policies, incl. every P2-06 bypass string"
+        },
+        {
+          "path": "packages/db/test/widget-resolution.integration.test.ts",
+          "runner": "integration",
+          "covers": "a key resolves only with its own tenant's verified origin"
+        },
+        {
+          "path": "packages/db/test/tenant-domains.integration.test.ts",
+          "runner": "integration",
+          "covers": "one origin, one tenant: the global unique index"
+        },
+        {
+          "path": "apps/api/test/widget-token.test.ts",
+          "runner": "unit",
+          "covers": "a token presented from another origin, or with none, is refused"
+        },
+        {
+          "path": "apps/e2e/test/cross-origin.spec.ts",
+          "runner": "e2e",
+          "covers": "a real browser on an unverified origin is refused"
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "T2",
+      "slug": "cross-tenant-read",
+      "goal": "Read another tenant's catalog via the API",
+      "control": "RLS + server-derived tenant + IDOR matrix",
+      "evidence": [
+        {
+          "path": "packages/db/test/rls-isolation.integration.test.ts",
+          "runner": "integration",
+          "covers": "every tenant table hides, and refuses writes to, another tenant's rows"
+        },
+        {
+          "path": "packages/db/test/rls-coverage.integration.test.ts",
+          "runner": "integration",
+          "covers": "every table with a tenant_id carries a forced policy, found by reflection"
+        },
+        {
+          "path": "apps/api/test/idor-matrix.integration.test.ts",
+          "runner": "integration",
+          "covers": "every id route answers another winery's id with a plain 404"
+        },
+        {
+          "path": "apps/api/test/tenant-from-input.test.ts",
+          "runner": "unit",
+          "covers": "no handler reads a tenant id from the request"
+        },
+        {
+          "path": "apps/api/test/tenant-from-input.integration.test.ts",
+          "runner": "integration",
+          "covers": "a tenant id in the request changes nothing, against real memberships"
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "T3",
+      "slug": "cors-poisoning",
+      "goal": "Poison the CORS allowlist with a lookalike domain",
+      "control": "Exact-set origin match, PSL validation, DNS/well-known verification",
+      "evidence": [
+        {
+          "path": "packages/security/test/origin-normalize.test.ts",
+          "runner": "unit",
+          "covers": "one canonical origin per input; lookalikes, IP literals and public suffixes refused"
+        },
+        {
+          "path": "packages/security/test/verify-dns.test.ts",
+          "runner": "unit",
+          "covers": "the TXT proof, from a pinned public resolver, compared in constant time"
+        },
+        {
+          "path": "packages/security/test/verify-wellknown.test.ts",
+          "runner": "unit",
+          "covers": "the file proof, through guardedFetch"
+        },
+        {
+          "path": "packages/security/test/guarded-fetch.test.ts",
+          "runner": "unit",
+          "covers": "no verification fetch reaches our own network, rebinding included"
+        },
+        {
+          "path": "packages/db/test/domains.integration.test.ts",
+          "runner": "integration",
+          "covers": "an origin held elsewhere is refused without saying by whom"
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "T4",
+      "slug": "quota-burn",
+      "goal": "Burn a competitor's message quota",
+      "control": "Multi-dimension rate limits (session, IP, tenant), quota gate before model call",
+      "evidence": [
+        {
+          "path": "packages/security/test/widget-limits.test.ts",
+          "runner": "unit",
+          "covers": "which dimensions each endpoint draws, the month as a calendar window"
+        },
+        {
+          "path": "apps/api/test/widget-rate-limit.test.ts",
+          "runner": "unit",
+          "covers": "each dimension trips on its own, through the real middleware"
+        },
+        {
+          "path": "packages/testing/test/rate-limit.integration.test.ts",
+          "runner": "integration",
+          "covers": "the conformance suite against the Postgres limiter, windows computed in SQL"
+        },
+        {
+          "path": "apps/api/test/quota.integration.test.ts",
+          "runner": "integration",
+          "covers": "the monthly cap is read from billed usage"
+        },
+        {
+          "path": "apps/api/test/chat-port.test.ts",
+          "runner": "unit",
+          "covers": "a spent month is refused before the provider is built or called"
+        }
+      ],
+      "gaps": [
+        {
+          "what": "The k6 abuse scenario that validates T4 under real concurrency",
+          "row": "P7-04"
+        }
+      ]
+    },
+    {
+      "id": "T5",
+      "slug": "prompt-injection",
+      "goal": "Steer the model via product descriptions",
+      "control": "Retrieved content treated as data; output allowlisted against candidate set",
+      "evidence": [
+        {
+          "path": "packages/core/test/rag/prompt-injection.test.ts",
+          "runner": "unit",
+          "covers": "catalogue text cannot carry a live delimiter, a comment or a fence into the prompt"
+        },
+        {
+          "path": "packages/core/test/rag/prompt.test.ts",
+          "runner": "unit",
+          "covers": "the system prompt is byte-identical whatever the catalogue says"
+        },
+        {
+          "path": "packages/core/test/rag/allowlist-attacks.test.ts",
+          "runner": "unit",
+          "covers": "a steered answer naming products outside the candidates is cut"
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "T6",
+      "slug": "free-premium",
+      "goal": "Get free premium tier",
+      "control": "Stripe webhook signature + idempotency; status never client-supplied",
+      "evidence": [
+        {
+          "path": "packages/security/test/threats/T6-free-premium.test.ts",
+          "runner": "unit",
+          "covers": "no code outside the named writers sets a tenant's status or plan"
+        },
+        {
+          "path": "apps/api/test/tenant-from-input.test.ts",
+          "runner": "unit",
+          "covers": "nothing tenant-shaped is read from a request"
+        }
+      ],
+      "gaps": [
+        {
+          "what": "Stripe webhook raw-body signature verification",
+          "row": "P5-03"
+        },
+        {
+          "what": "Webhook idempotency: a replayed event is a no-op",
+          "row": "P5-04"
+        },
+        {
+          "what": "Every status transition driven only by a verified event",
+          "row": "P5-06"
+        }
+      ]
+    },
+    {
+      "id": "T7",
+      "slug": "storefront-xss",
+      "goal": "XSS the seller's storefront through the widget",
+      "control": "Shadow DOM, text nodes only, no `innerHTML`, output sanitization",
+      "evidence": [
+        {
+          "path": "apps/widget/test/xss.test.tsx",
+          "runner": "unit",
+          "covers": "hostile text renders as text, with no inline handler, and data: or vbscript: URLs are dropped"
+        },
+        {
+          "path": "apps/api/test/chat-port.test.ts",
+          "runner": "unit",
+          "covers": "a card is filled from the catalogue, never from what the model said"
+        },
+        {
+          "path": "packages/security/test/threats/T7-storefront-xss.test.ts",
+          "runner": "unit",
+          "covers": "the lint rule banning innerHTML in the widget is in force"
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "T8",
+      "slug": "privilege-escalation",
+      "goal": "Escalate `EDITOR` → `OWNER`, or act with no membership at all",
+      "control": "Declarative capability table; membership + role checked on every endpoint",
+      "evidence": [
+        {
+          "path": "apps/api/test/rbac-matrix.test.ts",
+          "runner": "unit",
+          "covers": "every (role × endpoint) pair, generated from the route table"
+        },
+        {
+          "path": "apps/api/test/capability.test.ts",
+          "runner": "unit",
+          "covers": "a capability guard allows, refuses with 403, and names nothing it withholds"
+        },
+        {
+          "path": "packages/security/test/capabilities.test.ts",
+          "runner": "unit",
+          "covers": "the capability table itself"
+        },
+        {
+          "path": "apps/api/test/step-up.test.ts",
+          "runner": "unit",
+          "covers": "the routes that change who can act need a fresh second factor"
+        },
+        {
+          "path": "packages/db/test/last-owner.integration.test.ts",
+          "runner": "integration",
+          "covers": "the last owner can be neither removed nor demoted, under concurrency"
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "T9",
+      "slug": "token-replay",
+      "goal": "Replay a captured session token",
+      "control": "Short TTL + `jti` + origin binding + revocation list",
+      "evidence": [
+        {
+          "path": "packages/security/test/tokens-keys.test.ts",
+          "runner": "unit",
+          "covers": "signature, algorithm allowlist, expiry and skew"
+        },
+        {
+          "path": "apps/api/test/widget-token.test.ts",
+          "runner": "unit",
+          "covers": "origin binding, jti revocation and the P4-06 cutoff on every call"
+        },
+        {
+          "path": "apps/api/test/widget-session.test.ts",
+          "runner": "unit",
+          "covers": "a continuation cannot outlive its revocation"
+        },
+        {
+          "path": "packages/db/test/token-revocations.integration.test.ts",
+          "runner": "integration",
+          "covers": "revocations are read under the tenant's policy"
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "T10",
+      "slug": "cross-tenant-exfiltration",
+      "goal": "Exfiltrate a tenant's data via a hallucinated SKU",
+      "control": "Every returned `productId` re-validated against tenant + candidate set",
+      "evidence": [
+        {
+          "path": "packages/core/test/rag/allowlist.test.ts",
+          "runner": "unit",
+          "covers": "every returned productId is checked against this turn's candidates"
+        },
+        {
+          "path": "packages/core/test/rag/allowlist-attacks.test.ts",
+          "runner": "unit",
+          "covers": "another tenant's, an invented and a stale id are all dropped"
+        },
+        {
+          "path": "packages/db/test/retrieval.integration.test.ts",
+          "runner": "integration",
+          "covers": "retrieval returns none of another winery's wines"
+        },
+        {
+          "path": "apps/api/test/chat-port.test.ts",
+          "runner": "unit",
+          "covers": "every card field comes from this tenant's catalogue"
+        }
+      ],
+      "gaps": []
+    }
+  ]
+}
