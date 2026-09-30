@@ -1395,7 +1395,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 
 | # | Task | How / notes | Deps |
 |---|---|---|---|
-| P5-01 | Stripe products/prices script | Cantina (€29/mo, 1.5k msg, 300 SKU) + E-comm (€79/mo, 6k msg, 2.5k SKU) | P0-11 |
+| ✅ P5-01 | Stripe products/prices script | Cantina (€29/mo, 1.5k msg, 300 SKU) + E-comm (€79/mo, 6k msg, 2.5k SKU) | P0-11 |
 | P5-02 | Checkout session endpoint | custom tax metadata fields (P.IVA/CF, SdI/PEC) | P5-01 |
 | P5-02a | Italian tax metadata fields on Checkout | collects optional P.IVA/CF, Codice Destinatario SdI or PEC | P5-02 |
 | P5-03 | 🔒 Webhook: raw-body signature verify | before any body parser touches it | P5-01 |
@@ -4854,7 +4854,7 @@ The window start is **computed in SQL from `now()`**, never passed from the appl
 **Decided (2026-09-15) — the numbers.** §3.6 named the dimensions and gave no figures, so these were placeholders until now. They are sized for §5.0's ten tenants, and the table in §3.6 gives the reason for each. The monthly caps are P5-01's allowances, 1,500 and 6,000, and the trial's 150; the placeholders had 1,000, 10,000 and 100, which contradicted P5-01. Three things stay open:
 - **The trial's cap is a total, the limiter's window is a month.** The 150-message trial lasts 14 days, and a trial that crosses a month boundary could send 300. P2-36's quota gate owns the trial total.
 - **Top-ups are not in the limiter.** "+1,000 messages for €15" raises a tenant's allowance, which a fixed table cannot express. Also P2-36.
-- **The plan allowances live in two places.** `WIDGET_LIMITS.messagesPerMonth` restates plan data that P5-01 puts in `packages/core/src/plans.ts`. When that exists, the widget table should read from it rather than repeat it.
+- **The plan allowances live in two places.** `WIDGET_LIMITS.messagesPerMonth` restates plan data that P5-01 puts in `packages/core/src/plans.ts`. When that exists, the widget table should read from it rather than repeat it. *(Closed by P5-01, the other way round: `packages/security` sits below core in the build graph and cannot import it, so the copy stays and `plans.test.ts` holds it equal to the plans.)*
 
 ---
 
@@ -6867,6 +6867,31 @@ Store the resulting price ids in SSM. Include the plan limits in `packages/core/
 **Tests.** Running twice creates nothing new; our plan config covers every created price (a test, so adding a Stripe price without limits fails CI).
 
 **Files.** `scripts/stripe-setup.ts`, `packages/core/src/plans.ts`, tests. **~120 lines.**
+
+**As built (2026-09-30).** `packages/core/src/plans.ts`, `packages/core/src/billing/stripe-catalog.ts` and `scripts/stripe-setup.mjs`. **Nothing was run against Stripe**: there is no key for any stage yet, and P1-47's rule covers real provider calls. The script is exercised end to end against a stand-in Stripe on loopback.
+
+- **⚠ No price ids in SSM** *(deviation)*. A Stripe price is immutable, so a new amount is a new price with the lookup key moved onto it — and an id stored in configuration goes stale the day a plan is repriced, silently selling new subscribers the old price. The lookup key is the contract: P5-02 asks Stripe for the active price under it, and a webhook turns a subscription back into a plan with `planForLookupKey`, which answers `undefined` for a key that is not ours rather than the nearest plan.
+- **`plans.ts` is the source, and the copies it cannot replace are pinned to it.** It holds the price, the lookup key and the limits for each plan, and the trial's. `DOMAIN_CAPS` now reads from it. Two copies cannot: `WIDGET_LIMITS.messagesPerMonth` is in `packages/security`, below core in the build graph, and `MAX_IMPORT_ROWS` is a browser subpath that imports nothing. `plans.test.ts` holds both equal to the plans, and holds `PLAN_IDS` equal to the `tenant_plan` enum and the limiter's tiers at the type level. It is itself a browser-safe subpath (`@catalogorosso/core/plans`) for the billing screen.
+- **"1 prod + 1 dev" is P4-19's shape, not a per-plan number** *(as built)*. `plans.ts` carries production domains only; staging origins have their own cap of two for every plan (`STAGING_DOMAIN_CAP`, P4-19), outside the plan.
+- **"Adding a Stripe price without limits fails CI"** is met from our side: the script creates prices from `plans.ts` and nowhere else, and every plan's amount and limits are checked to be whole and positive. A price somebody clicks into the Dashboard has no plan, and `planForLookupKey` will not grant it one.
+- **The reconciliation is in core, behind a port; the HTTP is in the script** *(deviation — the row said `stripe-setup.ts`)*. Core imports no vendor SDK, and the repo's operator scripts are `.mjs` over `dist` (like `widget-token-key.mjs`). No Stripe SDK was added: two endpoints did not justify it, and P5-02 decides whether the API needs one.
+- **Planned, then applied whole or not at all.** A dry run by default; `--apply` writes. A price that disagrees with its plan — product, amount, currency or interval — stops the run before *anything* is written, including a plan that only needed creating, because half a catalogue is harder to reason about than none. `--reprice` replaces it: a new price takes the key, and the old one stays active for the subscribers it has.
+- **Operator guard rails**, each tested from outside as an exit status: a live key is refused without `--live`; `STRIPE_API_BASE` (for the tests) accepts loopback over plain http only, because the key goes wherever it points; the key is never printed and is redacted from Stripe's own error text; an unknown flag is refused rather than a typo of `--apply` becoming a dry run; every write carries an idempotency key derived from what it writes; the API version is pinned (`2026-08-26.dahlia`, checked against Stripe's upgrade guide) so a Dashboard upgrade cannot change a response under us.
+- **⚠ Found here: `process.exit()` after `fetch` crashes Node on Windows** with 0xC0000409 instead of the status it was given — a libuv assertion on a pooled socket. The script throws a refusal and sets `process.exitCode` once it has fetched anything; `die` is used only before.
+- **⚠ Open: VAT-inclusive or exclusive is not decided.** §2b quotes €29 and €79 without saying. The prices leave `tax_behavior` unspecified, which Stripe allows setting exactly once later — so the decision is still open rather than made by default. It must be made before P5-02 turns on Stripe Tax.
+- **Open (operator):** run it per stage once a Stripe account exists — `--apply` in test mode, then `--apply --live` for production.
+
+**Verified.** 4,653 unit tests; both new source files at 100% lines, branches and functions; 19 script cases run as child processes. 21 mutants, 21 killed — two only after a fix: the loopback check survived until a plain-`http` non-loopback case existed (every case had been `https`, which the protocol check refused on its own), and the limiter's copy survived only because the harness had not rebuilt `packages/security`, whose `dist` the test reads.
+
+| Mutation | Caught by |
+|---|---|
+| A live key without `--live` · any host for `STRIPE_API_BASE` · no redaction · a failed run exiting 0 | the script's guard-rail cases |
+| No `transfer_lookup_key` · no pinned version · no idempotency key | the request the stand-in received |
+| Any refusal read as a missing product | the restricted-key 403 case |
+| A dry run passing a disagreement · a conflict not stopping the run | the disagreeing-price cases, both layers |
+| Each compared field dropped · the product always created · a differing price counted unchanged | `stripe-catalog.test.ts` |
+| An unknown key mapped to the first plan · Cantina repriced in `plans.ts` alone | `plans.test.ts` |
+| The limiter's cap, a plan's domains, or the import ceiling drifting | `plans.test.ts` |
 
 ---
 

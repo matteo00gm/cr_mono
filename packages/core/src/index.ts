@@ -12,6 +12,8 @@ export * from './webhooks/index.js';
 export * from './rag/index.js';
 export * from './completeness.js';
 export * from './import-limits.js';
+export * from './plans.js';
+export * from './billing/stripe-catalog.js';
 export * from './domains.js';
 export * from './domain-claims.js';
 export * from './dev-mode.js';
