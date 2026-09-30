@@ -68,7 +68,7 @@ const user = async (label: string): Promise<string> => {
 const tenant = async (label: string): Promise<string> => {
   const id = randomUUID();
   await admin().execute(sql`
-    INSERT INTO tenants (id, name, slug, status) VALUES (${id}, ${label}, ${`${label}-${id}`}, 'ACTIVE')
+    INSERT INTO tenants (id, name, slug, status, stripe_subscription_id) VALUES (${id}, ${label}, ${`${label}-${id}`}, 'ACTIVE', 'sub_' || gen_random_uuid())
   `);
   return id;
 };

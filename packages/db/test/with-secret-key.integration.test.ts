@@ -85,7 +85,11 @@ const winery = async () => {
   );
 
   // A winery that has verified a domain is past onboarding; a new tenant row is not.
-  await adminDb.execute(sql`UPDATE tenants SET status = 'ACTIVE' WHERE id = ${tenantId}::uuid`);
+  /* A subscription with it: ACTIVE without one is what 0061's CHECK forbids. */
+  await adminDb.execute(sql`
+    UPDATE tenants SET status = 'ACTIVE', stripe_subscription_id = 'sub_' || gen_random_uuid()
+    WHERE id = ${tenantId}::uuid
+  `);
 
   return { tenantId, key, verified };
 };

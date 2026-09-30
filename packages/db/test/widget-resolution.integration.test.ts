@@ -54,8 +54,8 @@ const seedTenant = async (
     id,
     async (tx) => {
       await tx.execute(sql`
-        INSERT INTO tenants (id, name, slug, status, plan, locale)
-        VALUES (${id}::uuid, ${slug}, ${slug}, 'ACTIVE', 'CANTINA', 'it')
+        INSERT INTO tenants (id, name, slug, status, plan, locale, stripe_subscription_id)
+        VALUES (${id}::uuid, ${slug}, ${slug}, 'ACTIVE', 'CANTINA', 'it', 'sub_' || gen_random_uuid())
       `);
 
       for (const { key, revoked } of keys) {

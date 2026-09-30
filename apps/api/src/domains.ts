@@ -16,6 +16,7 @@ import {
   SHOPIFY_UNVERIFIABLE,
   STAGING_CAP_MESSAGE,
   STAGING_DOMAIN_CAP,
+  TRIAL,
   verificationToken,
   VERIFY_ATTEMPTS,
   siblingOrigin,
@@ -37,6 +38,7 @@ import {
   readDomainsFor,
   readTenantPlan,
   reissueVerification,
+  startTrial,
   withTenant,
   provesZone,
   type DomainKind,
@@ -554,6 +556,21 @@ const createDomainMethods = ({
           target: domain.origin,
           metadata: { method: METHOD_COLUMN[command.method] },
         });
+
+        /*
+         * **The card-free trial starts with the first verified domain** (P5-05,
+         * Open Decisions 2): the moment the widget has somewhere to run. Only
+         * for a winery that has never had one — the statement checks, not this
+         * caller — so a second domain, or one verified after paying, changes
+         * nothing. On this transaction, so a trial never starts for a
+         * verification that rolled back.
+         */
+        if ((await startTrial(tx, TRIAL.days)) !== undefined) {
+          await record(tx, {
+            action: 'billing.trial_started',
+            target: `tenant:${command.tenantId}`,
+          });
+        }
       }
 
       /*

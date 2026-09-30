@@ -37,11 +37,10 @@ const winery = async (billing: { customer?: string; subscription?: string } = {}
   const tenantId = randomUUID();
 
   await admin().execute(sql`
-    INSERT INTO tenants (id, name, slug, status, stripe_customer_id, stripe_subscription_id)
+    INSERT INTO tenants (id, name, slug, status, stripe_customer_id, stripe_subscription_id, trial_ends_at)
     VALUES (
       ${tenantId}, 'Cantina', ${`b-${tenantId}`}, 'TRIALING',
-      ${billing.customer ?? null}, ${billing.subscription ?? null}
-    )
+      ${billing.customer ?? null}, ${billing.subscription ?? null}, now() + interval '14 days')
   `);
 
   return tenantId;

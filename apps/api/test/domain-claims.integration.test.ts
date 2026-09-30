@@ -39,8 +39,8 @@ const winery = async (status: string): Promise<string> => {
   const id = randomUUID();
 
   await admin().execute(sql`
-    INSERT INTO tenants (id, name, slug, status, plan)
-    VALUES (${id}, 'Cantina', ${`claim-${id}`}, ${status}::tenant_status, 'ECOMMERCE')
+    INSERT INTO tenants (id, name, slug, status, plan, stripe_subscription_id, trial_ends_at)
+    VALUES (${id}, 'Cantina', ${`claim-${id}`}, ${status}::tenant_status, 'ECOMMERCE', CASE WHEN ${status}::tenant_status = 'ACTIVE' THEN 'sub_' || gen_random_uuid() END, CASE WHEN ${status}::tenant_status = 'TRIALING' THEN now() + interval '14 days' END)
   `);
 
   return id;

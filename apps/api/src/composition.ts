@@ -29,6 +29,7 @@ import {
 } from '@catalogorosso/db';
 
 import { createBillingPort, type BillingPort } from './billing.js';
+import { createBillingEffect } from './billing-events.js';
 import { createDomainsPort, type DomainsPort } from './domains.js';
 import { createKeysPort, type KeysPort } from './keys.js';
 import { createTurnstileVerifier } from './turnstile.js';
@@ -42,6 +43,7 @@ import { createQuotaPort, type QuotaPort } from './quota.js';
 import { createRagPort, type RagPort } from './rag.js';
 import { refusalRecorders, webhookRejectionRecorder } from './security-events.js';
 import { createStripeClient } from './stripe.js';
+import { createStripeEventsPort, type StripeEventsPort } from './stripe-events.js';
 import type { SignatureRejection } from './surfaces/webhooks.js';
 import type { WidgetDependencies } from './surfaces/widget.js';
 import { createWebhooksPort, type WebhooksPort } from './webhooks.js';
@@ -231,6 +233,8 @@ export interface Dependencies {
   /** Passed through to `createApp`; absent means the endpoint refuses. */
   readonly resendWebhookSecret?: string | undefined;
   readonly stripeWebhookSecret?: string | undefined;
+  /** Applies a verified Stripe event (P5-04, P5-05). */
+  readonly stripeEvents: StripeEventsPort;
   readonly onSignatureRejected?: ((rejection: SignatureRejection) => Promise<void>) | undefined;
   /** The widget surface's resolution, limits and usage read (P2-04 to P2-10). */
   readonly widget: WidgetDependencies;
@@ -569,14 +573,19 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
       ? {}
       : { resendWebhookSecret: config.resendWebhookSecret }),
 
-    /*
-     * Stripe (P5-03). The events port is not wired until P5-04 can claim an
-     * event exactly once: until then a verified event is a 500, which Stripe
-     * retries for three days, rather than a 200 that drops it for good.
-     */
+    /* Stripe (P5-03). Absent, the endpoint is a 404 and nothing moves. */
     ...(config.stripeWebhookSecret === undefined
       ? {}
       : { stripeWebhookSecret: config.stripeWebhookSecret }),
+
+    /*
+     * Each verified event claimed once under the winery it names (P5-04) and
+     * run through the state machine on that claim (P5-05). Live-mode events
+     * on production and test-mode events everywhere else (§5.2b).
+     */
+    stripeEvents: createStripeEventsPort({
+      apply: createBillingEffect({ livemode: config.stage === 'production' }),
+    }),
 
     /* Every refused signature, either provider, is a security event (P5-03). */
     onSignatureRejected: webhookRejectionRecorder(insertSecurityEvent),

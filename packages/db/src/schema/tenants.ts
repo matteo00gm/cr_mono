@@ -79,6 +79,20 @@ export const tenants = pgTable('tenants', {
   stripeCustomerId: text('stripe_customer_id').unique(),
   stripeSubscriptionId: text('stripe_subscription_id').unique(),
 
+  /**
+   * When the card-free trial ends (P5-05, Open Decisions 2). Set when the
+   * winery's first domain is verified; required while `TRIALING` by the
+   * `tenant_status_coherent` CHECK in migration 0061, which also requires a
+   * subscription while `ACTIVE` (§5.2b).
+   */
+  trialEndsAt: timestamp('trial_ends_at', { withTimezone: true, mode: 'date' }),
+
+  /**
+   * When the last applied Stripe event was created (P5-05). The state
+   * machine's ordering guard: an event older than this is ignored.
+   */
+  billingEventAt: timestamp('billing_event_at', { withTimezone: true, mode: 'date' }),
+
   locale: text('locale').notNull().default('it'),
   currency: text('currency').notNull().default('EUR'),
 

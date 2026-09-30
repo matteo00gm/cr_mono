@@ -1401,7 +1401,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P5-03 | 🔒 Webhook: raw-body signature verify | before any body parser touches it | P5-01 |
 | P5-03a | 🔒 SdI / FatturaPA e-invoicing bridge | async job on `invoice.paid` → Fatture in Cloud API to emit FatturaPA XML | P5-03,P5-04 |
 | ✅ P5-04 | 🔒 Webhook idempotency | `processed_webhooks`, replay is a no-op | P5-03 |
-| P5-05 | ⛔ Status state machine | TRIALING→ACTIVE→PAST_DUE→DISABLED→CANCELED; **adds `tenants.trial_ends_at`** and the `tenant_status_coherent` CHECK that reads it (§5.2b); `livemode` + customer↔tenant binding | P5-04 |
+| ✅ P5-05 | ⛔ Status state machine | TRIALING→ACTIVE→PAST_DUE→DISABLED→CANCELED; **adds `tenants.trial_ends_at`** and the `tenant_status_coherent` CHECK that reads it (§5.2b); `livemode` + customer↔tenant binding | P5-04 |
 | P5-05a | 🔒 Payment-failure blocking | **no grace** — `PAST_DUE` blocks the widget on first failure; dashboard stays open; Stripe retries restore automatically (§5.2b) | P5-05 |
 | P5-06 | 🔒 Webhook fixture test suite | every transition; unsigned and mis-signed rejected | P5-05 |
 | P5-07 | Test: DISABLED propagation split | chat refused immediately; `/config` may lag 60 s | P5-05,P2-13 |
@@ -7038,6 +7038,35 @@ Also send the P0-64 payment-failed email on entry to `PAST_DUE`, since the tenan
 **Tests.** P5-06.
 
 **Files.** `packages/core/src/billing/state.ts`. **~110 lines.**
+
+**As built (2026-09-30).** `transition` in `packages/core/src/billing/state.ts`, `readBillingEvent` beside `tenantOfStripeEvent`, the effect in `apps/api/src/billing-events.ts` — now wired, so the Stripe endpoint applies what it verifies — the statements in `packages/db/src/billing.ts`, and migration 0061.
+
+- **Only a completed Checkout binds** a customer and a subscription to a winery. Every later event must carry that customer and that subscription, or it changes nothing (ADR 0029). A second paid Checkout — two tabs — is caught (`second_subscription`) rather than replacing the first, and logged loudly: somebody has paid twice and needs a refund.
+- **The table as built.** A paid Checkout → `ACTIVE`; an unpaid one (a payment that settles later) binds and waits, and `checkout.session.async_payment_succeeded` or `invoice.paid` activates it. A subscription's `active` or `trialing` → `ACTIVE` (we run no Stripe-side trials, so one exists only because somebody made it); `past_due` and `unpaid` → `PAST_DUE`; `paused` → `DISABLED`; `canceled`, `incomplete_expired` and `customer.subscription.deleted` → `DISABLED` **with the subscription and plan cleared** — P5-02's carried item: otherwise a winery that cancelled could never buy again. `invoice.payment_failed` → `PAST_DUE` **from `ACTIVE` only**, so it cannot cut a card-free trial short; `invoice.paid` and `invoice.payment_succeeded` → `ACTIVE`. A plan comes from the Checkout's metadata or the price's lookup key; a price that is not ours keeps the plan on file rather than guessing one. `CANCELED` is a closed account, never set by Stripe, and ignores every event.
+- **The ordering clock is the event's own `created`**, in `tenants.billing_event_at`. Older is ignored; the same second is applied, because Stripe sends several events within one. **Every applied event moves the clock**, including one that changes no status — a second failure after a success must still outrank a success that arrives late.
+- **`FOR UPDATE` on the winery's row** *(addition)*: `invoice.paid` and `customer.subscription.updated` arrive within a second of each other and carry different ids, so the idempotency claim does not serialise them. The lock makes them take turns.
+- **The one-to-one binding is the unique index** §5.2b asks for. A customer or subscription already bound to another winery fails the write inside a **savepoint**, so the refusal rolls back only itself and the event is still claimed — without it, the whole claim would roll back and Stripe would retry, for three days, a change that can never succeed.
+- **`livemode`**: production takes live-mode events and every other stage takes test-mode ones (§5.2b), both refusals logged as errors.
+- **Audited with no actor** (`billing.status_changed`, from and to), on the claim's transaction — the domain claim's precedent for "somebody who is not a member did this".
+- **Migration 0061**: `trial_ends_at`, `billing_event_at`, and `tenant_status_coherent` exactly as §5.2b writes it. Rows written before it are repaired so it can be added — a `TRIALING` row gets its trial, an `ACTIVE` row with no subscription becomes a trial from today — and the reverse drops the constraint and the columns, not the repairs. The machine never answers with a state the CHECK forbids, and a sweep over every status and event proves it; the database is the backstop.
+- **The card-free trial starts with the first verified domain** *(scope, the row's machine includes it)*: nothing set `TRIALING` before this, so no winery could have been served before paying. `startTrial` moves `PENDING_VERIFICATION` only, for `TRIAL.days` (14, now in `plans.ts`), on the verification's own transaction, and is audited as `billing.trial_started`.
+- **T6's writer is named**: `packages/db/src/billing.ts` is the one file allowed to set a status or plan, and holds both writers.
+- **Operator:** the Stripe endpoint must be created on the pinned API version (`2026-08-26.dahlia`) and sent the eight types in `BILLING_EVENT_TYPES`. A type we act on in a shape we cannot read is logged as `stripe_event_unreadable`, which is the alarm that says the endpoint's version is wrong.
+- **⚠ Found here: Drizzle wraps a driver error** ("Failed query") and puts Postgres's own in `cause`. The savepoint's first version read the code only on the wrapper, so every bound-customer refusal would have thrown — and been retried by Stripe for three days. The integration test that tried it found it.
+- **Deferred to P5-05a** *(split)*: the payment-failed email to the owners — it goes through the outbox, so it commits with the claim — and **trial expiry**, which is not enforced yet: a `TRIALING` winery past `trial_ends_at` is still served until P5-05a puts the date in the service gate.
+- **⚠ Open:** a winery whose first domain arrives through a claim (P4-18) does not start a trial — `settleDomainClaim` inserts the claimant's row verified, outside the verify path.
+- **16 fixture inserts and one update** now satisfy the CHECK: an `ACTIVE` winery has a subscription, a `TRIALING` one a trial end.
+
+**Verified.** 4,857 unit tests; against real Postgres, the CHECK refuses both orphans to every role, the trial starts once and never for a payer, the writer reaches its own winery only and survives a bound customer, and the production port with the production effect activates on a paid Checkout, blocks at once on a failure, restores on the retry, keeps a winery blocked through a late success, frees a winery whose subscription ended, and changes nothing — while still claiming — for the wrong mode, a stranger's customer, a bound customer and a second Checkout. The browser suite passes against the harness's now-coherent winery. 29 mutants, 29 killed, one only after a test fix: the helper that built a subscription event swapped an explicit `undefined` plan for its default, so "a price that is not ours" had been sending Cantina's.
+
+| Mutation | Caught by |
+|---|---|
+| No ordering guard · the same second counted stale · a closed winery reopened · another customer believed · a second subscription replacing the first · any event binding · any subscription accepted · a plan not ours accepted · an unpaid Checkout activating · `past_due` served · an ended subscription kept · a foreign price clearing the plan · grace on a failure · a failure cutting a trial short · no recovery | `state.test.ts` |
+| A one-off Checkout read as a subscription · only `paid` counted as paid · the pinned invoice path ignored · a deletion read as a change | `stripe-events.test.ts` |
+| Any mode accepted · every move unaudited · a bound customer counted as applied · an unreadable shape said nothing about | `billing-events.test.ts` |
+| No row lock · a trial for anybody | `billing.test.ts` (db), and the integration suite |
+| No trial on verification | `domains-verify.test.ts` |
+| The CHECK forgetting either half | `billing.integration.test.ts` |
 
 ---
 

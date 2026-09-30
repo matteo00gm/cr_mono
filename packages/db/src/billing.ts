@@ -55,3 +55,135 @@ export const readBillingState = async (tx: DbTransaction): Promise<BillingState 
         locale: row.locale,
       };
 };
+
+/* ------------------------------------------------------------ the machine */
+
+/** What the state machine reads (P5-05): the state, and the ordering clock. */
+export interface BillingSnapshotRow {
+  readonly status: TenantStatus;
+  readonly plan: TenantPlan | null;
+  readonly customerId: string | null;
+  readonly subscriptionId: string | null;
+  readonly lastEventAt: Date | null;
+}
+
+/**
+ * The winery's billing state, **locked for the rest of the transaction**.
+ *
+ * `FOR UPDATE`, because two different Stripe events for one winery can arrive
+ * together — `invoice.paid` and `customer.subscription.updated` are sent within
+ * the same second — and each would otherwise read the same state and write its
+ * own answer over the other's. The idempotency claim does not help there: the
+ * events have different ids. The lock makes them take turns, and the second
+ * reads what the first wrote, ordering clock included.
+ */
+export const readBillingSnapshot = async (
+  tx: DbTransaction,
+): Promise<BillingSnapshotRow | undefined> => {
+  const rows = await tx.execute(sql`
+    SELECT status, plan, stripe_customer_id, stripe_subscription_id, billing_event_at
+    FROM tenants
+    LIMIT 1
+    FOR UPDATE
+  `);
+
+  const row = [...rows][0] as
+    | {
+        status: TenantStatus;
+        plan: TenantPlan | null;
+        stripe_customer_id: string | null;
+        stripe_subscription_id: string | null;
+        billing_event_at: string | Date | null;
+      }
+    | undefined;
+
+  return row === undefined
+    ? undefined
+    : {
+        status: row.status,
+        plan: row.plan,
+        customerId: row.stripe_customer_id,
+        subscriptionId: row.stripe_subscription_id,
+        lastEventAt: row.billing_event_at === null ? null : new Date(row.billing_event_at),
+      };
+};
+
+/** Everything the machine decided, written in one statement. */
+export interface BillingChangeRow {
+  readonly status: TenantStatus;
+  readonly plan: TenantPlan | null;
+  readonly customerId: string | null;
+  readonly subscriptionId: string | null;
+  readonly lastEventAt: Date;
+}
+
+/** Why a change was not written. */
+export type BillingWriteRefusal = 'customer_taken';
+
+/**
+ * Writes the machine's answer, or reports the one conflict it cannot see coming.
+ *
+ * **A customer or subscription id already bound to another winery** is refused
+ * by the unique constraints on `tenants` — the one-to-one binding §5.2b asks
+ * for, enforced by an index rather than a check — and this winery's scope
+ * cannot see the other row to ask first. The write runs in a savepoint, so the
+ * violation rolls back only itself: the caller's transaction, and the event's
+ * claim with it, survive to record that the event was handled. Without the
+ * savepoint the whole claim would roll back and Stripe would retry, forever, a
+ * change that can never succeed.
+ */
+export const writeBillingChange = async (
+  tx: DbTransaction,
+  change: BillingChangeRow,
+): Promise<'written' | BillingWriteRefusal> => {
+  try {
+    await tx.transaction(async (savepoint) => {
+      await savepoint.execute(sql`
+        UPDATE tenants
+        SET status = ${change.status}::tenant_status,
+            plan = ${change.plan}::tenant_plan,
+            stripe_customer_id = ${change.customerId},
+            stripe_subscription_id = ${change.subscriptionId},
+            billing_event_at = ${change.lastEventAt.toISOString()}::timestamptz
+      `);
+    });
+  } catch (error) {
+    /*
+     * Drizzle wraps the driver's error ("Failed query") and puts Postgres's own
+     * in `cause`, so the code is looked for on both: reading only the wrapper
+     * turned every refusal into a thrown error, and every retry into another.
+     */
+    const failure = error as { code?: unknown; cause?: { code?: unknown } } | null;
+
+    if (failure?.code === '23505' || failure?.cause?.code === '23505') return 'customer_taken';
+
+    throw error;
+  }
+
+  return 'written';
+};
+
+/**
+ * Starts the card-free trial, if this winery has not had one (P5-05).
+ *
+ * Called on the transaction that verifies a domain: `PENDING_VERIFICATION`
+ * becomes `TRIALING` with the trial's days on the clock (`TRIAL.days`, P5-01's
+ * `plans.ts`, passed in rather than restated here). **Only from
+ * `PENDING_VERIFICATION`**, in the statement rather than beside it, so a second
+ * domain verified later — or one verified by a winery that has already paid —
+ * changes nothing, and neither do two verifications arriving together.
+ * Answers when the trial ends, or `undefined` when it did not start one.
+ */
+export const startTrial = async (tx: DbTransaction, days: number): Promise<Date | undefined> => {
+  const rows = await tx.execute(sql`
+    UPDATE tenants
+    SET status = 'TRIALING',
+        trial_ends_at = now() + make_interval(days => ${days}::int)
+    WHERE status = 'PENDING_VERIFICATION'
+    RETURNING trial_ends_at
+  `);
+
+  const row = [...rows][0] as { trial_ends_at: string | Date } | undefined;
+
+  return row === undefined ? undefined : new Date(row.trial_ends_at);
+};
