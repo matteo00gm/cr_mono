@@ -1402,7 +1402,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P5-03a | 🔒 SdI / FatturaPA e-invoicing bridge | async job on `invoice.paid` → Fatture in Cloud API to emit FatturaPA XML | P5-03,P5-04 |
 | ✅ P5-04 | 🔒 Webhook idempotency | `processed_webhooks`, replay is a no-op | P5-03 |
 | ✅ P5-05 | ⛔ Status state machine | TRIALING→ACTIVE→PAST_DUE→DISABLED→CANCELED; **adds `tenants.trial_ends_at`** and the `tenant_status_coherent` CHECK that reads it (§5.2b); `livemode` + customer↔tenant binding | P5-04 |
-| P5-05a | 🔒 Payment-failure blocking | **no grace** — `PAST_DUE` blocks the widget on first failure; dashboard stays open; Stripe retries restore automatically (§5.2b) | P5-05 |
+| ✅ P5-05a | 🔒 Payment-failure blocking | **no grace** — `PAST_DUE` blocks the widget on first failure; dashboard stays open; Stripe retries restore automatically (§5.2b) | P5-05 |
 | P5-06 | 🔒 Webhook fixture test suite | every transition; unsigned and mis-signed rejected | P5-05 |
 | P5-07 | Test: DISABLED propagation split | chat refused immediately; `/config` may lag 60 s | P5-05,P2-13 |
 | P5-08 | Customer Portal link endpoint | | P5-02 |
@@ -7053,7 +7053,7 @@ Also send the P0-64 payment-failed email on entry to `PAST_DUE`, since the tenan
 - **T6's writer is named**: `packages/db/src/billing.ts` is the one file allowed to set a status or plan, and holds both writers.
 - **Operator:** the Stripe endpoint must be created on the pinned API version (`2026-08-26.dahlia`) and sent the eight types in `BILLING_EVENT_TYPES`. A type we act on in a shape we cannot read is logged as `stripe_event_unreadable`, which is the alarm that says the endpoint's version is wrong.
 - **⚠ Found here: Drizzle wraps a driver error** ("Failed query") and puts Postgres's own in `cause`. The savepoint's first version read the code only on the wrapper, so every bound-customer refusal would have thrown — and been retried by Stripe for three days. The integration test that tried it found it.
-- **Deferred to P5-05a** *(split)*: the payment-failed email to the owners — it goes through the outbox, so it commits with the claim — and **trial expiry**, which is not enforced yet: a `TRIALING` winery past `trial_ends_at` is still served until P5-05a puts the date in the service gate.
+- **Deferred to P5-05a** *(split)*: the payment-failed email to the owners, and **trial expiry**, which is not enforced yet: a `TRIALING` winery past `trial_ends_at` is still served until P5-05a puts the date in the service gate. *(Both closed by P5-05a; the email is sent after the claim commits, not through the outbox — see there.)*
 - **⚠ Open:** a winery whose first domain arrives through a claim (P4-18) does not start a trial — `settleDomainClaim` inserts the claimant's row verified, outside the verify path.
 - **16 fixture inserts and one update** now satisfy the CHECK: an `ACTIVE` winery has a subscription, a `TRIALING` one a trial end.
 
@@ -7067,6 +7067,30 @@ Also send the P0-64 payment-failed email on entry to `PAST_DUE`, since the tenan
 | No row lock · a trial for anybody | `billing.test.ts` (db), and the integration suite |
 | No trial on verification | `domains-verify.test.ts` |
 | The CHECK forgetting either half | `billing.integration.test.ts` |
+
+---
+
+### P5-05a · Payment-failure blocking 🔒
+
+**What the row asks.** No grace: `PAST_DUE` blocks the widget on the first failure; the dashboard stays open; Stripe's retries restore service automatically (§5.2b).
+
+**As built (2026-10-01).** `isServed` in `packages/core/src/billing/state.ts`, read by all three gates; `trialEndsAt` on both resolutions; `apps/api/src/billing-notices.ts`; and the `payment-failed` template.
+
+- **One definition of "served"**, `isServed`: `ACTIVE`, or `TRIALING` with the trial still running. The config (P2-10), the session mint (P2-12), every call that needs a session (P2-13) and the server-minted path (P4-10) all read it; `widget-config.ts`'s own set of statuses is gone. **`PAST_DUE` blocks on the first failure** because it is not in the definition — no counter, no timer, nothing to test beyond the predicate (§5.2b).
+- **Trial expiry is read, not swept** *(decision)*. Widget resolution and the secret-key resolution now return `trial_ends_at`, and a trial past its date is not served though its status still reads `TRIALING`. A job moving the status would serve an expired trial for as long as it was late, and would need a scope that reads across wineries to find them. A trial with no end is refused rather than served for ever.
+- **The dashboard stays open** — structurally: its tenant resolution reads a membership and never a status. `billing-access.integration.test.ts` holds it with the real membership reader under RLS, for a winery past due, disabled, trialling past its end, and waiting for its first domain: each reaches the dashboard, the catalogue, and billing, which answers it rather than turning it away.
+- **⚠ The payment-failed email is sent after the claim commits, not through the outbox** *(deviation from P5-05's note)*. The outbox (P1-31) is the embedding pipeline: its poller turns every row into an `EmbeddingMessage` for the embed worker, so a billing notice there would be read as a product. Instead the effect returns a notice when a winery *enters* `PAST_DUE` — not while it stays there — and the port sends it once the claim has committed, so it is sent at most once per event, never for a change that rolled back, and never for a redelivery. It goes through P0-64's `sendEmail`, which retries and raises `email_send_failed` when it gives up; a send that still fails is logged (`billing_notice_unsent`) and the event answers applied, because asking Stripe to resend it would tell nobody anything. Owners only, every one of them, in the winery's language; the suppression list is read under the winery's own scope, as the claim sweep reads it. `readClaimRecipients` became `readOwnerRecipients`, since a claim is no longer the only owner's business it serves.
+- **Recovery is P5-05's** and needs nothing here: `invoice.paid` → `ACTIVE`, and the widget serves on the next request — the config's edge TTL aside, which P5-07 documents.
+
+**Verified.** 4,882 unit tests; the full integration suite (74 files, 963 tests), including the dashboard for every dark state, both resolutions carrying a trial's date, and the production port telling a winery's owners once when its widget goes dark — not for a second failure, not on recovery, not for a redelivery, and never an editor or another winery's owner. 14 mutants, 14 killed.
+
+| Mutation | Caught by |
+|---|---|
+| A trial served past its date, on its last instant, or with no end · past due served | `state.test.ts` |
+| The gate ignoring the date · the browser or server path dropping it | the config, session, token and server-session gates |
+| Resolution reading no date | `widget-resolution.integration.test.ts` |
+| A notice for every applied event, or none · the notice never sent · a redelivery told again · any language passed through | the port, effect and notifier tests |
+| Editors told too | `billing-events.integration.test.ts` |
 
 ---
 

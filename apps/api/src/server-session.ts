@@ -136,6 +136,7 @@ export const mintServerSession = async (
     tenantId: tenant.tenantId,
     plan: tenant.plan,
     status: tenant.status,
+    trialEndsAt: tenant.trialEndsAt,
     locale: tenant.locale,
     /*
      * Never on the server path: the secret key is a stronger proof than any

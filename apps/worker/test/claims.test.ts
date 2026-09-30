@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ClaimRecipients, ClaimWork } from '@catalogorosso/db';
+import type { OwnerRecipients, ClaimWork } from '@catalogorosso/db';
 
 import { formatDeadline, sweepClaims, type ClaimSweepDeps } from '../src/claims.js';
 
@@ -27,7 +27,7 @@ const work = (overrides: Partial<ClaimWork> = {}): ClaimWork => ({
   ...overrides,
 });
 
-const PEOPLE: Record<string, ClaimRecipients> = {
+const PEOPLE: Record<string, OwnerRecipients> = {
   [CLAIMANT]: { tenantName: 'Nuova Cantina', locale: 'it', owners: ['nuova@example.com'] },
   [HOLDER]: {
     tenantName: 'Vecchia Cantina',

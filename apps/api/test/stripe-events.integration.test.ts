@@ -78,7 +78,7 @@ const port = createStripeEventsPort({
     applied += 1;
     await tx.execute(sql`UPDATE tenants SET name = name || '+'`);
 
-    return true;
+    return { applied: true };
   },
 });
 

@@ -39,6 +39,26 @@ export type TenantStatus = (typeof TENANT_STATUSES)[number];
 /** The statuses a widget is served in (§5.2b). `PAST_DUE` is not one of them: no grace. */
 export const SERVED_STATUSES: ReadonlySet<TenantStatus> = new Set(['ACTIVE', 'TRIALING']);
 
+/**
+ * Whether a winery's widget is served right now (P5-05a, §1.3, §5.2b).
+ *
+ * **The one definition, read by every gate** — the config, the session mint
+ * and every call that needs a session. `ACTIVE`, or `TRIALING` with the trial
+ * still running: a trial ends when its date passes, without a job to move the
+ * status, because a job that ran late would serve an expired trial for as long
+ * as it was late. `PAST_DUE` is not served, on the first failure, with no
+ * grace; nor is anything else.
+ *
+ * A `TRIALING` winery with no end date cannot exist (0061's CHECK), and is
+ * refused here rather than served for ever should one ever be read.
+ */
+export const isServed = (
+  winery: { readonly status: TenantStatus; readonly trialEndsAt: Date | null },
+  now: Date = new Date(),
+): boolean =>
+  winery.status === 'ACTIVE' ||
+  (winery.status === 'TRIALING' && winery.trialEndsAt !== null && winery.trialEndsAt > now);
+
 /** A winery's billing state, as the database holds it. */
 export interface BillingSnapshot {
   readonly status: TenantStatus;

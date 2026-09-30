@@ -30,6 +30,7 @@ import {
 
 import { createBillingPort, type BillingPort } from './billing.js';
 import { createBillingEffect } from './billing-events.js';
+import { createBillingNotifier } from './billing-notices.js';
 import { createDomainsPort, type DomainsPort } from './domains.js';
 import { createKeysPort, type KeysPort } from './keys.js';
 import { createTurnstileVerifier } from './turnstile.js';
@@ -585,6 +586,14 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
      */
     stripeEvents: createStripeEventsPort({
       apply: createBillingEffect({ livemode: config.stage === 'production' }),
+      /* The owners are told when their widget goes dark on a failed payment (P5-05a). */
+      notify: createBillingNotifier({
+        sendEmailFor: (tenantId) =>
+          sendEmailWith({
+            isSuppressed: (address) => withTenant(tenantId, (tx) => isSuppressed(tx, address)),
+          }),
+        dashboardOrigin: new URL(config.authBaseUrl).origin,
+      }),
     }),
 
     /* Every refused signature, either provider, is a security event (P5-03). */

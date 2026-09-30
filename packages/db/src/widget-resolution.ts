@@ -25,6 +25,12 @@ export type WidgetResolution =
       readonly found: true;
       readonly tenantId: string;
       readonly status: TenantStatus;
+      /**
+       * When a `TRIALING` winery's trial ends (P5-05a): past it, the widget is
+       * not served, though the status still reads `TRIALING` — the gate reads
+       * the date rather than waiting for a job to move the status.
+       */
+      readonly trialEndsAt: Date | null;
       readonly plan: TenantPlan | null;
       readonly locale: string;
       /** Whether the session mint asks for a Turnstile token (P4-14). */
@@ -56,6 +62,7 @@ interface ResolutionRow {
   readonly domain_id: string | null;
   readonly kind: 'production' | 'staging' | null;
   readonly status: TenantStatus | null;
+  readonly trial_ends_at: string | Date | null;
   readonly plan: TenantPlan | null;
   readonly locale: string | null;
   readonly turnstile_enabled: boolean | null;
@@ -90,6 +97,7 @@ export const resolveTenantByKeyAndOrigin = (
           d.id AS domain_id,
           d.kind,
           t.status,
+          t.trial_ends_at,
           t.plan,
           t.locale,
           t.turnstile_enabled,
@@ -141,6 +149,7 @@ export const resolveTenantByKeyAndOrigin = (
         found: true,
         tenantId: row.tenant_id,
         status: row.status,
+        trialEndsAt: row.trial_ends_at === null ? null : new Date(row.trial_ends_at),
         plan: row.plan,
         locale: row.locale,
         turnstile: row.turnstile_enabled === true,

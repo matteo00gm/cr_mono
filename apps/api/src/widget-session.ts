@@ -145,7 +145,7 @@ export const mintWidgetSession = async ({
    * state to render, and a wiring error would put an error with a retry button
    * in front of a lapsed seller.
    */
-  if (!isServiceable(tenant.status)) throw new UnavailableError(WIDGET_UNAVAILABLE);
+  if (!isServiceable(tenant)) throw new UnavailableError(WIDGET_UNAVAILABLE);
 
   const keys = await loadKeys();
 

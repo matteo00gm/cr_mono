@@ -50,6 +50,7 @@ const found = (over: Partial<Found> = {}): Found => ({
   found: true,
   tenantId: TENANT,
   status: 'ACTIVE',
+  trialEndsAt: null,
   plan: 'CANTINA',
   locale: 'it',
   turnstile: false,
@@ -159,7 +160,10 @@ describe('a minted session', () => {
     const keys = await freshKeys();
     const built = app({
       tokenKeys: () => Promise.resolve(keys),
-      resolve: () => Promise.resolve(found({ status: 'TRIALING', plan: null })),
+      resolve: () =>
+        Promise.resolve(
+          found({ status: 'TRIALING', plan: null, trialEndsAt: new Date(Date.now() + 86_400_000) }),
+        ),
     });
 
     const { payload } = await verified(keys, await mint(built));
@@ -225,6 +229,23 @@ describe('what is refused', () => {
     },
   );
 
+  it('a trial whose date has passed: 403 unavailable, and no key touched (P5-05a)', async () => {
+    const { loads, load } = counting(await freshKeys());
+    const response = await mint(
+      app({
+        tokenKeys: load,
+        resolve: () =>
+          Promise.resolve(found({ status: 'TRIALING', trialEndsAt: new Date(Date.now() - 1000) })),
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: { code: 'unavailable', message: WIDGET_UNAVAILABLE },
+    });
+    expect(loads.count).toBe(0);
+  });
+
   it('a switched-off tenant is told so even on a stage with no keyset', async () => {
     // The widget renders disabled for this; a wiring error would render as a broken widget.
     const response = await mint(
@@ -287,6 +308,7 @@ describe('mintWidgetSession', () => {
         tenantId: TENANT,
         plan: 'ECOMMERCE',
         status: 'ACTIVE',
+        trialEndsAt: null,
         locale: 'en',
         turnstile: false,
         originKind: 'production',
@@ -313,6 +335,7 @@ describe('mintWidgetSession', () => {
     tenantId: TENANT,
     plan: 'CANTINA',
     status: 'ACTIVE',
+    trialEndsAt: null,
     locale: 'it',
     turnstile: false,
     originKind: 'production',

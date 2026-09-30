@@ -57,7 +57,7 @@ describe('an event that names a winery', () => {
       claim,
       apply: (on, attributed) => {
         applied.push([on, attributed]);
-        return Promise.resolve(true);
+        return Promise.resolve({ applied: true });
       },
     });
 
@@ -70,7 +70,10 @@ describe('an event that names a winery', () => {
 
   it('reports an event that changed nothing as not applied', async () => {
     const { claim } = recordingClaim(true);
-    const port = createStripeEventsPort({ claim, apply: () => Promise.resolve(false) });
+    const port = createStripeEventsPort({
+      claim,
+      apply: () => Promise.resolve({ applied: false }),
+    });
 
     expect(await port.record(delivery({ metadata: { tenant_id: TENANT } }))).toEqual({
       duplicate: false,
@@ -80,7 +83,7 @@ describe('an event that names a winery', () => {
 
   it('reports a redelivery as a duplicate, and does not apply it', async () => {
     const { claim } = recordingClaim(false);
-    const apply = vi.fn(() => Promise.resolve(true));
+    const apply = vi.fn(() => Promise.resolve({ applied: true }));
     const port = createStripeEventsPort({ claim, apply });
 
     expect(await port.record(delivery({ metadata: { tenant_id: TENANT } }))).toEqual({
@@ -95,7 +98,7 @@ describe('an event that names nobody', () => {
   it('is acknowledged, logged by type, and never claimed or applied', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
     const { calls, claim } = recordingClaim(true);
-    const apply = vi.fn(() => Promise.resolve(true));
+    const apply = vi.fn(() => Promise.resolve({ applied: true }));
     const port = createStripeEventsPort({ claim, apply });
 
     expect(await port.record(delivery({ metadata: { tenantId: TENANT } }))).toEqual({
@@ -108,5 +111,87 @@ describe('an event that names nobody', () => {
       { kind: 'stripe_event_unattributed', type: 'customer.subscription.updated' },
       expect.any(String),
     );
+  });
+});
+
+describe('a notice an applied event leaves (P5-05a)', () => {
+  const notifying = (notice: 'payment_failed' | undefined) => {
+    const told: [string, string][] = [];
+    const { claim } = recordingClaim(true);
+    const port = createStripeEventsPort({
+      claim,
+      apply: () => Promise.resolve({ applied: true, notice }),
+      notify: (tenantId, sent) => {
+        told.push([tenantId, sent]);
+        return Promise.resolve();
+      },
+    });
+
+    return { told, port };
+  };
+
+  it('is sent once the claim has committed, for the winery the event named', async () => {
+    const { told, port } = notifying('payment_failed');
+
+    await port.record(delivery({ metadata: { tenant_id: TENANT } }));
+
+    expect(told).toEqual([[TENANT, 'payment_failed']]);
+  });
+
+  it('is not sent for an event that leaves none', async () => {
+    const { told, port } = notifying(undefined);
+
+    await port.record(delivery({ metadata: { tenant_id: TENANT } }));
+
+    expect(told).toEqual([]);
+  });
+
+  it('is not sent again for a redelivery, which applies nothing', async () => {
+    const told: string[] = [];
+    const { claim } = recordingClaim(false);
+    const port = createStripeEventsPort({
+      claim,
+      apply: () => Promise.resolve({ applied: true, notice: 'payment_failed' }),
+      notify: (tenantId) => {
+        told.push(tenantId);
+        return Promise.resolve();
+      },
+    });
+
+    await port.record(delivery({ metadata: { tenant_id: TENANT } }));
+
+    expect(told).toEqual([]);
+  });
+
+  it('that cannot be sent is logged, and the event still answers applied — never a retry', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const { claim } = recordingClaim(true);
+    const port = createStripeEventsPort({
+      claim,
+      apply: () => Promise.resolve({ applied: true, notice: 'payment_failed' }),
+      notify: () => Promise.reject(new Error('Resend is down')),
+    });
+
+    expect(await port.record(delivery({ metadata: { tenant_id: TENANT } }))).toEqual({
+      duplicate: false,
+      applied: true,
+    });
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'billing_notice_unsent', type: 'payment_failed' }),
+      expect.any(String),
+    );
+  });
+
+  it('is simply not sent where no notifier is wired', async () => {
+    const { claim } = recordingClaim(true);
+    const port = createStripeEventsPort({
+      claim,
+      apply: () => Promise.resolve({ applied: true, notice: 'payment_failed' }),
+    });
+
+    expect(await port.record(delivery({ metadata: { tenant_id: TENANT } }))).toEqual({
+      duplicate: false,
+      applied: true,
+    });
   });
 });

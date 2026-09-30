@@ -47,6 +47,7 @@ const FOUND: WidgetResolution = {
   found: true,
   tenantId: TENANT,
   status: 'ACTIVE',
+  trialEndsAt: null,
   plan: 'CANTINA',
   locale: 'it',
   turnstile: false,
@@ -250,6 +251,7 @@ describe('POST /v1/widget/session/server (P4-10)', () => {
   const found = {
     tenantId: TENANT,
     status: 'ACTIVE' as const,
+    trialEndsAt: null,
     plan: 'CANTINA' as const,
     locale: 'it',
     turnstile: false,

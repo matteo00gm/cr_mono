@@ -46,6 +46,9 @@ const LOUD: ReadonlySet<IgnoreReason> = new Set([
 
 const ACTED_ON: ReadonlySet<string> = new Set(BILLING_EVENT_TYPES);
 
+/** An event that changed nothing and leaves nobody to tell. */
+const NOTHING = { applied: false } as const;
+
 export const createBillingEffect =
   ({ livemode }: BillingEffectDeps): StripeEffect =>
   async (tx, delivery) => {
@@ -64,7 +67,7 @@ export const createBillingEffect =
         );
       }
 
-      return false;
+      return NOTHING;
     }
 
     if (read.livemode !== livemode) {
@@ -73,13 +76,13 @@ export const createBillingEffect =
         `a ${read.livemode ? 'live' : 'test'}-mode event reached a stage that takes the other (§5.2b)`,
       );
 
-      return false;
+      return NOTHING;
     }
 
     const current = await readBillingSnapshot(tx);
 
     /* The winery it names is gone: nothing to change, and the event is handled. */
-    if (current === undefined) return false;
+    if (current === undefined) return NOTHING;
 
     const decided = transition(current, read.event);
 
@@ -91,7 +94,7 @@ export const createBillingEffect =
         `a ${delivery.type} event changed nothing (P5-05)`,
       );
 
-      return false;
+      return NOTHING;
     }
 
     if ((await writeBillingChange(tx, decided.change)) === 'customer_taken') {
@@ -100,7 +103,7 @@ export const createBillingEffect =
         'a Stripe customer or subscription is already bound to another winery (§5.2b)',
       );
 
-      return false;
+      return NOTHING;
     }
 
     if (decided.change.status !== current.status) {
@@ -123,5 +126,12 @@ export const createBillingEffect =
       });
     }
 
-    return true;
+    /*
+     * **Entering `PAST_DUE` is the one move an owner must hear about at once**
+     * (§5.2b): their widget went dark on this event. Entering, not being — a
+     * second failure while already past due tells nobody twice.
+     */
+    const enteredPastDue = decided.change.status === 'PAST_DUE' && current.status !== 'PAST_DUE';
+
+    return enteredPastDue ? { applied: true, notice: 'payment_failed' } : { applied: true };
   };

@@ -211,6 +211,7 @@ export const widgetCors =
       tenantId: resolution.tenantId,
       plan: resolution.plan,
       status: resolution.status,
+      trialEndsAt: resolution.trialEndsAt,
       locale: resolution.locale,
       turnstile: resolution.turnstile,
       originKind: resolution.originKind,

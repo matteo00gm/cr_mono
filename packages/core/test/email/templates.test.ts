@@ -68,6 +68,10 @@ const PROPS: { [K in TemplateName]: TemplateProps[K] } = {
     domain: 'cantina.example',
     manageUrl: 'https://app.example/domains',
   },
+  'payment-failed': {
+    tenantName: 'Cantina <script>alert(1)</script>',
+    billingUrl: 'https://app.example/fatturazione',
+  },
 };
 
 const renderAll = (locale: Locale) =>
@@ -82,7 +86,7 @@ describe('templates', () => {
   it.each(LOCALES)('renders every template in %s with both body parts', (locale) => {
     // Guards the guard: an empty list would make every assertion below pass
     // while checking nothing.
-    expect(TEMPLATE_NAMES.length).toBe(9);
+    expect(TEMPLATE_NAMES.length).toBe(10);
 
     for (const { name, rendered } of renderAll(locale)) {
       expect(rendered.subject.trim(), `${name}: subject`).not.toBe('');

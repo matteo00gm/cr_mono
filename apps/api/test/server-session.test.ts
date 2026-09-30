@@ -70,6 +70,7 @@ const deps = (overrides: Partial<ServerSessionDeps> = {}, allowed = true): Serve
           ? {
               tenantId: TENANT,
               status: 'ACTIVE',
+              trialEndsAt: null,
               plan: 'ECOMMERCE',
               locale: 'it',
               verifiedOrigins: [ORIGIN, 'https://winery.com'],
@@ -293,6 +294,7 @@ describe('the origin a server asks for', () => {
         Promise.resolve({
           tenantId: TENANT,
           status: 'ACTIVE',
+          trialEndsAt: null,
           plan: 'ECOMMERCE',
           locale: 'it',
           verifiedOrigins: [local],
@@ -363,6 +365,7 @@ describe('a winery the widget does not run for', () => {
               Promise.resolve({
                 tenantId: TENANT,
                 status,
+                trialEndsAt: null,
                 plan: 'ECOMMERCE',
                 locale: 'it',
                 verifiedOrigins: [ORIGIN],
@@ -373,4 +376,24 @@ describe('a winery the widget does not run for', () => {
       ).rejects.toMatchObject({ kind: 'unavailable' });
     },
   );
+
+  it('gets the disabled answer when its trial has run out, whatever the status still says (P5-05a)', async () => {
+    await expect(
+      mintServerSession(
+        request(),
+        deps({
+          resolve: () =>
+            Promise.resolve({
+              tenantId: TENANT,
+              status: 'TRIALING',
+              trialEndsAt: new Date(Date.now() - 1000),
+              plan: null,
+              locale: 'it',
+              verifiedOrigins: [ORIGIN],
+              stagingOrigins: [],
+            }),
+        }),
+      ),
+    ).rejects.toMatchObject({ kind: 'unavailable' });
+  });
 });

@@ -48,7 +48,7 @@ const found = (): unknown[][] => [
   [],
   [{ tenant_id: TENANT }],
   [],
-  [{ status: 'ACTIVE', plan: 'ECOMMERCE', locale: 'it' }],
+  [{ status: 'ACTIVE', trial_ends_at: null, plan: 'ECOMMERCE', locale: 'it' }],
   [
     { origin: 'https://a.example', kind: 'production' },
     { origin: 'https://b.example', kind: 'staging' },
@@ -151,10 +151,24 @@ describe('the hand-over', () => {
     await expect(resolveTenantBySecretKey(HASH, db)).resolves.toEqual({
       tenantId: TENANT,
       status: 'ACTIVE',
+      trialEndsAt: null,
       plan: 'ECOMMERCE',
       locale: 'it',
       verifiedOrigins: ['https://a.example', 'https://b.example'],
       stagingOrigins: ['https://b.example'],
+    });
+  });
+
+  it('carries a trial’s end as a date, for the gate the server path shares (P5-05a)', async () => {
+    const reads = found();
+    reads[3] = [
+      { status: 'TRIALING', trial_ends_at: '2026-10-14T12:00:00.000Z', plan: null, locale: 'it' },
+    ];
+    const { db } = createMockDb(reads);
+
+    await expect(resolveTenantBySecretKey(HASH, db)).resolves.toMatchObject({
+      status: 'TRIALING',
+      trialEndsAt: new Date('2026-10-14T12:00:00.000Z'),
     });
   });
 

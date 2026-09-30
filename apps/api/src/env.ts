@@ -79,6 +79,8 @@ export interface WidgetTenant {
   readonly plan: WidgetPlan | null;
   /** The tenant's own status; the widget shows it only as enabled or disabled. */
   readonly status: Resolved['status'];
+  /** When a trial ends: past it, the widget is not served (P5-05a). */
+  readonly trialEndsAt: Date | null;
   readonly locale: string;
   /** Whether the session mint asks for a Turnstile token (P4-14). */
   readonly turnstile: boolean;

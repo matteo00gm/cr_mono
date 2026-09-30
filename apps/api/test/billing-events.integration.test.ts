@@ -6,6 +6,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createBillingEffect } from '../src/billing-events.js';
+import { createBillingNotifier } from '../src/billing-notices.js';
 import { logger } from '../src/middleware/logger.js';
 import { createStripeEventsPort, type StripeDelivery } from '../src/stripe-events.js';
 
@@ -288,5 +289,93 @@ describe('an event that changes nothing, and is still handled', () => {
       { kind: 'stripe_event_unreadable', type: 'invoice.paid' },
       expect.any(String),
     );
+  });
+});
+
+describe('the owners, told (P5-05a)', () => {
+  const told: [string, string][] = [];
+  const telling = createStripeEventsPort({
+    apply: createBillingEffect({ livemode: false }),
+    notify: (tenantId, notice) => {
+      told.push([tenantId, notice]);
+      return Promise.resolve();
+    },
+  });
+
+  it('once when the widget goes dark, not again for a second failure, and not on recovery', async () => {
+    told.length = 0;
+    const tenantId = await trialing();
+    const customer = `cus_${randomUUID()}`;
+    const subscription = `sub_${randomUUID()}`;
+
+    await telling.record(paidCheckout(tenantId, customer, subscription));
+    expect(told).toEqual([]);
+
+    await telling.record(invoiceFor('invoice.payment_failed', tenantId, customer, subscription));
+    await telling.record(invoiceFor('invoice.payment_failed', tenantId, customer, subscription));
+    await telling.record(invoiceFor('invoice.paid', tenantId, customer, subscription));
+
+    expect(told).toEqual([[tenantId, 'payment_failed']]);
+  });
+
+  it('never for a redelivered failure, which is a duplicate', async () => {
+    told.length = 0;
+    const { tenantId, customer, subscription } = await paying();
+    const failure = invoiceFor('invoice.payment_failed', tenantId, customer, subscription);
+
+    await telling.record(failure);
+    await telling.record(failure);
+
+    expect(told).toEqual([[tenantId, 'payment_failed']]);
+  });
+});
+
+describe('who is told (P5-05a)', () => {
+  it('every owner of the winery, in its language — and no editor, and nobody from another winery', async () => {
+    const tenantId = await trialing();
+    const other = await trialing();
+    const person = async (tenant: string, role: 'OWNER' | 'EDITOR', email: string) => {
+      const userId = `user_${randomUUID().slice(0, 8)}`;
+
+      await admin().execute(sql`
+        INSERT INTO auth_users (id, name, email) VALUES (${userId}, ${email}, ${email})
+      `);
+      await admin().execute(sql`
+        INSERT INTO memberships (tenant_id, user_id, role) VALUES (${tenant}, ${userId}, ${role})
+      `);
+    };
+
+    await admin().execute(
+      sql`UPDATE tenants SET locale = 'en', name = 'Cantina Rossi' WHERE id = ${tenantId}`,
+    );
+    await person(tenantId, 'OWNER', `anna-${tenantId}@rossi.example`);
+    await person(tenantId, 'OWNER', `marco-${tenantId}@rossi.example`);
+    await person(tenantId, 'EDITOR', `luca-${tenantId}@rossi.example`);
+    await person(other, 'OWNER', `someone-${other}@verdi.example`);
+
+    const sent: { to: string; template: string; locale: unknown; props: unknown }[] = [];
+    const notify = createBillingNotifier({
+      dashboardOrigin: 'https://app.catalogorosso.com',
+      sendEmailFor: () =>
+        ((message: { to: string; template: string; locale: unknown; props: unknown }) => {
+          sent.push(message);
+          return Promise.resolve({ outcome: 'sent' });
+        }) as never,
+    });
+
+    await notify(tenantId, 'payment_failed');
+
+    expect(sent.map((message) => message.to).sort()).toEqual([
+      `anna-${tenantId}@rossi.example`,
+      `marco-${tenantId}@rossi.example`,
+    ]);
+    expect(sent[0]).toMatchObject({
+      template: 'payment-failed',
+      locale: 'en',
+      props: {
+        tenantName: 'Cantina Rossi',
+        billingUrl: 'https://app.catalogorosso.com/fatturazione',
+      },
+    });
   });
 });

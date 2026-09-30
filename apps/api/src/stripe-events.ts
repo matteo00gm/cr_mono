@@ -1,6 +1,7 @@
 import { tenantOfStripeEvent } from '@catalogorosso/core';
 import { withTenantWebhookEvent, type DbTransaction } from '@catalogorosso/db';
 
+import type { BillingNotice, BillingNotifier } from './billing-notices.js';
 import { logger } from './middleware/logger.js';
 
 /**
@@ -67,14 +68,23 @@ export interface AttributedDelivery extends StripeDelivery {
   readonly tenantId: string;
 }
 
+/** What an effect did: whether it changed anything, and what an owner must be told. */
+export interface StripeOutcome {
+  readonly applied: boolean;
+  /** Sent after the claim commits, and so at most once per event (P5-05a). */
+  readonly notice?: BillingNotice | undefined;
+}
+
 /**
  * What an event does to a winery, on the transaction that claimed it.
  *
- * Answers whether it changed anything. P5-05's state machine is the one in
- * production; it runs under the named winery's tenant policy, so it reaches
- * that winery's row and no other.
+ * P5-05's state machine is the one in production; it runs under the named
+ * winery's tenant policy, so it reaches that winery's row and no other.
  */
-export type StripeEffect = (tx: DbTransaction, delivery: AttributedDelivery) => Promise<boolean>;
+export type StripeEffect = (
+  tx: DbTransaction,
+  delivery: AttributedDelivery,
+) => Promise<StripeOutcome>;
 
 export interface StripeEventsDeps {
   /**
@@ -86,6 +96,12 @@ export interface StripeEventsDeps {
   readonly apply: StripeEffect;
   /** `withTenantWebhookEvent`; injected by the unit tests. */
   readonly claim?: typeof withTenantWebhookEvent | undefined;
+  /**
+   * Tells the owners what an applied event left them to be told (P5-05a).
+   * Called after the claim has committed; a failure is logged and dropped,
+   * because the event is applied and Stripe must not be asked to send it again.
+   */
+  readonly notify?: BillingNotifier | undefined;
 }
 
 /**
@@ -99,6 +115,7 @@ export interface StripeEventsDeps {
 export const createStripeEventsPort = ({
   apply,
   claim = withTenantWebhookEvent,
+  notify,
 }: StripeEventsDeps): StripeEventsPort => ({
   async record(delivery) {
     const tenantId = tenantOfStripeEvent(delivery.payload);
@@ -122,8 +139,26 @@ export const createStripeEventsPort = ({
       apply(tx, { ...delivery, tenantId }),
     );
 
-    return run.claimed
-      ? { duplicate: false, applied: run.result }
-      : { duplicate: true, applied: false };
+    if (!run.claimed) return { duplicate: true, applied: false };
+
+    const { applied, notice } = run.result;
+
+    if (notice !== undefined && notify !== undefined) {
+      try {
+        await notify(tenantId, notice);
+      } catch (error) {
+        /*
+         * The event is applied and claimed; answering 500 now would have
+         * Stripe resend it, and the redelivery would be a duplicate that
+         * tells nobody anything. The seam has already retried and alarmed.
+         */
+        logger.error(
+          { kind: 'billing_notice_unsent', type: notice, err: error },
+          'an owner could not be told what a billing event did (P5-05a)',
+        );
+      }
+    }
+
+    return { duplicate: false, applied };
   },
 });

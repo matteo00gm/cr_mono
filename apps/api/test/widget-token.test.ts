@@ -60,6 +60,7 @@ const found = (over: Partial<Found> = {}): Found => ({
   found: true,
   tenantId: TENANT,
   status: 'ACTIVE',
+  trialEndsAt: null,
   plan: 'CANTINA',
   locale: 'it',
   turnstile: false,

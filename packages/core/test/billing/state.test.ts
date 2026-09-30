@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isServed,
   SERVED_STATUSES,
   TENANT_STATUSES,
   transition,
@@ -308,5 +309,39 @@ describe('every answer the machine can give', () => {
 describe('the statuses a widget is served in', () => {
   it('are ACTIVE and TRIALING, and PAST_DUE is not one of them', () => {
     expect([...SERVED_STATUSES].sort()).toEqual(['ACTIVE', 'TRIALING']);
+  });
+});
+
+describe('whether a widget is served right now (P5-05a)', () => {
+  const now = new Date('2026-10-01T12:00:00.000Z');
+  const later = new Date('2026-10-02T12:00:00.000Z');
+  const earlier = new Date('2026-09-30T12:00:00.000Z');
+
+  it('serves a paying winery', () => {
+    expect(isServed({ status: 'ACTIVE', trialEndsAt: null }, now)).toBe(true);
+  });
+
+  it('serves a trial that is still running', () => {
+    expect(isServed({ status: 'TRIALING', trialEndsAt: later }, now)).toBe(true);
+  });
+
+  it('stops serving a trial the moment its date passes, with no job to move it', () => {
+    expect(isServed({ status: 'TRIALING', trialEndsAt: earlier }, now)).toBe(false);
+    expect(isServed({ status: 'TRIALING', trialEndsAt: now }, now)).toBe(false);
+  });
+
+  it('refuses a trial with no end rather than serving it for ever', () => {
+    expect(isServed({ status: 'TRIALING', trialEndsAt: null }, now)).toBe(false);
+  });
+
+  it.each(['PENDING_VERIFICATION', 'PAST_DUE', 'DISABLED', 'CANCELED'] as const)(
+    'serves nothing %s, whatever date it carries — past due included, with no grace',
+    (status) => {
+      expect(isServed({ status, trialEndsAt: later }, now)).toBe(false);
+    },
+  );
+
+  it('reads the real clock when it is not handed one', () => {
+    expect(isServed({ status: 'TRIALING', trialEndsAt: new Date(Date.now() + 60_000) })).toBe(true);
   });
 });

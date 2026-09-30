@@ -73,6 +73,11 @@ export interface TemplateProps {
     readonly domain: string;
     readonly manageUrl: string;
   };
+  'payment-failed': {
+    readonly tenantName: string;
+    /** The Fatturazione screen, where the Stripe portal link is. */
+    readonly billingUrl: string;
+  };
 }
 
 export type TemplateName = keyof TemplateProps;
@@ -87,6 +92,7 @@ export const TEMPLATE_NAMES = [
   'domain-claim-lost',
   'domain-claim-won',
   'domain-claim-withdrawn',
+  'payment-failed',
 ] as const satisfies readonly TemplateName[];
 
 interface Content {
@@ -412,6 +418,52 @@ const domainClaimWithdrawn: Copy<TemplateProps['domain-claim-withdrawn']> = {
   }),
 };
 
+/**
+ * The widget went dark on a failed payment (P5-05a, §5.2b).
+ *
+ * **Leads with the fix, not the diagnosis**, as the banner does (§2.3): the
+ * card is what the owner can change, and Stripe keeps retrying, so the one
+ * useful sentence is where to update it and that service comes back by itself.
+ */
+const paymentFailed: Copy<TemplateProps['payment-failed']> = {
+  it: (p) => ({
+    subject: `${p.tenantName}: il pagamento non è riuscito e il widget è disattivato`,
+    blocks: [
+      {
+        kind: 'text',
+        value:
+          'Il pagamento dell’abbonamento non è riuscito, quindi il sommelier non risponde più ' +
+          'ai visitatori del tuo negozio. Aggiorna il metodo di pagamento per riattivarlo subito.',
+      },
+      { kind: 'action', label: 'Aggiorna il pagamento', url: p.billingUrl },
+      {
+        kind: 'note',
+        value:
+          'Riproveremo l’addebito nei prossimi giorni: appena riesce, il widget torna attivo da ' +
+          'solo. La dashboard e il catalogo restano sempre disponibili.',
+      },
+    ],
+  }),
+  en: (p) => ({
+    subject: `${p.tenantName}: your payment failed and the widget is paused`,
+    blocks: [
+      {
+        kind: 'text',
+        value:
+          'Your subscription payment did not go through, so the sommelier is no longer answering ' +
+          'visitors to your shop. Update your payment method to switch it back on straight away.',
+      },
+      { kind: 'action', label: 'Update payment', url: p.billingUrl },
+      {
+        kind: 'note',
+        value:
+          'We will retry the charge over the next few days, and the widget comes back on by itself ' +
+          'as soon as one succeeds. The dashboard and your catalogue stay available throughout.',
+      },
+    ],
+  }),
+};
+
 const TEMPLATES = {
   invite,
   'password-reset': passwordReset,
@@ -422,6 +474,7 @@ const TEMPLATES = {
   'domain-claim-lost': domainClaimLost,
   'domain-claim-won': domainClaimWon,
   'domain-claim-withdrawn': domainClaimWithdrawn,
+  'payment-failed': paymentFailed,
 } satisfies { [K in TemplateName]: Copy<TemplateProps[K]> };
 
 /**

@@ -16,12 +16,12 @@ import {
 import {
   isSuppressed,
   markClaimNotified,
-  readClaimRecipients,
+  readOwnerRecipients,
   readClaimWork,
   readTenantPlan,
   settleDomainClaim,
   withTenant,
-  type ClaimRecipients,
+  type OwnerRecipients,
   type ClaimWork,
 } from '@catalogorosso/db';
 
@@ -51,7 +51,7 @@ export interface ClaimSweepDeps {
   readonly manageUrl: string;
   readonly readWork?: () => Promise<readonly ClaimWork[]>;
   readonly settle?: typeof settleDomainClaim;
-  readonly recipientsOf?: (tenantId: string) => Promise<ClaimRecipients | undefined>;
+  readonly recipientsOf?: (tenantId: string) => Promise<OwnerRecipients | undefined>;
   readonly markNotified?: (claim: ClaimWork, noticeHours: number) => Promise<unknown>;
   readonly capOf?: (tenantId: string) => Promise<number>;
   readonly now?: () => Date;
@@ -81,7 +81,7 @@ export const formatDeadline = (at: Date, locale: Locale): string =>
     timeZone: 'Europe/Rome',
   }).format(at)} (${locale === 'it' ? 'ora italiana' : 'Italian time'})`;
 
-const defaultRecipients = (tenantId: string) => withTenant(tenantId, readClaimRecipients);
+const defaultRecipients = (tenantId: string) => withTenant(tenantId, readOwnerRecipients);
 
 const defaultMarkNotified = (claim: ClaimWork, noticeHours: number) =>
   withTenant(claim.claimantTenantId, (tx) =>
@@ -110,7 +110,7 @@ export const sweepClaims = async ({
   /** Mails every owner of one winery, in that winery's language. */
   const tell = async (
     tenantId: string,
-    compose: (recipients: ClaimRecipients, locale: Locale) => Message,
+    compose: (recipients: OwnerRecipients, locale: Locale) => Message,
   ): Promise<void> => {
     const recipients = await recipientsOf(tenantId);
 

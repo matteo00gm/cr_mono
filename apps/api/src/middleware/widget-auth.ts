@@ -108,7 +108,7 @@ export const requireWidgetToken =
     if (tenant === undefined) throw new WidgetTokenUnresolvedError();
 
     // Read uncached by CORS on this very request, so a lapsed tenant is refused now, not at expiry.
-    if (!isServiceable(tenant.status)) throw new UnavailableError(WIDGET_UNAVAILABLE);
+    if (!isServiceable(tenant)) throw new UnavailableError(WIDGET_UNAVAILABLE);
 
     const origin = c.get('widgetOrigin');
 

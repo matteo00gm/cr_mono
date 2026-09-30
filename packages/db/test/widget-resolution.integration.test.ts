@@ -124,11 +124,34 @@ describe('the outcomes the row lists', () => {
       found: true,
       tenantId: A,
       status: 'ACTIVE',
+      trialEndsAt: null,
       plan: 'CANTINA',
       locale: 'it',
       turnstile: false,
       originKind: 'production',
     });
+  });
+
+  it('carries a trial’s end, which is what the service gate reads (P5-05a)', async () => {
+    const endsAt = new Date('2031-01-01T00:00:00.000Z');
+
+    await withTenant(
+      A,
+      (tx) =>
+        tx.execute(sql`
+          UPDATE tenants SET status = 'TRIALING', trial_ends_at = ${endsAt.toISOString()}::timestamptz
+        `),
+      db,
+    );
+
+    try {
+      await expect(resolveTenantByKeyAndOrigin(KEY_A, ORIGIN_A, db)).resolves.toMatchObject({
+        status: 'TRIALING',
+        trialEndsAt: endsAt,
+      });
+    } finally {
+      await withTenant(A, (tx) => tx.execute(sql`UPDATE tenants SET status = 'ACTIVE'`), db);
+    }
   });
 
   it("reports a valid key from another tenant's verified origin as a mismatch", async () => {

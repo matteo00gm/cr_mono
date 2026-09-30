@@ -46,6 +46,7 @@ const FOUND: WidgetResolution = {
   found: true,
   tenantId: TENANT,
   status: 'ACTIVE',
+  trialEndsAt: null,
   plan: 'CANTINA',
   locale: 'it',
   turnstile: false,

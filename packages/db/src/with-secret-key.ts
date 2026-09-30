@@ -31,6 +31,8 @@ type TenantPlan = (typeof tenantPlan.enumValues)[number];
 export interface SecretKeyTenant {
   readonly tenantId: string;
   readonly status: TenantStatus;
+  /** When a `TRIALING` winery's trial ends, for the same gate the browser path reads (P5-05a). */
+  readonly trialEndsAt: Date | null;
   readonly plan: TenantPlan | null;
   readonly locale: string;
   /** Every origin this tenant has verified, which is the set a session may be minted for. */
@@ -109,9 +111,17 @@ export const resolveTenantBySecretKey = async (
         sql`SELECT set_config(${SECRET_KEY_GUC}, '', true), set_config('app.tenant_id', ${key.tenant_id}, true)`,
       );
 
-      const tenants = await tx.execute(sql`SELECT status, plan, locale FROM tenants LIMIT 1`);
+      const tenants = await tx.execute(
+        sql`SELECT status, trial_ends_at, plan, locale FROM tenants LIMIT 1`,
+      );
       const tenant = [...tenants][0] as
-        { status: TenantStatus; plan: TenantPlan | null; locale: string } | undefined;
+        | {
+            status: TenantStatus;
+            trial_ends_at: string | Date | null;
+            plan: TenantPlan | null;
+            locale: string;
+          }
+        | undefined;
 
       if (tenant === undefined) return undefined;
 
@@ -123,6 +133,7 @@ export const resolveTenantBySecretKey = async (
       return {
         tenantId: key.tenant_id,
         status: tenant.status,
+        trialEndsAt: tenant.trial_ends_at === null ? null : new Date(tenant.trial_ends_at),
         plan: tenant.plan,
         locale: tenant.locale,
         verifiedOrigins: verified.map((row) => row.origin),

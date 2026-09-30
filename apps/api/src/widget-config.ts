@@ -1,4 +1,5 @@
 import type { WidgetConfigResponse } from '@catalogorosso/api-client';
+import { isServed } from '@catalogorosso/core';
 import type { QuotaState } from '@catalogorosso/security';
 
 import type { WidgetTenant } from './env.js';
@@ -14,16 +15,19 @@ import type { WidgetTenant } from './env.js';
  */
 
 /**
- * The statuses a widget runs for (§1.3): paying, or trialling.
+ * Whether a widget runs for this tenant at all — one answer for the config
+ * (P2-10), the session mint (P2-12) and every call that needs a session (P2-13).
  *
- * Every other status — pending verification, past due, disabled, cancelled —
- * shows the visitor the same disabled state. The distinction between them is a
+ * Paying, or trialling with the trial still running: core's `isServed`, the one
+ * definition (P5-05a). Every other state — pending verification, past due on
+ * the first failure, a trial whose date has passed, disabled, cancelled — shows
+ * the visitor the same disabled state. The distinction between them is a
  * billing fact about the winery, and §1.3 says a visitor is never shown one.
  */
-const SERVICEABLE: ReadonlySet<WidgetTenant['status']> = new Set(['ACTIVE', 'TRIALING']);
-
-/** Whether a widget runs for this tenant at all — one answer for config (P2-10) and session mint (P2-12). */
-export const isServiceable = (status: WidgetTenant['status']): boolean => SERVICEABLE.has(status);
+export const isServiceable = (
+  tenant: Pick<WidgetTenant, 'status' | 'trialEndsAt'>,
+  now: Date = new Date(),
+): boolean => isServed(tenant, now);
 
 /**
  * What a switched-off winery's widget is told, never naming why (§1.3) — by the
@@ -58,7 +62,7 @@ export const widgetConfigFor = (
   quotaState: QuotaState,
   turnstileSiteKey?: string,
 ): WidgetConfigResponse => ({
-  status: isServiceable(tenant.status) ? 'ACTIVE' : 'DISABLED',
+  status: isServiceable(tenant) ? 'ACTIVE' : 'DISABLED',
   locale: tenant.locale,
   theme: { ...DEFAULT_THEME },
   welcomeMessage: tenant.locale === 'en' ? WELCOME.en : WELCOME.it,
