@@ -15,7 +15,7 @@ shows as a `todo` in every run.
 | [T3](#t3--poison-the-cors-allowlist-with-a-lookalike-domain) | Poison the CORS allowlist with a lookalike domain | 5 | — |
 | [T4](#t4--burn-a-competitors-message-quota) | Burn a competitor's message quota | 5 | P7-04 |
 | [T5](#t5--steer-the-model-via-product-descriptions) | Steer the model via product descriptions | 3 | — |
-| [T6](#t6--get-free-premium-tier) | Get free premium tier | 4 | P5-04, P5-06 |
+| [T6](#t6--get-free-premium-tier) | Get free premium tier | 7 | P5-06 |
 | [T7](#t7--xss-the-sellers-storefront-through-the-widget) | XSS the seller's storefront through the widget | 3 | — |
 | [T8](#t8--escalate-editor--owner-or-act-with-no-membership-at-all) | Escalate `EDITOR` → `OWNER`, or act with no membership at all | 5 | — |
 | [T9](#t9--replay-a-captured-session-token) | Replay a captured session token | 4 | — |
@@ -114,10 +114,12 @@ shows as a `todo` in every run.
 | [`apps/api/test/tenant-from-input.test.ts`](../../apps/api/test/tenant-from-input.test.ts) | unit | nothing tenant-shaped is read from a request |
 | [`packages/core/test/webhooks/stripe-signature.test.ts`](../../packages/core/test/webhooks/stripe-signature.test.ts) | unit | a Stripe event verifies only when signed with the endpoint secret over its timestamp and exact body, within five minutes |
 | [`apps/api/test/stripe-webhook.test.ts`](../../apps/api/test/stripe-webhook.test.ts) | unit | an unsigned, mis-signed, stale or altered event is refused before anything reads it, and recorded |
+| [`packages/db/test/tenant-webhooks.integration.test.ts`](../../packages/db/test/tenant-webhooks.integration.test.ts) | integration (Postgres) | an event is claimed and applied in one transaction under the winery it names, once, however many copies arrive together |
+| [`apps/api/test/stripe-events.integration.test.ts`](../../apps/api/test/stripe-events.integration.test.ts) | integration (Postgres) | a replayed event is answered as a duplicate and changes nothing, and one that names no winery of ours is never claimed |
+| [`packages/core/test/billing/stripe-events.test.ts`](../../packages/core/test/billing/stripe-events.test.ts) | unit | a winery is taken only from the two fields we write at Checkout, in UUID shape, and only when they agree |
 
 **Gaps.** 
 
-- Webhook idempotency: a replayed event is a no-op — **P5-04**
 - Every status transition driven only by a verified event — **P5-06**
 
 ## T7 — XSS the seller's storefront through the widget

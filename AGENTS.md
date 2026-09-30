@@ -68,7 +68,9 @@ patch will not, because the ORM's own documentation shows the forbidden form.
   stops being true the instant one of these touches a tenant table. The set is
   closed; adding to it is a design change (ADR 0020).
 - Never read a tenant id from request input — body, query, path or header. It
-  comes from a `memberships` row for the authenticated user (P0-48).
+  comes from a `memberships` row for the authenticated user (P0-48). The one
+  exception is a signature-verified Stripe event, which names the winery we
+  wrote into it at Checkout and is bound to the customer on file (ADR 0029).
 - Never hand-write a type that duplicates a table's shape. Contracts are
   derived from the schema with `drizzle-zod` (P0-42).
 - Never grant the runtime role a way to rewrite a ledger. `audit_log`,

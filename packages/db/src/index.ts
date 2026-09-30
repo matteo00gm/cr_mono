@@ -365,9 +365,14 @@ export {
  * It is exported rather than a `getDb` accessor for exactly that reason: one
  * named path with a written reason, never a general one that erodes into the
  * default.
+ *
+ * `withTenantWebhookEvent` is the same claim inside `withTenant` for the
+ * winery a verified Stripe event names (P5-04, ADR 0029): not a scope of its
+ * own, and no GUC beyond the tenant's.
  */
 export {
   claimWebhookEvent,
+  withTenantWebhookEvent,
   withWebhookEvent,
   type ClaimedRun,
   type WebhookEvent,

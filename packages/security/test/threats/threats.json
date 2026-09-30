@@ -196,13 +196,24 @@
           "path": "apps/api/test/stripe-webhook.test.ts",
           "runner": "unit",
           "covers": "an unsigned, mis-signed, stale or altered event is refused before anything reads it, and recorded"
+        },
+        {
+          "path": "packages/db/test/tenant-webhooks.integration.test.ts",
+          "runner": "integration",
+          "covers": "an event is claimed and applied in one transaction under the winery it names, once, however many copies arrive together"
+        },
+        {
+          "path": "apps/api/test/stripe-events.integration.test.ts",
+          "runner": "integration",
+          "covers": "a replayed event is answered as a duplicate and changes nothing, and one that names no winery of ours is never claimed"
+        },
+        {
+          "path": "packages/core/test/billing/stripe-events.test.ts",
+          "runner": "unit",
+          "covers": "a winery is taken only from the two fields we write at Checkout, in UUID shape, and only when they agree"
         }
       ],
       "gaps": [
-        {
-          "what": "Webhook idempotency: a replayed event is a no-op",
-          "row": "P5-04"
-        },
         {
           "what": "Every status transition driven only by a verified event",
           "row": "P5-06"
