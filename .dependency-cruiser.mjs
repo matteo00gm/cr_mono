@@ -292,6 +292,11 @@ export default {
           // statements on the caller's withTenant transaction, every one under
           // the tenants policy, and no GUC of its own.
           '|^packages/db/src/dev-mode[.]ts$' +
+          // src/billing.ts is exempt from P5-02 on turnstile.ts's terms:
+          // statements on the caller's withTenant transaction, every one under
+          // the tenants policy, and no GUC of its own. The webhook's writes
+          // join it under the same terms, not a scope of their own (P5-03).
+          '|^packages/db/src/billing[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
           '|^packages/core/src/auth[.]ts$' +

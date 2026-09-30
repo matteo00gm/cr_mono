@@ -394,6 +394,19 @@ export const turnstileSettingsResponse = z.strictObject({
 });
 
 export type TurnstileSettingsResponse = z.infer<typeof turnstileSettingsResponse>;
+
+/**
+ * Where to send the owner to buy a plan (P5-02).
+ *
+ * A Stripe-hosted Checkout page, good for about a day; the dashboard navigates
+ * to it. Nothing is bought until they finish there, and the plan changes only
+ * when Stripe's webhook says it has been paid for.
+ */
+export const billingCheckoutResponse = z.strictObject({
+  url: z.url({ protocol: /^https$/u }),
+});
+
+export type BillingCheckoutResponse = z.infer<typeof billingCheckoutResponse>;
 export type IssuedKeysResponse = z.infer<typeof issuedKeysResponse>;
 export type Product = z.infer<typeof productSchema>;
 
@@ -815,6 +828,7 @@ export const DASHBOARD_RESPONSES = {
   'POST /v1/dashboard/rag/simulate': ragSimulationResponse,
   'GET /v1/dashboard/domains/claims/served': servedClaimsResponse,
   'POST /v1/dashboard/domains/claims/:id/withdraw': claimWithdrawnResponse,
+  'POST /v1/dashboard/billing/checkout': billingCheckoutResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

@@ -53,7 +53,9 @@ const fakeStripe = async ({ prices = [], products = [], refuseWith, refuseProduc
     if (refuseWith !== undefined) return send(refuseWith.status, { error: refuseWith.error });
 
     if (incoming.method === 'GET' && url.pathname === '/v1/prices') {
-      const keys = params.getAll('lookup_keys[]');
+      const keys = [...params]
+        .filter(([name]) => /^lookup_keys\[\d+\]$/u.test(name))
+        .map(([, value]) => value);
       const data = state.prices.filter(
         (price) => price.active && price.lookup_key !== null && keys.includes(price.lookup_key),
       );
@@ -317,7 +319,7 @@ describe('an empty account', () => {
 
       expect(list.path).toBe('/v1/prices');
       expect(list.params.get('active')).toBe('true');
-      expect(list.params.getAll('lookup_keys[]')).toEqual([
+      expect([list.params.get('lookup_keys[0]'), list.params.get('lookup_keys[1]')]).toEqual([
         'cantina_monthly_eur',
         'ecommerce_monthly_eur',
       ]);

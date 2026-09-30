@@ -46,6 +46,17 @@ export const resendApiKey = new sst.Secret('ResendApiKey', '');
  * (it ships in every widget config that asks for a challenge); it is a secret
  * here only because `sst.Secret` is this app's per-stage operator value.
  */
+/**
+ * Stripe's secret key for this stage's account (P5-02). Empty until an
+ * operator has a Stripe account for the stage and has run
+ * `scripts/stripe-setup.mjs --apply` against it; empty is read as absent, and
+ * then no plan can be bought — the owner is told so. A restricted key is
+ * enough: Checkout and Billing Portal sessions, and prices and subscriptions.
+ *
+ *   `sst secret set StripeSecretKey --stage <stage>`
+ */
+const stripeSecretKey = new sst.Secret('StripeSecretKey', '');
+
 const turnstileSiteKey = new sst.Secret('TurnstileSiteKey', '');
 const turnstileSecretKey = new sst.Secret('TurnstileSecretKey', '');
 
@@ -210,6 +221,9 @@ const environment = {
   /* Both or neither; see the declarations above (P4-14). */
   TURNSTILE_SITE_KEY: turnstileSiteKey.value,
   TURNSTILE_SECRET_KEY: turnstileSecretKey.value,
+
+  /* Empty is absent: no plan can be bought (P5-02). */
+  STRIPE_SECRET_KEY: stripeSecretKey.value,
 
   /**
    * The widget token keyset (P2-11), read once per container when P2-12's

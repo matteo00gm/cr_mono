@@ -28,6 +28,7 @@ import {
   withUser,
 } from '@catalogorosso/db';
 
+import { createBillingPort, type BillingPort } from './billing.js';
 import { createDomainsPort, type DomainsPort } from './domains.js';
 import { createKeysPort, type KeysPort } from './keys.js';
 import { createTurnstileVerifier } from './turnstile.js';
@@ -40,6 +41,7 @@ import { createChatPort, type ChatPort } from './chat.js';
 import { createQuotaPort, type QuotaPort } from './quota.js';
 import { createRagPort, type RagPort } from './rag.js';
 import { refusalRecorders } from './security-events.js';
+import { createStripeClient } from './stripe.js';
 import type { WidgetDependencies } from './surfaces/widget.js';
 import { createWebhooksPort, type WebhooksPort } from './webhooks.js';
 import type { AuthPort } from './middleware/auth.js';
@@ -165,6 +167,12 @@ export interface RuntimeConfig {
    * default everywhere until an operator sets them.
    */
   readonly turnstile?: { readonly siteKey: string; readonly secretKey: string } | undefined;
+  /**
+   * Stripe's secret key for this stage (P5-02). Absent is restrictive: no plan
+   * can be bought, and the owner is told so, rather than the API refusing to
+   * start on a stage nobody has set up payments for yet.
+   */
+  readonly stripeSecretKey?: string | undefined;
 }
 
 /**
@@ -205,6 +213,8 @@ export interface Dependencies {
   /** Keys (P4-09). */
   readonly keys: KeysPort;
   readonly turnstileSettings: TurnstileSettingsPort;
+  /** Billing (P5). */
+  readonly billing: BillingPort;
   /** The catalogue (P1-02). */
   readonly products: ProductsPort;
   /** The retrieval sandbox (P2-37). */
@@ -439,6 +449,14 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
 
     /* The Turnstile switch (P4-14), refusing to turn on where it cannot verify. */
     turnstileSettings: createTurnstileSettingsPort({ available: config.turnstile !== undefined }),
+
+    /* Billing (P5-02): Stripe when this stage has a key, a plain refusal when not. */
+    billing: createBillingPort({
+      ...(config.stripeSecretKey === undefined
+        ? {}
+        : { stripe: createStripeClient({ secretKey: config.stripeSecretKey }) }),
+      dashboardOrigin: new URL(config.authBaseUrl).origin,
+    }),
 
     domains: createDomainsPort({
       environment: config.stage === 'unknown' ? 'development' : 'production',

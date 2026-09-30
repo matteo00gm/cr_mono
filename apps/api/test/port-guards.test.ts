@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BillingPortNotConfiguredError,
+  unconfiguredBilling,
+  type BillingPort,
+} from '../src/billing.js';
+import {
   ProductsPortNotConfiguredError,
   unconfiguredProducts,
   type ProductsPort,
@@ -106,5 +111,26 @@ describe('unconfiguredWebhooks', () => {
 
   it('names the composition root, not the request', async () => {
     await expect(calls.record()).rejects.toThrow(/composition root/i);
+  });
+});
+
+describe('unconfiguredBilling', () => {
+  const calls: Record<keyof BillingPort, () => Promise<unknown>> = {
+    checkout: () => unconfiguredBilling.checkout('11111111-1111-1111-1111-111111111111', 'CANTINA'),
+  };
+
+  it.each(Object.keys(calls) as (keyof BillingPort)[])(
+    'refuses %s with a named error',
+    async (method) => {
+      await expect(calls[method]()).rejects.toThrow(BillingPortNotConfiguredError);
+    },
+  );
+
+  it('covers every method the port declares', () => {
+    expect(Object.keys(calls).sort()).toEqual(Object.keys(unconfiguredBilling).sort());
+  });
+
+  it('names the composition root, not the request', async () => {
+    await expect(calls.checkout()).rejects.toThrow(/composition root/i);
   });
 });
