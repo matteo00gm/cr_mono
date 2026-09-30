@@ -215,3 +215,51 @@ describe('no cache between the allowlist and the answer (§5.7)', () => {
     expect((await get(neri.key, neri.origin)).status).toBe(403);
   });
 });
+
+describe('development mode, end to end (P4-19b)', () => {
+  /*
+   * The real CORS check and the real accessor, in production mode, over the
+   * real policy — the path a developer's `http://localhost:3000` takes. The
+   * row's test is the expiry, not the grant: the same request a second after
+   * `dev_mode_expires_at` is refused exactly as a stranger's is.
+   */
+  const LOCAL = 'http://localhost:3000';
+
+  const grant = async (tenantId: string, expiresIn: string) => {
+    if (harness === undefined) throw new Error('harness not started');
+
+    await harness.adminDb.execute(sql`
+      UPDATE tenants
+      SET dev_origin = ${LOCAL}, dev_mode_expires_at = now() + ${expiresIn}::interval
+      WHERE id = ${tenantId}::uuid
+    `);
+  };
+
+  it('serves the winery’s one local origin while the grant is live', async () => {
+    await grant(rossi.tenantId, '1 hour');
+
+    const response = await get(rossi.key, LOCAL);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('access-control-allow-origin')).toBe(LOCAL);
+    expect(await response.json()).toEqual({ tenantId: rossi.tenantId });
+  });
+
+  it('refuses it the moment the grant has run out', async () => {
+    await grant(rossi.tenantId, '-1 second');
+
+    expect((await get(rossi.key, LOCAL)).status).toBe(403);
+  });
+
+  it('never serves it to another winery’s key', async () => {
+    await grant(rossi.tenantId, '1 hour');
+
+    expect((await get(verdi.key, LOCAL)).status).toBe(403);
+  });
+
+  it('never serves another local origin', async () => {
+    await grant(rossi.tenantId, '1 hour');
+
+    expect((await get(rossi.key, 'http://localhost:4000')).status).toBe(403);
+  });
+});

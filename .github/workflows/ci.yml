@@ -82,6 +82,13 @@ jobs:
       - name: Check ADRs
         run: pnpm adr:check
 
+      # The threat matrix (P4-17). The coverage document is generated from the
+      # same manifest the threat suites check, so a manifest edit without a
+      # regenerated document — or the other way round — fails here, before the
+      # document can claim evidence the suites do not hold.
+      - name: Check threat coverage is current
+        run: pnpm threats:check
+
       # The invariants (P0-60). Packages are discovered on disk rather than
       # listed, the same reflection pattern as P0-41 — so a new package fails
       # this the moment it exists, which is the intended prompt.
@@ -540,6 +547,30 @@ jobs:
 
       - name: Integration tests
         run: pnpm test:integration
+
+  # The T1–T10 matrix (P4-17), as one job a reviewer can point at.
+  #
+  # Every file here also runs in `test` or `integration`; this job is the
+  # matrix run *as the matrix*, so "is T3 covered?" has one green or red answer
+  # rather than a search through two logs. Docker for the Postgres evidence, as
+  # `integration` has; the browser evidence runs in `e2e`.
+  security:
+    name: Security matrix (T1–T10)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Security matrix
+        run: pnpm test:security
 
   # The browser suite (P3-18).
   #
