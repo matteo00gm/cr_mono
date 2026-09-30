@@ -1,0 +1,41 @@
+{
+  "id": "__EVENT__",
+  "object": "event",
+  "api_version": "2026-08-26.dahlia",
+  "created": "__CREATED__",
+  "livemode": false,
+  "pending_webhooks": 1,
+  "request": { "id": null, "idempotency_key": null },
+  "type": "checkout.session.completed",
+  "data": {
+    "object": {
+      "id": "cs_test_REDACTED",
+      "object": "checkout.session",
+      "amount_subtotal": 7900,
+      "amount_total": 7900,
+      "cancel_url": "https://app.catalogorosso.example/fatturazione?checkout=cancelled",
+      "client_reference_id": "__TENANT__",
+      "currency": "eur",
+      "customer": "__CUSTOMER__",
+      "customer_details": {
+        "email": "owner@example.invalid",
+        "name": "REDACTED",
+        "address": {
+          "country": "IT",
+          "city": "REDACTED",
+          "line1": "REDACTED",
+          "postal_code": "00000"
+        }
+      },
+      "invoice": "in_REDACTED",
+      "livemode": false,
+      "locale": "it",
+      "metadata": { "tenant_id": "__TENANT__", "plan": "ECOMMERCE" },
+      "mode": "subscription",
+      "payment_status": "__PAYMENT_STATUS__",
+      "status": "complete",
+      "subscription": "__SUBSCRIPTION__",
+      "success_url": "https://app.catalogorosso.example/fatturazione?checkout=success"
+    }
+  }
+}

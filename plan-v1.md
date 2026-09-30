@@ -1403,7 +1403,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P5-04 | 🔒 Webhook idempotency | `processed_webhooks`, replay is a no-op | P5-03 |
 | ✅ P5-05 | ⛔ Status state machine | TRIALING→ACTIVE→PAST_DUE→DISABLED→CANCELED; **adds `tenants.trial_ends_at`** and the `tenant_status_coherent` CHECK that reads it (§5.2b); `livemode` + customer↔tenant binding | P5-04 |
 | ✅ P5-05a | 🔒 Payment-failure blocking | **no grace** — `PAST_DUE` blocks the widget on first failure; dashboard stays open; Stripe retries restore automatically (§5.2b) | P5-05 |
-| P5-06 | 🔒 Webhook fixture test suite | every transition; unsigned and mis-signed rejected | P5-05 |
+| ✅ P5-06 | 🔒 Webhook fixture test suite | every transition; unsigned and mis-signed rejected | P5-05 |
 | P5-07 | Test: DISABLED propagation split | chat refused immediately; `/config` may lag 60 s | P5-05,P2-13 |
 | P5-08 | Customer Portal link endpoint | | P5-02 |
 | P5-09 | Upgrade (prorated) / downgrade (period end) | | P5-05 |
@@ -7099,6 +7099,16 @@ Also send the P0-64 payment-failed email on entry to `PAST_DUE`, since the tenan
 **How.** Real captured Stripe test payloads (checked in, redacted) driving every transition end-to-end through the endpoint: trial start, activation, payment failure, recovery, cancellation, immediate deletion, plan change. Plus adversarial cases: unsigned, mis-signed, replayed, out-of-order (an older event arriving after a newer one must not regress the status), and an event for an unknown tenant (ignored, logged, 200 — returning an error would make Stripe retry forever).
 
 **Files.** `apps/api/test/stripe-webhooks.spec.ts`, fixtures. **~180 test lines.**
+
+**As built (2026-10-01).** `apps/api/test/stripe-webhooks.integration.test.ts` (the repository's naming for a Postgres suite) and six fixtures in `apps/api/test/fixtures/stripe/`.
+
+- **Through the endpoint, as production composes it**: each fixture is signed with the endpoint secret, posted to `/v1/webhooks/stripe`, claimed once under the winery it names, run through the state machine, and read back from Postgres as `app_rw` wrote it. One winery lives the whole story — activation, a failed payment (dark at once, owners told once), recovery with no human, a plan change landing through the price, a cancellation scheduled at period end that keeps it served, and the end — and three more cover immediate deletion, a Checkout that settles later, and Stripe reporting a subscription past due and active again.
+- **The adversarial half**: unsigned and mis-signed events are refused with nothing claimed and a `security_events` row written; a body altered after signing (the plan upgraded in flight) is refused; a replay is answered 200 as a duplicate and changes nothing; an older failure delivered after a newer success does not regress a payer; an event naming a winery that does not exist is acknowledged and claimed; one naming no winery is acknowledged and never claimed; and a customer another winery pays with cannot be bound.
+- **⚠ The fixtures are written, not captured** *(deviation)*: there is no Stripe account for any stage, so they follow Stripe's API reference at the pinned version (`2026-08-26.dahlia`) — invoices carry their subscription under `parent.subscription_details`, as that version does. Placeholders are filled per test so every test has its own winery; everything that would identify a customer is `REDACTED` or `example.invalid`. **Open (operator): replace them with captures** from `stripe trigger` once test mode exists, and keep the placeholders.
+- **"Trial start" is not a Stripe event here**: the card-free trial starts on the first verified domain (P5-05), and a Checkout during it is the activation case.
+- **T6 has no gaps left** in the threat matrix: this suite and the 0061 CHECK's are its last evidence.
+
+**Verified.** 12 cases against real Postgres. Its own mutation run asks whether it catches, end to end and alone, what the unit suites catch in isolation: the signature not checked, no block on a failure, no ordering guard, a replay applied again, a bound customer taken, a plan change not landing — 6 mutants, 6 killed.
 
 ---
 

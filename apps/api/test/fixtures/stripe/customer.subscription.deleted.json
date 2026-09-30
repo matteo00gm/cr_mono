@@ -1,0 +1,44 @@
+{
+  "id": "__EVENT__",
+  "object": "event",
+  "api_version": "2026-08-26.dahlia",
+  "created": "__CREATED__",
+  "livemode": false,
+  "pending_webhooks": 1,
+  "request": { "id": null, "idempotency_key": null },
+  "type": "customer.subscription.deleted",
+  "data": {
+    "object": {
+      "id": "__SUBSCRIPTION__",
+      "object": "subscription",
+      "canceled_at": 1792592000,
+      "cancel_at_period_end": false,
+      "currency": "eur",
+      "customer": "__CUSTOMER__",
+      "ended_at": 1792592000,
+      "items": {
+        "object": "list",
+        "data": [
+          {
+            "id": "si_REDACTED",
+            "object": "subscription_item",
+            "price": {
+              "id": "price_REDACTED",
+              "object": "price",
+              "currency": "eur",
+              "lookup_key": "ecommerce_monthly_eur",
+              "product": "plan_ecommerce",
+              "recurring": { "interval": "month", "interval_count": 1 },
+              "unit_amount": 7900
+            },
+            "quantity": 1
+          }
+        ],
+        "has_more": false
+      },
+      "livemode": false,
+      "metadata": { "tenant_id": "__TENANT__", "plan": "ECOMMERCE" },
+      "status": "canceled"
+    }
+  }
+}
