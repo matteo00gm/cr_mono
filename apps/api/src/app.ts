@@ -5,6 +5,7 @@ import type { MembershipReader } from '@catalogorosso/core';
 
 import type { AppEnv } from './env.js';
 import type { AuthPort } from './middleware/auth.js';
+import type { BillingPort } from './billing.js';
 import type { DomainsPort } from './domains.js';
 import type { KeysPort } from './keys.js';
 import type { TurnstileSettingsPort } from './turnstile-settings.js';
@@ -86,6 +87,9 @@ export interface AppOptions {
   /** The Turnstile setting (P4-14). Optional on the same terms. */
   readonly turnstileSettings?: TurnstileSettingsPort | undefined;
 
+  /** Billing (P5). Optional on the same terms. See `src/billing.ts`. */
+  readonly billing?: BillingPort | undefined;
+
   /**
    * The shared secret CloudFront attaches to origin requests (A2).
    *
@@ -148,6 +152,7 @@ export const createApp = ({
   domains,
   keys,
   turnstileSettings,
+  billing,
   products,
   rag,
   originSecret,
@@ -231,6 +236,7 @@ export const createApp = ({
       domains,
       keys,
       turnstileSettings,
+      billing,
       products,
       rag,
       dashboardOrigin,

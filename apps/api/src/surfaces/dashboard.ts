@@ -4,6 +4,7 @@ import type { MembershipReader } from '@catalogorosso/core';
 import { publicRoute, requires, ROLES, type RouteAccess } from '@catalogorosso/security';
 import {
   acceptInviteResponse,
+  billingCheckoutResponse,
   catalogueReindexedResponse,
   claimWithdrawnResponse,
   devModeResponse,
@@ -47,6 +48,7 @@ import {
   MAX_IMPORT_BODY_BYTES,
   MAX_IMPORT_ROWS,
   NotFoundError,
+  PLAN_IDS,
   rangeOfBand,
   readVariantId,
   VARIANT_ID_EXPECTED,
@@ -63,6 +65,7 @@ import {
   type ProductInsert,
 } from '@catalogorosso/db';
 
+import { unconfiguredBilling, type BillingPort } from '../billing.js';
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
 import { requireSameOrigin } from '../middleware/same-origin.js';
@@ -145,6 +148,11 @@ export interface DashboardOptions {
   readonly keys?: KeysPort | undefined;
   /** The Turnstile setting (P4-14). */
   readonly turnstileSettings?: TurnstileSettingsPort | undefined;
+  /**
+   * Billing (P5). Optional on the same terms as the rest: absent refuses every
+   * call with a wiring error, never a Checkout page for the wrong thing.
+   */
+  readonly billing?: BillingPort | undefined;
   /** Where state-changing requests must come from (review, R5). */
   readonly dashboardOrigin?: string | undefined;
 }
@@ -486,6 +494,12 @@ const noStore: MiddlewareHandler<AppEnv> = async (c, next) => {
  */
 const verifyBody = z.object({ method: z.enum(VERIFY_METHODS) }).strict();
 
+/**
+ * Which plan to buy. The list is `plans.ts`'s, so a plan that exists there and
+ * not here — or the reverse — cannot happen (P5-01).
+ */
+const checkoutBody = z.object({ plan: z.enum(PLAN_IDS) }).strict();
+
 export const createDashboardApp = ({
   auth,
   readMemberships,
@@ -496,6 +510,7 @@ export const createDashboardApp = ({
   domains = unconfiguredDomains,
   keys = unconfiguredKeys,
   turnstileSettings = unconfiguredTurnstileSettings,
+  billing = unconfiguredBilling,
 }: DashboardOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
@@ -1279,6 +1294,27 @@ export const createDashboardApp = ({
   app.delete('/widget/dev-mode', requireCapability('domains:manage'), async (c) =>
     c.json(await domains.endDevMode(c.get('tenantId'))),
   );
+
+  /* ---- Billing (P5) ------------------------------------------------------ */
+
+  /**
+   * Start buying a plan: a Stripe Checkout page to send the owner to (P5-02).
+   *
+   * **No step-up**, unlike a change of plan (P5-09): this changes nothing until
+   * the owner pays on Stripe's page, and paying is itself the confirmation. The
+   * tenant is the session's; the body names only a plan.
+   */
+  app.post('/billing/checkout', requireCapability('billing:manage'), async (c) => {
+    const parsed = checkoutBody.safeParse(await readJson(c));
+
+    if (!parsed.success) {
+      throw new InvalidRequestError(
+        `Send a JSON body naming the plan: ${PLAN_IDS.map((id) => `{"plan": "${id}"}`).join(' or ')}.`,
+      );
+    }
+
+    return c.json(await billing.checkout(c.get('tenantId'), parsed.data.plan));
+  });
 
   app.post('/keys', requireCapability('keys:manage'), stepUp, async (c) =>
     c.json(await keys.create(c.get('tenantId')), 201),
@@ -2258,6 +2294,23 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         previous: { publicKey: 'pk_live_…old…', validUntil: '2026-09-27T10:00:00.000Z' },
       },
       response: keysResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/billing/checkout`),
+    {
+      access: requires('billing:manage'),
+      summary: 'Start buying a plan',
+      description:
+        'Body `{"plan": "CANTINA"}` or `{"plan": "ECOMMERCE"}`. Answers with the URL of a ' +
+        'Stripe-hosted Checkout page for that plan; send the owner there. Nothing changes here ' +
+        'until they finish paying and Stripe tells us so — the plan and the status move then, ' +
+        'not now — and they come back to the Fatturazione screen either way. A winery that ' +
+        'already has a subscription is refused with a 409: moving between plans is a change to ' +
+        'that subscription, not a second one. A 409 also means payments are not set up on this ' +
+        'service.',
+      example: { url: 'https://checkout.stripe.com/c/pay/cs_test_a1b2c3' },
+      response: billingCheckoutResponse,
     },
   ],
   [

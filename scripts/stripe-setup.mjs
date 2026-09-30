@@ -37,6 +37,7 @@ import { die, table } from './lib/report.mjs';
 const { applyCatalog, CatalogConflictError, planCatalog, STRIPE_API_VERSION } =
   await import('../packages/core/dist/billing/stripe-catalog.js');
 const { PLANS } = await import('../packages/core/dist/plans.js');
+const { encodeStripeForm } = await import('../packages/core/dist/billing/stripe-form.js');
 
 const FLAGS = new Set(['--apply', '--reprice', '--live']);
 const args = process.argv.slice(2);
@@ -117,19 +118,8 @@ class Refusal extends Error {
 /** Removes the key from anything about to be shown, however it got there. */
 const redact = (text) => String(text).replaceAll(key, '[redacted]');
 
-/** Stripe's form encoding: nested objects as `a[b]`, arrays as `a[]`. */
-const encode = (params, prefix = '') =>
-  Object.entries(params).flatMap(([name, value]) => {
-    const field = prefix === '' ? name : `${prefix}[${name}]`;
-
-    if (Array.isArray(value)) return value.map((item) => [`${field}[]`, String(item)]);
-    if (typeof value === 'object' && value !== null) return encode(value, field);
-
-    return [[field, String(value)]];
-  });
-
 const request = async (method, path, params = {}) => {
-  const body = new URLSearchParams(encode(params)).toString();
+  const body = new URLSearchParams(encodeStripeForm(params)).toString();
   const headers = {
     authorization: `Bearer ${key}`,
     'stripe-version': STRIPE_API_VERSION,

@@ -1396,7 +1396,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | # | Task | How / notes | Deps |
 |---|---|---|---|
 | ✅ P5-01 | Stripe products/prices script | Cantina (€29/mo, 1.5k msg, 300 SKU) + E-comm (€79/mo, 6k msg, 2.5k SKU) | P0-11 |
-| P5-02 | Checkout session endpoint | custom tax metadata fields (P.IVA/CF, SdI/PEC) | P5-01 |
+| ✅ P5-02 | Checkout session endpoint | custom tax metadata fields (P.IVA/CF, SdI/PEC) | P5-01 |
 | P5-02a | Italian tax metadata fields on Checkout | collects optional P.IVA/CF, Codice Destinatario SdI or PEC | P5-02 |
 | P5-03 | 🔒 Webhook: raw-body signature verify | before any body parser touches it | P5-01 |
 | P5-03a | 🔒 SdI / FatturaPA e-invoicing bridge | async job on `invoice.paid` → Fatture in Cloud API to emit FatturaPA XML | P5-03,P5-04 |
@@ -6902,6 +6902,29 @@ Store the resulting price ids in SSM. Include the plan limits in `packages/core/
 **Tests.** Creates a session with the tenant reference; an unknown plan id is refused; an existing customer is reused; `EDITOR` gets 403.
 
 **Files.** `billing.ts`, tests. **~100 lines.**
+
+**As built (2026-09-30).** `POST /v1/dashboard/billing/checkout` (`billing:manage`), `apps/api/src/billing.ts` over `apps/api/src/stripe.ts`, the session's parameters in `packages/core/src/billing/checkout.ts`, and `readBillingState` in `packages/db/src/billing.ts`. **Nothing has been sent to Stripe**: there is no key for any stage, and every test drives an in-memory stand-in.
+
+- **The tenant travels in Stripe-signed data, written by us** *(decision, for P5-03)*. `client_reference_id` and `metadata.tenant_id` on the session, and `metadata.tenant_id` on the *subscription* through `subscription_data` — so every later subscription and invoice event carries the winery it belongs to. The webhook can then open an ordinary `withTenant` scope and check the customer against the one on file, rather than look a customer id up across every winery, which would be a new un-scoped read. The body names only a plan (strict), so nothing a browser sends reaches either field (P0-48).
+- **Checkout changes nothing of ours.** It returns a Stripe-hosted page; the plan and the status move only when the webhook says the subscription exists and is paid for (P5-05), so there is one writer of billing state.
+- **A second subscription is refused** (409) while `stripe_subscription_id` is on file, and Stripe is not asked anything: moving between plans is P5-09's change to the subscription, not a second purchase. **Carried to P5-05:** the webhook that ends a subscription must clear that column, or a winery that cancelled can never buy again; and two Checkout pages opened in two tabs can both be paid, so a `checkout.session.completed` for a winery that already has a *different* subscription must be caught there rather than silently replacing the first.
+- **The price is Stripe's answer under the lookup key** (P5-01), never an id from configuration. None under it means `stripe-setup.mjs` was never applied: the owner gets the same 409 as a stage with no key, and the operator a `stripe_price_missing` log line naming the plan.
+- **`STRIPE_SECRET_KEY` is optional** (`StripeSecretKey` in `infra/api.ts`, empty by default). Absent, the API starts and every purchase is refused plainly; requiring it would block every stage that has no Stripe account yet.
+- **No Stripe SDK** *(decision)*. A two-verb client with a Zod schema per call, the P5-01 encoder (now `encodeStripeForm` in core, which the script also uses, indexing arrays so `line_items` keeps each item's keys together), the pinned API version and a ten-second timeout. A Stripe error surfaces as its type and code only — its prose can quote a customer's email.
+- **No step-up** *(decision)*: nothing changes until the owner pays on Stripe's page, and paying is the confirmation. A plan *change* takes one (P5-09).
+- **An unknown plan is a 422**, as every malformed dashboard body is here; the row's "refused" holds, and the message names the plans there are.
+- **Deferred to P5-02a:** the tax fields on the session, and saving them on completion. **To P5-12:** the Fatturazione screen that calls this.
+
+**Verified.** Unit, route and composition suites; `readBillingState` under RLS in `packages/db`, and the port with its default reader in `apps/api`, against real Postgres. 18 mutants, 18 killed.
+
+| Mutation | Caught by |
+|---|---|
+| A purchase with no key · a second subscription sold · any price taken for the plan · the customer not reused | `billing.test.ts` |
+| The default reader reading no winery | `billing.integration.test.ts` |
+| No `client_reference_id` · no subscription metadata · any locale · cancel landing on success | `checkout.test.ts` |
+| `undefined` sent as a word · arrays not indexed | `stripe-form.test.ts` |
+| No pinned version · idempotency key dropped · a refusal or an unreadable success handed on · no timeout | `stripe.test.ts` |
+| An editor may buy · the body accepting other fields | the route cases |
 
 ---
 

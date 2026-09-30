@@ -186,6 +186,7 @@ export const dependencies = buildDependencies({
   ...(resendWebhookSecret === undefined ? {} : { resendWebhookSecret }),
   ...(widgetTokenKeys === undefined ? {} : { widgetTokenKeys }),
   ...(turnstile === undefined ? {} : { turnstile }),
+  stripeSecretKey: optionalEnvironment('STRIPE_SECRET_KEY'),
 
   emailFrom: optionalEnvironment('EMAIL_FROM') ?? 'AI Sommelier <noreply@localhost>',
   resendApiKey: optionalEnvironment('RESEND_API_KEY'),

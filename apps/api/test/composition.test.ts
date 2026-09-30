@@ -7,6 +7,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app.js';
+import { BILLING_UNAVAILABLE } from '../src/billing.js';
 import { buildDependencies, QUERY_EMBEDDING } from '../src/composition.js';
 import { unconfiguredMembers } from '../src/members.js';
 import { ORIGIN_SECRET_HEADER } from '../src/middleware/origin-secret.js';
@@ -380,5 +381,15 @@ describe('embedding a visitor’s question (review, R7)', () => {
 
     expect(QUERY_EMBEDDING.maxAttempts).toBeLessThanOrEqual(2);
     expect(worstCase).toBeLessThanOrEqual(10_000);
+  });
+});
+
+describe('billing (P5-02)', () => {
+  it('starts without a Stripe key, and refuses a purchase plainly rather than failing to boot', async () => {
+    const deps = buildDependencies(config);
+
+    await expect(deps.billing.checkout(randomUUID(), 'CANTINA')).rejects.toThrow(
+      BILLING_UNAVAILABLE,
+    );
   });
 });
