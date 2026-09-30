@@ -31,9 +31,11 @@ export type WidgetResolution =
       readonly turnstile: boolean;
       /**
        * Which kind of origin the request came from (P4-19). A staging origin
-       * gets its own, lower rate limit and shares the winery's monthly quota.
+       * gets its own, lower rate limit and shares the winery's monthly quota;
+       * `development` is the winery's one local origin in development mode
+       * (P4-19b), and is limited the same way.
        */
-      readonly originKind: 'production' | 'staging';
+      readonly originKind: 'production' | 'staging' | 'development';
     }
   /**
    * No usable key: never issued, or revoked and past its grace window.
@@ -57,6 +59,8 @@ interface ResolutionRow {
   readonly plan: TenantPlan | null;
   readonly locale: string | null;
   readonly turnstile_enabled: boolean | null;
+  /** The winery reached through its development origin rather than a domain (P4-19b). */
+  readonly development: boolean | null;
 }
 
 export const resolveTenantByKeyAndOrigin = (
@@ -88,13 +92,17 @@ export const resolveTenantByKeyAndOrigin = (
           t.status,
           t.plan,
           t.locale,
-          t.turnstile_enabled
+          t.turnstile_enabled,
+          (d.id IS NULL AND t.id IS NOT NULL) AS development
         FROM widget_keys k
         LEFT JOIN tenant_domains d
           ON d.tenant_id = k.tenant_id
           AND d.origin = ${origin}
           AND d.status = 'VERIFIED'
-        LEFT JOIN tenants t ON t.id = d.tenant_id
+        LEFT JOIN tenants t
+          ON t.id = k.tenant_id
+          AND (d.id IS NOT NULL
+            OR (t.dev_origin = ${origin} AND t.dev_mode_expires_at > now()))
         WHERE k.public_key = ${publicKey}
       `);
 
@@ -107,7 +115,13 @@ export const resolveTenantByKeyAndOrigin = (
        */
       if (!row?.usable) return { found: false, reason: 'unknown_key' };
 
-      if (row.domain_id === null) {
+      /*
+       * No verified domain, and not the winery's live development origin
+       * either (P4-19b). The join mirrors the policy, so a development origin
+       * whose twenty-four hours have passed lands here exactly as a stranger
+       * would.
+       */
+      if (row.domain_id === null && row.development !== true) {
         return { found: false, reason: 'origin_mismatch', tenantId: row.tenant_id };
       }
 
@@ -130,7 +144,12 @@ export const resolveTenantByKeyAndOrigin = (
         plan: row.plan,
         locale: row.locale,
         turnstile: row.turnstile_enabled === true,
-        originKind: row.kind === 'staging' ? 'staging' : 'production',
+        originKind:
+          row.development === true
+            ? 'development'
+            : row.kind === 'staging'
+              ? 'staging'
+              : 'production',
       };
     },
     db,

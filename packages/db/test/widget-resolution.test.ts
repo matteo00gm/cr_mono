@@ -66,6 +66,26 @@ describe('the outcomes', () => {
     });
   });
 
+  it('resolves the winery’s live development origin, and says so (P4-19b)', async () => {
+    const { db, statements } = fakeDb([row({ domain_id: null, development: true })]);
+
+    await expect(resolveTenantByKeyAndOrigin(KEY, ORIGIN, db)).resolves.toMatchObject({
+      found: true,
+      originKind: 'development',
+    });
+    expect(sqlOf(statements[1]).sql).toContain('t.dev_mode_expires_at > now()');
+  });
+
+  it('treats a local origin with no live development mode as a mismatch (P4-19b)', async () => {
+    const { db } = fakeDb([row({ domain_id: null, development: false, status: null })]);
+
+    await expect(resolveTenantByKeyAndOrigin(KEY, ORIGIN, db)).resolves.toEqual({
+      found: false,
+      reason: 'origin_mismatch',
+      tenantId: TENANT,
+    });
+  });
+
   it('says a staging origin is one, for its lower rate limit (P4-19)', async () => {
     const { db, statements } = fakeDb([row({ kind: 'staging' })]);
 
@@ -171,6 +191,7 @@ describe('the statement', () => {
     const { sql, params } = sqlOf(statements[1]);
     expect(sql).not.toContain("'1'='1");
     expect(sql).not.toMatch(/\bLIKE\b|~|similar to/i);
-    expect(params).toEqual([hostile, KEY]);
+    /* The origin twice: the verified domain, and the development origin (P4-19b). */
+    expect(params).toEqual([hostile, hostile, KEY]);
   });
 });

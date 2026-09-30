@@ -61,6 +61,9 @@ const port = (
   claim: () => Promise.reject(new Error('not under test')),
   verifyClaim: () => Promise.reject(new Error('not under test')),
   servedClaims: () => Promise.reject(new Error('not under test')),
+  devMode: () => Promise.reject(new Error('not under test')),
+  enableDevMode: () => Promise.reject(new Error('not under test')),
+  endDevMode: () => Promise.reject(new Error('not under test')),
   withdrawClaim: () => Promise.reject(new Error('not under test')),
   add: (command) => {
     seen.push(command);

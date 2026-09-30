@@ -6,6 +6,7 @@ import {
   acceptInviteResponse,
   catalogueReindexedResponse,
   claimWithdrawnResponse,
+  devModeResponse,
   contextResponse,
   importPreviewResponse,
   domainAddedResponse,
@@ -453,6 +454,9 @@ const domainBody = z.object({ domain: z.string().min(1).max(300) }).strict();
  * seller tests rather than where shoppers buy (P4-19). A claim takes only the
  * domain — a claimed origin is always production.
  */
+/** Development mode's one field: the local origin, as the developer typed it (P4-19b). */
+const devModeBody = z.object({ origin: z.string().min(1).max(300) }).strict();
+
 const addDomainBody = z
   .object({
     domain: z.string().min(1).max(300),
@@ -1244,6 +1248,37 @@ export const createDashboardApp = ({
 
     return c.json(await turnstileSettings.set(c.get('tenantId'), parsed.data.enabled));
   });
+
+  /* ---- Development mode (P4-19b) ---------------------------------------- */
+
+  /** Whether the widget may be served to a local origin right now, and which. */
+  app.get('/widget/dev-mode', requireCapability('domains:manage'), async (c) =>
+    c.json(await domains.devMode(c.get('tenantId'))),
+  );
+
+  /**
+   * Turn development mode on for one local origin, for twenty-four hours.
+   *
+   * **Step-up, because this widens where the widget runs** — for a day, to a
+   * machine no DNS proof stands behind — which is "how a winery can be acted
+   * for" in the sense CLAUDE.md gives it. Owners only, through `domains:manage`.
+   */
+  app.put('/widget/dev-mode', requireCapability('domains:manage'), stepUp, async (c) => {
+    const parsed = devModeBody.safeParse(await readJson(c));
+
+    if (!parsed.success) {
+      throw new InvalidRequestError('Send a JSON body carrying the local origin to allow.');
+    }
+
+    return c.json(
+      await domains.enableDevMode({ tenantId: c.get('tenantId'), input: parsed.data.origin }),
+    );
+  });
+
+  /** End it now. No step-up: narrowing where the widget runs is never the risky direction. */
+  app.delete('/widget/dev-mode', requireCapability('domains:manage'), async (c) =>
+    c.json(await domains.endDevMode(c.get('tenantId'))),
+  );
 
   app.post('/keys', requireCapability('keys:manage'), stepUp, async (c) =>
     c.json(await keys.create(c.get('tenantId')), 201),
@@ -2265,6 +2300,56 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         signals: { unauthorizedOrigins: 212, rateLimited: 4 },
       },
       response: turnstileSettingsResponse,
+    },
+  ],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/widget/dev-mode`),
+    {
+      access: requires('domains:manage'),
+      summary: 'Read development mode',
+      description:
+        'Whether the widget may be served to a local origin right now, which one, and until ' +
+        'when (P4-19b). A grant that has run out reads as off, whatever the row still says.',
+      example: {
+        active: true,
+        origin: 'http://localhost:3000',
+        expiresAt: '2026-10-01T09:00:00.000Z',
+      },
+      response: devModeResponse,
+    },
+  ],
+  [
+    routeKey('PUT', `${DASHBOARD_PREFIX}/widget/dev-mode`),
+    {
+      access: requires('domains:manage'),
+      summary: 'Turn development mode on',
+      description:
+        'Body `{"origin": "http://localhost:3000"}`. For twenty-four hours the widget is served ' +
+        'to that one local origin as well as to verified domains, so a developer can build against ' +
+        'it before it is live (P4-19b). One exact origin, never `localhost:*` — CORS matching is ' +
+        'exact-set equality — and only a local address: `localhost` or a name under ' +
+        '`.localhost`; anything else is a 422 pointing at staging domains. The expiry is the ' +
+        'database’s: the tenants policy stops admitting the winery the moment it passes. A ' +
+        'development origin is rate-limited as a staging one. Replacing a grant for another ' +
+        'origin ends that origin’s sessions. Needs a fresh second factor. Audited.',
+      example: {
+        active: true,
+        origin: 'http://localhost:3000',
+        expiresAt: '2026-10-01T09:00:00.000Z',
+      },
+      response: devModeResponse,
+    },
+  ],
+  [
+    routeKey('DELETE', `${DASHBOARD_PREFIX}/widget/dev-mode`),
+    {
+      access: requires('domains:manage'),
+      summary: 'Turn development mode off',
+      description:
+        'Ends the grant now and ends every session on its origin, as removing a domain does ' +
+        '(P4-06). Always allowed, and audited when there was a grant to end.',
+      example: { active: false, origin: null, expiresAt: null },
+      response: devModeResponse,
     },
   ],
   [

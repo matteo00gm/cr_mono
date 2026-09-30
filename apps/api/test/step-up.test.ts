@@ -114,6 +114,7 @@ describe('the routes that need it', () => {
         'POST /v1/dashboard/keys/public/rotate',
         'POST /v1/dashboard/keys/secret/rotate',
         'POST /v1/dashboard/members/invite',
+        'PUT /v1/dashboard/widget/dev-mode',
       ].sort(),
     );
   });

@@ -43,6 +43,9 @@ const port = (verifyClaim?: DomainsPort['verifyClaim']): DomainsPort => ({
   add: unused,
   verify: unused,
   remove: unused,
+  devMode: unused,
+  enableDevMode: unused,
+  endDevMode: unused,
   claim: (command) => {
     opened.push(command);
 

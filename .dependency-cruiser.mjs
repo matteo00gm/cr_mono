@@ -288,6 +288,10 @@ export default {
           // with-lapsed-revocations.ts's pattern. markClaimNotified writes on
           // the caller's withTenant transaction and opens nothing.
           '|^packages/db/src/claim-sweep[.]ts$' +
+          // src/dev-mode.ts is exempt from P4-19b on turnstile.ts's terms:
+          // statements on the caller's withTenant transaction, every one under
+          // the tenants policy, and no GUC of its own.
+          '|^packages/db/src/dev-mode[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
           '|^packages/core/src/auth[.]ts$' +

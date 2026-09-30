@@ -14,6 +14,7 @@ export * from './completeness.js';
 export * from './import-limits.js';
 export * from './domains.js';
 export * from './domain-claims.js';
+export * from './dev-mode.js';
 
 /**
  * What a turn cost (P2-31).

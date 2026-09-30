@@ -325,6 +325,17 @@ export const servedClaimSchema = z.strictObject({
 /** Every notice served on this winery that is still running. What the banner reads. */
 export const servedClaimsResponse = z.strictObject({ claims: z.array(servedClaimSchema) });
 
+/**
+ * A winery's development mode (P4-19b): whether it is on, for which local
+ * origin, and until when. Off is `{ active: false, origin: null, expiresAt: null }`
+ * — including a grant that has run out, which is off whatever the row says.
+ */
+export const devModeResponse = z.strictObject({
+  active: z.boolean(),
+  origin: z.string().nullable(),
+  expiresAt: z.string().nullable(),
+});
+
 /** What withdrawing a claim gives back: the origin, which stays where it is. */
 export const claimWithdrawnResponse = z.strictObject({
   id: z.string(),
@@ -362,6 +373,7 @@ export type DomainClaimCheckedResponse = z.infer<typeof domainClaimCheckedRespon
 export type ServedClaim = z.infer<typeof servedClaimSchema>;
 export type ServedClaimsResponse = z.infer<typeof servedClaimsResponse>;
 export type ClaimWithdrawnResponse = z.infer<typeof claimWithdrawnResponse>;
+export type DevModeResponse = z.infer<typeof devModeResponse>;
 export type KeysResponse = z.infer<typeof keysResponse>;
 
 /**

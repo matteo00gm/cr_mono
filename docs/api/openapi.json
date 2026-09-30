@@ -4271,6 +4271,234 @@
           }
         }
       },
+      "/v1/dashboard/widget/dev-mode": {
+        "delete": {
+          "summary": "Turn development mode off",
+          "description": "Ends the grant now and ends every session on its origin, as removing a domain does (P4-06). Always allowed, and audited when there was a grant to end.\n\nRequires the `domains:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
+          "operationId": "deleteV1DashboardWidgetDev-mode",
+          "x-required-capability": "domains:manage",
+          "responses": {
+            "200": {
+              "description": "Turn development mode off",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "active": {
+                        "type": "boolean"
+                      },
+                      "origin": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "expiresAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "active",
+                      "origin",
+                      "expiresAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "active": false,
+                    "origin": null,
+                    "expiresAt": null
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "get": {
+          "summary": "Read development mode",
+          "description": "Whether the widget may be served to a local origin right now, which one, and until when (P4-19b). A grant that has run out reads as off, whatever the row still says.\n\nRequires the `domains:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
+          "operationId": "getV1DashboardWidgetDev-mode",
+          "x-required-capability": "domains:manage",
+          "responses": {
+            "200": {
+              "description": "Read development mode",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "active": {
+                        "type": "boolean"
+                      },
+                      "origin": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "expiresAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "active",
+                      "origin",
+                      "expiresAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "active": true,
+                    "origin": "http://localhost:3000",
+                    "expiresAt": "2026-10-01T09:00:00.000Z"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "put": {
+          "summary": "Turn development mode on",
+          "description": "Body `{\"origin\": \"http://localhost:3000\"}`. For twenty-four hours the widget is served to that one local origin as well as to verified domains, so a developer can build against it before it is live (P4-19b). One exact origin, never `localhost:*` — CORS matching is exact-set equality — and only a local address: `localhost` or a name under `.localhost`; anything else is a 422 pointing at staging domains. The expiry is the database’s: the tenants policy stops admitting the winery the moment it passes. A development origin is rate-limited as a staging one. Replacing a grant for another origin ends that origin’s sessions. Needs a fresh second factor. Audited.\n\nRequires the `domains:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.\n\nNeeds a second factor proved within the last 15 minutes; otherwise 403 with code `step_up_required`. Verify a code and send the same request again.",
+          "operationId": "putV1DashboardWidgetDev-mode",
+          "x-required-capability": "domains:manage",
+          "x-requires-step-up": true,
+          "responses": {
+            "200": {
+              "description": "Turn development mode on",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "active": {
+                        "type": "boolean"
+                      },
+                      "origin": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "expiresAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "active",
+                      "origin",
+                      "expiresAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "active": true,
+                    "origin": "http://localhost:3000",
+                    "expiresAt": "2026-10-01T09:00:00.000Z"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/widget/turnstile": {
         "get": {
           "summary": "The winery's Turnstile setting, and whether turning it on is suggested",
