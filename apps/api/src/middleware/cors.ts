@@ -1,4 +1,4 @@
-import { ForbiddenError } from '@catalogorosso/core';
+import { ForbiddenError, localOrigin } from '@catalogorosso/core';
 import type { WidgetResolution } from '@catalogorosso/db';
 import { normalizeOrigin } from '@catalogorosso/security';
 import type { MiddlewareHandler } from 'hono';
@@ -174,12 +174,23 @@ export const widgetCors =
     if (sentOrigin === undefined) return refuse({ type: 'UNAUTHORIZED_ORIGIN' });
 
     const normalized = normalizeOrigin(sentOrigin, { environment });
-    if (!normalized.ok) return refuse({ type: 'UNAUTHORIZED_ORIGIN' });
+
+    /*
+     * **A local origin is still asked about in production** (P4-19b). The
+     * strict normaliser refuses `http:` and `localhost` there, correctly, and a
+     * winery in development mode serves its widget from exactly that. So a
+     * local origin goes on to resolution — where the tenants policy admits it
+     * only for the presented key's own winery, only as that winery's one
+     * development origin, and only until the grant runs out. Every other local
+     * origin comes back a mismatch, and is refused below like any other.
+     */
+    const origin = normalized.ok ? normalized.origin : localOrigin(sentOrigin);
+    if (origin === undefined) return refuse({ type: 'UNAUTHORIZED_ORIGIN' });
 
     if (publicKey === undefined || publicKey === '') return refuse({ type: 'INVALID_KEY' });
 
     // Rule 2: the comparison is `normalizeOrigin` plus an exact match in SQL.
-    const resolution = await resolve(publicKey, normalized.origin);
+    const resolution = await resolve(publicKey, origin);
 
     if (!resolution.found) {
       return resolution.reason === 'origin_mismatch'
@@ -193,7 +204,7 @@ export const widgetCors =
      * only normalised onto a verified one — `https://winery.com.` — gets a value
      * that does not match it, and the browser refuses the response. Fail closed.
      */
-    c.header('Access-Control-Allow-Origin', normalized.origin);
+    c.header('Access-Control-Allow-Origin', origin);
     c.header('Access-Control-Allow-Credentials', 'false');
 
     c.set('widgetTenant', {
@@ -204,7 +215,7 @@ export const widgetCors =
       turnstile: resolution.turnstile,
       originKind: resolution.originKind,
     });
-    c.set('widgetOrigin', normalized.origin);
+    c.set('widgetOrigin', origin);
 
     // Rule 5: the same resolution answered the preflight, so it gets the same answer.
     if (c.req.method === 'OPTIONS') {

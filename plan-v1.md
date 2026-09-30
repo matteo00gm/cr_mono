@@ -1388,8 +1388,8 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-18a | 🔒 Domain claim: proof and settlement | DNS proof to claim a held origin; **immediate if incumbent lapsed, 72h notice if paying**; eighth RLS scope (ADR 0028) | P4-02 |
 | ✅ P4-18b | 🔒 Domain claim: notice, withdrawal, sweep | holder sees and withdraws a claim; both sides emailed; a due notice transfers unattended | P4-18a |
 | ✅ P4-19a | 🔒 Staging origins + zone cover | staging outside the plan cap (own cap of 2, lower rate limit); subdomains of a DNS-proved zone need no new record; `.myshopify.com` refused with a pointer | P4-01 |
-| P4-19b | 🔒 Development mode | 24h-expiring, OWNER-only, one exact `localhost` origin | P4-19a |
-| P4-17 | 🔒 T1–T10 suite assembly | one named spec per threat-model row | P4-16 |
+| ✅ P4-19b | 🔒 Development mode | 24h-expiring, OWNER-only, one exact `localhost` origin | P4-19a |
+| ✅ P4-17 | 🔒 T1–T10 suite assembly | one named spec per threat-model row | P4-16 |
 
 ### P5 — Billing
 
@@ -6712,6 +6712,18 @@ Enrolment and disablement both write to `audit_log`, and disabling 2FA is itself
 
 **Verified (P4-19a).** 7 cases against real Postgres on the caps, the cover and the widget's reading of the kind, plus the statements, port, verify, CORS, limiter (including the row's own test, a staging origin hitting its limit while production still has room), core and security suites. `packages/security` stays at 100% coverage and 100% Stryker. A mutation run of 11 mutants killed 11: staging counted in the plan cap, staging counted as production, a file proof covering the zone, a held registrable domain costing a slot, the widget told every origin is production, the port not using the cover, the staging cap reported as the plan's, the Shopify refusal removed, CORS or the limiter dropping the kind, and a lookalike taken for a Shopify store.
 
+**As built (P4-19b).** Development mode, the row's third case.
+
+- **One exact local origin, never `localhost:*`** *(deviation; the row says "temporarily permits `http://localhost:*`")*. CLAUDE.md's invariant is that CORS matching is exact-set equality, never a pattern, and a port wildcard is exactly the pattern it forbids. So the owner names the origin (`http://localhost:3000`), and that one string is what the widget is served to. `localOrigin` in `core` decides what can ever be one: `normalizeOrigin` in its development mode, kept only if the host is `localhost` or under `.localhost`. The dashboard route and the widget's CORS check share it, and a public name can never become a development origin however it is spelt. Migration 0058's check refuses to hold one either.
+- **The expiry is the database's.** `tenants.dev_origin` and `dev_mode_expires_at` (0058, both or neither). The tenants policy (0059) admits the winery through its development origin only for the presented key's own winery and only while `dev_mode_expires_at > now()`. The widget's resolution joins on the same conditions, so a grant ends on time whether or not anything runs. The mutation run showed the join had been hiding the policy: deleting either policy condition failed nothing, because every test went through the resolution. The policy is now tested on its own, reading `tenants` under the widget scope's GUCs with no join.
+- **CORS asks about a local origin in production** *(the "P2-05 change" the row names)*. The strict normaliser still refuses `http:` and `localhost`, and a local origin now goes on to resolution instead of being refused at the door. That is safe because resolution admits it only as a live development origin; every other local origin comes back a mismatch and is refused as any unknown origin is. A public `http:` origin is still refused before anything is asked.
+- **Routes:** `GET`, `PUT` and `DELETE /widget/dev-mode`, owners only through `domains:manage`. Enabling takes **step-up**: it widens where the widget runs, to a machine no DNS proof stands behind, which is the "how a winery can be acted for" that CLAUDE.md's step-up rule means. Ending needs no step-up, since narrowing is never the risky direction. Moving the grant to another origin, or ending it, cuts off that origin's sessions as removing a domain does (P4-06). Both actions are audited.
+- **A development origin is rate-limited as a staging one**, sharing the staging bucket. To a shopper both are places that are not the shop, and to the quota both are the same risk.
+- **Not built:** a dashboard control. There is no domains screen yet to put it on, and the API is complete without one.
+- The edge-cached `/config` can answer a local origin for up to its cache lifetime after a grant ends. Every other widget request, and every session mint, is refused at once.
+
+**Verified (P4-19b).** 9 cases against real Postgres, three reading the policy directly. 4 end to end through the real CORS check and accessor, including refusal the moment the grant runs out, another winery's key, and another port. Also the statements, the resolution, core's `localOrigin` (13 spellings), the port and routes, step-up's router walk, and CORS. `packages/security` stays at 100% coverage and 100% Stryker. A mutation run of 10 mutants killed 10: the policy admitting an expired grant or any key's (both survived until the direct policy tests), a public origin held, the resolution ignoring the expiry or calling the origin production, a run-out grant reading as on, a public origin granted, no step-up, sessions left running, and CORS never asking.
+
 ---
 
 ### P4-18 · Domain claim challenge 🔒
@@ -6805,6 +6817,18 @@ On transfer, in one transaction: delete the incumbent's row, invalidate their li
 **Tests.** This is the test aggregation.
 
 **Files.** `test/threats/*`, script, docs. **~150 lines.**
+
+**As built.**
+
+- **Index, not re-import** *(deviation from "re-exports and orchestration")*. The evidence for ten threats lives in five packages, two runners and three environments: node, jsdom, Postgres through Testcontainers, and Playwright. Importing those suites into one file would run them twice, outside their own mocks and containers. So `packages/security/test/threats/threats.json` is the matrix, naming each threat's control and its evidence files with the runner each needs. Each named suite, `T1-widget-theft.test.ts` through `T10-cross-tenant-exfiltration.test.ts` (*renamed*: this repository's test suffix is `.test.ts`, and `.spec.ts` is Playwright's), is the index a reviewer opens. It proves every listed file exists, runs where the manifest says, and holds a test, and it shows each gap as a `todo` in every run. `threats.test.ts` holds the matrix to the plan: T1–T10 in order, with goals and controls word for word as §3.0 has them.
+- **`pnpm test:security` runs exactly the listed files**: 24 unit targets including the suites, and 14 Postgres targets. The browser evidence is listed and runs in the cross-origin job. There is a **Security matrix (T1–T10)** CI job, and `threats:check` keeps `docs/security/threat-coverage.md`, generated from the same manifest, from drifting.
+- **Every "covers" line was checked against the file it names**, and five were wrong on the first draft. `candidates.test.ts` caps the candidate set; it does not isolate tenants, so `retrieval.integration` replaced it. The last-owner guard is `last-owner.integration`, not the members port. The product-card suite does not show that a card comes only from the catalogue; `chat-port.test` does. A manifest that overstated its evidence would be worse than none.
+- **The gaps the mapping exposed**, as the row expected:
+  1. **T7: the widget had silently lost P0-63's raw-fetch ban.** ESLint flat config replaces a rule configured again rather than merging it, and the widget's `innerHTML` block re-configured `no-restricted-syntax` over files the fetch ban already covered. That is exactly the trap the config's own comment warns about. It is fixed, and T7 asserts both rules in **the configuration ESLint computes for a widget file**, not the config text. Reading the text would have shown both present. Verified by reverting the fix and watching T7 fail.
+  2. **T6: the billing half does not exist yet.** P5-03, P5-04 and P5-06 are named as `todo`s. What can be held today is held: T6 scans every production source and fails on any write to `tenants.status` or `tenants.plan`, in raw SQL (`UPDATE`/`INSERT`) or Drizzle's builder, outside `ALLOWED_WRITERS`, which is empty until P5-05's webhook handler joins it. It is a guard that can fail: four write shapes are caught and four look-alikes are not.
+  3. **T4: no load test.** The k6 abuse scenario is P7-04's, and it is a named `todo`.
+
+**Verified.** `pnpm test:security`: 809 unit tests pass with 4 todos, and 285 Postgres tests pass. The T7 fix was reverted once to watch the suite fail. `threats:check`, lint, typecheck and format are clean.
 
 ---
 

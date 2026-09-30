@@ -234,6 +234,9 @@ export { readOpenInvitations, revokeInvitation, type PendingInvitation } from '.
  */
 export { endSessionsFor, sessionCutoffAt } from './session-cutoffs.js';
 
+/** Development mode (P4-19b): one local origin, for a fixed time the database enforces. */
+export { enableDevMode, endDevMode, readDevMode, type DevMode } from './dev-mode.js';
+
 /**
  * The seventh RLS scope (P4-10, ADR 0026): a server finds its tenant from a
  * secret key. It admits one active key row, then hands over to an ordinary

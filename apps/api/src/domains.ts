@@ -52,6 +52,7 @@ import {
   type ResolveTxt,
 } from '@catalogorosso/security/net';
 
+import { createDevMode, type DevModePort } from './dev-mode.js';
 import {
   createDomainClaims,
   type DomainClaimsDeps,
@@ -108,7 +109,7 @@ export interface RemoveDomainCommand {
 }
 
 /** The domains screen, including claims on a domain another winery holds (P4-18). */
-export interface DomainsPort extends DomainClaimsPort {
+export interface DomainsPort extends DomainClaimsPort, DevModePort {
   add(command: AddDomainCommand): Promise<AddDomainResult>;
   verify(command: VerifyDomainCommand): Promise<VerifyDomainResult>;
   remove(command: RemoveDomainCommand): Promise<DomainRemovedResponse>;
@@ -198,7 +199,7 @@ const createDomainMethods = ({
   newResolver = publicResolveTxt,
   now = Date.now,
   fetcher,
-}: DomainsDeps): Omit<DomainsPort, keyof DomainClaimsPort> => ({
+}: DomainsDeps): Omit<DomainsPort, keyof DomainClaimsPort | keyof DevModePort> => ({
   async add(command) {
     const normalised = normalizeOrigin(command.input, { environment });
 
@@ -635,6 +636,7 @@ const createDomainMethods = ({
  */
 export const createDomainsPort = (deps: DomainsDeps = {}): DomainsPort => ({
   ...createDomainClaims(deps),
+  ...createDevMode(deps),
   ...createDomainMethods(deps),
 });
 
@@ -659,6 +661,9 @@ export const unconfiguredDomains: DomainsPort = {
   verifyClaim: () => Promise.reject(new DomainsPortNotConfiguredError()),
   servedClaims: () => Promise.reject(new DomainsPortNotConfiguredError()),
   withdrawClaim: () => Promise.reject(new DomainsPortNotConfiguredError()),
+  devMode: () => Promise.reject(new DomainsPortNotConfiguredError()),
+  enableDevMode: () => Promise.reject(new DomainsPortNotConfiguredError()),
+  endDevMode: () => Promise.reject(new DomainsPortNotConfiguredError()),
   add: () => Promise.reject(new DomainsPortNotConfiguredError()),
   verify: () => Promise.reject(new DomainsPortNotConfiguredError()),
   remove: () => Promise.reject(new DomainsPortNotConfiguredError()),

@@ -348,15 +348,57 @@ describe('no cache between the allowlist and the answer', () => {
 });
 
 describe('development', () => {
-  it('admits a local http origin only when told it is development', async () => {
+  it('asks about a local origin in production, and serves it only if resolution does (P4-19b)', async () => {
+    /*
+     * **The decision moved to the policy.** In production a local origin used
+     * to be refused before anything was asked. Development mode serves the
+     * widget from exactly such an origin, so it now goes on to resolution —
+     * which admits it only as the key's own winery's live development origin.
+     * Here the fake resolver stands in for that answer both ways.
+     */
+    const local = 'http://localhost:5173';
+    const live = resolver({ [`${KEY_A} ${local}`]: { ...FOUND_A, originKind: 'development' } });
+    const lapsed = resolver();
+
+    const served = await request(widgetApp({ resolve: live.resolve }), {
+      origin: local,
+      key: KEY_A,
+    });
+    const refused = await request(widgetApp({ resolve: lapsed.resolve }), {
+      origin: local,
+      key: KEY_A,
+    });
+
+    expect(served.status).toBe(200);
+    expect(served.headers.get('access-control-allow-origin')).toBe(local);
+    expect(refused.status).toBe(403);
+    expect(lapsed.calls).toEqual([[KEY_A, local]]);
+  });
+
+  it('still refuses a public http origin before asking anything', async () => {
+    const { resolve, calls } = resolver();
+
+    const response = await request(widgetApp({ resolve }), {
+      origin: 'http://cantina-rossi.example',
+      key: KEY_A,
+    });
+
+    expect(response.status).toBe(403);
+    expect(calls).toEqual([]);
+  });
+
+  it('admits a local http origin in development as before', async () => {
     const local = 'http://localhost:5173';
     const { resolve } = resolver({ [`${KEY_A} ${local}`]: FOUND_A });
 
-    const production = widgetApp({ resolve });
-    const development = widgetApp({ resolve, environment: 'development' });
-
-    expect((await request(production, { origin: local, key: KEY_A })).status).toBe(403);
-    expect((await request(development, { origin: local, key: KEY_A })).status).toBe(200);
+    expect(
+      (
+        await request(widgetApp({ resolve, environment: 'development' }), {
+          origin: local,
+          key: KEY_A,
+        })
+      ).status,
+    ).toBe(200);
   });
 });
 

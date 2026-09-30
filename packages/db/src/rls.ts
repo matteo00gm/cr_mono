@@ -218,6 +218,8 @@ const HEADERS: Readonly<Record<string, string>> = {
   '0054_domain_claims_rls': 'A proven claim reaches the domain it names (P4-18).',
   '0056_domain_claim_sweep_rls':
     'The claim sweep finds its work, and a notice counts once sent (P4-18b).',
+  '0059_dev_mode_rls':
+    'A winery in development mode is reachable from its one local origin (P4-19b).',
 };
 
 /** Every migration file this list generates, in first-appearance order. */
@@ -484,6 +486,25 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
       'domain a proven claim names, but a claim on notice reaches it only with notified_at set ' +
       'and transfer_at passed — so a holder nobody told cannot lose its origin, whatever the ' +
       'code settling it believes.',
+  },
+  {
+    table: 'tenants',
+    migration: '0059_dev_mode_rls',
+    supersedes: true,
+    using: `id = ${TENANT}
+    OR id IN (SELECT d.tenant_id FROM tenant_domains d
+      WHERE d.origin = ${WIDGET_ORIGIN} AND d.status = 'VERIFIED'
+        AND d.tenant_id IN (${WIDGET_KEY_TENANT}))
+    OR (dev_origin = ${WIDGET_ORIGIN}
+      AND dev_mode_expires_at > now()
+      AND id IN (${WIDGET_KEY_TENANT}))`,
+    withCheck: `id = ${TENANT}`,
+    note:
+      'Development mode (P4-19b): a seller’s developer serves the widget from one exact local ' +
+      'origin for twenty-four hours. The branch admits the winery only for its own key, only from ' +
+      'that exact origin, and only while dev_mode_expires_at is in the future — so the expiry is ' +
+      'the database’s, and the grant ends on time whatever the code believes. WITH CHECK stays ' +
+      'tenant-only, and the widget scope cannot write.',
   },
 ];
 

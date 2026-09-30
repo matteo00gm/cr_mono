@@ -225,9 +225,11 @@ describe('rls migration', () => {
          * the widget branch is still in it and must still be read-only. */
         /* And `tenant_domains` by P4-18's claim branch; likewise. */
         expect(current(table)?.migration, table).toBe(
-          { widget_keys: '0049_secret_key_rls', tenant_domains: '0056_domain_claim_sweep_rls' }[
-            table as string
-          ] ?? '0042_widget_key_rls',
+          {
+            widget_keys: '0049_secret_key_rls',
+            tenant_domains: '0056_domain_claim_sweep_rls',
+            tenants: '0059_dev_mode_rls',
+          }[table as string] ?? '0042_widget_key_rls',
         );
         expect(current(table)?.using, table).toContain('app.widget_');
         expect(current(table)?.withCheck, table).not.toContain('app.widget_');
@@ -363,6 +365,26 @@ describe('the claim scope (P4-18, ADR 0028)', () => {
     expect(current('domain_claims')?.using).toContain('incumbent_tenant_id =');
     expect(current('domain_claims')?.withCheck).toMatch(
       /incumbent_tenant_id = nullif\(current_setting\('app\.tenant_id', true\), ''\)::uuid AND status = 'CANCELED'/u,
+    );
+  });
+});
+
+describe('development mode (P4-19b)', () => {
+  const tenants = () => [...RLS_POLICIES].reverse().find((p) => p.table === 'tenants');
+
+  it('admits a winery from its one exact local origin, for its own key, while unexpired', () => {
+    const using = tenants()?.using ?? '';
+
+    expect(using).toContain("dev_origin = nullif(current_setting('app.widget_origin', true), '')");
+    expect(using).toContain('AND dev_mode_expires_at > now()');
+    expect(using).toMatch(
+      /dev_mode_expires_at > now\(\)\s+AND id IN \(SELECT k\.tenant_id FROM widget_keys k/u,
+    );
+  });
+
+  it('keeps the branch out of WITH CHECK', () => {
+    expect(tenants()?.withCheck).toBe(
+      "id = nullif(current_setting('app.tenant_id', true), '')::uuid",
     );
   });
 });

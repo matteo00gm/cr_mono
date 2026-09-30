@@ -9,6 +9,7 @@ catalogue. One database, one API, many tenants.
 ```bash
 pnpm test              # unit suites, no Docker
 pnpm test:integration  # real Postgres via Testcontainers, needs Docker
+pnpm test:security     # the T1–T10 threat matrix, unit + Postgres (P4-17)
 pnpm lint              # per-package eslint
 pnpm typecheck         # per-package tsc --noEmit
 pnpm boundaries        # architectural rules that lint cannot express
