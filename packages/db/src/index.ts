@@ -272,11 +272,13 @@ export {
 
 export {
   countDomains,
+  countStagingDomains,
   countVerifiedDomains,
   deleteDomain,
   insertDomain,
   insertVerifiedSibling,
   markDomainVerified,
+  provesZone,
   readDomainById,
   readDomainByOrigin,
   readDomains,
@@ -284,6 +286,7 @@ export {
   readTenantPlan,
   reissueVerification,
   type DomainInsert,
+  type DomainKind,
   type DomainRow,
   type NewDomain,
 } from './domains-write.js';

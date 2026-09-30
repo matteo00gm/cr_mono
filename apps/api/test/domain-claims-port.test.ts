@@ -261,6 +261,16 @@ describe('opening a claim', () => {
     );
   });
 
+  it('refuses a Shopify store’s own address, which DNS can never prove (P4-19)', async () => {
+    await expect(
+      port().claim({ tenantId: 't1', input: 'winery.myshopify.com' }),
+    ).rejects.toMatchObject({
+      kind: 'conflict',
+      message: expect.stringContaining('Shopify') as unknown,
+    });
+    expect(calls).toEqual([]);
+  });
+
   it('refuses what is not an origin before opening anything', async () => {
     await expect(port().claim({ tenantId: 't1', input: 'not a domain' })).rejects.toMatchObject({
       kind: 'invalid',

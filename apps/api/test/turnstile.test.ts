@@ -171,6 +171,7 @@ const resolution = (turnstile: boolean): WidgetResolution => ({
   plan: 'CANTINA',
   locale: 'it',
   turnstile,
+  originKind: 'production',
 });
 
 const mintApp = (turnstileOn: boolean, deps: Partial<WidgetDependencies> = {}) =>

@@ -62,7 +62,17 @@ describe('the outcomes', () => {
       plan: 'CANTINA',
       locale: 'it',
       turnstile: false,
+      originKind: 'production',
     });
+  });
+
+  it('says a staging origin is one, for its lower rate limit (P4-19)', async () => {
+    const { db, statements } = fakeDb([row({ kind: 'staging' })]);
+
+    await expect(resolveTenantByKeyAndOrigin(KEY, ORIGIN, db)).resolves.toMatchObject({
+      originKind: 'staging',
+    });
+    expect(sqlOf(statements[1]).sql).toContain('d.kind');
   });
 
   it("carries the winery's Turnstile flag through (P4-14)", async () => {

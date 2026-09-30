@@ -35,6 +35,8 @@ export interface SecretKeyTenant {
   readonly locale: string;
   /** Every origin this tenant has verified, which is the set a session may be minted for. */
   readonly verifiedOrigins: readonly string[];
+  /** Those of them that are staging origins, for the lower rate limit they draw (P4-19). */
+  readonly stagingOrigins: readonly string[];
 }
 
 /** An empty hash would match no row and look exactly like an unknown key. */
@@ -114,15 +116,17 @@ export const resolveTenantBySecretKey = async (
       if (tenant === undefined) return undefined;
 
       const origins = await tx.execute(sql`
-        SELECT origin FROM tenant_domains WHERE status = 'VERIFIED' ORDER BY origin
+        SELECT origin, kind FROM tenant_domains WHERE status = 'VERIFIED' ORDER BY origin
       `);
+      const verified = [...origins] as unknown as { origin: string; kind: string }[];
 
       return {
         tenantId: key.tenant_id,
         status: tenant.status,
         plan: tenant.plan,
         locale: tenant.locale,
-        verifiedOrigins: [...origins].map((row) => (row as { origin: string }).origin),
+        verifiedOrigins: verified.map((row) => row.origin),
+        stagingOrigins: verified.filter((row) => row.kind === 'staging').map((row) => row.origin),
       };
     },
     { accessMode: 'read only' },

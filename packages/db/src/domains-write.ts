@@ -30,11 +30,15 @@ type TenantPlan = (typeof tenantPlan.enumValues)[number];
  * exists: the winery's own.
  */
 
+/** Where the widget serves shoppers, or where the seller tests it (P4-19). */
+export type DomainKind = 'production' | 'staging';
+
 export interface DomainRow {
   readonly id: string;
   readonly origin: string;
   readonly registrableDomain: string;
   readonly status: 'PENDING' | 'VERIFIED';
+  readonly kind: DomainKind;
   readonly verificationToken: string | null;
   /** When the nonce stops being accepted (P4-04). Null once it has been used. */
   readonly verificationExpiresAt: Date | null;
@@ -45,6 +49,15 @@ export interface NewDomain {
   readonly origin: string;
   readonly registrableDomain: string;
   readonly verificationToken: string;
+  /** Production unless the seller says otherwise (P4-19). */
+  readonly kind?: DomainKind | undefined;
+  /**
+   * The proof this winery already holds for the origin's zone, if it holds
+   * one (P4-19). A verified row under the same registrable domain means the
+   * zone is already proved, so the new origin lands `VERIFIED` with that
+   * method and no nonce — the reasoning P4-05 applies to `www`.
+   */
+  readonly coveredBy?: 'DNS_TXT' | 'WELL_KNOWN' | undefined;
 }
 
 interface DomainSqlRow {
@@ -52,6 +65,7 @@ interface DomainSqlRow {
   readonly origin: string;
   readonly registrable_domain: string;
   readonly status: 'PENDING' | 'VERIFIED';
+  readonly kind: DomainKind;
   readonly verification_token: string | null;
   readonly verification_expires_at: SqlTimestamp | null;
   readonly created_at: SqlTimestamp;
@@ -62,13 +76,14 @@ const toDomain = (row: DomainSqlRow): DomainRow => ({
   origin: row.origin,
   registrableDomain: row.registrable_domain,
   status: row.status,
+  kind: row.kind,
   verificationToken: row.verification_token,
   verificationExpiresAt: asDateOrNull(row.verification_expires_at),
   createdAt: asDate(row.created_at),
 });
 
 const COLUMNS = sql`
-  id, origin, registrable_domain, status,
+  id, origin, registrable_domain, status, kind,
   verification_token, verification_expires_at, created_at
 `;
 
@@ -147,12 +162,44 @@ const lockTenant = async (tx: DbTransaction): Promise<void> => {
  * sells is a domain, and what a domain costs us is a verification.
  */
 export const countDomains = async (tx: DbTransaction): Promise<number> => {
+  /* Production only: a staging origin has its own cap and costs no plan slot (P4-19). */
   const rows = await tx.execute(sql`
     SELECT count(DISTINCT registrable_domain)::int AS held FROM tenant_domains
+    WHERE kind = 'production'
   `);
   const row = [...rows][0] as { held?: number } | undefined;
 
   return row?.held ?? 0;
+};
+
+/**
+ * How many staging origins this winery holds (P4-19).
+ *
+ * **Origins, not registrable domains**: the cap of two is on places the widget
+ * can be tested, and two subdomains of one staging host are two of those.
+ */
+export const countStagingDomains = async (tx: DbTransaction): Promise<number> => {
+  const rows = await tx.execute(sql`
+    SELECT count(*)::int AS held FROM tenant_domains WHERE kind = 'staging'
+  `);
+  const row = [...rows][0] as { held?: number } | undefined;
+
+  return row?.held ?? 0;
+};
+
+/**
+ * Whether this winery has already added a production origin under this
+ * registrable domain, so a new one there costs no plan slot (P4-07: what the
+ * plan sells is a domain, and its subdomains ride on it).
+ */
+const holdsRegistrable = async (tx: DbTransaction, registrableDomain: string): Promise<boolean> => {
+  const rows = await tx.execute(sql`
+    SELECT 1 FROM tenant_domains
+    WHERE kind = 'production' AND registrable_domain = ${registrableDomain}
+    LIMIT 1
+  `);
+
+  return [...rows].length > 0;
 };
 
 /**
@@ -169,20 +216,40 @@ export const insertDomain = async (
 ): Promise<DomainInsert> => {
   await lockTenant(tx);
 
-  const held = await countDomains(tx);
+  const kind = domain.kind ?? 'production';
 
-  if (held >= cap) return { outcome: 'at-cap', held };
+  /*
+   * **Each kind against its own cap** (P4-19). A staging origin counts
+   * staging origins; a production one counts distinct registrable domains,
+   * and one under a registrable domain already held costs nothing — which is
+   * what P4-07 says "one domain" means and what this used to refuse.
+   */
+  if (kind === 'staging') {
+    const held = await countStagingDomains(tx);
 
+    if (held >= cap) return { outcome: 'at-cap', held };
+  } else if (!(await holdsRegistrable(tx, domain.registrableDomain))) {
+    const held = await countDomains(tx);
+
+    if (held >= cap) return { outcome: 'at-cap', held };
+  }
+
+  const covered = domain.coveredBy;
   const rows = await tx.execute(sql`
     INSERT INTO tenant_domains (
-      tenant_id, origin, registrable_domain, verification_token, verification_expires_at
+      tenant_id, origin, registrable_domain, kind, status,
+      verification_method, verified_at, verification_token, verification_expires_at
     )
     VALUES (
       nullif(current_setting('app.tenant_id', true), '')::uuid,
       ${domain.origin},
       ${domain.registrableDomain},
-      ${domain.verificationToken},
-      now() + ${VERIFICATION_WINDOW}
+      ${kind}::domain_kind,
+      ${covered === undefined ? 'PENDING' : 'VERIFIED'}::domain_status,
+      ${covered ?? null}::domain_verification_method,
+      ${covered === undefined ? null : sql`now()`},
+      ${covered === undefined ? domain.verificationToken : null},
+      ${covered === undefined ? sql`now() + ${VERIFICATION_WINDOW}` : null}
     )
     ON CONFLICT (origin) DO NOTHING
     RETURNING ${COLUMNS}
@@ -346,6 +413,32 @@ export const insertVerifiedSibling = async (
   const row = [...rows][0] as DomainSqlRow | undefined;
 
   return row === undefined ? undefined : toDomain(row);
+};
+
+/**
+ * Whether this winery has proved control of a registrable domain's **zone**
+ * (P4-19), so a new origin under it needs no fresh proof.
+ *
+ * **DNS only.** A TXT record at `_somm-verify.<domain>` shows control of the
+ * zone, which is where every subdomain is created — so `staging.winery.com`
+ * is inside what was proved. A file on the storefront shows control of one web
+ * server, and a subdomain may point at somebody else's entirely (a hosted shop,
+ * an agency's staging box). P4-05 gives the file proof its `www` sibling and no
+ * further; neither does this.
+ */
+export const provesZone = async (
+  tx: DbTransaction,
+  registrableDomain: string,
+): Promise<boolean> => {
+  const rows = await tx.execute(sql`
+    SELECT 1 FROM tenant_domains
+    WHERE registrable_domain = ${registrableDomain}
+      AND status = 'VERIFIED'
+      AND verification_method = 'DNS_TXT'
+    LIMIT 1
+  `);
+
+  return [...rows].length > 0;
 };
 
 /** Every origin this winery holds under one registrable domain. */

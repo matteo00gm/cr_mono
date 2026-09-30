@@ -82,4 +82,6 @@ export interface WidgetTenant {
   readonly locale: string;
   /** Whether the session mint asks for a Turnstile token (P4-14). */
   readonly turnstile: boolean;
+  /** Which kind of origin this request came from, for its rate limit (P4-19). */
+  readonly originKind: 'production' | 'staging';
 }

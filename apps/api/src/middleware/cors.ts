@@ -202,6 +202,7 @@ export const widgetCors =
       status: resolution.status,
       locale: resolution.locale,
       turnstile: resolution.turnstile,
+      originKind: resolution.originKind,
     });
     c.set('widgetOrigin', normalized.origin);
 

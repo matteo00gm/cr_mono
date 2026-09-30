@@ -36,6 +36,7 @@ const tenant = (id: string): WidgetTenant => ({
   status: 'ACTIVE',
   locale: 'it',
   turnstile: false,
+  originKind: 'production',
 });
 
 const embeddings: EmbeddingProvider = {

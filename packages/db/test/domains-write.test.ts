@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { PgDialect } from 'drizzle-orm/pg-core';
+
 import {
   countDomains,
+  countStagingDomains,
   countVerifiedDomains,
   deleteDomain,
   insertDomain,
   insertVerifiedSibling,
   markDomainVerified,
+  provesZone,
   readDomainById,
   readDomainByOrigin,
   readDomains,
@@ -30,6 +34,9 @@ import { text } from './support/sql-text.js';
  * the insert takes its tenant from the GUC rather than from an argument, and
  * that the reads name no tenant at all.
  */
+
+const sqlParams = (statement: unknown): unknown[] =>
+  new PgDialect().sqlToQuery(statement as Parameters<PgDialect['sqlToQuery']>[0]).params;
 
 const capturing = (...responses: unknown[][]) => {
   const statements: unknown[] = [];
@@ -58,17 +65,19 @@ const raw = {
 };
 
 /**
- * The three statements an insert issues, in order: the lock, the count, the
- * insert itself. Naming them here rather than indexing by number means a
- * statement added in front of the lock breaks these tests loudly.
+ * The four statements a production insert issues, in order: the lock, whether
+ * the registrable domain is already held (P4-19), the count, the insert itself.
+ * Naming them here rather than indexing by number means a statement added in
+ * front of the lock breaks these tests loudly.
  */
 const LOCK = 0;
-const COUNT = 1;
-const INSERT = 2;
+const HOLDS = 1;
+const COUNT = 2;
+const INSERT = 3;
 
 /** An insert against a winery holding `held` origins, under a cap of `cap`. */
 const adding = (rows: unknown[], held = 0, cap = 2) => {
-  const captured = capturing([], [{ held }], rows);
+  const captured = capturing([], [], [{ held }], rows);
   const result = insertDomain(
     captured.tx,
     {
@@ -175,8 +184,8 @@ describe('the plan cap', () => {
 
     await result;
 
-    /* The lock and the count, and no insert. */
-    expect(statements).toHaveLength(2);
+    /* The lock, the holding check and the count, and no insert. */
+    expect(statements).toHaveLength(3);
   });
 
   it('counts pending claims as well as verified ones', async () => {
@@ -188,6 +197,117 @@ describe('the plan cap', () => {
     await result;
 
     expect(text(statements[COUNT])).not.toMatch(/status/u);
+  });
+
+  it('counts production domains only (P4-19)', async () => {
+    const { statements, result } = adding([raw]);
+
+    await result;
+
+    expect(text(statements[HOLDS])).toContain("kind = 'production'");
+    expect(text(statements[COUNT])).toContain("kind = 'production'");
+  });
+});
+
+describe('the cap by kind (P4-19)', () => {
+  const insert = (
+    responses: unknown[][],
+    domain: Partial<Parameters<typeof insertDomain>[1]> = {},
+    cap = 1,
+  ) => {
+    const captured = capturing(...responses);
+    const result = insertDomain(
+      captured.tx,
+      {
+        origin: 'https://shop.winery.com',
+        registrableDomain: 'winery.com',
+        verificationToken: 'a-nonce',
+        ...domain,
+      },
+      cap,
+    );
+
+    return { ...captured, result };
+  };
+
+  it('costs no plan slot under a registrable domain already held', async () => {
+    /* P4-07: what the plan sells is a domain, and its subdomains ride on it. */
+    const { statements, result } = insert([[], [{ '?column?': 1 }], [raw]], {}, 1);
+
+    await expect(result).resolves.toMatchObject({ outcome: 'created' });
+    expect(statements).toHaveLength(3);
+    expect(text(statements[2])).toMatch(/INSERT INTO tenant_domains/u);
+  });
+
+  it('counts a staging origin against staging origins alone', async () => {
+    const { statements, result } = insert([[], [{ held: 2 }]], { kind: 'staging' }, 2);
+
+    await expect(result).resolves.toEqual({ outcome: 'at-cap', held: 2 });
+    expect(text(statements[1])).toContain("WHERE kind = 'staging'");
+    expect(text(statements[1])).toContain('count(*)');
+  });
+
+  it('writes a staging row as staging', async () => {
+    const { statements, result } = insert([[], [{ held: 0 }], [raw]], { kind: 'staging' }, 2);
+
+    await result;
+
+    const insertStatement = statements.at(-1);
+
+    expect(sqlParams(insertStatement)).toContain('staging');
+  });
+
+  it('writes a covered origin verified, with the covering method and no nonce', async () => {
+    const { statements, result } = insert([[], [{ '?column?': 1 }], [raw]], {
+      coveredBy: 'DNS_TXT',
+    });
+
+    await result;
+
+    const params = sqlParams(statements.at(-1));
+
+    expect(params).toContain('VERIFIED');
+    expect(params).toContain('DNS_TXT');
+    expect(params).not.toContain('a-nonce');
+  });
+
+  it('writes an uncovered origin pending, with its nonce', async () => {
+    const { statements, result } = insert([[], [{ '?column?': 1 }], [raw]]);
+
+    await result;
+
+    const params = sqlParams(statements.at(-1));
+
+    expect(params).toContain('PENDING');
+    expect(params).toContain('a-nonce');
+  });
+});
+
+describe('proving a zone (P4-19)', () => {
+  it('counts a DNS proof and nothing weaker', async () => {
+    const { tx, statements } = capturing([{ '?column?': 1 }]);
+
+    await expect(provesZone(tx, 'winery.com')).resolves.toBe(true);
+    expect(text(statements[0])).toContain("verification_method = 'DNS_TXT'");
+    expect(text(statements[0])).toContain("status = 'VERIFIED'");
+  });
+
+  it('answers false when nothing proves it', async () => {
+    const { tx } = capturing([]);
+
+    await expect(provesZone(tx, 'winery.com')).resolves.toBe(false);
+  });
+
+  it('counts staging origins as origins', async () => {
+    const { tx } = capturing([{ held: 1 }]);
+
+    await expect(countStagingDomains(tx)).resolves.toBe(1);
+  });
+
+  it('reads no staging origins as none', async () => {
+    const { tx } = capturing([]);
+
+    await expect(countStagingDomains(tx)).resolves.toBe(0);
   });
 });
 

@@ -113,7 +113,7 @@
       "/v1/dashboard/domains": {
         "post": {
           "summary": "Add a domain",
-          "description": "Normalises whatever the seller typed into one canonical origin (P2-05) and creates a PENDING row with a verification nonce. An origin another winery already holds is refused with 409 and a message that says only that it is not available: naming the other winery would make this an oracle for enumerating who our customers are. An origin this winery already holds is answered with the row it has, so the screen can show the token again rather than reporting a conflict that is not one. Every attempt is audited, including the refused ones, which are the interesting ones.\n\nRequires the `domains:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
+          "description": "Normalises whatever the seller typed into one canonical origin (P2-05) and creates a PENDING row with a verification nonce. An origin another winery already holds is refused with 409 and a message that says only that it is not available: naming the other winery would make this an oracle for enumerating who our customers are. An origin this winery already holds is answered with the row it has, so the screen can show the token again rather than reporting a conflict that is not one. Every attempt is audited, including the refused ones, which are the interesting ones. `kind: \"staging\"` marks an origin the seller tests on (P4-19): it has its own cap of two, outside the plan, and a lower rate limit, and shares the monthly quota. An origin under a registrable domain this winery has already proved by DNS lands `VERIFIED` with no new record to publish, because the TXT record proved the zone every subdomain is created in; a file proof covers only its own host.\n\nRequires the `domains:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
           "operationId": "postV1DashboardDomains",
           "x-required-capability": "domains:manage",
           "responses": {
@@ -144,6 +144,13 @@
                               "VERIFIED"
                             ]
                           },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "production",
+                              "staging"
+                            ]
+                          },
                           "verificationToken": {
                             "type": [
                               "string",
@@ -165,6 +172,7 @@
                           "origin",
                           "registrableDomain",
                           "status",
+                          "kind",
                           "verificationToken",
                           "verificationExpiresAt",
                           "createdAt"
@@ -187,6 +195,7 @@
                       "origin": "https://www.winery.com",
                       "registrableDomain": "winery.com",
                       "status": "PENDING",
+                      "kind": "production",
                       "verificationToken": null,
                       "verificationExpiresAt": "2026-10-03T09:00:00.000Z",
                       "createdAt": "2026-09-25T09:00:00.000Z"
@@ -342,6 +351,13 @@
                               "VERIFIED"
                             ]
                           },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "production",
+                              "staging"
+                            ]
+                          },
                           "verificationToken": {
                             "type": [
                               "string",
@@ -363,6 +379,7 @@
                           "origin",
                           "registrableDomain",
                           "status",
+                          "kind",
                           "verificationToken",
                           "verificationExpiresAt",
                           "createdAt"
@@ -399,6 +416,13 @@
                                     "VERIFIED"
                                   ]
                                 },
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "production",
+                                    "staging"
+                                  ]
+                                },
                                 "verificationToken": {
                                   "type": [
                                     "string",
@@ -420,6 +444,7 @@
                                 "origin",
                                 "registrableDomain",
                                 "status",
+                                "kind",
                                 "verificationToken",
                                 "verificationExpiresAt",
                                 "createdAt"
@@ -450,6 +475,7 @@
                       "origin": "https://www.winery.com",
                       "registrableDomain": "winery.com",
                       "status": "VERIFIED",
+                      "kind": "production",
                       "verificationToken": null,
                       "verificationExpiresAt": null,
                       "createdAt": "2026-09-25T09:00:00.000Z"
@@ -720,6 +746,13 @@
                               "VERIFIED"
                             ]
                           },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "production",
+                              "staging"
+                            ]
+                          },
                           "verificationToken": {
                             "type": [
                               "string",
@@ -741,6 +774,7 @@
                           "origin",
                           "registrableDomain",
                           "status",
+                          "kind",
                           "verificationToken",
                           "verificationExpiresAt",
                           "createdAt"

@@ -150,6 +150,12 @@ export const domainSchema = z.object({
   origin: z.string(),
   registrableDomain: z.string(),
   status: z.enum(['PENDING', 'VERIFIED']),
+  /**
+   * Where the widget serves shoppers, or where the seller tests it (P4-19). A
+   * staging origin has its own cap of two, outside the plan, and a lower rate
+   * limit; it shares the winery's monthly quota.
+   */
+  kind: z.enum(['production', 'staging']),
   verificationToken: z.string().nullable(),
   /**
    * When the nonce stops being accepted (P4-04), ISO, null once it is used.

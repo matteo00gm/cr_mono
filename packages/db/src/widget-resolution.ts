@@ -29,6 +29,11 @@ export type WidgetResolution =
       readonly locale: string;
       /** Whether the session mint asks for a Turnstile token (P4-14). */
       readonly turnstile: boolean;
+      /**
+       * Which kind of origin the request came from (P4-19). A staging origin
+       * gets its own, lower rate limit and shares the winery's monthly quota.
+       */
+      readonly originKind: 'production' | 'staging';
     }
   /**
    * No usable key: never issued, or revoked and past its grace window.
@@ -47,6 +52,7 @@ interface ResolutionRow {
   readonly tenant_id: string;
   readonly usable: boolean;
   readonly domain_id: string | null;
+  readonly kind: 'production' | 'staging' | null;
   readonly status: TenantStatus | null;
   readonly plan: TenantPlan | null;
   readonly locale: string | null;
@@ -78,6 +84,7 @@ export const resolveTenantByKeyAndOrigin = (
           k.tenant_id,
           (k.revoked_at IS NULL OR k.grace_until > now()) AS usable,
           d.id AS domain_id,
+          d.kind,
           t.status,
           t.plan,
           t.locale,
@@ -123,6 +130,7 @@ export const resolveTenantByKeyAndOrigin = (
         plan: row.plan,
         locale: row.locale,
         turnstile: row.turnstile_enabled === true,
+        originKind: row.kind === 'staging' ? 'staging' : 'production',
       };
     },
     db,

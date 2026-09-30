@@ -37,6 +37,7 @@ const tenant = (id: string): WidgetTenant => ({
   status: 'ACTIVE',
   locale: 'it',
   turnstile: false,
+  originKind: 'production',
 });
 
 const useTenant = async (id: string): Promise<void> => {

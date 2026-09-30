@@ -89,11 +89,57 @@ describe('widgetLimitChecks', () => {
       tenantPerMinute: { CANTINA: 6, ECOMMERCE: 7, none: 8 },
       endpointPerMinute: { config: 9, session: 10, chat: 11 },
       messagesPerMonth: { CANTINA: 12, ECOMMERCE: 13, none: 14 },
+      stagingPerMinute: { config: 16, session: 17, chat: 18 },
     };
 
     expect(
       widgetLimitChecks(request({ endpoint: 'chat', sessionId: 's' }), tiny).map((c) => c.limit),
     ).toEqual([2, 5, 6, 11, 12]);
+    expect(
+      widgetLimitChecks(
+        request({ endpoint: 'chat', sessionId: 's', originKind: 'staging' }),
+        tiny,
+      ).map((c) => c.limit),
+    ).toEqual([2, 5, 6, 11, 18, 12]);
+  });
+});
+
+describe('a staging origin (P4-19)', () => {
+  it('adds its own allowance per endpoint, and still spends every shared one', () => {
+    /*
+     * **On top of, never instead of.** A staging request still counts against
+     * the tenant minute and the month it shares with production; it just has a
+     * lower ceiling of its own, so a test loop left running is stopped first.
+     */
+    expect(
+      widgetLimitChecks(request({ endpoint: 'chat', sessionId: 'sid-1', originKind: 'staging' })),
+    ).toEqual([
+      { key: 'session:sid-1:chat', limit: 6, windowSec: 60 },
+      { key: `ip:bucket:${TENANT}:chat`, limit: 20, windowSec: 60 },
+      { key: `tenant:${TENANT}:min`, limit: 60, windowSec: 60 },
+      { key: `endpoint:chat:${TENANT}`, limit: 60, windowSec: 60 },
+      { key: `staging:${TENANT}:chat`, limit: 10, windowSec: 60 },
+      { key: `tenant:${TENANT}:month`, limit: 1_500, window: 'month' },
+    ]);
+  });
+
+  it('draws nothing extra from a production origin, named or not', () => {
+    expect(widgetLimitChecks(request({ originKind: 'production' }))).toEqual(
+      widgetLimitChecks(request()),
+    );
+  });
+
+  it.each(['config', 'session', 'chat'] as const)(
+    'binds below the production endpoint limit for %s',
+    (endpoint) => {
+      expect(WIDGET_LIMITS.stagingPerMinute[endpoint]).toBeLessThan(
+        WIDGET_LIMITS.endpointPerMinute[endpoint],
+      );
+    },
+  );
+
+  it('holds the numbers the row set', () => {
+    expect(WIDGET_LIMITS.stagingPerMinute).toEqual({ config: 30, session: 10, chat: 10 });
   });
 });
 

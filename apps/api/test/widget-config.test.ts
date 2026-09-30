@@ -46,6 +46,7 @@ const found = (overrides: Partial<Found> = {}): Found => ({
   plan: 'CANTINA',
   locale: 'it',
   turnstile: false,
+  originKind: 'production',
   ...overrides,
 });
 

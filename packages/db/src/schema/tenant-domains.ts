@@ -14,6 +14,13 @@ import { tenants } from './tenants.js';
 
 export const domainStatus = pgEnum('domain_status', ['PENDING', 'VERIFIED']);
 
+/**
+ * Whether an origin is where the widget serves shoppers or where the seller
+ * tests it (P4-19). Staging origins have their own cap and a lower rate limit,
+ * and share the monthly quota.
+ */
+export const domainKind = pgEnum('domain_kind', ['production', 'staging']);
+
 /** The two proofs of control from §3.3. Null until the seller picks one. */
 export const domainVerificationMethod = pgEnum('domain_verification_method', [
   'DNS_TXT',
@@ -74,6 +81,9 @@ export const tenantDomains = pgTable(
     registrableDomain: text('registrable_domain').notNull(),
 
     status: domainStatus('status').notNull().default('PENDING'),
+
+    /** Production unless the seller says otherwise (P4-19). */
+    kind: domainKind('kind').notNull().default('production'),
 
     verificationMethod: domainVerificationMethod('verification_method'),
     verificationToken: text('verification_token'),

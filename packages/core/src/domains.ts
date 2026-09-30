@@ -101,6 +101,37 @@ export const capMessage = (plan: PlanTier, cap: number): string =>
   'Fatturazione screen.';
 
 /**
+ * How many staging origins a winery may hold, whatever its plan (P4-19).
+ *
+ * **Outside the plan's domain cap**, because charging a seller a domain slot to
+ * test is a bad trade for us: it discourages testing, and an untested install
+ * is a support ticket. Two is a staging site and a preview; a third is a second
+ * production site under another name.
+ */
+export const STAGING_DOMAIN_CAP = 2;
+
+export const STAGING_CAP_MESSAGE =
+  `You can have up to ${String(STAGING_DOMAIN_CAP)} staging domains, and both are in use. ` +
+  'Remove one you no longer test on.';
+
+/**
+ * Whether a registrable domain is a Shopify store's own `*.myshopify.com`
+ * (P4-19).
+ *
+ * `myshopify.com` is a public suffix, so every store is its own registrable
+ * domain — and Shopify controls that zone, so a seller can neither publish a
+ * TXT record there nor put a file at its root. Neither proof can ever succeed,
+ * and saying so up front beats a check that fails with no explanation.
+ */
+export const isShopifyStoreDomain = (registrableDomain: string): boolean =>
+  registrableDomain.endsWith('.myshopify.com');
+
+export const SHOPIFY_UNVERIFIABLE =
+  'A myshopify.com address cannot be verified with DNS or a file, because Shopify controls it. ' +
+  'Connecting your Shopify store will add it for you once that is available; until then, ' +
+  'contact support and we will add it by hand.';
+
+/**
  * How often one domain may be re-checked (P4-02, P2-04).
  *
  * **This endpoint makes an outbound network call on demand**, which makes it an

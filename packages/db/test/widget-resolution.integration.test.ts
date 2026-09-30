@@ -127,6 +127,7 @@ describe('the outcomes the row lists', () => {
       plan: 'CANTINA',
       locale: 'it',
       turnstile: false,
+      originKind: 'production',
     });
   });
 

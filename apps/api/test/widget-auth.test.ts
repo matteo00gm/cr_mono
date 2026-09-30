@@ -58,6 +58,7 @@ const found = (over: Partial<Found> = {}): Found => ({
   plan: 'CANTINA',
   locale: 'it',
   turnstile: false,
+  originKind: 'production',
   ...over,
 });
 

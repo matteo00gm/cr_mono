@@ -49,7 +49,10 @@ const found = (): unknown[][] => [
   [{ tenant_id: TENANT }],
   [],
   [{ status: 'ACTIVE', plan: 'ECOMMERCE', locale: 'it' }],
-  [{ origin: 'https://a.example' }, { origin: 'https://b.example' }],
+  [
+    { origin: 'https://a.example', kind: 'production' },
+    { origin: 'https://b.example', kind: 'staging' },
+  ],
 ];
 
 describe('the guards', () => {
@@ -151,6 +154,7 @@ describe('the hand-over', () => {
       plan: 'ECOMMERCE',
       locale: 'it',
       verifiedOrigins: ['https://a.example', 'https://b.example'],
+      stagingOrigins: ['https://b.example'],
     });
   });
 
