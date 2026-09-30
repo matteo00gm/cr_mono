@@ -53,4 +53,8 @@ reports/
 # Playwright's own output (P3-18). Traces are uploaded by CI on a failure and
 # are never worth committing: they are megabytes, and they describe one run.
 apps/e2e/test-results/
+# Visual baselines are CI's Linux renders (P3-19); a local run writes its own
+# platform's files beside them, which are never committed.
+apps/e2e/test/*-snapshots/*-win32.png
+apps/e2e/test/*-snapshots/*-darwin.png
 apps/e2e/playwright-report/

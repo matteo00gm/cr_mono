@@ -61,6 +61,17 @@ const ROUTES: Readonly<Record<string, string>> = {
   '/hostile.css': 'hostile.css',
 };
 
+/**
+ * What a Shopify theme sets on every storefront, as a script of its own (P3-19).
+ *
+ * The plain storefront sets it inline; the hostile page cannot, because its
+ * policy is `script-src 'self'` — so it loads this, which is how a real theme
+ * on a strict policy gets its globals: from a script it allows. Without it the
+ * hostile page is a shop with no cart, the widget rightly offers no button,
+ * and the two pages cannot be compared pixel for pixel.
+ */
+const SHOPIFY_GLOBALS = `window.Shopify = { shop: 'cantina-rossi.myshopify.com', locale: 'it' };`;
+
 const TYPES: Readonly<Record<string, string>> = {
   html: 'text/html; charset=utf-8',
   css: 'text/css; charset=utf-8',
@@ -133,6 +144,13 @@ export const startHostPages = async ({
     if (url.pathname === '/cart.js') {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ item_count: calls.length }));
+
+      return;
+    }
+
+    if (url.pathname === '/shopify.js') {
+      response.writeHead(200, { 'content-type': typeOf(url.pathname) });
+      response.end(SHOPIFY_GLOBALS);
 
       return;
     }

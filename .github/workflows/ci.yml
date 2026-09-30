@@ -593,3 +593,16 @@ jobs:
           name: playwright-traces
           path: apps/e2e/test-results/
           retention-days: 7
+
+      # Visual baselines (P3-19). A missing baseline is written by the run that
+      # fails for want of it, and uploaded here, so a new or changed baseline
+      # is the runner's own Linux render — reviewed and committed by hand,
+      # never regenerated silently.
+      - name: Upload visual baselines
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: visual-baselines
+          path: apps/e2e/test/visual.spec.ts-snapshots/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -3,6 +3,7 @@ import {
   widgetConfigResponse,
   widgetSessionResponse,
   widgetSurfaceResponse,
+  type WidgetChatEvent,
 } from '@catalogorosso/api-client';
 import {
   planCapCheck,
@@ -589,8 +590,9 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
           await stream.writeSSE({
             event: 'error',
             data: JSON.stringify({
+              type: 'error',
               code: error instanceof QuotaExceededError ? 'quota_exceeded' : 'provider_error',
-            }),
+            } satisfies WidgetChatEvent),
           });
         } finally {
           clearInterval(beat);

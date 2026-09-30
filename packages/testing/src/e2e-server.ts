@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import process from 'node:process';
 import { Readable } from 'node:stream';
 
+import { closeDb } from '@catalogorosso/db/test-support';
 import { sql } from 'drizzle-orm';
 
 import { startTestDatabase, type TestDatabase } from './db-harness.js';
@@ -262,10 +263,22 @@ export const startE2eApi = async ({
     },
 
     endSessions: async () => {
+      /*
+       * **Stamped by this process's clock, not the container's `now()`.** The
+       * token's start is stamped by the API's clock — this process — and the
+       * check compares the two. Docker Desktop's VM clock swings the better
+       * part of a second either side of its host's, so a cutoff written with
+       * `now()` could land *before* a token minted a moment earlier and the
+       * test failed about one run in ten on Windows for no reason in the code
+       * under test. A deployment's clocks are both NTP-synced; this helper
+       * stands in for "the seller acted now", and now is ours to state.
+       */
+      const at = new Date().toISOString();
+
       await admin.execute(sql`
         INSERT INTO widget_session_cutoffs (tenant_id, origin, valid_from)
-        VALUES (${tenantId}, ${VERIFIED_ORIGIN}, now())
-        ON CONFLICT (tenant_id, origin) DO UPDATE SET valid_from = now()
+        VALUES (${tenantId}, ${VERIFIED_ORIGIN}, ${at}::timestamptz)
+        ON CONFLICT (tenant_id, origin) DO UPDATE SET valid_from = EXCLUDED.valid_from
       `);
     },
 
@@ -306,6 +319,17 @@ export const startE2eApi = async ({
           else resolve();
         });
       });
+      /*
+       * **The scoped helpers' client is memoised for the process** (`getDb`),
+       * and a Playwright worker runs every spec file in one process. Left open,
+       * the next spec's `start()` sets a fresh `DATABASE_URL` that nothing
+       * reads. Its first requests go to connections into this container after
+       * it has stopped, and answer 500 — a CORS refusal, to a browser — until
+       * the pool reconnects to this URL, where Docker has usually handed the
+       * port to the new container. A bug that heals itself by coincidence.
+       * Vitest never showed it because it isolates each file.
+       */
+      await closeDb();
       await database.close();
     },
   };

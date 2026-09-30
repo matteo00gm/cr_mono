@@ -266,6 +266,19 @@ describe('the stream', () => {
 });
 
 describe('a failure after the first event', () => {
+  /*
+   * **Parsed with the published schema, not searched for a word.** The widget
+   * builds its reader from `widgetChatEvent` and drops a frame that does not
+   * parse, so an error frame missing its `type` reaches the wire and is then
+   * thrown away: the shopper whose month ran out mid-answer was told nothing.
+   * A substring check passed for exactly that frame (P3-19 found it).
+   */
+  const errorsOf = (body: string): unknown[] =>
+    payloadsOf(body)
+      .filter((payload) => JSON.stringify(payload) !== '{}')
+      .map((payload) => widgetChatEvent.parse(payload))
+      .filter((event) => event.type === 'error');
+
   it('arrives as an error event rather than truncating silently', async () => {
     /*
      * The response has already begun, so there is no status left to change. A
@@ -283,7 +296,7 @@ describe('a failure after the first event', () => {
     const body = await (await ask(appWith({ chat: failing }))).text();
 
     expect(eventsOf(body)).toEqual(['text', 'error', 'done']);
-    expect(body).toContain('provider_error');
+    expect(errorsOf(body)).toEqual([{ type: 'error', code: 'provider_error' }]);
   });
 
   it('never carries the provider own words to a visitor', async () => {
@@ -312,7 +325,9 @@ describe('a failure after the first event', () => {
         })(),
     };
 
-    expect(await (await ask(appWith({ chat: refusing }))).text()).toContain('quota_exceeded');
+    const body = await (await ask(appWith({ chat: refusing }))).text();
+
+    expect(errorsOf(body)).toEqual([{ type: 'error', code: 'quota_exceeded' }]);
   });
 });
 

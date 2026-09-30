@@ -38,6 +38,12 @@ test.beforeEach(async () => {
    */
   harness.verified.reset();
   harness.unverified.reset();
+  /*
+   * A fresh rate-limit window too. Twenty-odd tests share one trial winery's
+   * thirty requests a minute, so a fast machine met the limit mid-suite and
+   * read a 429 as whatever the test was about. None of these is about it.
+   */
+  harness.nextMinute();
   await harness.api.reverifyDomain();
 });
 
