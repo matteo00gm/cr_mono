@@ -34,6 +34,7 @@ const tenant = (id: string): WidgetTenant => ({
   tenantId: id,
   plan: 'CANTINA',
   status: 'ACTIVE',
+  trialEndsAt: null,
   locale: 'it',
   turnstile: false,
   originKind: 'production',

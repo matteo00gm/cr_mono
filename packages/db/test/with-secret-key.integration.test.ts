@@ -101,6 +101,22 @@ describe('a server presenting a secret key', () => {
     await expect(resolveTenantBySecretKey(sha(key), db)).resolves.toMatchObject({
       tenantId,
       status: 'ACTIVE',
+      trialEndsAt: null,
+    });
+  });
+
+  it('carries a trial’s end, so the server path gates on it as the browser path does (P5-05a)', async () => {
+    const { tenantId, key } = await winery();
+    const endsAt = new Date('2031-01-01T00:00:00.000Z');
+
+    await adminDb.execute(sql`
+      UPDATE tenants SET status = 'TRIALING', trial_ends_at = ${endsAt.toISOString()}::timestamptz
+      WHERE id = ${tenantId}::uuid
+    `);
+
+    await expect(resolveTenantBySecretKey(sha(key), db)).resolves.toMatchObject({
+      status: 'TRIALING',
+      trialEndsAt: endsAt,
     });
   });
 

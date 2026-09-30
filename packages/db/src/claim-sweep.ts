@@ -148,11 +148,16 @@ export const markClaimNotified = async (
   return row.status === 'NOTICE' && row.transfer_at !== null ? asDate(row.transfer_at) : null;
 };
 
-/** Who a claim's mail goes to, in one winery, and how to address them. */
-export interface ClaimRecipients {
+/**
+ * Who an owner's mail goes to, in one winery, and how to address them.
+ *
+ * A domain claim's (P4-18b) and a failed payment's (P5-05a): both are an
+ * owner's business, as the domains and billing screens are.
+ */
+export interface OwnerRecipients {
   readonly tenantName: string;
   readonly locale: string;
-  /** Every owner's address. A claim is an owner's business, as the domains screen is. */
+  /** Every owner's address. */
   readonly owners: readonly string[];
 }
 
@@ -163,9 +168,9 @@ export interface ClaimRecipients {
  * does — so this reaches the owners of the winery that is set and nobody else.
  * Returns `undefined` for a winery that no longer exists.
  */
-export const readClaimRecipients = async (
+export const readOwnerRecipients = async (
   tx: DbTransaction,
-): Promise<ClaimRecipients | undefined> => {
+): Promise<OwnerRecipients | undefined> => {
   const tenants = await tx.execute(sql`SELECT name, locale FROM tenants LIMIT 1`);
   const tenant = [...tenants][0] as { name: string; locale: string } | undefined;
 

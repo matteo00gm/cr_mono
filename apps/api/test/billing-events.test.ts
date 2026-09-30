@@ -78,8 +78,8 @@ afterEach(() => {
 });
 
 describe('an event the machine acts on', () => {
-  it('writes the change and audits the move, with no actor', async () => {
-    expect(await effect(tx, failedInvoice())).toBe(true);
+  it('writes the change, audits the move with no actor, and leaves the owners to be told', async () => {
+    expect(await effect(tx, failedInvoice())).toEqual({ applied: true, notice: 'payment_failed' });
     expect(state.written).toEqual([
       { ...paying, status: 'PAST_DUE', lastEventAt: new Date(1_790_000_100_000) },
     ]);
@@ -96,10 +96,10 @@ describe('an event the machine acts on', () => {
     ]);
   });
 
-  it('writes a change that moves only the clock, and audits nothing', async () => {
+  it('writes a change that moves only the clock, audits nothing, and tells nobody twice', async () => {
     state.snapshot = { ...paying, status: 'PAST_DUE' };
 
-    expect(await effect(tx, failedInvoice())).toBe(true);
+    expect(await effect(tx, failedInvoice())).toEqual({ applied: true });
     expect(state.written).toHaveLength(1);
     expect(state.audits).toEqual([]);
   });
@@ -107,13 +107,17 @@ describe('an event the machine acts on', () => {
 
 describe('an event that changes nothing', () => {
   it('when it is not a type the machine reads, and says nothing', async () => {
-    expect(await effect(tx, delivery('customer.created', { id: 'cus_1' }))).toBe(false);
+    expect(await effect(tx, delivery('customer.created', { id: 'cus_1' }))).toEqual({
+      applied: false,
+    });
     expect(state.written).toEqual([]);
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('when it is a type the machine reads, in a shape it cannot, and says so', async () => {
-    expect(await effect(tx, delivery('invoice.paid', { customer: { id: 'cus_1' } }))).toBe(false);
+    expect(await effect(tx, delivery('invoice.paid', { customer: { id: 'cus_1' } }))).toEqual({
+      applied: false,
+    });
     expect(logger.warn).toHaveBeenCalledWith(
       { kind: 'stripe_event_unreadable', type: 'invoice.paid' },
       expect.any(String),
@@ -123,7 +127,7 @@ describe('an event that changes nothing', () => {
   it('when it is from the other mode, loudly', async () => {
     const live = { ...failedInvoice(), payload: { ...failedInvoice().payload, livemode: true } };
 
-    expect(await effect(tx, live)).toBe(false);
+    expect(await effect(tx, live)).toEqual({ applied: false });
     expect(state.written).toEqual([]);
     expect(logger.error).toHaveBeenCalledWith(
       { kind: 'stripe_event_wrong_mode', type: 'invoice.payment_failed' },
@@ -132,7 +136,9 @@ describe('an event that changes nothing', () => {
   });
 
   it('when a production stage receives a test event, loudly the other way', async () => {
-    expect(await createBillingEffect({ livemode: true })(tx, failedInvoice())).toBe(false);
+    expect(await createBillingEffect({ livemode: true })(tx, failedInvoice())).toEqual({
+      applied: false,
+    });
     expect(logger.error).toHaveBeenCalledWith(
       { kind: 'stripe_event_wrong_mode', type: 'invoice.payment_failed' },
       expect.stringContaining('test-mode'),
@@ -142,14 +148,14 @@ describe('an event that changes nothing', () => {
   it('when the winery it names is gone', async () => {
     state.snapshot = undefined;
 
-    expect(await effect(tx, failedInvoice())).toBe(false);
+    expect(await effect(tx, failedInvoice())).toEqual({ applied: false });
     expect(state.written).toEqual([]);
   });
 
   it('when it is out of order — said quietly, because Stripe does that', async () => {
     state.snapshot = { ...paying, lastEventAt: new Date(1_790_000_200_000) };
 
-    expect(await effect(tx, failedInvoice())).toBe(false);
+    expect(await effect(tx, failedInvoice())).toEqual({ applied: false });
     expect(state.written).toEqual([]);
     expect(logger.info).toHaveBeenCalledWith(
       { kind: 'stripe_event_ignored', type: 'stale' },
@@ -159,7 +165,7 @@ describe('an event that changes nothing', () => {
   });
 
   it('when it is for another customer — said loudly, because somebody did that', async () => {
-    expect(await effect(tx, failedInvoice('cus_stranger'))).toBe(false);
+    expect(await effect(tx, failedInvoice('cus_stranger'))).toEqual({ applied: false });
     expect(logger.warn).toHaveBeenCalledWith(
       { kind: 'stripe_event_ignored', type: 'customer_mismatch' },
       expect.any(String),
@@ -169,7 +175,7 @@ describe('an event that changes nothing', () => {
   it('when its customer is bound to another winery, and audits nothing', async () => {
     state.outcome = 'customer_taken';
 
-    expect(await effect(tx, failedInvoice())).toBe(false);
+    expect(await effect(tx, failedInvoice())).toEqual({ applied: false });
     expect(state.audits).toEqual([]);
     expect(logger.warn).toHaveBeenCalledWith(
       { kind: 'stripe_event_ignored', type: 'customer_taken' },

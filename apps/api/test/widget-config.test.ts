@@ -43,6 +43,7 @@ const found = (overrides: Partial<Found> = {}): Found => ({
   found: true,
   tenantId: TENANT,
   status: 'ACTIVE',
+  trialEndsAt: null,
   plan: 'CANTINA',
   locale: 'it',
   turnstile: false,
@@ -158,6 +159,9 @@ describe('the response', () => {
     expect(body.welcomeMessage).toMatch(/^Hello!/);
   });
 
+  /** A trial with a day left to run: `TRIALING` serves only while its date is ahead (P5-05a). */
+  const running = new Date(Date.now() + 86_400_000);
+
   it.each<[Found['status'], 'ACTIVE' | 'DISABLED']>([
     ['ACTIVE', 'ACTIVE'],
     ['TRIALING', 'ACTIVE'],
@@ -166,11 +170,24 @@ describe('the response', () => {
     ['CANCELED', 'DISABLED'],
     ['PENDING_VERIFICATION', 'DISABLED'],
   ])('reports a tenant that is %s as %s, and never the billing detail', async (status, shown) => {
-    const built = app({ resolve: () => Promise.resolve(found({ status })) });
+    const built = app({
+      resolve: () => Promise.resolve(found({ status, trialEndsAt: running })),
+    });
 
     const body = widgetConfigResponse.parse(await (await getConfig(built)).json());
 
     expect(body.status).toBe(shown);
+  });
+
+  it('reports a trial whose date has passed as disabled, though its status still says TRIALING (P5-05a)', async () => {
+    const built = app({
+      resolve: () =>
+        Promise.resolve(found({ status: 'TRIALING', trialEndsAt: new Date(Date.now() - 1000) })),
+    });
+
+    const body = widgetConfigResponse.parse(await (await getConfig(built)).json());
+
+    expect(body.status).toBe('DISABLED');
   });
 });
 

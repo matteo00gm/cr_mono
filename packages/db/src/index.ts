@@ -338,9 +338,9 @@ export {
   CLAIM_SWEEPER_GUC,
   markClaimNotified,
   NestedClaimSweepContextError,
-  readClaimRecipients,
+  readOwnerRecipients,
   readClaimWork,
-  type ClaimRecipients,
+  type OwnerRecipients,
   type ClaimWork,
 } from './claim-sweep.js';
 

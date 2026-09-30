@@ -61,6 +61,7 @@ const tenant: WidgetTenant = {
   tenantId: TENANT,
   plan: 'CANTINA',
   status: 'ACTIVE',
+  trialEndsAt: null,
   locale: 'it',
   turnstile: false,
   originKind: 'production',

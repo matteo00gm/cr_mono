@@ -55,6 +55,7 @@ const found = (over: Partial<Found> = {}): Found => ({
   found: true,
   tenantId: TENANT,
   status: 'ACTIVE',
+  trialEndsAt: null,
   plan: 'CANTINA',
   locale: 'it',
   turnstile: false,
@@ -300,6 +301,28 @@ describe('before the token is read', () => {
     expect(loads.count).toBe(0);
     expect(rejected).toEqual([]);
   });
+
+  it.each([
+    ['past due, on the first failure, with no grace', { status: 'PAST_DUE' as const }],
+    [
+      'on a trial whose date has passed',
+      { status: 'TRIALING' as const, trialEndsAt: new Date(Date.now() - 1000) },
+    ],
+  ])(
+    'tells a winery %s it is unavailable, mid-conversation, and loads no key (P5-05a)',
+    async (_what, resolution) => {
+      const { keys, app, loads } = await harness({ resolution: found(resolution) });
+
+      const response = await send(app, { token: await tokenFor(keys) });
+
+      expect(await refusalOf(response)).toEqual({
+        status: 403,
+        code: 'unavailable',
+        message: WIDGET_UNAVAILABLE,
+      });
+      expect(loads.count).toBe(0);
+    },
+  );
 
   it('leaves a preflight to CORS, which answers it without any token', async () => {
     const { app, loads } = await harness();

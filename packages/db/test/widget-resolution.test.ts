@@ -46,6 +46,7 @@ const row = (overrides: Record<string, unknown> = {}) => ({
   usable: true,
   domain_id: 'd0000000-0000-4000-8000-000000000001',
   status: 'ACTIVE',
+  trial_ends_at: null,
   plan: 'CANTINA',
   locale: 'it',
   ...overrides,
@@ -59,11 +60,25 @@ describe('the outcomes', () => {
       found: true,
       tenantId: TENANT,
       status: 'ACTIVE',
+      trialEndsAt: null,
       plan: 'CANTINA',
       locale: 'it',
       turnstile: false,
       originKind: 'production',
     });
+  });
+
+  it('carries a trial’s end as a date, whichever form the driver gives it (P5-05a)', async () => {
+    const endsAt = new Date('2026-10-14T12:00:00.000Z');
+
+    for (const given of [endsAt, endsAt.toISOString()]) {
+      const { db } = fakeDb([row({ status: 'TRIALING', trial_ends_at: given })]);
+
+      await expect(resolveTenantByKeyAndOrigin(KEY, ORIGIN, db)).resolves.toMatchObject({
+        status: 'TRIALING',
+        trialEndsAt: endsAt,
+      });
+    }
   });
 
   it('resolves the winery’s live development origin, and says so (P4-19b)', async () => {
