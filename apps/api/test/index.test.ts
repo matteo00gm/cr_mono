@@ -259,6 +259,35 @@ describe('the Lambda entry point', () => {
     );
 
     it(
+      'warns, under a kind of its own, when the Stripe signing secret is absent (P5-03)',
+      async () => {
+        /*
+         * Its own kind, not Resend's: on a stage that sells plans this is an
+         * outage of the thing that switches widgets on and off, and an alarm
+         * filtering on bounces must not be the one that pages for it.
+         */
+        const { warned } = await load({ SST_STAGE: 'review', ORIGIN_SECRET: randomUUID() });
+
+        expect(warned()).toContain('stripe_webhook_secret_absent');
+      },
+      COLD_START_MS,
+    );
+
+    it(
+      'says nothing about the Stripe secret once it is set',
+      async () => {
+        const { warned } = await load({
+          SST_STAGE: 'review',
+          ORIGIN_SECRET: randomUUID(),
+          STRIPE_WEBHOOK_SECRET: `whsec_${randomUUID()}`,
+        });
+
+        expect(warned()).not.toContain('stripe_webhook_secret_absent');
+      },
+      COLD_START_MS,
+    );
+
+    it(
       'warns, rather than refusing to start, when the widget token keyset is absent (P2-12)',
       async () => {
         // Restrictive when absent: no session is minted, so it is said, not enforced.

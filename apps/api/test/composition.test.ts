@@ -10,6 +10,7 @@ import { createApp } from '../src/app.js';
 import { BILLING_UNAVAILABLE } from '../src/billing.js';
 import { buildDependencies, QUERY_EMBEDDING } from '../src/composition.js';
 import { unconfiguredMembers } from '../src/members.js';
+import { logger } from '../src/middleware/logger.js';
 import { ORIGIN_SECRET_HEADER } from '../src/middleware/origin-secret.js';
 
 /**
@@ -381,6 +382,32 @@ describe('embedding a visitor’s question (review, R7)', () => {
 
     expect(QUERY_EMBEDDING.maxAttempts).toBeLessThanOrEqual(2);
     expect(worstCase).toBeLessThanOrEqual(10_000);
+  });
+});
+
+describe('the Stripe webhook (P5-03)', () => {
+  const post = (built: ReturnType<typeof createApp>) =>
+    built.request('/v1/webhooks/stripe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{"id":"evt_1","type":"invoice.paid"}',
+    });
+
+  it('does not exist until a signing secret is set', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+
+    expect((await post(createApp(buildDependencies(config)))).status).toBe(404);
+    warn.mockRestore();
+  });
+
+  it('refuses an unsigned event once it does', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const built = createApp(
+      buildDependencies({ ...config, stripeWebhookSecret: `whsec_${randomUUID()}` }),
+    );
+
+    expect((await post(built)).status).toBe(401);
+    warn.mockRestore();
   });
 });
 

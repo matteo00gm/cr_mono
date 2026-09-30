@@ -95,6 +95,16 @@ export const emailAllowlist = new sst.Secret('EmailAllowlist', '');
 const resendWebhookSecret = new sst.Secret('ResendWebhookSecret', '');
 
 /**
+ * Stripe's webhook endpoint signing secret, `whsec_…` (P5-03). Empty until an
+ * operator creates the endpoint in Stripe's dashboard for this stage, and
+ * empty reads as absent: every event is refused and nothing about a winery's
+ * billing moves.
+ *
+ *   `sst secret set StripeWebhookSecret --stage <stage>`
+ */
+const stripeWebhookSecret = new sst.Secret('StripeWebhookSecret', '');
+
+/**
  * The widget session token keyset (P2-11): one or two Ed25519 private JWKs, the
  * first of which signs.
  *
@@ -217,6 +227,7 @@ const environment = {
    * suppression list is indistinguishable from a domain with no bounces.
    */
   RESEND_WEBHOOK_SECRET: resendWebhookSecret.value,
+  STRIPE_WEBHOOK_SECRET: stripeWebhookSecret.value,
 
   /* Both or neither; see the declarations above (P4-14). */
   TURNSTILE_SITE_KEY: turnstileSiteKey.value,

@@ -127,6 +127,22 @@ if (stage !== 'unknown' && resendWebhookSecret === undefined) {
 }
 
 /**
+ * Stripe's webhook signing secret (P5-03). Absent on the same terms as
+ * Resend's: every event is refused with a 404, so a winery's billing state
+ * stops moving — said once per container, because on a stage that sells plans
+ * that is an outage of the one thing that switches widgets on and off.
+ */
+const stripeWebhookSecret = optionalEnvironment('STRIPE_WEBHOOK_SECRET');
+
+if (stage !== 'unknown' && stripeWebhookSecret === undefined) {
+  logger.warn(
+    { kind: 'stripe_webhook_secret_absent' },
+    'STRIPE_WEBHOOK_SECRET is not set, so Stripe events are refused and no payment, failure ' +
+      'or cancellation reaches a winery (P5-03)',
+  );
+}
+
+/**
  * The widget token keyset (P2-11, P2-12).
  *
  * **A warning rather than a throw, on the webhook secret's terms.** Absent is
@@ -184,6 +200,7 @@ export const dependencies = buildDependencies({
   ...(originSecret === undefined ? {} : { originSecret }),
   ...(rateLimiter === undefined ? {} : { rateLimiter, readUsage: rateLimiter.peek }),
   ...(resendWebhookSecret === undefined ? {} : { resendWebhookSecret }),
+  ...(stripeWebhookSecret === undefined ? {} : { stripeWebhookSecret }),
   ...(widgetTokenKeys === undefined ? {} : { widgetTokenKeys }),
   ...(turnstile === undefined ? {} : { turnstile }),
   stripeSecretKey: optionalEnvironment('STRIPE_SECRET_KEY'),

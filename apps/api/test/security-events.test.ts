@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { SecurityEvent } from '@catalogorosso/db';
 import { describe, expect, it } from 'vitest';
 
-import { refusalRecorders } from '../src/security-events.js';
+import { refusalRecorders, webhookRejectionRecorder } from '../src/security-events.js';
 import type { TokenRefusal } from '../src/widget-token.js';
 
 /**
@@ -97,6 +97,27 @@ describe('a refused token (P2-13)', () => {
     expect(events.map((event) => event.metadata)).toEqual([
       { reason: 'origin_mismatch' },
       { reason: 'tenant_mismatch' },
+    ]);
+  });
+});
+
+describe('a webhook refused for its signature (P5-03)', () => {
+  it('is recorded with the provider and the reason, and no tenant — whatever the body claimed', async () => {
+    const events: SecurityEvent[] = [];
+    const record = webhookRejectionRecorder((event) => {
+      events.push(event);
+      return Promise.resolve();
+    });
+
+    await record({ provider: 'stripe', reason: 'timestamp-outside-tolerance' });
+    await record({ provider: 'resend', reason: 'no-match' });
+
+    expect(events).toEqual([
+      {
+        type: 'INVALID_WEBHOOK_SIGNATURE',
+        metadata: { provider: 'stripe', reason: 'timestamp-outside-tolerance' },
+      },
+      { type: 'INVALID_WEBHOOK_SIGNATURE', metadata: { provider: 'resend', reason: 'no-match' } },
     ]);
   });
 });

@@ -15,7 +15,7 @@ shows as a `todo` in every run.
 | [T3](#t3--poison-the-cors-allowlist-with-a-lookalike-domain) | Poison the CORS allowlist with a lookalike domain | 5 | — |
 | [T4](#t4--burn-a-competitors-message-quota) | Burn a competitor's message quota | 5 | P7-04 |
 | [T5](#t5--steer-the-model-via-product-descriptions) | Steer the model via product descriptions | 3 | — |
-| [T6](#t6--get-free-premium-tier) | Get free premium tier | 2 | P5-03, P5-04, P5-06 |
+| [T6](#t6--get-free-premium-tier) | Get free premium tier | 4 | P5-04, P5-06 |
 | [T7](#t7--xss-the-sellers-storefront-through-the-widget) | XSS the seller's storefront through the widget | 3 | — |
 | [T8](#t8--escalate-editor--owner-or-act-with-no-membership-at-all) | Escalate `EDITOR` → `OWNER`, or act with no membership at all | 5 | — |
 | [T9](#t9--replay-a-captured-session-token) | Replay a captured session token | 4 | — |
@@ -112,10 +112,11 @@ shows as a `todo` in every run.
 |---|---|---|
 | [`packages/security/test/threats/T6-free-premium.test.ts`](../../packages/security/test/threats/T6-free-premium.test.ts) | unit | no code outside the named writers sets a tenant's status or plan |
 | [`apps/api/test/tenant-from-input.test.ts`](../../apps/api/test/tenant-from-input.test.ts) | unit | nothing tenant-shaped is read from a request |
+| [`packages/core/test/webhooks/stripe-signature.test.ts`](../../packages/core/test/webhooks/stripe-signature.test.ts) | unit | a Stripe event verifies only when signed with the endpoint secret over its timestamp and exact body, within five minutes |
+| [`apps/api/test/stripe-webhook.test.ts`](../../apps/api/test/stripe-webhook.test.ts) | unit | an unsigned, mis-signed, stale or altered event is refused before anything reads it, and recorded |
 
 **Gaps.** 
 
-- Stripe webhook raw-body signature verification — **P5-03**
 - Webhook idempotency: a replayed event is a no-op — **P5-04**
 - Every status transition driven only by a verified event — **P5-06**
 

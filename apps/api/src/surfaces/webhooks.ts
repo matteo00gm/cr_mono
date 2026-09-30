@@ -2,15 +2,19 @@ import {
   NotFoundError,
   UnauthenticatedError,
   isUnreadableWebhookPayload,
+  verifyStripeSignature,
   verifySvixSignature,
+  type SignatureFailure,
 } from '@catalogorosso/core';
 import { publicRoute, type RouteAccess } from '@catalogorosso/security';
 import { Hono, type Context } from 'hono';
+import { z } from 'zod';
 
 import type { AppEnv } from '../env.js';
 import { routeKey } from '../middleware/capability.js';
 import { logger } from '../middleware/logger.js';
 import { WEBHOOK_PREFIX } from '../routes.js';
+import { unconfiguredStripeEvents, type StripeEventsPort } from '../stripe-events.js';
 import { unconfiguredWebhooks, type WebhooksPort } from '../webhooks.js';
 
 /**
@@ -53,7 +57,40 @@ export interface WebhookOptions {
    */
   readonly resendWebhookSecret?: string | undefined;
   readonly webhooks?: WebhooksPort | undefined;
+
+  /**
+   * The Stripe endpoint signing secret, `whsec_…` (P5-03). Absent is
+   * restrictive on `resendWebhookSecret`'s terms: nothing can be verified, so
+   * the endpoint answers 404 and nothing about a winery's billing moves.
+   */
+  readonly stripeWebhookSecret?: string | undefined;
+  readonly stripeEvents?: StripeEventsPort | undefined;
+
+  /**
+   * Told of every delivery refused for its signature, whichever provider it
+   * claimed to be from (P5-03). A `security_events` row in production.
+   *
+   * **It can never fail the request**: it is not awaited, and a rejection is
+   * logged and dropped. A security log that errors must not become a way to
+   * change the answer, or to slow it — the refusal is the same 401 either way.
+   */
+  readonly onSignatureRejected?: ((rejection: SignatureRejection) => Promise<void>) | undefined;
 }
+
+export interface SignatureRejection {
+  readonly provider: 'resend' | 'stripe';
+  readonly reason: SignatureFailure;
+}
+
+/** Stripe's one header. Lowercase: Hono normalises on lookup. */
+export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';
+
+/**
+ * All the route reads of an event before handing it on: its id, which is the
+ * idempotency key, and its type. The rest is the event reader's (P5-05), which
+ * knows what each type carries.
+ */
+const stripeEnvelope = z.object({ id: z.string().min(1), type: z.string().min(1) });
 
 /** Svix's three headers. Lowercase: Hono normalises on lookup. */
 export const SVIX_ID_HEADER = 'svix-id';
@@ -105,8 +142,38 @@ const acknowledgeUnreadable = (
 export const createWebhookApp = ({
   resendWebhookSecret,
   webhooks = unconfiguredWebhooks,
+  stripeWebhookSecret,
+  stripeEvents = unconfiguredStripeEvents,
+  onSignatureRejected,
 }: WebhookOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
+
+  /** Logs the specific reason, records the refusal, and never lets either change the answer. */
+  const rejected = (rejection: SignatureRejection): never => {
+    /*
+     * The reason travels under `type`, an allowlisted key whose documented
+     * purpose is classification, for the reason given on the Resend route.
+     */
+    logger.warn(
+      { kind: 'webhook_signature_rejected', type: rejection.reason },
+      `a ${rejection.provider} delivery failed signature verification (P0-64b, P5-03)`,
+    );
+
+    const unrecorded = () => {
+      logger.warn(
+        { kind: 'webhook_rejection_unrecorded', type: rejection.reason },
+        'a refused webhook delivery went unrecorded',
+      );
+    };
+
+    try {
+      onSignatureRejected?.(rejection).catch(unrecorded);
+    } catch {
+      unrecorded();
+    }
+
+    throw new UnauthenticatedError(REJECTED);
+  };
 
   /**
    * Resend delivery events (P0-64b).
@@ -156,12 +223,7 @@ export const createWebhookApp = ({
        * (D8), and `SignatureFailure` is a closed set of five literals that
        * cannot carry a secret, so an existing key does the job exactly.
        */
-      logger.warn(
-        { kind: 'webhook_signature_rejected', type: verified.reason },
-        'a delivery event failed signature verification (P0-64b)',
-      );
-
-      throw new UnauthenticatedError(REJECTED);
+      rejected({ provider: 'resend', reason: verified.reason });
     }
 
     /*
@@ -208,7 +270,85 @@ export const createWebhookApp = ({
     }
   });
 
+  /**
+   * Stripe billing events (P5-03).
+   *
+   * **The raw body, verified, and only then parsed** — the Resend route's
+   * order and its reason: a signature over a re-serialisation of the payload
+   * is a signature over bytes Stripe never sent. Nothing above this surface
+   * parses a body, and `webhooks.test.ts` fails if anything starts to.
+   *
+   * No session, no tenant and no CORS: its own `Hono` instance (see the top of
+   * this file). Which winery an event is about is the event's to say, inside
+   * the signed body, and the port checks it against the customer on file.
+   */
+  app.post('/stripe', async (c) => {
+    if (stripeWebhookSecret === undefined || stripeWebhookSecret.trim() === '') {
+      logger.warn(
+        { kind: 'webhook_unconfigured' },
+        'a Stripe event arrived with no signing secret configured (P5-03)',
+      );
+
+      throw new NotFoundError('Not found.');
+    }
+
+    const body = await c.req.text();
+
+    const verified = verifyStripeSignature({
+      secret: stripeWebhookSecret,
+      header: c.req.header(STRIPE_SIGNATURE_HEADER),
+      body,
+    });
+
+    if (!verified.ok) rejected({ provider: 'stripe', reason: verified.reason });
+
+    /*
+     * Signed and unreadable is Stripe changing a shape under us, not a caller
+     * mistake: acknowledged, so it is not redelivered for three days to no
+     * purpose, and logged for the alarm — the Resend route's reasoning.
+     */
+    let payload: unknown;
+
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      return acknowledgeUnreadableStripe(c, 'webhook_body_not_json');
+    }
+
+    const envelope = stripeEnvelope.safeParse(payload);
+
+    if (!envelope.success) return acknowledgeUnreadableStripe(c, 'webhook_payload_unreadable');
+
+    /*
+     * A failure past this point — a database that is down, an unwired port —
+     * is left to become a 500, which Stripe retries. That is the case where a
+     * redelivery repairs something, and P5-04's ledger makes it safe.
+     */
+    const result = await stripeEvents.record({
+      eventId: envelope.data.id,
+      type: envelope.data.type,
+      payload,
+    });
+
+    return c.json({
+      received: true as const,
+      type: envelope.data.type,
+      duplicate: result.duplicate,
+      applied: result.applied,
+    });
+  });
+
   return app;
+};
+
+/** `acknowledgeUnreadable`, for Stripe: no suppression count, because there is no suppression. */
+const acknowledgeUnreadableStripe = (
+  c: Context<AppEnv>,
+  kind: 'webhook_body_not_json' | 'webhook_payload_unreadable',
+) => {
+  logger.warn({ kind }, 'a signed Stripe event could not be read (P5-03)');
+
+  return c.json({ received: true as const, type: 'unreadable' as const });
 };
 
 /**
@@ -228,6 +368,17 @@ export const WEBHOOK_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map<st
         'message id and timestamp inside the signed content and a five-minute tolerance. ' +
         'An unsigned or mis-signed request is refused before the body is parsed. Applied ' +
         'exactly once per event id, because providers redeliver.',
+    ),
+  ],
+  [
+    routeKey('POST', `${WEBHOOK_PREFIX}/stripe`),
+    publicRoute(
+      'Public in the sense that it carries no session and no tenant, and authenticated ' +
+        "in the sense that matters: Stripe's HMAC-SHA256 signature over the timestamp and " +
+        'the raw body, with a five-minute tolerance. An unsigned or mis-signed request is ' +
+        'refused before the body is parsed and recorded as a security event. The winery an ' +
+        'event is about is read from inside the signed body and checked against the ' +
+        'customer on file; nothing a caller could choose decides it.',
     ),
   ],
 ]);

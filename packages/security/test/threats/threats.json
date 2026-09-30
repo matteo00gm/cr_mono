@@ -186,13 +186,19 @@
           "path": "apps/api/test/tenant-from-input.test.ts",
           "runner": "unit",
           "covers": "nothing tenant-shaped is read from a request"
+        },
+        {
+          "path": "packages/core/test/webhooks/stripe-signature.test.ts",
+          "runner": "unit",
+          "covers": "a Stripe event verifies only when signed with the endpoint secret over its timestamp and exact body, within five minutes"
+        },
+        {
+          "path": "apps/api/test/stripe-webhook.test.ts",
+          "runner": "unit",
+          "covers": "an unsigned, mis-signed, stale or altered event is refused before anything reads it, and recorded"
         }
       ],
       "gaps": [
-        {
-          "what": "Stripe webhook raw-body signature verification",
-          "row": "P5-03"
-        },
         {
           "what": "Webhook idempotency: a replayed event is a no-op",
           "row": "P5-04"

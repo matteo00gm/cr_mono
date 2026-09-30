@@ -19,7 +19,12 @@ import { DASHBOARD_PREFIX, WEBHOOK_PREFIX, WIDGET_PREFIX } from './routes.js';
 import { requestContext } from './middleware/logger.js';
 import { requireOriginSecret } from './middleware/origin-secret.js';
 import { createDashboardApp, DASHBOARD_ROUTE_ACCESS } from './surfaces/dashboard.js';
-import { createWebhookApp, WEBHOOK_ROUTE_ACCESS } from './surfaces/webhooks.js';
+import {
+  createWebhookApp,
+  WEBHOOK_ROUTE_ACCESS,
+  type SignatureRejection,
+} from './surfaces/webhooks.js';
+import type { StripeEventsPort } from './stripe-events.js';
 import {
   createWidgetApp,
   WIDGET_ROUTE_ACCESS,
@@ -136,6 +141,12 @@ export interface AppOptions {
    * going unrecorded, which is E7 rather than a hole.
    */
   readonly resendWebhookSecret?: string | undefined;
+  /** Stripe's endpoint signing secret (P5-03). See `surfaces/webhooks.ts`. */
+  readonly stripeWebhookSecret?: string | undefined;
+  /** Applies a verified Stripe event (P5-03, P5-04). */
+  readonly stripeEvents?: StripeEventsPort | undefined;
+  /** Told of every webhook refused for its signature (P5-03). */
+  readonly onSignatureRejected?: ((rejection: SignatureRejection) => Promise<void>) | undefined;
 
   /**
    * The widget surface's resolution, limits and usage read (P2-04 to P2-10).
@@ -159,6 +170,9 @@ export const createApp = ({
   dashboardOrigin,
   webhooks,
   resendWebhookSecret,
+  stripeWebhookSecret,
+  stripeEvents,
+  onSignatureRejected,
   widget,
 }: AppOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
@@ -243,7 +257,16 @@ export const createApp = ({
     }),
   );
   app.route(WIDGET_PREFIX, createWidgetApp(widget));
-  app.route(WEBHOOK_PREFIX, createWebhookApp({ webhooks, resendWebhookSecret }));
+  app.route(
+    WEBHOOK_PREFIX,
+    createWebhookApp({
+      webhooks,
+      resendWebhookSecret,
+      stripeWebhookSecret,
+      stripeEvents,
+      onSignatureRejected,
+    }),
+  );
 
   /*
    * Fails closed, at boot (P0-49).

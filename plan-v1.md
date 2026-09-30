@@ -1398,7 +1398,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P5-01 | Stripe products/prices script | Cantina (€29/mo, 1.5k msg, 300 SKU) + E-comm (€79/mo, 6k msg, 2.5k SKU) | P0-11 |
 | ✅ P5-02 | Checkout session endpoint | custom tax metadata fields (P.IVA/CF, SdI/PEC) | P5-01 |
 | P5-02a | Italian tax metadata fields on Checkout | collects optional P.IVA/CF, Codice Destinatario SdI or PEC | P5-02 |
-| P5-03 | 🔒 Webhook: raw-body signature verify | before any body parser touches it | P5-01 |
+| ✅ P5-03 | 🔒 Webhook: raw-body signature verify | before any body parser touches it | P5-01 |
 | P5-03a | 🔒 SdI / FatturaPA e-invoicing bridge | async job on `invoice.paid` → Fatture in Cloud API to emit FatturaPA XML | P5-03,P5-04 |
 | P5-04 | 🔒 Webhook idempotency | `processed_webhooks`, replay is a no-op | P5-03 |
 | P5-05 | ⛔ Status state machine | TRIALING→ACTIVE→PAST_DUE→DISABLED→CANCELED; **adds `tenants.trial_ends_at`** and the `tenant_status_coherent` CHECK that reads it (§5.2b); `livemode` + customer↔tenant binding | P5-04 |
@@ -6955,6 +6955,25 @@ Save these fields to `tenants` (`vat_id`, `sdi_code`, `pec_address` columns, nul
 **Tests.** A valid signed fixture is accepted; a tampered body is rejected; a stale timestamp is rejected; a missing signature is rejected; JSON middleware ordering is asserted (a test that fails if the raw body is consumed first, since that breakage is silent and total).
 
 **Files.** `webhooks/stripe.ts`, tests. **~110 lines.**
+
+**As built (2026-09-30).** `POST /v1/webhooks/stripe` on the webhook surface beside Resend's, `verifyStripeSignature` beside `verifySvixSignature` in `packages/core/src/webhooks/signature.ts`, and migration 0060. Nothing has been sent by Stripe: there is no endpoint registered for any stage.
+
+- **One verifier file, two schemes**, as the Svix verifier's header asked: the tolerance (five minutes, both directions) and the constant-time comparison are shared; the parsing is Stripe's. **The secret is used whole**, `whsec_` and all — the opposite of Svix, whose remainder is base64 — and a test signs Svix's way to prove the two do not share that mistake. Every `v1` is tried, so rolling the secret does not take the endpoint down; `v0` and unknown schemes are ignored rather than trusted.
+- **The raw body, verified, then parsed.** The ordering test the row asks for posts valid JSON that no `JSON.stringify` would produce — indentation, an escaped character, a trailing space — and it verifies only because the handler checks the bytes as sent. Nothing above this surface parses a body; its own `Hono` instance keeps the dashboard's session and the widget's CORS away from it.
+- **401, not 400** *(deviation)*, with one message for every failure: the Resend route's answer, and Stripe retries any non-2xx alike. The specific reason goes to the log under `type`.
+- **Every refused signature is a `security_events` row**, type `INVALID_WEBHOOK_SIGNATURE` (0060, reversed by rebuilding the enum on 0044's pattern), with the provider and the reason in `metadata` and **no tenant**: a forged event names a winery in its body, and a body that did not verify is not believed about anything. **Resend's refusals are recorded too** *(addition)* — one recorder for the surface. It is not awaited and a failure is logged and dropped, as the widget's refusal recorders are: a security log that errors must not change the answer.
+- **The event id is read from the signed body** and is safe as P5-04's idempotency key for that reason. A signed body that is not an event is acknowledged with a 200 and logged, on the Resend route's reasoning.
+- **`StripeWebhookSecret`** per stage (`infra/api.ts`), empty by default. Absent, the endpoint is a 404 and the API says so at startup under its own log kind — not Resend's, because on a stage that sells plans this is an outage of the thing that switches widgets on and off.
+- **The events port is deliberately not wired here.** A verified event is a 500 until P5-04 can claim it exactly once — Stripe retries for three days, so nothing is lost — rather than a 200 that would drop it for good.
+- **T6's P5-03 gap is closed** in the threat matrix: its evidence is `stripe-signature.test.ts` and `stripe-webhook.test.ts`.
+
+**Verified.** 4,748 unit tests; `security_events` accepts the new type as `app_rw` with no tenant, and 0060 reverses, against real Postgres. Two existing guards fired and were right: the schema test that pins the enum's values, and the entry point's test that no webhook warning survives Resend's secret being set — which is why Stripe's warning has a kind of its own. 16 mutants, 16 killed.
+
+| Mutation | Caught by |
+|---|---|
+| No header · a malformed or fractional timestamp · no tolerance · the past only · the timestamp unsigned · the secret stripped of `whsec_` · `v0` accepted · only the first `v1` · no signatures read as a mismatch | `stripe-signature.test.ts` |
+| The route skipping a failed check · a blank secret counted · an envelope without an id handed on · the wrong id handed on | `stripe-webhook.test.ts` |
+| The recorder never told · its failure left unhandled · the row's type | the route and recorder cases |
 
 ---
 

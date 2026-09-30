@@ -40,8 +40,9 @@ import { createProductsPort, type ProductsPort } from './products.js';
 import { createChatPort, type ChatPort } from './chat.js';
 import { createQuotaPort, type QuotaPort } from './quota.js';
 import { createRagPort, type RagPort } from './rag.js';
-import { refusalRecorders } from './security-events.js';
+import { refusalRecorders, webhookRejectionRecorder } from './security-events.js';
 import { createStripeClient } from './stripe.js';
+import type { SignatureRejection } from './surfaces/webhooks.js';
 import type { WidgetDependencies } from './surfaces/widget.js';
 import { createWebhooksPort, type WebhooksPort } from './webhooks.js';
 import type { AuthPort } from './middleware/auth.js';
@@ -145,6 +146,8 @@ export interface RuntimeConfig {
    * only the surface has a use for it.
    */
   readonly resendWebhookSecret?: string | undefined;
+  /** Stripe's endpoint signing secret, `whsec_…` (P5-03). */
+  readonly stripeWebhookSecret?: string | undefined;
 
   /**
    * Reads how much of a limit window has been spent without spending it (P2-10):
@@ -227,6 +230,8 @@ export interface Dependencies {
   readonly webhooks: WebhooksPort;
   /** Passed through to `createApp`; absent means the endpoint refuses. */
   readonly resendWebhookSecret?: string | undefined;
+  readonly stripeWebhookSecret?: string | undefined;
+  readonly onSignatureRejected?: ((rejection: SignatureRejection) => Promise<void>) | undefined;
   /** The widget surface's resolution, limits and usage read (P2-04 to P2-10). */
   readonly widget: WidgetDependencies;
   /** Exposed so the wiring is assertable, not because anything else calls it. */
@@ -563,6 +568,18 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
     ...(config.resendWebhookSecret === undefined
       ? {}
       : { resendWebhookSecret: config.resendWebhookSecret }),
+
+    /*
+     * Stripe (P5-03). The events port is not wired until P5-04 can claim an
+     * event exactly once: until then a verified event is a 500, which Stripe
+     * retries for three days, rather than a 200 that drops it for good.
+     */
+    ...(config.stripeWebhookSecret === undefined
+      ? {}
+      : { stripeWebhookSecret: config.stripeWebhookSecret }),
+
+    /* Every refused signature, either provider, is a security event (P5-03). */
+    onSignatureRejected: webhookRejectionRecorder(insertSecurityEvent),
 
     sendResetPassword,
   };
