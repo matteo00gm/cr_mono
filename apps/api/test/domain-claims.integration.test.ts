@@ -174,4 +174,37 @@ describe('claiming a domain another winery holds', () => {
     /* And the answer names nobody: no holder id, anywhere in it. */
     expect(JSON.stringify(checked.body)).not.toContain(holder);
   });
+
+  it('lets the holder see the notice and withdraw it, and the claimant hears the answer', async () => {
+    const { origin, holder, claimantOwner } = await contest('ACTIVE');
+    const holderOwner = await owner(holder);
+
+    const opened = await post(claimantOwner, '/domains/claims', { domain: origin });
+    const claim = opened.body.claim as { id: string; verificationToken: string };
+
+    published.push([claim.verificationToken]);
+    await post(claimantOwner, `/domains/claims/${claim.id}/verify`);
+
+    const served = await appAs(holderOwner).request('/v1/dashboard/domains/claims/served');
+    const listed = (await served.json()) as { claims: { id: string; origin: string }[] };
+
+    expect(listed.claims).toEqual([expect.objectContaining({ id: claim.id, origin }) as unknown]);
+    /* The holder learns the origin and the deadline, never who claimed it. */
+    expect(JSON.stringify(listed)).not.toContain(claimantOwner);
+
+    const withdrawn = await post(holderOwner, `/domains/claims/${claim.id}/withdraw`);
+
+    expect(withdrawn).toEqual({
+      status: 200,
+      body: { id: claim.id, origin, withdrawn: true },
+    });
+
+    const answered = await post(claimantOwner, `/domains/claims/${claim.id}/verify`);
+
+    expect(answered.body).toMatchObject({
+      transferred: false,
+      claim: { status: 'CANCELED' },
+    });
+    expect(await holderOf(origin)).toBe(holder);
+  });
 });

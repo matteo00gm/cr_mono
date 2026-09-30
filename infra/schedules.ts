@@ -1,5 +1,6 @@
 /// <reference path="../.sst/platform/config.d.ts" />
 
+import { authBaseUrl, emailAllowlist, emailFrom, resendApiKey } from './api';
 import { databaseUrl, parameterReadPermissions } from './config';
 import {
   assertSweepFitsSchedule,
@@ -78,4 +79,39 @@ new aws.cloudwatch.MetricAlarm('SweepDeletedNothing', {
   threshold: 0,
   comparisonOperator: 'LessThanOrEqualToThreshold',
   treatMissingData: 'breaching',
+});
+
+/**
+ * The claim sweep (P4-18b): sends each domain-claim notice, settles each notice
+ * that was sent and has run out, and tells both wineries how a claim ended.
+ *
+ * Every five minutes: a notice's 72 hours start when its mail is stamped as
+ * sent, so this cadence is the most a holder's notice can start late — and the
+ * most a claimant waits past the deadline.
+ *
+ * In the VPC for the database, and with the same mail configuration the API
+ * has, because it is the second thing in this system that sends mail. Outside
+ * production that configuration logs every message unless its address is on
+ * the allowlist, exactly as the API's does.
+ */
+export const claimSweep = new sst.aws.Cron('ClaimSweep', {
+  schedule: 'rate(5 minutes)',
+  function: {
+    handler: 'apps/worker/src/claims.handler',
+    architecture: 'arm64',
+    runtime: 'nodejs22.x',
+    memory: '256 MB',
+    timeout: '120 seconds',
+    vpc,
+    environment: {
+      DATABASE_URL: databaseUrl.value,
+      NODE_ENV: 'production',
+      SST_STAGE: $app.stage,
+      AUTH_BASE_URL: authBaseUrl.value,
+      EMAIL_FROM: emailFrom.value,
+      RESEND_API_KEY: resendApiKey.value,
+      EMAIL_ALLOWLIST: emailAllowlist.value,
+    },
+    permissions: [...parameterReadPermissions(['database/url'])],
+  },
 });

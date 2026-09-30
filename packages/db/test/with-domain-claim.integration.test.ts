@@ -106,16 +106,25 @@ const claim = async (
   origin: string,
   registrable: string,
   status: ClaimStatus = 'PROVEN',
-  notice?: { readonly incumbent: string; readonly dueInSec: number },
+  /** A notice is sent unless a test says otherwise (P4-18b). */
+  notice?: {
+    readonly incumbent: string;
+    readonly dueInSec: number;
+    readonly notified?: boolean;
+  },
 ): Promise<string> => {
+  const notified = notice !== undefined && notice.notified !== false;
   const rows = await adminDb.execute(sql`
     INSERT INTO domain_claims (
-      tenant_id, origin, registrable_domain, status, incumbent_tenant_id, transfer_at
+      tenant_id, origin, registrable_domain, status, incumbent_tenant_id, transfer_at,
+      notified_status, notified_at
     )
     VALUES (
       ${claimant}::uuid, ${origin}, ${registrable}, ${status}::domain_claim_status,
       ${notice?.incumbent ?? null}::uuid,
-      ${notice === undefined ? null : sql`now() + make_interval(secs => ${notice.dueInSec})`}
+      ${notice === undefined ? null : sql`now() + make_interval(secs => ${notice.dueInSec})`},
+      ${notified ? status : null}::domain_claim_status,
+      ${notified ? sql`now()` : null}
     )
     RETURNING id
   `);
@@ -145,6 +154,14 @@ const claimRow = async (id: string) => {
     settled_at: Date | null;
     due_in: number | null;
   };
+};
+
+const notifiedAt = async (id: string): Promise<Date | null> => {
+  const rows = await adminDb.execute(
+    sql`SELECT notified_at FROM domain_claims WHERE id = ${id}::uuid`,
+  );
+
+  return ([...rows][0] as { notified_at: Date | null }).notified_at;
 };
 
 const auditOf = async (tenantId: string) => {
@@ -246,6 +263,27 @@ describe('the branch a claim opens onto tenant_domains', () => {
 
     expect(await visibleThroughClaim(early, running.apex, claimant)).toBe(0);
     expect(await visibleThroughClaim(due, lapsed.apex, claimant)).toBe(1);
+  });
+
+  it('reaches nothing for a notice that has run out without ever being sent (P4-18b)', async () => {
+    /*
+     * **A holder nobody told keeps its origin, whatever the clock says.** The
+     * notice's deadline passed, but no mail went out — so the branch will not
+     * reach the row, and a settlement is refused by the database rather than
+     * by the good behaviour of whatever is asking.
+     */
+    const [holder, claimant] = [await winery('ACTIVE'), await winery()];
+    const { registrable, apex } = zone();
+    await hold(holder, apex, registrable);
+    const silent = await claim(claimant, apex, registrable, 'NOTICE', {
+      incumbent: holder,
+      dueInSec: -1,
+      notified: false,
+    });
+
+    expect(await visibleThroughClaim(silent, apex, claimant)).toBe(0);
+    await expect(settle(silent, claimant)).resolves.toEqual({ kind: 'unsettleable' });
+    expect((await holderOf(apex))?.tenant_id).toBe(holder);
   });
 
   it('reaches the one origin the claim names, not the rest of the holder’s', async () => {
@@ -388,6 +426,8 @@ describe('settling a claim', () => {
 
     expect(settled).toMatchObject({ kind: 'transferred', basis });
     expect((await holderOf(apex))?.tenant_id).toBe(claimant);
+    /* The holder is recorded as the claim closes, so the sweep can tell it (P4-18b). */
+    expect((await claimRow(id)).incumbent_tenant_id).toBe(holder);
     /* Only the origin moves; the rest of the holder's zone stays put. */
     expect((await holderOf(www))?.tenant_id).toBe(holder);
     /* The holder's live sessions on it end now, and stay ended. */
@@ -497,6 +537,8 @@ describe('settling a claim', () => {
 
     expect(row.incumbent_tenant_id).toBe(second);
     expect(row.due_in).toBeGreaterThan(CLAIM_NOTICE_HOURS * 3600 - 60);
+    /* Told to nobody yet: the first holder's notification does not count for the second. */
+    expect(await notifiedAt(id)).toBeNull();
   });
 
   it.each<[string, ClaimStatus, number | undefined]>([

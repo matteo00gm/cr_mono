@@ -225,7 +225,7 @@ describe('rls migration', () => {
          * the widget branch is still in it and must still be read-only. */
         /* And `tenant_domains` by P4-18's claim branch; likewise. */
         expect(current(table)?.migration, table).toBe(
-          { widget_keys: '0049_secret_key_rls', tenant_domains: '0054_domain_claims_rls' }[
+          { widget_keys: '0049_secret_key_rls', tenant_domains: '0056_domain_claim_sweep_rls' }[
             table as string
           ] ?? '0042_widget_key_rls',
         );
@@ -324,7 +324,25 @@ describe('the claim scope (P4-18, ADR 0028)', () => {
      */
     expect(domains()).toContain("current_setting('app.domain_claim', true)");
     expect(domains()).toContain("c.status = 'PROVEN'");
-    expect(domains()).toContain("c.status = 'NOTICE' AND c.transfer_at <= now()");
+    expect(domains()).toContain(
+      "c.status = 'NOTICE' AND c.notified_at IS NOT NULL AND c.transfer_at <= now()",
+    );
+  });
+
+  it('settles a notice only once it has been sent (P4-18b)', () => {
+    /* A holder nobody told cannot lose its origin, whatever the code settling
+     * it believes: the branch will not reach its row. */
+    expect(domains()).toContain('c.notified_at IS NOT NULL');
+  });
+
+  it('gives the claim sweep a read of its own work, and nothing more (P4-18b)', () => {
+    const claims = current('domain_claims');
+
+    expect(claims?.using).toContain("current_setting('app.claim_sweeper', true)");
+    expect(claims?.using).toContain(
+      "status IN ('TRANSFERRED', 'CANCELED') AND notified_status IS DISTINCT FROM status",
+    );
+    expect(claims?.withCheck).not.toContain('app.claim_sweeper');
   });
 
   it('keeps the claim branch out of WITH CHECK', () => {

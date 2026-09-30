@@ -299,8 +299,11 @@ export {
   insertClaim,
   markClaimProven,
   readClaimById,
+  readServedClaims,
   reissueClaimVerification,
+  withdrawClaim,
   type DomainClaimRow,
+  type ServedClaimRow,
   type DomainClaimStatus,
   type NewDomainClaim,
 } from './domain-claims.js';
@@ -314,6 +317,16 @@ export {
   type SettleClaim,
   type TransferBasis,
 } from './with-domain-claim.js';
+export {
+  CLAIM_SWEEP_LIMIT,
+  CLAIM_SWEEPER_GUC,
+  markClaimNotified,
+  NestedClaimSweepContextError,
+  readClaimRecipients,
+  readClaimWork,
+  type ClaimRecipients,
+  type ClaimWork,
+} from './claim-sweep.js';
 
 /**
  * The Postgres rate limiter (P2-02), which is what closes A1.

@@ -59,6 +59,8 @@ const port = (
   /* Claims have their own route suite; here they are never reached. */
   claim: () => Promise.reject(new Error('not under test')),
   verifyClaim: () => Promise.reject(new Error('not under test')),
+  servedClaims: () => Promise.reject(new Error('not under test')),
+  withdrawClaim: () => Promise.reject(new Error('not under test')),
   add: (command) => {
     seen.push(command);
 

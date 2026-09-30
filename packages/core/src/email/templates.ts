@@ -51,7 +51,24 @@ export interface TemplateProps {
     readonly daysLeft: number;
     readonly upgradeUrl: string;
   };
-  'domain-claim': {
+  'domain-claim-notice': {
+    readonly tenantName: string;
+    readonly domain: string;
+    /** When the domain moves unless the holder answers, already formatted. */
+    readonly transferOn: string;
+    readonly manageUrl: string;
+  };
+  'domain-claim-lost': {
+    readonly tenantName: string;
+    readonly domain: string;
+    readonly manageUrl: string;
+  };
+  'domain-claim-won': {
+    readonly tenantName: string;
+    readonly domain: string;
+    readonly manageUrl: string;
+  };
+  'domain-claim-withdrawn': {
     readonly tenantName: string;
     readonly domain: string;
     readonly manageUrl: string;
@@ -66,7 +83,10 @@ export const TEMPLATE_NAMES = [
   'quota-warning',
   'quota-exhausted',
   'trial-expiry',
-  'domain-claim',
+  'domain-claim-notice',
+  'domain-claim-lost',
+  'domain-claim-won',
+  'domain-claim-withdrawn',
 ] as const satisfies readonly TemplateName[];
 
 interface Content {
@@ -234,45 +254,159 @@ const trialExpiry: Copy<TemplateProps['trial-expiry']> = {
 };
 
 /*
- * Sent to the tenant that already holds a domain when someone else claims it
- * (§3.2). It is a security notice, so it says what happened and what to do —
- * and it goes out whether or not the claim succeeded, because the useful signal
- * is the attempt.
+ * The four messages a domain claim sends (P4-18b, §3.2). None names the other
+ * winery: proving control of a zone entitles a seller to the origin, not to
+ * learn who our customer was — and the holder is owed the same discretion.
  */
-const domainClaim: Copy<TemplateProps['domain-claim']> = {
+
+/**
+ * To the holder's owners, when a proven claim puts a paying holder on notice.
+ *
+ * **A notice is only a safeguard once it has been read**, which is why the
+ * notice period starts when this is sent rather than when the claim was proven.
+ * It says what happened, when the domain will move, and the one thing to do if
+ * the domain is still theirs.
+ */
+const domainClaimNotice: Copy<TemplateProps['domain-claim-notice']> = {
   it: (p) => ({
     subject: `${p.tenantName}: qualcuno ha richiesto ${p.domain}`,
     blocks: [
       {
         kind: 'text',
         value:
-          `Un altro account ha provato a verificare ${p.domain}, che è già collegato a ${p.tenantName}. ` +
-          'Il dominio non è stato spostato.',
+          `Un altro account ha dimostrato di controllare il DNS di ${p.domain}, che è collegato a ` +
+          `${p.tenantName}, e ne ha chiesto il trasferimento. Se non rispondi entro ${p.transferOn}, ` +
+          'il dominio passerà a quell’account e il widget smetterà di funzionare lì.',
       },
-      { kind: 'action', label: 'Controlla i domini', url: p.manageUrl },
+      { kind: 'action', label: 'Controlla la richiesta', url: p.manageUrl },
       {
         kind: 'note',
         value:
-          'Se sei stato tu, o un tuo collega, non serve fare nulla. ' +
-          'Altrimenti scrivici: vuol dire che qualcun altro controlla il DNS di quel dominio.',
+          'Se il dominio è ancora tuo, ritira la richiesta dalla pagina dei domini. ' +
+          'Se il suo DNS non è più sotto il tuo controllo, non devi fare nulla.',
       },
     ],
   }),
   en: (p) => ({
-    subject: `${p.tenantName}: someone claimed ${p.domain}`,
+    subject: `${p.tenantName}: someone has claimed ${p.domain}`,
     blocks: [
       {
         kind: 'text',
         value:
-          `Another account tried to verify ${p.domain}, which is already connected to ${p.tenantName}. ` +
-          'The domain has not moved.',
+          `Another account has proved it controls the DNS for ${p.domain}, which is connected to ` +
+          `${p.tenantName}, and asked for it to be moved. Unless you respond by ${p.transferOn}, ` +
+          'the domain moves to that account and the widget stops working there.',
+      },
+      { kind: 'action', label: 'Review the claim', url: p.manageUrl },
+      {
+        kind: 'note',
+        value:
+          'If the domain is still yours, withdraw the claim from the domains page. ' +
+          'If its DNS is no longer yours, there is nothing to do.',
+      },
+    ],
+  }),
+};
+
+/** To the holder's owners, once the origin has moved away from them. */
+const domainClaimLost: Copy<TemplateProps['domain-claim-lost']> = {
+  it: (p) => ({
+    subject: `${p.tenantName}: ${p.domain} è stato trasferito`,
+    blocks: [
+      {
+        kind: 'text',
+        value:
+          `${p.domain} non è più collegato a ${p.tenantName}: un altro account ha dimostrato di ` +
+          'controllarne il DNS, e il dominio è passato a lui. Il widget non funziona più lì.',
+      },
+      { kind: 'action', label: 'Vedi i tuoi domini', url: p.manageUrl },
+      {
+        kind: 'note',
+        value:
+          'Prodotti, conversazioni e abbonamento restano come sono. ' +
+          'Se pensi che sia un errore, rispondi a questo messaggio.',
+      },
+    ],
+  }),
+  en: (p) => ({
+    subject: `${p.tenantName}: ${p.domain} has moved`,
+    blocks: [
+      {
+        kind: 'text',
+        value:
+          `${p.domain} is no longer connected to ${p.tenantName}: another account proved it ` +
+          'controls the domain’s DNS, and the domain has moved to it. The widget no longer works there.',
       },
       { kind: 'action', label: 'Review your domains', url: p.manageUrl },
       {
         kind: 'note',
         value:
-          'If this was you or a colleague, there is nothing to do. ' +
-          'If not, reply to this message — it means someone else controls DNS for that domain.',
+          'Your products, conversations and subscription are unchanged. ' +
+          'If you think this is a mistake, reply to this message.',
+      },
+    ],
+  }),
+};
+
+/**
+ * To the claimant's owners, when a notice ran out and the origin moved to them.
+ * An immediate transfer needs no mail: the claimant was at the screen for it.
+ */
+const domainClaimWon: Copy<TemplateProps['domain-claim-won']> = {
+  it: (p) => ({
+    subject: `${p.tenantName}: ${p.domain} è tuo`,
+    blocks: [
+      {
+        kind: 'text',
+        value:
+          `Il periodo di preavviso per ${p.domain} è scaduto senza risposta, e il dominio ora è ` +
+          `collegato a ${p.tenantName}. Il widget può funzionare lì da subito.`,
+      },
+      { kind: 'action', label: 'Vedi i tuoi domini', url: p.manageUrl },
+    ],
+  }),
+  en: (p) => ({
+    subject: `${p.tenantName}: ${p.domain} is yours`,
+    blocks: [
+      {
+        kind: 'text',
+        value:
+          `The notice period for ${p.domain} ended without an answer, and the domain is now ` +
+          `connected to ${p.tenantName}. The widget can run there straight away.`,
+      },
+      { kind: 'action', label: 'Review your domains', url: p.manageUrl },
+    ],
+  }),
+};
+
+/** To the claimant's owners, when the holder withdrew the claim and kept the origin. */
+const domainClaimWithdrawn: Copy<TemplateProps['domain-claim-withdrawn']> = {
+  it: (p) => ({
+    subject: `${p.tenantName}: la richiesta per ${p.domain} è stata ritirata`,
+    blocks: [
+      {
+        kind: 'text',
+        value: `L’attuale titolare di ${p.domain} ha deciso di tenerlo, quindi il dominio non è stato trasferito.`,
+      },
+      { kind: 'action', label: 'Vedi i tuoi domini', url: p.manageUrl },
+      {
+        kind: 'note',
+        value: 'Se pensi che sia un errore, rispondi a questo messaggio e verificheremo insieme.',
+      },
+    ],
+  }),
+  en: (p) => ({
+    subject: `${p.tenantName}: your claim on ${p.domain} was declined`,
+    blocks: [
+      {
+        kind: 'text',
+        value: `The current holder of ${p.domain} has kept it, so the domain has not moved.`,
+      },
+      { kind: 'action', label: 'Review your domains', url: p.manageUrl },
+      {
+        kind: 'note',
+        value:
+          'If you believe that is wrong, reply to this message and we will look into it together.',
       },
     ],
   }),
@@ -284,7 +418,10 @@ const TEMPLATES = {
   'quota-warning': quotaWarning,
   'quota-exhausted': quotaExhausted,
   'trial-expiry': trialExpiry,
-  'domain-claim': domainClaim,
+  'domain-claim-notice': domainClaimNotice,
+  'domain-claim-lost': domainClaimLost,
+  'domain-claim-won': domainClaimWon,
+  'domain-claim-withdrawn': domainClaimWithdrawn,
 } satisfies { [K in TemplateName]: Copy<TemplateProps[K]> };
 
 /**

@@ -3,6 +3,7 @@ import { useMemo } from 'preact/hooks';
 import { Link, Route, Switch, useLocation } from 'wouter-preact';
 
 import { CatalogScreen } from './features/catalog/CatalogScreen.js';
+import { ClaimNotice } from './features/domains/ClaimNotice.js';
 import { EnrolmentScreen } from './features/security/EnrolmentScreen.js';
 import { navFor } from './nav.js';
 import { apiFor, rememberTenant, useSession, type SessionState } from './session.js';
@@ -152,6 +153,12 @@ export const Layout = ({
   readonly clientFor?: ((tenantId: string) => ApiClient) | undefined;
 }): JSX.Element => {
   const { active, memberships, twoFactorEnabled } = session;
+  /* One client per winery for the shell's own reads, memoised for the reason
+   * `CatalogRoute` gives. */
+  const shellClient = useMemo(
+    () => (active === undefined ? undefined : clientFor(active.tenantId)),
+    [active, clientFor],
+  );
 
   if (!active) {
     /*
@@ -193,6 +200,15 @@ export const Layout = ({
           Attiva la verifica in due passaggi per gestire chiavi, domini, membri e fatturazione.{' '}
           <Link href="/sicurezza">Attivala ora</Link>
         </p>
+      ) : null}
+
+      {active.role === 'OWNER' && twoFactorEnabled && shellClient !== undefined ? (
+        /*
+         * A claim on one of this winery's domains (P4-18b). Owners only, and
+         * only with a second factor: the routes behind it are `domains:manage`,
+         * which refuses an owner without one — so asking would only fail.
+         */
+        <ClaimNotice client={shellClient} />
       ) : null}
 
       <main class="shell-main">

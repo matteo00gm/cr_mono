@@ -47,7 +47,23 @@ const PROPS: { [K in TemplateName]: TemplateProps[K] } = {
     daysLeft: 3,
     upgradeUrl: 'https://app.example/billing',
   },
-  'domain-claim': {
+  'domain-claim-notice': {
+    tenantName: 'Cantina <script>alert(1)</script>',
+    domain: 'cantina.example',
+    transferOn: '02/10/2026 09:00 UTC',
+    manageUrl: 'https://app.example/domains',
+  },
+  'domain-claim-lost': {
+    tenantName: 'Cantina <script>alert(1)</script>',
+    domain: 'cantina.example',
+    manageUrl: 'https://app.example/domains',
+  },
+  'domain-claim-won': {
+    tenantName: 'Cantina <script>alert(1)</script>',
+    domain: 'cantina.example',
+    manageUrl: 'https://app.example/domains',
+  },
+  'domain-claim-withdrawn': {
     tenantName: 'Cantina <script>alert(1)</script>',
     domain: 'cantina.example',
     manageUrl: 'https://app.example/domains',
@@ -66,7 +82,7 @@ describe('templates', () => {
   it.each(LOCALES)('renders every template in %s with both body parts', (locale) => {
     // Guards the guard: an empty list would make every assertion below pass
     // while checking nothing.
-    expect(TEMPLATE_NAMES.length).toBe(6);
+    expect(TEMPLATE_NAMES.length).toBe(9);
 
     for (const { name, rendered } of renderAll(locale)) {
       expect(rendered.subject.trim(), `${name}: subject`).not.toBe('');

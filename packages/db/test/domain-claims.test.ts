@@ -6,7 +6,9 @@ import {
   insertClaim,
   markClaimProven,
   readClaimById,
+  readServedClaims,
   reissueClaimVerification,
+  withdrawClaim,
 } from '../src/domain-claims.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 import { text } from './support/sql-text.js';
@@ -130,5 +132,42 @@ describe('the claimant’s reads and writes', () => {
     expect(text(statements[0])).toContain(OWN_TENANT);
     expect(text(statements[0])).toContain("AND status = 'PENDING'");
     expect(params(statements[0])).toEqual(['fresh', 'c1']);
+  });
+});
+
+describe('the holder’s side (P4-18b)', () => {
+  const OWN_HOLDING =
+    "incumbent_tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid";
+
+  it('lists the notices served on this winery, by its holder column', async () => {
+    const { tx, statements } = capturing([
+      { id: 'c1', origin: 'https://www.winery.com', transfer_at: new Date('2026-10-02T09:00:00Z') },
+    ]);
+
+    await expect(readServedClaims(tx)).resolves.toEqual([
+      {
+        id: 'c1',
+        origin: 'https://www.winery.com',
+        transferAt: new Date('2026-10-02T09:00:00Z'),
+      },
+    ]);
+    expect(text(statements[0])).toContain(OWN_HOLDING);
+    expect(text(statements[0])).toContain("status = 'NOTICE'");
+    expect(text(statements[0])).not.toMatch(/SELECT[^]*tenant_id,/u);
+  });
+
+  it('withdraws only a notice served on this winery', async () => {
+    const { tx, statements } = capturing([{ origin: 'https://www.winery.com' }]);
+
+    await expect(withdrawClaim(tx, 'c1')).resolves.toBe('https://www.winery.com');
+    expect(text(statements[0])).toContain(OWN_HOLDING);
+    expect(text(statements[0])).toContain("AND status = 'NOTICE'");
+    expect(text(statements[0])).toContain("SET status = 'CANCELED'");
+  });
+
+  it('answers nothing for a claim that is not this winery’s to withdraw', async () => {
+    const { tx } = capturing([]);
+
+    await expect(withdrawClaim(tx, 'c1')).resolves.toBeUndefined();
   });
 });

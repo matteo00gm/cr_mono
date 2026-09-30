@@ -54,6 +54,8 @@ const state = {
   claims: [] as (ClaimRow | undefined)[],
   proven: claimRow({ status: 'PROVEN' }) as ClaimRow | undefined,
   reissued: undefined as ClaimRow | undefined,
+  served: [] as { id: string; origin: string; transferAt: Date }[],
+  withdrawn: undefined as string | undefined,
 };
 
 class ClaimRacedError extends Error {}
@@ -87,6 +89,16 @@ vi.mock('@catalogorosso/db', () => ({
     calls.push(`markClaimProven(${id},${token})`);
 
     return Promise.resolve(state.proven);
+  },
+  readServedClaims: () => {
+    calls.push('readServedClaims');
+
+    return Promise.resolve(state.served);
+  },
+  withdrawClaim: (_tx: unknown, id: string) => {
+    calls.push(`withdrawClaim(${id})`);
+
+    return Promise.resolve(state.withdrawn);
   },
   reissueClaimVerification: (_tx: unknown, id: string, token: string) => {
     calls.push(`reissueClaimVerification(${id},${token})`);
@@ -178,6 +190,8 @@ beforeEach(() => {
     claims: [],
     proven: claimRow({ status: 'PROVEN' }),
     reissued: undefined,
+    served: [],
+    withdrawn: undefined,
   });
 });
 
@@ -518,5 +532,43 @@ describe('checking a claim', () => {
     await expect(
       port({ settlement: { kind: 'unsettleable' } }).verifyClaim({ tenantId: 't1', claimId: 'c1' }),
     ).rejects.toMatchObject({ kind: 'not_found' });
+  });
+});
+
+describe('the holder’s side (P4-18b)', () => {
+  it('lists the notices served on it, with nothing about the claimant', async () => {
+    state.served = [
+      {
+        id: 'c9',
+        origin: 'https://www.ours.com',
+        transferAt: new Date('2026-10-03T08:00:00.000Z'),
+      },
+    ];
+
+    await expect(port().servedClaims('t1')).resolves.toEqual({
+      claims: [
+        { id: 'c9', origin: 'https://www.ours.com', transferAt: '2026-10-03T08:00:00.000Z' },
+      ],
+    });
+    expect(calls).toEqual(['withTenant(t1)', 'readServedClaims']);
+  });
+
+  it('withdraws a notice and audits it in the same transaction', async () => {
+    state.withdrawn = 'https://www.ours.com';
+
+    await expect(port().withdrawClaim({ tenantId: 't1', claimId: 'c9' })).resolves.toEqual({
+      id: 'c9',
+      origin: 'https://www.ours.com',
+      withdrawn: true,
+    });
+    expect(calls).toEqual(['withTenant(t1)', 'withdrawClaim(c9)']);
+    expect(written).toEqual([{ action: 'domain.claim_withdrawn', target: 'https://www.ours.com' }]);
+  });
+
+  it('answers 404 for a claim it may not withdraw, and audits nothing', async () => {
+    await expect(port().withdrawClaim({ tenantId: 't1', claimId: 'c9' })).rejects.toMatchObject({
+      kind: 'not_found',
+    });
+    expect(written).toEqual([]);
   });
 });

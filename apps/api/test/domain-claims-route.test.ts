@@ -2,7 +2,11 @@ import { ConflictError, NotFoundError } from '@catalogorosso/core';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/app.js';
-import type { ClaimDomainCommand, VerifyClaimCommand } from '../src/domain-claims.js';
+import type {
+  ClaimDomainCommand,
+  VerifyClaimCommand,
+  WithdrawClaimCommand,
+} from '../src/domain-claims.js';
 import type { DomainsPort } from '../src/domains.js';
 import { oneMembership, signedIn } from './support/auth.js';
 
@@ -30,6 +34,8 @@ const claim = {
 
 const opened: ClaimDomainCommand[] = [];
 const checked: VerifyClaimCommand[] = [];
+const listedFor: string[] = [];
+const withdrawn: WithdrawClaimCommand[] = [];
 
 const unused = () => Promise.reject(new Error('not under test'));
 
@@ -48,6 +54,22 @@ const port = (verifyClaim?: DomainsPort['verifyClaim']): DomainsPort => ({
     return verifyClaim === undefined
       ? Promise.resolve({ claim, verified: false, transferred: false, reason: 'not yet' })
       : verifyClaim(command);
+  },
+  servedClaims: (tenantId) => {
+    listedFor.push(tenantId);
+
+    return Promise.resolve({
+      claims: [
+        { id: 'c9', origin: 'https://www.ours.com', transferAt: '2026-10-03T08:00:00.000Z' },
+      ],
+    });
+  },
+  withdrawClaim: (command) => {
+    withdrawn.push(command);
+
+    return command.claimId === 'c9'
+      ? Promise.resolve({ id: 'c9', origin: 'https://www.ours.com', withdrawn: true as const })
+      : Promise.reject(new NotFoundError('No such claim.'));
   },
 });
 
@@ -128,5 +150,56 @@ describe('checking a claim', () => {
     );
 
     expect(response.status).toBe(status);
+  });
+});
+
+describe('the holder’s side', () => {
+  const get = (built: ReturnType<typeof createApp>, path: string) =>
+    built.request(`/v1/dashboard${path}`);
+
+  it('lists the notices served on the membership’s winery', async () => {
+    listedFor.length = 0;
+
+    const response = await get(app('OWNER'), '/domains/claims/served');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      claims: [
+        { id: 'c9', origin: 'https://www.ours.com', transferAt: '2026-10-03T08:00:00.000Z' },
+      ],
+    });
+    expect(listedFor).toEqual([TENANT]);
+  });
+
+  it('withdraws a notice for the membership’s winery, and answers 404 for one it cannot', async () => {
+    withdrawn.length = 0;
+
+    const ours = await send(app('OWNER'), '/domains/claims/c9/withdraw');
+    const theirs = await send(app('OWNER'), '/domains/claims/c1/withdraw');
+
+    expect(ours.status).toBe(200);
+    expect(await ours.json()).toEqual({
+      id: 'c9',
+      origin: 'https://www.ours.com',
+      withdrawn: true,
+    });
+    expect(theirs.status).toBe(404);
+    expect(withdrawn).toEqual([
+      { tenantId: TENANT, claimId: 'c9' },
+      { tenantId: TENANT, claimId: 'c1' },
+    ]);
+  });
+
+  it.each([
+    ['GET', '/domains/claims/served'],
+    ['POST', '/domains/claims/c9/withdraw'],
+  ])('%s %s is an owner’s', async (method, path) => {
+    listedFor.length = 0;
+    withdrawn.length = 0;
+
+    const response = await app('EDITOR').request(`/v1/dashboard${path}`, { method });
+
+    expect(response.status).toBe(403);
+    expect([...listedFor, ...withdrawn]).toEqual([]);
   });
 });
