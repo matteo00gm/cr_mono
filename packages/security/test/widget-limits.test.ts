@@ -123,6 +123,12 @@ describe('a staging origin (P4-19)', () => {
     ]);
   });
 
+  it('limits a development origin as staging (P4-19b)', () => {
+    expect(widgetLimitChecks(request({ originKind: 'development' }))).toEqual(
+      widgetLimitChecks(request({ originKind: 'staging' })),
+    );
+  });
+
   it('draws nothing extra from a production origin, named or not', () => {
     expect(widgetLimitChecks(request({ originKind: 'production' }))).toEqual(
       widgetLimitChecks(request()),

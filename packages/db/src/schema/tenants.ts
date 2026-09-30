@@ -93,6 +93,15 @@ export const tenants = pgTable('tenants', {
   turnstileEnabled: boolean('turnstile_enabled').notNull().default(false),
 
   /**
+   * Development mode (P4-19b): one exact local origin the widget may be served
+   * to, until `devModeExpiresAt`. Both or neither, and local addresses only —
+   * the checks are in migration 0058, and the expiry is enforced by the tenants
+   * policy (0059) rather than by whoever reads these.
+   */
+  devOrigin: text('dev_origin'),
+  devModeExpiresAt: timestamp('dev_mode_expires_at', { withTimezone: true, mode: 'date' }),
+
+  /**
    * The embedding generation this tenant's retrieval reads (P1-49).
    *
    * A pointer, not a description of the vectors: every vector carries its own

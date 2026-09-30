@@ -90,8 +90,11 @@ export interface WidgetRequest {
   readonly ipBucket: string;
   /** Present once a session token has been verified (P2-13). */
   readonly sessionId?: string | undefined;
-  /** Which kind of origin the request came from (P4-19). Production when absent. */
-  readonly originKind?: 'production' | 'staging' | undefined;
+  /**
+   * Which kind of origin the request came from (P4-19). Production when absent;
+   * a development origin (P4-19b) is limited as staging is.
+   */
+  readonly originKind?: 'production' | 'staging' | 'development' | undefined;
 }
 
 const MINUTE = 60;
@@ -178,8 +181,12 @@ export const widgetLimitChecks = (
     },
   );
 
-  /* A staging origin's own, lower allowance, on top of everything above (P4-19). */
-  if (request.originKind === 'staging') {
+  /*
+   * A staging or development origin's own, lower allowance, on top of
+   * everything above (P4-19). One bucket for both: they are the same thing to a
+   * shopper — a place that is not the shop — and the same risk to the quota.
+   */
+  if (request.originKind === 'staging' || request.originKind === 'development') {
     checks.push({
       key: `staging:${tenantId}:${endpoint}`,
       limit: limits.stagingPerMinute[endpoint],
