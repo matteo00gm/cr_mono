@@ -22,10 +22,12 @@ import {
   VERIFY_WINDOW_SEC,
 } from '@catalogorosso/core';
 import type {
+  ClaimWithdrawnResponse,
   Domain,
   DomainClaim,
   DomainClaimCheckedResponse,
   DomainClaimOpenedResponse,
+  ServedClaimsResponse,
 } from '@catalogorosso/api-client';
 import {
   ClaimRacedError,
@@ -34,10 +36,12 @@ import {
   markClaimProven,
   readClaimById,
   readDomainByOrigin,
+  readServedClaims,
   readDomainsFor,
   readTenantPlan,
   reissueClaimVerification,
   settleDomainClaim,
+  withdrawClaim,
   withTenant,
   type ClaimSettlement,
   type DomainClaimRow,
@@ -94,9 +98,19 @@ export interface DomainClaimsDeps {
   readonly settle?: typeof settleDomainClaim;
 }
 
+export interface WithdrawClaimCommand {
+  /** The holder: the winery the claim was served on. */
+  readonly tenantId: string;
+  readonly claimId: string;
+}
+
 export interface DomainClaimsPort {
   claim(command: ClaimDomainCommand): Promise<DomainClaimOpenedResponse>;
   verifyClaim(command: VerifyClaimCommand): Promise<DomainClaimCheckedResponse>;
+  /** The notices served on this winery that are still running (P4-18b). */
+  servedClaims(tenantId: string): Promise<ServedClaimsResponse>;
+  /** The holder keeps its origin (P4-18b). */
+  withdrawClaim(command: WithdrawClaimCommand): Promise<ClaimWithdrawnResponse>;
 }
 
 /** The wire shape: JSON has no `Date`, and the holder is never in it. */
@@ -227,6 +241,44 @@ export const createDomainClaims = ({
   };
 
   return {
+    async servedClaims(tenantId) {
+      const served = await withTenant(tenantId, readServedClaims);
+
+      return {
+        claims: served.map((row) => ({
+          id: row.id,
+          origin: row.origin,
+          transferAt: row.transferAt.toISOString(),
+        })),
+      };
+    },
+
+    async withdrawClaim(command) {
+      /*
+       * **One transaction: the withdrawal and the holder's audit row.** The
+       * claimant hears through the claim sweep, which reads the claim's new
+       * state; this request never writes into the claimant's winery.
+       */
+      const origin = await withTenant(command.tenantId, async (tx) => {
+        const withdrawn = await withdrawClaim(tx, command.claimId);
+
+        if (withdrawn !== undefined) {
+          await record(tx, { action: 'domain.claim_withdrawn', target: withdrawn });
+        }
+
+        return withdrawn;
+      });
+
+      /*
+       * A claim served on another winery, one this winery made itself, one no
+       * longer on notice and one that never existed are all the same empty
+       * result, and §3.5 wants the same answer for each.
+       */
+      if (origin === undefined) throw new NotFoundError('No such claim.');
+
+      return { id: command.claimId, origin, withdrawn: true };
+    },
+
     async claim(command) {
       const normalised = normalizeOrigin(command.input, { environment });
 

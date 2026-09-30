@@ -197,3 +197,61 @@ export const reissueClaimVerification = async (
       RETURNING ${COLUMNS}
     `),
   );
+
+/* ---- The holder's side (P4-18b) ------------------------------------------- */
+
+/**
+ * A claim served on this winery, as its holder may see it.
+ *
+ * **The origin and the deadline, and nothing about the claimant.** Proving
+ * control of a zone does not make the claimant's identity the holder's business
+ * any more than the other way round.
+ */
+export interface ServedClaimRow {
+  readonly id: string;
+  readonly origin: string;
+  readonly transferAt: Date;
+}
+
+/**
+ * Every notice served on this winery that is still running.
+ *
+ * Named by the holder column rather than left to the policy, whose other half
+ * admits the claims this winery made itself.
+ */
+export const readServedClaims = async (tx: DbTransaction): Promise<readonly ServedClaimRow[]> => {
+  const rows = await tx.execute(sql`
+    SELECT id, origin, transfer_at FROM domain_claims
+    WHERE incumbent_tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+      AND status = 'NOTICE'
+    ORDER BY transfer_at, origin
+  `);
+
+  return [...rows].map((row) => {
+    const r = row as { id: string; origin: string; transfer_at: SqlTimestamp };
+
+    return { id: r.id, origin: r.origin, transferAt: asDate(r.transfer_at) };
+  });
+};
+
+/**
+ * Withdraws a claim served on this winery, keeping its origin.
+ *
+ * **Only while the claim is on notice**, and only by the winery it was served
+ * on — in the statement as well as in the policy, whose holder half would also
+ * let this winery write a `CANCELED` row naming itself. Returns the origin, or
+ * `undefined` for a claim that is not this winery's to withdraw, or no longer
+ * on notice.
+ */
+export const withdrawClaim = async (tx: DbTransaction, id: string): Promise<string | undefined> => {
+  const rows = await tx.execute(sql`
+    UPDATE domain_claims
+    SET status = 'CANCELED', settled_at = now()
+    WHERE id = ${id}::uuid
+      AND incumbent_tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+      AND status = 'NOTICE'
+    RETURNING origin
+  `);
+
+  return ([...rows][0] as { origin?: string } | undefined)?.origin;
+};

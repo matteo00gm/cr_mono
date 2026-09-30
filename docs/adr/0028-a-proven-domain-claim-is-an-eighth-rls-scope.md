@@ -97,3 +97,26 @@ being in the policy is what makes it one.
   _finding_ the due notices is a read across every winery's claims, and nothing here admits that.
   P4-18b will add a flag-guarded branch on `domain_claims` that admits only `NOTICE` rows past
   `transfer_at`, on ADR 0023's pattern, and record it as an amendment to this ADR.
+
+## Amendment (P4-18b, 2026-09-30)
+
+The notice/withdrawal half added two things to this scope, as the consequence above said it would.
+
+- **A notice counts only once it has been sent.** `domain_claims` gained `notified_status` and
+  `notified_at`, and the branch on `tenant_domains` now admits a claim on notice only with
+  `notified_at` set and `transfer_at` passed. The claim sweep sends the notice mail first, then
+  stamps it and restarts `transfer_at` from that moment, so the holder gets the whole notice period
+  from when it was told. A notice nobody was sent reaches no row, whatever the code settling it
+  believes. The tests caught the scope's own "settleable" check disagreeing with this before it was
+  aligned: the policy held, and the holder's row stayed hidden.
+- **A read-only flag for the sweep, `app.claim_sweeper`**, on the pattern of ADR 0023. Finding the
+  claims that need a notice, a settlement or an outcome mail is a read across every winery, and the
+  flag's branch on `domain_claims` admits exactly those: claims on notice, and settled or withdrawn
+  claims whose outcome has not been told. A claim awaiting proof, and every claim already told, stay
+  invisible. `readClaimWork` opens its transaction `READ ONLY`, `WITH CHECK` is unchanged, and a
+  write under the flag alone is refused (tested). Every write the sweep makes is made as the
+  claimant or the holder, under the ordinary tenant policy.
+
+The cost is one more GUC. It admits nothing a claimant or a holder does not already see of its own
+claims, but it admits it across every winery, so it is read-only and narrowed by predicate as the
+revocation sweep's is.

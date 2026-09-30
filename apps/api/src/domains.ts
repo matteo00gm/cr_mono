@@ -615,6 +615,8 @@ export class DomainsPortNotConfiguredError extends Error {
 export const unconfiguredDomains: DomainsPort = {
   claim: () => Promise.reject(new DomainsPortNotConfiguredError()),
   verifyClaim: () => Promise.reject(new DomainsPortNotConfiguredError()),
+  servedClaims: () => Promise.reject(new DomainsPortNotConfiguredError()),
+  withdrawClaim: () => Promise.reject(new DomainsPortNotConfiguredError()),
   add: () => Promise.reject(new DomainsPortNotConfiguredError()),
   verify: () => Promise.reject(new DomainsPortNotConfiguredError()),
   remove: () => Promise.reject(new DomainsPortNotConfiguredError()),

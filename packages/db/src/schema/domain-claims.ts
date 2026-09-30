@@ -76,6 +76,14 @@ export const domainClaims = pgTable(
     transferAt: timestamp('transfer_at', { withTimezone: true, mode: 'date' }),
     settledAt: timestamp('settled_at', { withTimezone: true, mode: 'date' }),
 
+    /**
+     * Which state both wineries have been told about, and when (P4-18b). A
+     * notice's clock starts at `notified_at`, and the policy will not settle a
+     * notice without one: a holder nobody told cannot lose its origin.
+     */
+    notifiedStatus: domainClaimStatus('notified_status'),
+    notifiedAt: timestamp('notified_at', { withTimezone: true, mode: 'date' }),
+
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
@@ -92,6 +100,9 @@ export const domainClaims = pgTable(
     index('domain_claims_incumbent_idx')
       .on(table.incumbentTenantId)
       .where(sql`incumbent_tenant_id IS NOT NULL`),
+    index('domain_claims_unnotified_idx')
+      .on(table.status)
+      .where(sql`notified_status IS DISTINCT FROM status`),
     index('domain_claims_due_idx')
       .on(table.transferAt)
       .where(sql`status = 'NOTICE'`),

@@ -19,7 +19,8 @@ import { authSecret, databaseUrl, originSecret, parameterReadPermissions } from 
  * mechanism this app already has for operator-supplied per-stage values; the
  * domain itself is not sensitive.
  */
-const authBaseUrl = new sst.Secret('AuthBaseUrl', 'https://localhost');
+/** Exported for the claim sweep (P4-18b), which links to the dashboard from its mail. */
+export const authBaseUrl = new sst.Secret('AuthBaseUrl', 'https://localhost');
 
 /**
  * The transactional email provider key (P0-64).
@@ -35,7 +36,8 @@ const authBaseUrl = new sst.Secret('AuthBaseUrl', 'https://localhost');
  * the value never reaches a shell history file:
  *   `sst secret set ResendApiKey --stage <stage>`
  */
-const resendApiKey = new sst.Secret('ResendApiKey', '');
+/** Exported for the claim sweep (P4-18b), the second sender of mail. */
+export const resendApiKey = new sst.Secret('ResendApiKey', '');
 
 /**
  * Cloudflare Turnstile (P4-14). Empty on every stage until an operator creates
@@ -54,7 +56,7 @@ const turnstileSecretKey = new sst.Secret('TurnstileSecretKey', '');
  * sensitive, but because `sst.Secret` is the mechanism this app already has for
  * an operator-supplied per-stage value.
  */
-const emailFrom = new sst.Secret('EmailFrom', 'AI Sommelier <noreply@localhost>');
+export const emailFrom = new sst.Secret('EmailFrom', 'AI Sommelier <noreply@localhost>');
 
 /**
  * Addresses a non-production stage may really mail, comma-separated.
@@ -64,7 +66,7 @@ const emailFrom = new sst.Secret('EmailFrom', 'AI Sommelier <noreply@localhost>'
  * you deliberately let one address through for manual testing, never how you
  * accidentally reach a customer.
  */
-const emailAllowlist = new sst.Secret('EmailAllowlist', '');
+export const emailAllowlist = new sst.Secret('EmailAllowlist', '');
 
 /**
  * The Resend webhook endpoint signing secret, `whsec_…` (P0-64b).

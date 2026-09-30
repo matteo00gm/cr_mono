@@ -145,6 +145,11 @@ export const settleDomainClaim = async (
     await setTenant(tx, claimantTenantId);
 
     /*
+     * **Settleable here means what it means to the policy** (0056): proven, or
+     * a notice that was sent and has run out. The policy is what protects the
+     * holder either way — a notice nobody sent reaches no row — but a scope
+     * that disagreed with it would read a hidden holder as no holder at all.
+     *
      * **Locked, so a double click settles once.** The second request waits
      * here, then finds a claim that is no longer settleable. Read under the
      * claimant's own half of the policy, and named by tenant as well: the
@@ -153,7 +158,9 @@ export const settleDomainClaim = async (
      */
     const claims = await tx.execute(sql`
       SELECT origin, registrable_domain, status, incumbent_tenant_id,
-             (status = 'PROVEN' OR (status = 'NOTICE' AND transfer_at <= now())) AS settleable
+             (status = 'PROVEN'
+               OR (status = 'NOTICE' AND notified_at IS NOT NULL AND transfer_at <= now()))
+               AS settleable
       FROM domain_claims
       WHERE id = ${claimId}::uuid AND tenant_id = ${claimantTenantId}::uuid
       FOR UPDATE
@@ -179,10 +186,21 @@ export const settleDomainClaim = async (
     `);
     const { held, covered } = [...counts][0] as { held: number; covered: boolean };
 
-    const finish = async (domain: DomainRow, basis: TransferBasis): Promise<ClaimSettlement> => {
+    /*
+     * The holder is recorded on the claim as it closes, as well as with a
+     * notice: the sweep tells the winery that lost an origin (P4-18b), and it
+     * can only reach the ones the claim names.
+     */
+    const finish = async (
+      domain: DomainRow,
+      basis: TransferBasis,
+      holderTenantId: string | null = null,
+    ): Promise<ClaimSettlement> => {
       await tx.execute(sql`
         UPDATE domain_claims
-        SET status = 'TRANSFERRED', settled_at = now()
+        SET status = 'TRANSFERRED',
+            settled_at = now(),
+            incumbent_tenant_id = coalesce(${holderTenantId}::uuid, incumbent_tenant_id)
         WHERE id = ${claimId}::uuid
       `);
       await insertAuditRow(tx, {
@@ -224,7 +242,10 @@ export const settleDomainClaim = async (
     const holder = [...holders][0] as HolderSqlRow | undefined;
 
     /* The claimant proved the zone, and nobody holds the origin — so it is theirs. */
-    const land = async (basis: TransferBasis): Promise<ClaimSettlement> => {
+    const land = async (
+      basis: TransferBasis,
+      holderTenantId: string | null = null,
+    ): Promise<ClaimSettlement> => {
       await setTenant(tx, claimantTenantId);
 
       const landed = await insertVerifiedSibling(
@@ -235,7 +256,7 @@ export const settleDomainClaim = async (
 
       if (landed === undefined) throw new ClaimRacedError();
 
-      return finish(landed, basis);
+      return finish(landed, basis, holderTenantId);
     };
 
     if (holder === undefined) return land('unheld');
@@ -284,7 +305,13 @@ export const settleDomainClaim = async (
         UPDATE domain_claims
         SET status = 'NOTICE',
             incumbent_tenant_id = ${holder.tenant_id}::uuid,
-            transfer_at = now() + make_interval(hours => ${noticeHours})
+            transfer_at = now() + make_interval(hours => ${noticeHours}),
+            -- A notice served now has been told to nobody yet, including when it
+            -- replaces one a previous holder was sent (P4-18b). Left set, the
+            -- sweep would never tell the new holder, and the policy would count
+            -- the notice as sent.
+            notified_status = NULL,
+            notified_at = NULL
         WHERE id = ${claimId}::uuid
         RETURNING transfer_at
       `);
@@ -321,6 +348,6 @@ export const settleDomainClaim = async (
       userAgent: undefined,
     });
 
-    return land(basis);
+    return land(basis, holder.tenant_id);
   });
 };

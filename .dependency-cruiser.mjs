@@ -282,6 +282,12 @@ export default {
           // under the holder's and then the claimant's ordinary tenant scope.
           // A closed operation: it hands no transaction to a caller.
           '|^packages/db/src/with-domain-claim[.]ts$' +
+          // src/claim-sweep.ts is exempt from P4-18b, an amendment to ADR 0028:
+          // it opens a READ ONLY transaction and sets app.claim_sweeper, whose
+          // branch admits only claims on notice and outcomes not yet told, on
+          // with-lapsed-revocations.ts's pattern. markClaimNotified writes on
+          // the caller's withTenant transaction and opens nothing.
+          '|^packages/db/src/claim-sweep[.]ts$' +
           '|^packages/db/src/schema/' +
           '|^packages/testing/src/' +
           '|^packages/core/src/auth[.]ts$' +

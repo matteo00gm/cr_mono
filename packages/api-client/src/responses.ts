@@ -305,6 +305,28 @@ export const domainClaimCheckedResponse = z.strictObject({
 });
 
 /**
+ * A claim served on this winery, as its holder sees it (P4-18b).
+ *
+ * The origin and when it moves unless the holder answers — **and nothing about
+ * the claimant**. Strict, for the reason `domainClaimSchema` is.
+ */
+export const servedClaimSchema = z.strictObject({
+  id: z.string(),
+  origin: z.string(),
+  transferAt: z.string(),
+});
+
+/** Every notice served on this winery that is still running. What the banner reads. */
+export const servedClaimsResponse = z.strictObject({ claims: z.array(servedClaimSchema) });
+
+/** What withdrawing a claim gives back: the origin, which stays where it is. */
+export const claimWithdrawnResponse = z.strictObject({
+  id: z.string(),
+  origin: z.string(),
+  withdrawn: z.literal(true),
+});
+
+/**
  * What redeeming an invitation gives back.
  *
  * The membership as written, so the dashboard can switch straight into the new
@@ -331,6 +353,9 @@ export type DomainRemovedResponse = z.infer<typeof domainRemovedResponse>;
 export type DomainClaim = z.infer<typeof domainClaimSchema>;
 export type DomainClaimOpenedResponse = z.infer<typeof domainClaimOpenedResponse>;
 export type DomainClaimCheckedResponse = z.infer<typeof domainClaimCheckedResponse>;
+export type ServedClaim = z.infer<typeof servedClaimSchema>;
+export type ServedClaimsResponse = z.infer<typeof servedClaimsResponse>;
+export type ClaimWithdrawnResponse = z.infer<typeof claimWithdrawnResponse>;
 export type KeysResponse = z.infer<typeof keysResponse>;
 
 /**
@@ -770,6 +795,8 @@ export const DASHBOARD_RESPONSES = {
   'POST /v1/dashboard/products/import': productsImportedResponse,
   'POST /v1/dashboard/products/import/preview': importPreviewResponse,
   'POST /v1/dashboard/rag/simulate': ragSimulationResponse,
+  'GET /v1/dashboard/domains/claims/served': servedClaimsResponse,
+  'POST /v1/dashboard/domains/claims/:id/withdraw': claimWithdrawnResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

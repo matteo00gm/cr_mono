@@ -132,11 +132,28 @@ const SECRET_KEY_HASH = "nullif(current_setting('app.secret_key_hash', true), ''
  */
 const CLAIM = "nullif(current_setting('app.domain_claim', true), '')::uuid";
 
+/**
+ * The claim sweep's flag (P4-18b, an amendment to ADR 0028).
+ *
+ * It widens across tenants, as the revocation sweep's does, and like that one
+ * **its branch carries a row predicate**: it admits a claim on notice, and a
+ * settled or withdrawn claim whose outcome has not been notified yet — the
+ * work the sweep exists to do, and nothing else. A claim awaiting its proof,
+ * and every claim whose last state has already been told, stay invisible.
+ */
+const CLAIM_SWEEPER = "nullif(current_setting('app.claim_sweeper', true), '') = 'on'";
+
 /** The origin a settleable claim names, read under `domain_claims`' own policy. */
-const SETTLEABLE_CLAIM_ORIGIN = `SELECT c.origin FROM domain_claims c
+const SETTLEABLE_CLAIM_ORIGIN_0054 = `SELECT c.origin FROM domain_claims c
       WHERE c.id = ${CLAIM}
         AND (c.status = 'PROVEN'
           OR (c.status = 'NOTICE' AND c.transfer_at <= now()))`;
+
+/** From P4-18b: a notice is settleable only once it has been sent. */
+const SETTLEABLE_CLAIM_ORIGIN = `SELECT c.origin FROM domain_claims c
+      WHERE c.id = ${CLAIM}
+        AND (c.status = 'PROVEN'
+          OR (c.status = 'NOTICE' AND c.notified_at IS NOT NULL AND c.transfer_at <= now()))`;
 
 export interface RlsPolicy {
   /** Table the policy is attached to. */
@@ -199,6 +216,8 @@ const HEADERS: Readonly<Record<string, string>> = {
   '0047_session_cutoffs_rls': 'Row-level security for session cutoffs (P4-06).',
   '0049_secret_key_rls': 'A server finds its tenant from a secret key (P4-10).',
   '0054_domain_claims_rls': 'A proven claim reaches the domain it names (P4-18).',
+  '0056_domain_claim_sweep_rls':
+    'The claim sweep finds its work, and a notice counts once sent (P4-18b).',
 };
 
 /** Every migration file this list generates, in first-appearance order. */
@@ -420,7 +439,7 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
     using: `tenant_id = ${TENANT}
     OR (origin = ${WIDGET_ORIGIN}
       AND tenant_id IN (${WIDGET_KEY_TENANT}))
-    OR origin IN (${SETTLEABLE_CLAIM_ORIGIN})`,
+    OR origin IN (${SETTLEABLE_CLAIM_ORIGIN_0054})`,
     withCheck: `tenant_id = ${TENANT}`,
     note:
       'Settling a claim has to find the holder of an origin, and RLS hides every other ' +
@@ -431,6 +450,40 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
       'withdrawn claim admit nothing. settleDomainClaim clears the GUC as soon as it has read ' +
       'the holder and continues under the holder’s ordinary tenant scope. WITH CHECK stays ' +
       'tenant-only.',
+  },
+  {
+    table: 'domain_claims',
+    migration: '0056_domain_claim_sweep_rls',
+    supersedes: true,
+    using: `tenant_id = ${TENANT}
+    OR incumbent_tenant_id = ${TENANT}
+    OR (${CLAIM_SWEEPER}
+      AND (status = 'NOTICE'
+        OR (status IN ('TRANSFERRED', 'CANCELED') AND notified_status IS DISTINCT FROM status)))`,
+    withCheck: `tenant_id = ${TENANT}
+    OR (incumbent_tenant_id = ${TENANT} AND status = 'CANCELED')`,
+    note:
+      'The claim sweep sends each notice, settles each notice that has run out, and tells both ' +
+      'wineries how a claim ended — and learning which claims need any of that is itself the ' +
+      'cross-tenant read (P4-18b, ADR 0028). The flag never admits a row on its own: only a ' +
+      'claim on notice, or a settled or withdrawn one whose outcome has not been notified. A ' +
+      'claim awaiting proof, and every claim already told, stay invisible to it. WITH CHECK is ' +
+      'unchanged, so the flag buys a read; the sweep writes as the claimant or the holder.',
+  },
+  {
+    table: 'tenant_domains',
+    migration: '0056_domain_claim_sweep_rls',
+    supersedes: true,
+    using: `tenant_id = ${TENANT}
+    OR (origin = ${WIDGET_ORIGIN}
+      AND tenant_id IN (${WIDGET_KEY_TENANT}))
+    OR origin IN (${SETTLEABLE_CLAIM_ORIGIN})`,
+    withCheck: `tenant_id = ${TENANT}`,
+    note:
+      'A notice now counts only once it has been sent (P4-18b). The branch still admits the ' +
+      'domain a proven claim names, but a claim on notice reaches it only with notified_at set ' +
+      'and transfer_at passed — so a holder nobody told cannot lose its origin, whatever the ' +
+      'code settling it believes.',
   },
 ];
 

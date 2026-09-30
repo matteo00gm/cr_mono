@@ -50,6 +50,8 @@ interface Seeded {
   readonly invitationA: string;
   /** A's claim, on notice, served on B — so B can see it, and still must get 404. */
   readonly claimA: string;
+  /** A notice served on A by B — so B, the claimant, is the one who must get 404. */
+  readonly servedA: string;
 }
 
 let seeded: Seeded;
@@ -131,6 +133,21 @@ beforeAll(async () => {
     `)),
   ] as { id: string }[];
 
+  /* Withdrawing is the holder's act. The claimant made the claim and can see
+   * it, and still must be answered exactly as for an id that never existed. */
+  const [served] = [
+    ...(await admin().execute(sql`
+      INSERT INTO domain_claims (
+        tenant_id, incumbent_tenant_id, origin, registrable_domain, status, transfer_at
+      )
+      VALUES (
+        ${tenantB}, ${tenantA}, 'https://www.cantina-a.example', 'cantina-a.example',
+        'NOTICE', now() + interval '72 hours'
+      )
+      RETURNING id
+    `)),
+  ] as { id: string }[];
+
   seeded = {
     tenantA,
     tenantB,
@@ -141,6 +158,7 @@ beforeAll(async () => {
     domainA: domain?.id ?? '',
     invitationA: invitation?.id ?? '',
     claimA: claim?.id ?? '',
+    servedA: served?.id ?? '',
   };
 }, 180_000);
 
@@ -218,6 +236,10 @@ const MATRIX: ReadonlyMap<string, Case> = new Map<string, Case>([
     { path: (ids) => `/domains/claims/${ids.claimA}/verify`, missing: randomUUID() },
   ],
   [
+    'POST /v1/dashboard/domains/claims/:id/withdraw',
+    { path: (ids) => `/domains/claims/${ids.servedA}/withdraw`, missing: randomUUID() },
+  ],
+  [
     'DELETE /v1/dashboard/members/invitations/:id',
     { path: (ids) => `/members/invitations/${ids.invitationA}`, missing: randomUUID() },
   ],
@@ -262,6 +284,7 @@ describe('the matrix', () => {
         domainA: test.missing,
         invitationA: test.missing,
         claimA: test.missing,
+        servedA: test.missing,
       });
       const nobodys = await call(seeded.ownerB, method, missingPath, test.body);
 

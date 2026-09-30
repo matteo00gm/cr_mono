@@ -5,6 +5,7 @@ import { publicRoute, requires, ROLES, type RouteAccess } from '@catalogorosso/s
 import {
   acceptInviteResponse,
   catalogueReindexedResponse,
+  claimWithdrawnResponse,
   contextResponse,
   importPreviewResponse,
   domainAddedResponse,
@@ -16,6 +17,7 @@ import {
   issuedKeysResponse,
   keysResponse,
   turnstileSettingsResponse,
+  servedClaimsResponse,
   inviteResponse,
   meResponse,
   memberRemovedResponse,
@@ -1342,6 +1344,33 @@ export const createDashboardApp = ({
   });
 
   /**
+   * The notices served on this winery that are still running (P4-18b).
+   *
+   * What the dashboard's banner reads. Registered before the `:id` routes below
+   * for readability only — the segment counts differ, so they cannot collide.
+   */
+  app.get('/domains/claims/served', requireCapability('domains:manage'), async (c) =>
+    c.json(await domains.servedClaims(c.get('tenantId'))),
+  );
+
+  /**
+   * Withdraw a claim served on this winery, and keep the origin (P4-18b).
+   *
+   * No step-up, and on purpose: this is the holder *keeping* what it has, and
+   * the one click the plan promises. Making it harder would make the 72 hours
+   * shorter for exactly the winery the notice exists to protect.
+   */
+  app.post('/domains/claims/:id/withdraw', requireCapability('domains:manage'), async (c) =>
+    c.json(
+      await domains.withdrawClaim({
+        /* From a `memberships` row, never from the body (P0-48). */
+        tenantId: c.get('tenantId'),
+        claimId: c.req.param('id'),
+      }),
+    ),
+  );
+
+  /**
    * Check a claim's DNS proof, and settle it (P4-18).
    *
    * `POST` for P4-02's reasons: an outbound DNS query, a rate-limit bucket and,
@@ -2355,6 +2384,48 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
           'hours to respond. If they do not, it moves to your account automatically.',
       },
       response: domainClaimCheckedResponse,
+    },
+  ],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/domains/claims/served`),
+    {
+      access: requires('domains:manage'),
+      summary: 'List claims served on this winery',
+      description:
+        'Every claim another account has proved by DNS against one of this winery’s domains, ' +
+        'while its notice is still running (P4-18b) — what the dashboard’s banner reads. Each ' +
+        'entry is the origin and when it moves unless withdrawn, and **nothing about the ' +
+        'claimant**: proving control of a zone does not make the claimant’s identity the ' +
+        'holder’s business, any more than the other way round.',
+      example: {
+        claims: [
+          {
+            id: '5b2e8c1d-3f4a-4e6b-8c9d-0a1b2c3d4e5f',
+            origin: 'https://www.winery.com',
+            transferAt: '2026-10-03T08:00:00.000Z',
+          },
+        ],
+      },
+      response: servedClaimsResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/domains/claims/:id/withdraw`),
+    {
+      access: requires('domains:manage'),
+      summary: 'Withdraw a claim, and keep the domain',
+      description:
+        'The one click the notice promises (P4-18b). The claim is closed, the domain stays ' +
+        'where it is, and the holder’s audit log records it; the claimant is told by the claim ' +
+        'sweep, never by this request writing into its winery. Only while the notice is running, ' +
+        'and only by the winery it was served on. A claim this winery made itself, one served ' +
+        'on another winery, one already settled and one that never existed all answer 404.',
+      example: {
+        id: '5b2e8c1d-3f4a-4e6b-8c9d-0a1b2c3d4e5f',
+        origin: 'https://www.winery.com',
+        withdrawn: true,
+      },
+      response: claimWithdrawnResponse,
     },
   ],
   [
