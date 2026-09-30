@@ -119,6 +119,25 @@ const WIDGET_KEY_TENANT = `SELECT k.tenant_id FROM widget_keys k WHERE k.public_
  */
 const SECRET_KEY_HASH = "nullif(current_setting('app.secret_key_hash', true), '')";
 
+/**
+ * The claim being settled, set by `settleDomainClaim` (P4-18, ADR 0028) — the
+ * **eighth** context.
+ *
+ * An identifier, not a secret, and what bounds it is not the value but the row
+ * it names: the branch below admits a domain only when the named claim is one
+ * the current tenant can see under `domain_claims`' own policy, and only once
+ * that claim has been proved, or its notice has run out. A claim still waiting
+ * for its DNS proof, a notice with time left on it and a withdrawn claim all
+ * admit nothing, whatever runs inside the scope.
+ */
+const CLAIM = "nullif(current_setting('app.domain_claim', true), '')::uuid";
+
+/** The origin a settleable claim names, read under `domain_claims`' own policy. */
+const SETTLEABLE_CLAIM_ORIGIN = `SELECT c.origin FROM domain_claims c
+      WHERE c.id = ${CLAIM}
+        AND (c.status = 'PROVEN'
+          OR (c.status = 'NOTICE' AND c.transfer_at <= now()))`;
+
 export interface RlsPolicy {
   /** Table the policy is attached to. */
   readonly table: string;
@@ -179,6 +198,7 @@ const HEADERS: Readonly<Record<string, string>> = {
   '0043_revocation_sweep_rls': 'The sweep deletes lapsed token revocations across tenants (P2-14).',
   '0047_session_cutoffs_rls': 'Row-level security for session cutoffs (P4-06).',
   '0049_secret_key_rls': 'A server finds its tenant from a secret key (P4-10).',
+  '0054_domain_claims_rls': 'A proven claim reaches the domain it names (P4-18).',
 };
 
 /** Every migration file this list generates, in first-appearance order. */
@@ -377,6 +397,40 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
       'key rotation carries the hash onto the new row and the revoked one keeps its copy through ' +
       'the grace window (P4-08). resolveTenantBySecretKey clears the GUC as soon as it has read the row and ' +
       'continues as an ordinary tenant scope, READ ONLY. WITH CHECK stays tenant-only.',
+  },
+  {
+    table: 'domain_claims',
+    migration: '0054_domain_claims_rls',
+    using: `tenant_id = ${TENANT}
+    OR incumbent_tenant_id = ${TENANT}`,
+    withCheck: `tenant_id = ${TENANT}
+    OR (incumbent_tenant_id = ${TENANT} AND status = 'CANCELED')`,
+    note:
+      'Two tenants on one row (P4-18, ADR 0028). The claimant owns it, as tenant_id. The holder ' +
+      'a proven claim has put on notice must see it too, or the notice could not be answered — ' +
+      'so incumbent_tenant_id admits it once it is set, and it is set only with a notice. The ' +
+      'holder writes exactly one thing, a withdrawal, so its half of WITH CHECK admits only a ' +
+      'CANCELED row: a holder cannot write a live claim, least of all one naming somebody else ' +
+      'as claimant.',
+  },
+  {
+    table: 'tenant_domains',
+    migration: '0054_domain_claims_rls',
+    supersedes: true,
+    using: `tenant_id = ${TENANT}
+    OR (origin = ${WIDGET_ORIGIN}
+      AND tenant_id IN (${WIDGET_KEY_TENANT}))
+    OR origin IN (${SETTLEABLE_CLAIM_ORIGIN})`,
+    withCheck: `tenant_id = ${TENANT}`,
+    note:
+      'Settling a claim has to find the holder of an origin, and RLS hides every other ' +
+      'winery’s rows — which is correct everywhere else, and the reason P4-01 can only say ' +
+      '"not available" (P4-18, ADR 0028). The branch admits the one domain whose origin a ' +
+      'settleable claim names: a claim the current tenant can see, that has been proved by DNS, ' +
+      'or whose notice has run out. A claim awaiting proof, a notice with time left and a ' +
+      'withdrawn claim admit nothing. settleDomainClaim clears the GUC as soon as it has read ' +
+      'the holder and continues under the holder’s ordinary tenant scope. WITH CHECK stays ' +
+      'tenant-only.',
   },
 ];
 

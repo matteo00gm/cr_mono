@@ -39,9 +39,14 @@ export const refusalMessage = (reason: NormalizeFailure): string => REFUSALS[rea
  * "That origin belongs to another tenant" confirms a competitor is a customer,
  * and repeated against a list of domains it enumerates our customer base. This
  * message is the same one an origin the seller has mistyped would get.
+ *
+ * It points at the claim (P4-18) rather than at support, because proving DNS
+ * control is the answer for a seller who really does own it — and offering it
+ * to everybody says nothing about whether anybody holds the origin.
  */
 export const ORIGIN_UNAVAILABLE =
-  'That domain is not available to add. If it is yours and you are seeing this, contact support.';
+  'That domain is not available to add. If it is yours, you can claim it by proving you ' +
+  'control its DNS.';
 
 /**
  * A verification nonce.

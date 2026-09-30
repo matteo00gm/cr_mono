@@ -76,8 +76,9 @@ describe('the message for an origin somebody else holds', () => {
 
   it('still leaves the seller somewhere to go', () => {
     /* A refusal with no next step on the one screen that gates the product is
-     * how a legitimate seller who mistyped gives up. */
-    expect(ORIGIN_UNAVAILABLE).toMatch(/support/iu);
+     * how a legitimate seller gives up. For one who really owns the domain the
+     * next step is the claim (P4-18). */
+    expect(ORIGIN_UNAVAILABLE).toMatch(/claim it by proving you control its DNS/iu);
   });
 });
 

@@ -9,6 +9,7 @@
 export * from './audit-log.js';
 export * from './auth.js';
 export * from './conversations.js';
+export * from './domain-claims.js';
 export * from './email-suppressions.js';
 export * from './import-runs.js';
 export * from './invitations.js';

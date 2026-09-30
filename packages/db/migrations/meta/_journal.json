@@ -372,6 +372,20 @@
       "when": 1788654188587,
       "tag": "0052_messages_seq",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1788654188588,
+      "tag": "0053_domain_claims",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1788654188589,
+      "tag": "0054_domain_claims_rls",
+      "breakpoints": true
     }
   ]
 }

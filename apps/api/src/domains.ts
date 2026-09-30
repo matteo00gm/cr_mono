@@ -46,6 +46,12 @@ import {
   type ResolveTxt,
 } from '@catalogorosso/security/net';
 
+import {
+  createDomainClaims,
+  type DomainClaimsDeps,
+  type DomainClaimsPort,
+} from './domain-claims.js';
+
 /**
  * The domains port (P4-01, §3.3).
  *
@@ -93,7 +99,8 @@ export interface RemoveDomainCommand {
   readonly confirmed: boolean;
 }
 
-export interface DomainsPort {
+/** The domains screen, including claims on a domain another winery holds (P4-18). */
+export interface DomainsPort extends DomainClaimsPort {
   add(command: AddDomainCommand): Promise<AddDomainResult>;
   verify(command: VerifyDomainCommand): Promise<VerifyDomainResult>;
   remove(command: RemoveDomainCommand): Promise<DomainRemovedResponse>;
@@ -136,7 +143,7 @@ const toResponse = (row: DomainRow): Domain => ({
   createdAt: row.createdAt.toISOString(),
 });
 
-export interface DomainsDeps {
+export interface DomainsDeps extends DomainClaimsDeps {
   /**
    * The audit writer (P0-53), injected for the reason `members.ts` gives: a
    * test that mocks `@catalogorosso/db` gets a second copy of the context
@@ -173,7 +180,7 @@ export interface DomainsDeps {
   readonly newResolver?: () => ResolveTxt;
 }
 
-export const createDomainsPort = ({
+const createDomainMethods = ({
   audit: record = audit,
   environment,
   newToken = verificationToken,
@@ -181,7 +188,7 @@ export const createDomainsPort = ({
   newResolver = publicResolveTxt,
   now = Date.now,
   fetcher,
-}: DomainsDeps = {}): DomainsPort => ({
+}: DomainsDeps): Omit<DomainsPort, keyof DomainClaimsPort> => ({
   async add(command) {
     const normalised = normalizeOrigin(command.input, { environment });
 
@@ -581,6 +588,15 @@ export const createDomainsPort = ({
 });
 
 /**
+ * The port: the claim methods (P4-18) beside the rest, from one set of
+ * dependencies — one limiter, one resolver factory, one clock.
+ */
+export const createDomainsPort = (deps: DomainsDeps = {}): DomainsPort => ({
+  ...createDomainClaims(deps),
+  ...createDomainMethods(deps),
+});
+
+/**
  * The port when nothing has configured one.
  *
  * Refusing loudly is the only safe default: an absent port that silently
@@ -597,6 +613,8 @@ export class DomainsPortNotConfiguredError extends Error {
 }
 
 export const unconfiguredDomains: DomainsPort = {
+  claim: () => Promise.reject(new DomainsPortNotConfiguredError()),
+  verifyClaim: () => Promise.reject(new DomainsPortNotConfiguredError()),
   add: () => Promise.reject(new DomainsPortNotConfiguredError()),
   verify: () => Promise.reject(new DomainsPortNotConfiguredError()),
   remove: () => Promise.reject(new DomainsPortNotConfiguredError()),

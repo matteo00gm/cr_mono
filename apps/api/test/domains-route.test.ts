@@ -56,6 +56,9 @@ const port = (
   verify: DomainsPort['verify'] = () => Promise.resolve(verified),
   remove: DomainsPort['remove'] = () => Promise.resolve(removed),
 ): DomainsPort => ({
+  /* Claims have their own route suite; here they are never reached. */
+  claim: () => Promise.reject(new Error('not under test')),
+  verifyClaim: () => Promise.reject(new Error('not under test')),
   add: (command) => {
     seen.push(command);
 

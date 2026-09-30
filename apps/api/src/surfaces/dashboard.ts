@@ -8,6 +8,8 @@ import {
   contextResponse,
   importPreviewResponse,
   domainAddedResponse,
+  domainClaimCheckedResponse,
+  domainClaimOpenedResponse,
   domainRemovedResponse,
   domainVerifiedResponse,
   invitationRevokedResponse,
@@ -1315,6 +1317,49 @@ export const createDashboardApp = ({
   });
 
   /**
+   * Claim a domain another winery holds (P4-18).
+   *
+   * What P4-01's "not available" points at. The body is the same raw string an
+   * added domain takes, normalised in the port for the same reason. A claim is
+   * opened whether or not anybody holds the origin — this route cannot tell,
+   * and saying either way would be the oracle P4-01 refuses to be.
+   */
+  app.post('/domains/claims', requireCapability('domains:manage'), async (c) => {
+    const parsed = domainBody.safeParse(await readJson(c));
+
+    if (!parsed.success) {
+      throw new InvalidRequestError('Send a JSON body carrying the domain to claim.');
+    }
+
+    return c.json(
+      await domains.claim({
+        /* From a `memberships` row, never from the body (P0-48). */
+        tenantId: c.get('tenantId'),
+        input: parsed.data.domain,
+      }),
+      201,
+    );
+  });
+
+  /**
+   * Check a claim's DNS proof, and settle it (P4-18).
+   *
+   * `POST` for P4-02's reasons: an outbound DNS query, a rate-limit bucket and,
+   * on success, an origin moving between wineries. DNS only, so there is no
+   * body. No step-up: to the claimant this is adding a domain, and what stands
+   * between it and somebody else's origin is control of that origin's zone.
+   */
+  app.post('/domains/claims/:id/verify', requireCapability('domains:manage'), async (c) =>
+    c.json(
+      await domains.verifyClaim({
+        /* From a `memberships` row, never from the body (P0-48). */
+        tenantId: c.get('tenantId'),
+        claimId: c.req.param('id'),
+      }),
+    ),
+  );
+
+  /**
    * Add a domain.
    *
    * Behind `domains:manage`, which only an OWNER holds: a verified origin is
@@ -2237,6 +2282,79 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         verified: true,
       },
       response: domainVerifiedResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/domains/claims`),
+    {
+      access: requires('domains:manage'),
+      summary: 'Claim a domain another winery holds',
+      status: 201,
+      description:
+        'The way through when adding a domain answers "not available" (P4-18): a winery that ' +
+        'churned, a business that was sold, an agency rebuilding a site under a new workspace. ' +
+        'Normalises the input as adding does and opens a claim carrying a fresh nonce for the ' +
+        '`_somm-verify` TXT record — the same proof a first verification takes. Opened whether or ' +
+        'not anybody holds the origin, because this route cannot tell and saying either way would ' +
+        'be the enumeration oracle adding refuses to be. A second attempt answers with the claim ' +
+        'already open, so the record a seller published stays valid. Refused with 409 for an ' +
+        'origin this winery already holds, and for a winery already at its plan cap.',
+      example: {
+        claim: {
+          id: '5b2e8c1d-3f4a-4e6b-8c9d-0a1b2c3d4e5f',
+          origin: 'https://www.winery.com',
+          registrableDomain: 'winery.com',
+          status: 'PENDING',
+          verificationToken: '3f9a0c5e…',
+          verificationExpiresAt: '2026-10-06T09:00:00.000Z',
+          transferAt: null,
+          createdAt: '2026-09-29T09:00:00.000Z',
+        },
+        created: true,
+      },
+      response: domainClaimOpenedResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/domains/claims/:id/verify`),
+    {
+      access: requires('domains:manage'),
+      summary: "Check a claim's proof, and settle it",
+      description:
+        'Resolves the `_somm-verify` TXT record through the pinned public resolver and compares ' +
+        'it, in constant time, with the claim’s own nonce. DNS only: a file on a storefront ' +
+        'proves control of a web server, which is exactly what a former contractor may still ' +
+        'have after the zone has moved on. On success the claim is settled in its own RLS scope ' +
+        '(ADR 0028), and what happens depends on the holder, who is never named. An origin nobody ' +
+        'holds, one the holder never verified, or one held by a winery that is disabled, ' +
+        'cancelled or never finished signing up moves at once: the holder’s row is deleted, its ' +
+        'live sessions are cut off, and both wineries’ audit logs record it. A paying holder is ' +
+        'put on 72 hours’ notice instead and keeps the origin until then — `transferred: false` ' +
+        'with `transferAt` — because moving a live customer’s origin on one DNS check is how a ' +
+        'hostile contractor or a compromised registrar kills a widget unannounced. A notice is ' +
+        'never settled from this route, even once it has run out: it moves only after the holder ' +
+        'has been told (P4-18b). A record that is absent or wrong answers 200 ' +
+        "with `verified: false`. Attempts are counted per claim. Another winery's id, including " +
+        'the claimant’s id seen from the holder’s side, answers 404, never 403.',
+      example: {
+        claim: {
+          id: '5b2e8c1d-3f4a-4e6b-8c9d-0a1b2c3d4e5f',
+          origin: 'https://www.winery.com',
+          registrableDomain: 'winery.com',
+          status: 'NOTICE',
+          verificationToken: null,
+          verificationExpiresAt: null,
+          transferAt: '2026-10-02T09:00:00.000Z',
+          createdAt: '2026-09-29T09:00:00.000Z',
+        },
+        verified: true,
+        transferred: false,
+        transferAt: '2026-10-02T09:00:00.000Z',
+        reason:
+          'We found your record. The domain is in use, so its current holder has been given 72 ' +
+          'hours to respond. If they do not, it moves to your account automatically.',
+      },
+      response: domainClaimCheckedResponse,
     },
   ],
   [
