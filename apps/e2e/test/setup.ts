@@ -39,6 +39,15 @@ export interface Harness {
   readonly secretKey: string;
   readonly verified: HostPages;
   readonly unverified: HostPages;
+  /**
+   * Moves the rate limiter one window on, as if a minute had passed.
+   *
+   * **Only the limiter's clock moves.** A token's expiry, a session's cutoff and
+   * everything else keep real time, so this cannot make anything valid that is
+   * not. It exists for a spec that asks more per minute than a trial winery is
+   * allowed (`tenantPerMinute.none`, P2-02) and is not *about* that limit.
+   */
+  readonly nextMinute: () => void;
   readonly close: () => Promise<void>;
 }
 
@@ -55,6 +64,9 @@ export const start = async (): Promise<Harness> => {
 
   /* Generated per run, never written down (P0-56). Only its hash reaches the database. */
   const secretKey = newSecretKey();
+
+  let skew = 0;
+  const limiter = memoryRateLimiter(() => Date.now() + skew);
 
   const api = await startE2eApi({
     secretKeyHash: hashSecretKey(secretKey),
@@ -76,7 +88,7 @@ export const start = async (): Promise<Harness> => {
       widget: {
         /* Real: this is the thing under test. */
         resolve: resolveTenantByKeyAndOrigin,
-        limiter: memoryRateLimiter(),
+        limiter,
         readUsage: () => Promise.resolve(0),
         ipSecret: randomUUID(),
         /*
@@ -160,6 +172,9 @@ export const start = async (): Promise<Harness> => {
     secretKey,
     verified,
     unverified,
+    nextMinute: () => {
+      skew += 60_000;
+    },
     close: async () => {
       await verified.close();
       await unverified.close();

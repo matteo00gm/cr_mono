@@ -42,7 +42,23 @@ export default defineConfig({
   timeout: 30_000,
   globalTimeout: 10 * 60_000,
 
-  expect: { timeout: 10_000 },
+  expect: {
+    timeout: 10_000,
+    /*
+     * Visual regression (P3-19). Animations are stopped and the caret hidden,
+     * because a baseline that depends on which frame of a transition the
+     * screenshot caught is a flake with an approval process attached.
+     */
+    toHaveScreenshot: { animations: 'disabled', caret: 'hide' },
+  },
+
+  /*
+   * **Per platform, on purpose** (P3-19). Fonts rasterise differently on every
+   * operating system, so the committed baselines are CI's Linux ones and a
+   * laptop's run writes its own files beside them instead of failing against
+   * pixels it could never produce. Only `-linux` files are committed.
+   */
+  snapshotPathTemplate: '{testDir}/{testFileName}-snapshots/{arg}-{platform}{ext}',
 
   reporter: process.env['CI'] === undefined ? [['list']] : [['list'], ['github']],
 

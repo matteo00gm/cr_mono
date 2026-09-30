@@ -1360,7 +1360,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P3-16 | 🔒 Token in memory, anon id in sessionStorage | no cookies, no `localStorage` | P3-06 |
 | ✅ P3-17 | `packages/testing`: fake host pages | two origins (4001 verified / 4002 not), fake Shopify cart | P0-44 |
 | ✅ P3-18 | ⛔ 🔒 Cross-origin Playwright suite | real browser proves CORS, not just headers | P3-17,P2-09 |
-| P3-19 | Visual regression per state per locale | | P3-14 |
+| ✅ P3-19 | Visual regression per state per locale | | P3-14 |
 | ✅ P3-20 | `widget_events` emission | open, message, recommendation, detail, add_to_cart, zero_results | P0-29 |
 | ✅ P3-21 | Session auto-refresh | proactive + on-401, single-flight, retry once, `DISABLED` renders disabled not error | P2-12a |
 
@@ -5584,6 +5584,7 @@ X-Accel-Buffering: no
 - **Amended by P3-11 (2026-09-23): the card carries `variantId`.** Public by nature — it is in the seller's own storefront HTML on every product page — and the widget cannot add a wine to a Shopify cart without it.
 - **Amended by P3-08 (2026-09-23): a `recommendations` item now carries its card.** As shipped here the event held `{productId, reason, confidence}` and nothing else, which left §1.5's card with no fields and no endpoint to fetch them from. The server fills `product` from the rows it already has, after `allowlisted` has refused any id outside the request's candidates — so the model still supplies only an id and a sentence.
 - **A failure after the first event is an event, not a status**, carrying a code of ours: the provider's own words could hold a connection string (P0-55). `done` is always last, because a finished answer and a dropped connection are otherwise identical.
+- **⚠ Amended by P3-19 (2026-09-30): that event carried no `type`**, so the widget — whose reader is built from `widgetChatEvent` and drops a frame that does not parse — threw it away. A shopper whose month ran out mid-answer, or whose provider fell over, saw the reply stop and was told nothing. The tests here asserted `toContain('quota_exceeded')`, which the broken frame satisfied; they now parse every error frame with the published schema, and the write is `satisfies WidgetChatEvent`.
 - **The turn is written in a `finally`**, so a visitor who closed the tab still has what was generated recorded — what was generated was paid for.
 - **Providers are factories, not instances.** Tokens are reported per construction (P1-42's `onUsage`) and the bill is per turn; the SDK client is the expensive part and is built once at the composition root.
 
@@ -6225,7 +6226,7 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 - **⚠ §5.7's "immediate effect" is not observable on the config route**, and the first version of the test assumed it was. The config response is deliberately cacheable (`public, max-age=60`, P2-10, because it is edge-cached and world-readable), so a shopper who reloads inside that minute is answered by their own browser. The session mint is a POST and cannot be cached, so that is where the effect shows: the panel opens from cached config and the first question is refused.
 - **Serial, one worker, no retries.** Every test shares one database and one API, and one test un-verifies the domain the others depend on — restored in `beforeEach`. A retry would hide a flake, and a flake in the suite that proves the browser enforces CORS is a thing to investigate.
 - **Its own CI job**, not folded into `test`: it needs Docker *and* a downloaded Chromium, and `pnpm test` must stay runnable on a laptop with neither. Not behind `needs:`, for the reason the integration job is not.
-- **Deferred to P3-19:** the `axe-core` full rule set in a browser (P3-15 runs the structural subset in JSDOM) and the hostile-CSS style-leakage assertions, which are visual-regression work and belong with the screenshots.
+- **Deferred to P3-19:** the `axe-core` full rule set in a browser (P3-15 runs the structural subset in JSDOM) and the hostile-CSS style-leakage assertions, which are visual-regression work and belong with the screenshots. *(✅ Both closed in P3-19.)*
 
 ---
 
@@ -6234,6 +6235,29 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 **How.** Playwright screenshots of all five §1.3 states × IT/EN, plus the card list and the mobile viewport. Mask the streaming region and any timestamp to avoid flakes. Store baselines in-repo; a diff requires explicit approval in review — which is the point, since the widget renders on customers' sites and an unnoticed visual regression is seen by their shoppers before us.
 
 **Files.** `e2e/visual.spec.ts`, baselines. **~90 lines + images.**
+
+**As built (2026-09-30).** `apps/e2e/test/visual.spec.ts`, 22 cases in the existing browser job: the §1.3 states in `it-IT` and `en-GB` — `DISABLED`, `ACTIVE`, `QUOTA_EXCEEDED`, `RATE_LIMITED`, and `ERROR` twice (a 5xx and a dropped connection, which are different notices) — the card list in both, the open panel and the card list at 375×812, the hostile-page comparison, and four axe scans. **It found a production defect on its first run**, and three in the harness.
+
+- **⚠ A quota or provider failure mid-answer never reached the shopper.** The API wrote the error frame as `{"code":…}` with no `type`, and the widget drops any frame its schema refuses — so the `QUOTA_EXCEEDED` screenshot never appeared. Fixed in the route, and recorded against P2-29, which shipped it.
+- **Every state arrives through the real network path**, bent at the wire with `route.fetch` + `route.fulfill` rather than rendered as a component: the config's `status`, a 429 with `Retry-After`, a 503, `route.abort`, and the quota frame exactly as the API writes it. A bent response keeps the real one's headers, so CORS is the API's own.
+- **The `DISABLED` case reads the response back** *(addition)*. A refused config renders the same greyed launcher, so the screenshot alone passed while the origin was being refused by CORS — which is how the first harness defect below hid. It now asserts a 200, the origin in `Access-Control-Allow-Origin`, and `status: 'DISABLED'`.
+- **Only the countdown is masked** *(deviation)*. The row asks to mask the streaming region and any timestamp; the widget shows no timestamp, and every screenshot is taken after the stream's last event is asserted on screen, so there is no streaming region left to mask. The rate-limit countdown is the one moving part — masked and asserted instead, because freezing the clock freezes Preact's effect scheduling with it.
+- **Baselines are Linux's, from CI** *(decision)*. Fonts rasterise differently per platform, so `snapshotPathTemplate` carries `{platform}`, only `-linux.png` is committed, and a laptop writes its own files beside them (ignored). A missing baseline fails the run that lacks it and is uploaded as `visual-baselines`, so a new or changed baseline is the runner's own render, committed by hand and seen in review — never regenerated silently.
+- **Hostile CSS, closed from P3-18: one baseline, two pages.** The answered panel is screenshotted on the plain storefront and on the hostile one against the *same* file, so anything of the shop's that crossed the shadow root is a pixel diff — including inherited properties, which a shadow root does not stop and which the hostile page sets on the host (`font-size: 0`, `color: transparent`). It first failed for a harness reason: the hostile page's own `script-src 'self'` blocked the inline `window.Shopify`, so it was a shop with no cart and the widget rightly offered no button. The host server now serves `/shopify.js`, which is how a real theme on a strict policy gets its globals.
+- **axe's full rule set, closed from P3-18**, in Chromium where layout exists — colour contrast, target size and visibility included — over the launcher, the open panel, an answer with cards and a notice with its retry. Scoped to the widget: the storefront is the harness's, and a rule it fails is not ours to report. Clean on first run.
+- **⚠ Harness: the memoised database client outlived its container.** `getDb()` caches for the process, and a Playwright worker runs every spec file in one: the second spec's `start()` set a fresh `DATABASE_URL` that nothing read, and its first requests went to a pool whose connections belonged to a stopped container. Those answered 500 — which the browser reports as a CORS refusal, since the error carries no CORS headers — until postgres-js reconnected to the old URL, where Docker had usually handed the port to the *new* container. So it failed a case or two and then healed, by coincidence, which is the worst shape a harness bug can have. Invisible until a second spec called `start()`, and invisible to Vitest, which isolates files. `startE2eApi`'s `close()` now calls `closeDb()`.
+- **⚠ Harness: the suite outran a trial winery's limit.** `tenantPerMinute.none` is thirty requests a minute across every widget endpoint, and sixteen screenshots of config, session and chat spend that in well under one. `Harness.nextMinute()` moves *only the limiter's* clock a window on — a token's expiry and a session's cutoff keep real time, so it cannot make anything valid that is not — and both specs call it in `beforeEach`. The cross-origin spec was already near the edge: on a fast machine it read a 429 as whatever the test was about.
+- **⚠ Harness: P4-06's "stays dead" case failed about one run in seven on Windows.** The token's start is stamped by the API's clock and the cutoff by Postgres's `now()`, and Docker Desktop's VM clock swings the better part of a second either side of the host's — logged at −0.73 s on the failing run, so a cutoff landed *before* a token minted a moment earlier. The harness's `endSessions()` now stamps with the process clock: it stands in for "the seller acted now", and now is ours to state. Not a production defect — both clocks are NTP-synced there, and flooring `iat` to the second errs toward refusal — but it is why the e2e helper, unlike `endSessionsFor`, does not use `now()`.
+
+**Verified.** 46 browser cases green twice from a cold run and twice more against the written baselines; P4-06's two cases 40/40 over twenty repeats after the clock fix, 17/20 before. Each guard broken on purpose:
+
+| Mutation | Caught by |
+|---|---|
+| Error frame without `type` (the shipped bug) | `widget-chat.test.ts`, two cases |
+| `.card { letter-spacing: 0.5px }` adopted into the shadow root on the hostile page only | the shared panel baseline (1,672 px) |
+| `.panel * { color: #eee }` adopted before the scan | axe `color-contrast` |
+| The quota frame as the API used to write it | `QUOTA_EXCEEDED` — the notice never appears |
+| No `closeDb()` in teardown | the `DISABLED` read-back: a 500 from the dead pool (before that assertion existed, the next case's CORS refusal) |
 
 ---
 
