@@ -3,6 +3,8 @@ import { randomBytes } from 'node:crypto';
 import type { NormalizeFailure, PlanTier } from '@catalogorosso/security';
 import type { DnsFailure, WellKnownFailure } from '@catalogorosso/security/net';
 
+import { PLANS, TRIAL } from './plans.js';
+
 /**
  * What a seller is told when a domain is refused (P4-01, §3.3).
  *
@@ -73,16 +75,16 @@ export const verificationToken = (): string => randomBytes(32).toString('hex');
  * product at all, and this is the screen that gates everything else.
  */
 export const DOMAIN_CAPS: Readonly<Record<PlanTier, number>> = {
-  CANTINA: 1,
-  ECOMMERCE: 2,
-  none: 1,
+  CANTINA: PLANS.CANTINA.productionDomains,
+  ECOMMERCE: PLANS.ECOMMERCE.productionDomains,
+  none: TRIAL.productionDomains,
 };
 
 /** What a seller calls their plan, which is not what the enum calls it. */
 const PLAN_NAMES: Readonly<Record<PlanTier, string>> = {
-  CANTINA: 'Cantina',
-  ECOMMERCE: 'E-commerce',
-  none: 'trial',
+  CANTINA: PLANS.CANTINA.name,
+  ECOMMERCE: PLANS.ECOMMERCE.name,
+  none: TRIAL.name,
 };
 
 export const capFor = (plan: PlanTier): number => DOMAIN_CAPS[plan];

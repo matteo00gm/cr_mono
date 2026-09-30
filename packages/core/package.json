@@ -25,6 +25,10 @@
       "types": "./dist/import-limits.d.ts",
       "default": "./dist/import-limits.js"
     },
+    "./plans": {
+      "types": "./dist/plans.d.ts",
+      "default": "./dist/plans.js"
+    },
     "./variant-id": {
       "types": "./dist/shopify/variant-id.d.ts",
       "default": "./dist/shopify/variant-id.js"
