@@ -771,3 +771,39 @@ describe('the pair a verification earns (P4-05)', () => {
     expect(calls.indexOf('readDomainsFor(winery.com)')).toBeGreaterThan(-1);
   });
 });
+
+describe('a Shopify store’s own address (P4-19)', () => {
+  it.each(['dns', 'wellknown'] as const)(
+    'is refused for %s without a lookup, pointing at the route that will work',
+    async (method) => {
+      /*
+       * Shopify controls the `myshopify.com` zone and the store's web root, so
+       * neither proof can ever succeed — and a check that failed with "record
+       * not found" would send a seller to publish a record they cannot publish.
+       */
+      state.domain = row({
+        origin: 'https://winery.myshopify.com',
+        registrableDomain: 'winery.myshopify.com',
+      });
+
+      const result = await port([['the-nonce']]).verify({
+        tenantId: 't1',
+        domainId: 'd1',
+        method,
+      });
+
+      expect(result).toMatchObject({
+        verified: false,
+        reason: expect.stringContaining('Shopify controls it') as unknown,
+      });
+      expect(calls.some((call) => call.startsWith('markDomainVerified'))).toBe(false);
+      expect(calls.some((call) => call.startsWith('fetch'))).toBe(false);
+      expect(written).toEqual([
+        expect.objectContaining({
+          action: 'domain.verify_failed',
+          metadata: expect.objectContaining({ reason: 'shopify' }) as unknown,
+        }),
+      ]);
+    },
+  );
+});

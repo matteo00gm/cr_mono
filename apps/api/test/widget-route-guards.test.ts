@@ -50,6 +50,7 @@ const FOUND: WidgetResolution = {
   plan: 'CANTINA',
   locale: 'it',
   turnstile: false,
+  originKind: 'production',
 };
 const UNKNOWN: WidgetResolution = { found: false, reason: 'unknown_key' };
 
@@ -252,7 +253,9 @@ describe('POST /v1/widget/session/server (P4-10)', () => {
     plan: 'CANTINA' as const,
     locale: 'it',
     turnstile: false,
+    originKind: 'production',
     verifiedOrigins: [ORIGIN],
+    stagingOrigins: [],
   };
 
   it('mints for a known key and a verified origin', async () => {

@@ -29,6 +29,7 @@ const CANTINA: WidgetTenant = {
   status: 'ACTIVE',
   locale: 'it',
   turnstile: false,
+  originKind: 'production',
 };
 const SECRET = randomUUID();
 
@@ -40,6 +41,7 @@ const ROOMY: WidgetLimits = {
   tenantPerMinute: { CANTINA: 100, ECOMMERCE: 100, none: 100 },
   endpointPerMinute: { config: 100, session: 100, chat: 100 },
   messagesPerMonth: { CANTINA: 100, ECOMMERCE: 100, none: 100 },
+  stagingPerMinute: { config: 100, session: 100, chat: 100 },
 };
 
 /** A limiter that remembers what it was asked. */
@@ -156,7 +158,14 @@ describe('each dimension trips on its own', () => {
   it('per tenant per minute, at the no-subscription tier when there is no plan', async () => {
     const app = widgetApp({
       limiter: memoryRateLimiter(),
-      tenant: { tenantId: TENANT, plan: null, status: 'TRIALING', locale: 'it', turnstile: false },
+      tenant: {
+        tenantId: TENANT,
+        plan: null,
+        status: 'TRIALING',
+        locale: 'it',
+        turnstile: false,
+        originKind: 'production',
+      },
       limits: { ...ROOMY, tenantPerMinute: { ...ROOMY.tenantPerMinute, none: 1 } },
     });
 
@@ -358,5 +367,37 @@ describe('wiring', () => {
       'tenant',
     ]);
     expect(seen[0]?.at(-1)).toMatchObject({ key: `tenant:${TENANT}:month`, window: 'month' });
+  });
+});
+
+describe('a staging origin (P4-19)', () => {
+  it('hits its own limit while production traffic still has room', async () => {
+    /*
+     * The row's test, over the real middleware: a test loop on staging is
+     * stopped at the staging allowance, and a shopper on the production origin
+     * of the same winery, a moment later, is still served.
+     */
+    const { limiter } = recording();
+    const limits: WidgetLimits = { ...ROOMY, stagingPerMinute: { config: 2, session: 2, chat: 2 } };
+    const staging = widgetApp({ limiter, tenant: { ...CANTINA, originKind: 'staging' }, limits });
+    const production = widgetApp({ limiter, tenant: CANTINA, limits });
+
+    expect((await call(staging, 'GET /config')).status).toBe(200);
+    expect((await call(staging, 'GET /config')).status).toBe(200);
+    expect((await call(staging, 'GET /config')).status).toBe(429);
+    expect((await call(production, 'GET /config')).status).toBe(200);
+  });
+
+  it('draws the staging allowance only from a staging origin', async () => {
+    const { seen, limiter } = recording();
+
+    await call(widgetApp({ limiter, tenant: CANTINA }), 'GET /config');
+    await call(
+      widgetApp({ limiter, tenant: { ...CANTINA, originKind: 'staging' } }),
+      'GET /config',
+    );
+
+    expect(seen[0]?.some((check) => check.key.startsWith('staging:'))).toBe(false);
+    expect(seen[1]?.some((check) => check.key === `staging:${TENANT}:config`)).toBe(true);
   });
 });

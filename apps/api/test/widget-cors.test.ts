@@ -37,6 +37,7 @@ const FOUND_A: WidgetResolution = {
   plan: 'CANTINA',
   locale: 'it',
   turnstile: false,
+  originKind: 'production',
 };
 
 /**
@@ -131,6 +132,7 @@ describe('an allowed request', () => {
         status: 'ACTIVE',
         locale: 'it',
         turnstile: false,
+        originKind: 'production',
       },
     });
   });
@@ -539,5 +541,20 @@ describe('what a refusal hands the recorder (P2-16)', () => {
     expect(rejected[0]?.ipBucket).toBeUndefined();
     // A real key from a site its winery has not verified: the theft signal (§3.2).
     expect(rejected[0]?.type).toBe('UNAUTHORIZED_ORIGIN');
+  });
+});
+
+describe('the kind of origin (P4-19)', () => {
+  it('passes the resolved kind on, so a staging origin draws its lower allowance', async () => {
+    const app = widgetApp({
+      resolve: resolver({ [`${KEY_A} ${ORIGIN_A}`]: { ...FOUND_A, originKind: 'staging' } })
+        .resolve,
+    });
+
+    const response = await request(app, { origin: ORIGIN_A, key: KEY_A });
+
+    expect(((await response.json()) as { tenant: { originKind: string } }).tenant.originKind).toBe(
+      'staging',
+    );
   });
 });

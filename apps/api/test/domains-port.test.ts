@@ -23,6 +23,7 @@ interface Row {
   origin: string;
   registrableDomain: string;
   status: 'PENDING' | 'VERIFIED';
+  kind: 'production' | 'staging';
   verificationToken: string | null;
   verificationExpiresAt: Date | null;
   createdAt: Date;
@@ -36,7 +37,16 @@ const state = {
   atCap: false,
   /** What the insert was actually handed, which the response does not echo. */
   written: undefined as
-    { origin: string; registrableDomain: string; verificationToken: string } | undefined,
+    | {
+        origin: string;
+        registrableDomain: string;
+        verificationToken: string;
+        kind?: string;
+        coveredBy?: string;
+      }
+    | undefined,
+  /** Whether this winery has proved the registrable domain's zone by DNS (P4-19). */
+  zoneProved: false,
   /** The cap the port computed, which is the thing the plan table decides. */
   cap: undefined as number | undefined,
 };
@@ -46,6 +56,7 @@ const row = (origin: string, overrides: Partial<Row> = {}): Row => ({
   origin,
   registrableDomain: 'winery.com',
   status: 'PENDING',
+  kind: 'production',
   verificationToken: 'nonce',
   verificationExpiresAt: new Date('2026-10-02T09:00:00.000Z'),
   createdAt: new Date('2026-09-25T09:00:00.000Z'),
@@ -74,7 +85,13 @@ vi.mock('@catalogorosso/db', () => ({
   },
   insertDomain: (
     _tx: unknown,
-    domain: { origin: string; registrableDomain: string; verificationToken: string },
+    domain: {
+      origin: string;
+      registrableDomain: string;
+      verificationToken: string;
+      kind?: string;
+      coveredBy?: string;
+    },
     cap: number,
   ) => {
     calls.push(`insertDomain(${domain.origin})`);
@@ -93,6 +110,11 @@ vi.mock('@catalogorosso/db', () => ({
     calls.push('readTenantPlan');
 
     return Promise.resolve(state.plan);
+  },
+  provesZone: (_tx: unknown, registrable: string) => {
+    calls.push(`provesZone(${registrable})`);
+
+    return Promise.resolve(state.zoneProved);
   },
 }));
 
@@ -131,6 +153,7 @@ beforeEach(() => {
   state.plan = null;
   state.atCap = false;
   state.committed = true;
+  state.zoneProved = false;
 });
 
 describe('adding a domain', () => {
@@ -391,5 +414,64 @@ describe('with no port configured', () => {
     await expect(unconfiguredDomains.add({ tenantId: 't1', input: 'winery.com' })).rejects.toThrow(
       /composition root/iu,
     );
+  });
+});
+
+describe('staging and covered origins (P4-19)', () => {
+  it('counts a staging origin against the staging cap, not the plan', async () => {
+    state.plan = 'CANTINA';
+    state.inserted = row('https://staging.winery.com', { kind: 'staging' });
+
+    await expect(
+      createDomainsPort({ audit: record }).add({
+        tenantId: 't1',
+        input: 'staging.winery.com',
+        kind: 'staging',
+      }),
+    ).resolves.toMatchObject({ domain: { kind: 'staging' } });
+    expect(state.cap).toBe(2);
+    expect(state.written).toMatchObject({ kind: 'staging' });
+  });
+
+  it('says the staging cap, not the plan, when staging is full', async () => {
+    state.atCap = true;
+
+    await expect(
+      createDomainsPort({ audit: record }).add({
+        tenantId: 't1',
+        input: 'staging.winery.com',
+        kind: 'staging',
+      }),
+    ).rejects.toMatchObject({
+      kind: 'conflict',
+      message: expect.stringContaining('staging') as unknown,
+    });
+  });
+
+  it('lands an origin under a zone already proved by DNS as verified, with nothing to publish', async () => {
+    state.zoneProved = true;
+    state.inserted = row('https://shop.winery.com', {
+      status: 'VERIFIED',
+      verificationToken: null,
+    });
+
+    await createDomainsPort({ audit: record }).add({ tenantId: 't1', input: 'shop.winery.com' });
+
+    expect(calls).toContain('provesZone(winery.com)');
+    expect(state.written).toMatchObject({ coveredBy: 'DNS_TXT', kind: 'production' });
+    expect(written).toEqual([
+      expect.objectContaining({
+        action: 'domain.added',
+        metadata: expect.objectContaining({ covered: true, kind: 'production' }) as unknown,
+      }),
+    ]);
+  });
+
+  it('asks for a proof where the zone has not been proved by DNS', async () => {
+    state.inserted = row('https://shop.winery.com');
+
+    await createDomainsPort({ audit: record }).add({ tenantId: 't1', input: 'shop.winery.com' });
+
+    expect(state.written?.coveredBy).toBeUndefined();
   });
 });

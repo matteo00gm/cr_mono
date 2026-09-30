@@ -73,6 +73,7 @@ const deps = (overrides: Partial<ServerSessionDeps> = {}, allowed = true): Serve
               plan: 'ECOMMERCE',
               locale: 'it',
               verifiedOrigins: [ORIGIN, 'https://winery.com'],
+              stagingOrigins: [],
             }
           : undefined,
       );
@@ -295,6 +296,7 @@ describe('the origin a server asks for', () => {
           plan: 'ECOMMERCE',
           locale: 'it',
           verifiedOrigins: [local],
+          stagingOrigins: [],
         }),
     });
 
@@ -364,6 +366,7 @@ describe('a winery the widget does not run for', () => {
                 plan: 'ECOMMERCE',
                 locale: 'it',
                 verifiedOrigins: [ORIGIN],
+                stagingOrigins: [],
               }),
           }),
         ),

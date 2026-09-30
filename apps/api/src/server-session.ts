@@ -143,6 +143,8 @@ export const mintServerSession = async (
      * one (P4-14).
      */
     turnstile: false,
+    /* A staging origin draws its lower allowance on this path too (P4-19). */
+    originKind: tenant.stagingOrigins.includes(normalised.origin) ? 'staging' : 'production',
   };
 
   /*

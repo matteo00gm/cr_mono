@@ -53,6 +53,7 @@ const found = (over: Partial<Found> = {}): Found => ({
   plan: 'CANTINA',
   locale: 'it',
   turnstile: false,
+  originKind: 'production',
   ...over,
 });
 
@@ -288,6 +289,7 @@ describe('mintWidgetSession', () => {
         status: 'ACTIVE',
         locale: 'en',
         turnstile: false,
+        originKind: 'production',
       },
       origin: ORIGIN,
       now,
@@ -313,6 +315,7 @@ describe('mintWidgetSession', () => {
     status: 'ACTIVE',
     locale: 'it',
     turnstile: false,
+    originKind: 'production',
   } as const;
   const notRevoked = () => Promise.resolve(false);
 

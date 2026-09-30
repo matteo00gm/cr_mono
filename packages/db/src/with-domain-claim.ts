@@ -183,6 +183,7 @@ export const settleDomainClaim = async (
       SELECT count(DISTINCT registrable_domain)::int AS held,
              coalesce(bool_or(registrable_domain = ${claim.registrable_domain}), false) AS covered
       FROM tenant_domains
+      WHERE kind = 'production'
     `);
     const { held, covered } = [...counts][0] as { held: number; covered: boolean };
 

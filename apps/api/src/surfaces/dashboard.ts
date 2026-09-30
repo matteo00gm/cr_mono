@@ -449,6 +449,18 @@ const simulationRequest = z
 const domainBody = z.object({ domain: z.string().min(1).max(300) }).strict();
 
 /**
+ * What adding a domain takes: the domain, and optionally that it is where the
+ * seller tests rather than where shoppers buy (P4-19). A claim takes only the
+ * domain — a claimed origin is always production.
+ */
+const addDomainBody = z
+  .object({
+    domain: z.string().min(1).max(300),
+    kind: z.enum(['production', 'staging']).optional(),
+  })
+  .strict();
+
+/**
  * `Cache-Control: no-store` on the way out (P4-09).
  *
  * Set after the handler runs, so it lands on the response actually sent —
@@ -1402,7 +1414,7 @@ export const createDashboardApp = ({
    * different rows.
    */
   app.post('/domains', requireCapability('domains:manage'), async (c) => {
-    const parsed = domainBody.safeParse(await readJson(c));
+    const parsed = addDomainBody.safeParse(await readJson(c));
 
     if (!parsed.success) {
       throw new InvalidRequestError('Send a JSON body carrying the domain to add.');
@@ -1413,6 +1425,7 @@ export const createDashboardApp = ({
         /* From a `memberships` row, never from the body (P0-48). */
         tenantId: c.get('tenantId'),
         input: parsed.data.domain,
+        kind: parsed.data.kind,
       }),
       201,
     );
@@ -2095,13 +2108,19 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'other winery would make this an oracle for enumerating who our customers are. An ' +
         'origin this winery already holds is answered with the row it has, so the screen can ' +
         'show the token again rather than reporting a conflict that is not one. Every ' +
-        'attempt is audited, including the refused ones, which are the interesting ones.',
+        'attempt is audited, including the refused ones, which are the interesting ones. ' +
+        '`kind: "staging"` marks an origin the seller tests on (P4-19): it has its own cap of ' +
+        'two, outside the plan, and a lower rate limit, and shares the monthly quota. An origin ' +
+        'under a registrable domain this winery has already proved by DNS lands `VERIFIED` ' +
+        'with no new record to publish, because the TXT record proved the zone every subdomain ' +
+        'is created in; a file proof covers only its own host.',
       example: {
         domain: {
           id: '9f0b2d41-6c3a-4e8b-9d27-1a5c8e3f7b40',
           origin: 'https://www.winery.com',
           registrableDomain: 'winery.com',
           status: 'PENDING',
+          kind: 'production',
           verificationToken: null,
           verificationExpiresAt: '2026-10-03T09:00:00.000Z',
           createdAt: '2026-09-25T09:00:00.000Z',
@@ -2304,6 +2323,7 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
           origin: 'https://www.winery.com',
           registrableDomain: 'winery.com',
           status: 'VERIFIED',
+          kind: 'production',
           verificationToken: null,
           verificationExpiresAt: null,
           createdAt: '2026-09-25T09:00:00.000Z',

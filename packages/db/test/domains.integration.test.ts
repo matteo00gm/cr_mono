@@ -94,11 +94,16 @@ afterAll(async () => {
 /** A generous cap, so the cases that are not about the cap are not about it. */
 const ROOMY = 100;
 
-const attempt = (tenant: string, origin: string, token = 'a-nonce', cap = ROOMY) =>
+const attempt = (
+  tenant: string,
+  origin: string,
+  token = 'a-nonce',
+  cap = ROOMY,
+  registrableDomain = 'winery.com',
+) =>
   withTenant(
     tenant,
-    (tx) =>
-      insertDomain(tx, { origin, registrableDomain: 'winery.com', verificationToken: token }, cap),
+    (tx) => insertDomain(tx, { origin, registrableDomain, verificationToken: token }, cap),
     db,
   );
 
@@ -249,7 +254,10 @@ describe('the plan cap', () => {
     await expect(attempt(CAPPED, 'https://capped-one.winery.com', 'n', 1)).resolves.toMatchObject({
       outcome: 'created',
     });
-    await expect(attempt(CAPPED, 'https://capped-two.winery.com', 'n', 1)).resolves.toEqual({
+    /* A second registrable domain: a subdomain of the first would cost no slot (P4-19). */
+    await expect(
+      attempt(CAPPED, 'https://capped-two.example', 'n', 1, 'capped-two.example'),
+    ).resolves.toEqual({
       outcome: 'at-cap',
       held: 1,
     });
@@ -339,11 +347,13 @@ describe('the plan cap', () => {
     await held;
 
     let settled = false;
-    const second = attempt(RACING, 'https://race-two.winery.com', 'n', 1).then((result) => {
-      settled = true;
+    const second = attempt(RACING, 'https://race-two.example', 'n', 1, 'race-two.example').then(
+      (result) => {
+        settled = true;
 
-      return result;
-    });
+        return result;
+      },
+    );
 
     await new Promise((resolve) => {
       setTimeout(resolve, 300);

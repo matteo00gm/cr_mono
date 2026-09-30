@@ -6,12 +6,16 @@ import {
   dnsRefusalMessage,
   InvalidRequestError,
   isOurFault,
+  isShopifyStoreDomain,
   LAST_DOMAIN_WARNING,
   METHOD_COLUMN,
   NotFoundError,
   ORIGIN_UNAVAILABLE,
   RateLimitedError,
   refusalMessage,
+  SHOPIFY_UNVERIFIABLE,
+  STAGING_CAP_MESSAGE,
+  STAGING_DOMAIN_CAP,
   verificationToken,
   VERIFY_ATTEMPTS,
   siblingOrigin,
@@ -34,6 +38,8 @@ import {
   readTenantPlan,
   reissueVerification,
   withTenant,
+  provesZone,
+  type DomainKind,
   type DomainRow,
 } from '@catalogorosso/db';
 import { normalizeOrigin, type PlanTier, type RateLimiter } from '@catalogorosso/security';
@@ -69,6 +75,8 @@ export interface AddDomainCommand {
   readonly tenantId: string;
   /** Whatever the seller typed. Normalised here, never trusted as given. */
   readonly input: string;
+  /** Production unless the seller says it is where they test (P4-19). */
+  readonly kind?: DomainKind | undefined;
 }
 
 export interface AddDomainResult {
@@ -130,6 +138,7 @@ interface Checked {
 type Outcome =
   | { readonly refused: 'taken' }
   | { readonly refused: 'at-cap'; readonly plan: PlanTier; readonly cap: number }
+  | { readonly refused: 'staging-cap' }
   | { readonly refused: false; readonly domain: DomainRow; readonly created: boolean };
 
 /** The wire shape: JSON has no `Date`. */
@@ -138,6 +147,7 @@ const toResponse = (row: DomainRow): Domain => ({
   origin: row.origin,
   registrableDomain: row.registrableDomain,
   status: row.status,
+  kind: row.kind,
   verificationToken: row.verificationToken,
   verificationExpiresAt: row.verificationExpiresAt?.toISOString() ?? null,
   createdAt: row.createdAt.toISOString(),
@@ -227,7 +237,16 @@ const createDomainMethods = ({
        * signup and checkout, and `capFor` gives it the entry allowance.
        */
       const plan: PlanTier = (await readTenantPlan(tx)) ?? 'none';
-      const cap = capFor(plan);
+      const kind: DomainKind = command.kind ?? 'production';
+      const cap = kind === 'staging' ? STAGING_DOMAIN_CAP : capFor(plan);
+
+      /*
+       * **A zone already proved by DNS covers the new origin** (P4-19): the
+       * seller published a TXT record where every subdomain is created, so
+       * `staging.winery.com` is inside what they proved, and asking again is
+       * how a seller gives up testing. A file proof covers only its own host.
+       */
+      const covered = await provesZone(tx, normalised.registrableDomain);
 
       /*
        * The count and the insert are one statement sequence inside one
@@ -241,6 +260,8 @@ const createDomainMethods = ({
           origin: normalised.origin,
           registrableDomain: normalised.registrableDomain,
           verificationToken: newToken(),
+          kind,
+          ...(covered ? { coveredBy: 'DNS_TXT' as const } : {}),
         },
         cap,
       );
@@ -259,14 +280,16 @@ const createDomainMethods = ({
       await record(tx, {
         action: attempt.outcome === 'created' ? 'domain.added' : `domain.add_${attempt.outcome}`,
         target: normalised.origin,
-        metadata: { registrableDomain: normalised.registrableDomain, plan },
+        metadata: { registrableDomain: normalised.registrableDomain, plan, kind, covered },
       });
 
       if (attempt.outcome === 'created') {
         return { refused: false, domain: attempt.domain, created: true };
       }
 
-      return attempt.outcome === 'taken' ? { refused: 'taken' } : { refused: 'at-cap', plan, cap };
+      if (attempt.outcome === 'taken') return { refused: 'taken' };
+
+      return kind === 'staging' ? { refused: 'staging-cap' } : { refused: 'at-cap', plan, cap };
     });
 
     /*
@@ -276,6 +299,7 @@ const createDomainMethods = ({
      * and naming anything about it would be an oracle.
      */
     if (outcome.refused === 'taken') throw new ConflictError(ORIGIN_UNAVAILABLE);
+    if (outcome.refused === 'staging-cap') throw new ConflictError(STAGING_CAP_MESSAGE);
     if (outcome.refused === 'at-cap') {
       throw new ConflictError(capMessage(outcome.plan, outcome.cap));
     }
@@ -391,6 +415,24 @@ const createDomainMethods = ({
      * satisfied, and a screen that errors on a second click is worse. */
     if (domain.status === 'VERIFIED') {
       return { domain: toResponse(domain), verified: true };
+    }
+
+    /*
+     * **Neither proof can ever succeed on a Shopify store's own address**
+     * (P4-19): Shopify controls that zone and that web root. Said before any
+     * network call, and audited like any failed check, so a seller is pointed
+     * at the route that will work instead of retrying one that cannot.
+     */
+    if (isShopifyStoreDomain(domain.registrableDomain)) {
+      await withTenant(command.tenantId, (tx) =>
+        record(tx, {
+          action: 'domain.verify_failed',
+          target: domain.origin,
+          metadata: { reason: 'shopify', method: METHOD_COLUMN[command.method] },
+        }),
+      );
+
+      return { domain: toResponse(domain), verified: false, reason: SHOPIFY_UNVERIFIABLE };
     }
 
     if (domain.verificationToken === null) {

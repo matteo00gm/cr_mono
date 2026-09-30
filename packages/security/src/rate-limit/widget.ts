@@ -42,6 +42,14 @@ export interface WidgetLimits {
   readonly endpointPerMinute: Readonly<Record<WidgetEndpoint, number>>;
   /** Chat messages per tenant per UTC calendar month — the billing boundary. */
   readonly messagesPerMonth: Readonly<Record<PlanTier, number>>;
+  /**
+   * Per tenant, per endpoint, per minute, **from its staging origins alone**
+   * (P4-19). Well under the production endpoint limits, so a test loop left
+   * running on staging is stopped long before it could crowd out shoppers — and
+   * counted in addition to every other dimension, so staging traffic still
+   * spends the tenant-wide allowances and the monthly quota it shares.
+   */
+  readonly stagingPerMinute: Readonly<Record<WidgetEndpoint, number>>;
 }
 
 /**
@@ -70,6 +78,7 @@ export const WIDGET_LIMITS: WidgetLimits = {
   tenantPerMinute: { CANTINA: 60, ECOMMERCE: 120, none: 30 },
   endpointPerMinute: { config: 120, session: 60, chat: 60 },
   messagesPerMonth: { CANTINA: 1_500, ECOMMERCE: 6_000, none: 150 },
+  stagingPerMinute: { config: 30, session: 10, chat: 10 },
 };
 
 export interface WidgetRequest {
@@ -81,6 +90,8 @@ export interface WidgetRequest {
   readonly ipBucket: string;
   /** Present once a session token has been verified (P2-13). */
   readonly sessionId?: string | undefined;
+  /** Which kind of origin the request came from (P4-19). Production when absent. */
+  readonly originKind?: 'production' | 'staging' | undefined;
 }
 
 const MINUTE = 60;
@@ -166,6 +177,15 @@ export const widgetLimitChecks = (
       windowSec: MINUTE,
     },
   );
+
+  /* A staging origin's own, lower allowance, on top of everything above (P4-19). */
+  if (request.originKind === 'staging') {
+    checks.push({
+      key: `staging:${tenantId}:${endpoint}`,
+      limit: limits.stagingPerMinute[endpoint],
+      windowSec: MINUTE,
+    });
+  }
 
   /*
    * Only chat counts against the month. A message is what a plan sells, and

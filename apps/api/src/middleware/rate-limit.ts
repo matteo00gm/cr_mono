@@ -85,6 +85,8 @@ export const limitWidgetRequest =
           ipBucket: visitorBucket(c.req.header('x-forwarded-for'), ipSecret, now()),
           // Set only by requireWidgetToken (P2-13), on a route that needs a session; absent otherwise.
           sessionId: c.get('widgetSessionId'),
+          /* A staging origin draws its own, lower allowance as well (P4-19). */
+          originKind: tenant.originKind,
         },
         limits,
       ),

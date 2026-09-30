@@ -49,6 +49,7 @@ const FOUND: WidgetResolution = {
   plan: 'CANTINA',
   locale: 'it',
   turnstile: false,
+  originKind: 'production',
 };
 
 let keys: WidgetTokenKeys;

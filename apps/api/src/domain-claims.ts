@@ -14,9 +14,11 @@ import {
   getRequestActor,
   InvalidRequestError,
   isOurFault,
+  isShopifyStoreDomain,
   NotFoundError,
   RateLimitedError,
   refusalMessage,
+  SHOPIFY_UNVERIFIABLE,
   verificationToken,
   VERIFY_ATTEMPTS,
   VERIFY_WINDOW_SEC,
@@ -130,6 +132,7 @@ const toDomain = (row: DomainRow): Domain => ({
   origin: row.origin,
   registrableDomain: row.registrableDomain,
   status: row.status,
+  kind: row.kind,
   verificationToken: row.verificationToken,
   verificationExpiresAt: row.verificationExpiresAt?.toISOString() ?? null,
   createdAt: row.createdAt.toISOString(),
@@ -283,6 +286,11 @@ export const createDomainClaims = ({
       const normalised = normalizeOrigin(command.input, { environment });
 
       if (!normalised.ok) throw new InvalidRequestError(refusalMessage(normalised.reason));
+
+      /* A claim is proved by DNS, which Shopify's own zone can never carry (P4-19). */
+      if (isShopifyStoreDomain(normalised.registrableDomain)) {
+        throw new ConflictError(SHOPIFY_UNVERIFIABLE);
+      }
 
       const outcome = await withTenant(command.tenantId, async (tx) => {
         /* A claim on an origin this winery holds would be a claim against itself. */

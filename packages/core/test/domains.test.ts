@@ -10,6 +10,10 @@ import {
   LAST_DOMAIN_WARNING,
   METHOD_COLUMN,
   ORIGIN_UNAVAILABLE,
+  isShopifyStoreDomain,
+  SHOPIFY_UNVERIFIABLE,
+  STAGING_CAP_MESSAGE,
+  STAGING_DOMAIN_CAP,
   refusalMessage,
   siblingOrigin,
   verificationToken,
@@ -306,5 +310,32 @@ describe('the tag a seller pastes (P4-08)', () => {
     expect(snippet).not.toContain('"><script>');
     expect(snippet).toContain('pk&quot;&gt;&lt;script&gt;x&lt;/script&gt;');
     expect(snippet).toContain('a&quot;b&amp;c');
+  });
+});
+
+describe('staging domains (P4-19)', () => {
+  it('are capped at two, outside the plan', () => {
+    expect(STAGING_DOMAIN_CAP).toBe(2);
+    expect(STAGING_CAP_MESSAGE).toContain('up to 2 staging domains');
+  });
+});
+
+describe('a Shopify store’s own address (P4-19)', () => {
+  it.each(['winery.myshopify.com', 'a-b.myshopify.com'])('is recognised: %s', (domain) => {
+    expect(isShopifyStoreDomain(domain)).toBe(true);
+  });
+
+  it.each(['myshopify.com.evil.com', 'notmyshopify.com', 'winery.com', 'myshopify.com'])(
+    'is not mistaken for one: %s',
+    (domain) => {
+      /* Suffix after a dot, so a lookalike registered elsewhere is not exempted
+       * from the proofs every other domain takes. */
+      expect(isShopifyStoreDomain(domain)).toBe(false);
+    },
+  );
+
+  it('points the seller somewhere that will work', () => {
+    expect(SHOPIFY_UNVERIFIABLE).toMatch(/Shopify controls it/u);
+    expect(SHOPIFY_UNVERIFIABLE).toMatch(/contact support/u);
   });
 });
