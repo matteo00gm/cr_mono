@@ -474,6 +474,32 @@ export const usageResponse = z.strictObject({
 export type UsageResponse = z.infer<typeof usageResponse>;
 
 /**
+ * The funnel (P6-02, §2.4): visits reaching each stage over a range of whole
+ * UTC days, both included, and the share of each step.
+ *
+ * A stage counts every visit that reached it or a later one, so the numbers
+ * never grow down the funnel and a rate is never over one. `rate` is `null`
+ * for the first stage, and after a stage nobody reached. The last stage is an
+ * add to cart: an order is not seen until the Shopify webhook is connected.
+ */
+export const funnelResponse = z.strictObject({
+  /** `YYYY-MM-DD`, UTC, the first day counted. */
+  from: z.iso.date(),
+  /** `YYYY-MM-DD`, UTC, the last day counted. */
+  to: z.iso.date(),
+  stages: z.array(
+    z.strictObject({
+      stage: z.enum(['WIDGET_OPEN', 'MESSAGE_SENT', 'RECOMMENDATION_SHOWN', 'ADD_TO_CART']),
+      /** Visits: the anonymous per-tab id the widget's events carry. */
+      sessions: tally,
+      rate: z.number().min(0).max(1).nullable(),
+    }),
+  ),
+});
+
+export type FunnelResponse = z.infer<typeof funnelResponse>;
+
+/**
  * A plan change, asked for (P5-09). `now` is an upgrade — prorated, with the
  * new limits as soon as Stripe confirms the payment; `period_end` is a
  * downgrade, which takes effect at `effectiveAt` and not before.
@@ -911,6 +937,7 @@ export const DASHBOARD_RESPONSES = {
   'POST /v1/dashboard/billing/plan': billingPlanChangeResponse,
   'POST /v1/dashboard/billing/top-up': billingTopUpResponse,
   'GET /v1/dashboard/usage': usageResponse,
+  'GET /v1/dashboard/analytics/funnel': funnelResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

@@ -44,6 +44,7 @@ export interface NavItem {
 export const NAV: readonly NavItem[] = [
   { href: '/', label: 'Panoramica' },
   { href: '/catalogo', label: 'Catalogo', capability: 'catalog:write' },
+  { href: '/analisi', label: 'Analisi', capability: 'analytics:read' },
   { href: '/conversazioni', label: 'Conversazioni', capability: 'analytics:read' },
   { href: '/membri', label: 'Membri', capability: 'members:manage' },
   { href: '/domini', label: 'Domini', capability: 'domains:manage' },

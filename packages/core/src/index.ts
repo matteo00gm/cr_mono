@@ -26,6 +26,8 @@ export * from './billing/synthetic-events.js';
 export * from './domains.js';
 export * from './domain-claims.js';
 export * from './dev-mode.js';
+export * from './analytics/funnel.js';
+export * from './analytics/range.js';
 
 /**
  * What a turn cost (P2-31).

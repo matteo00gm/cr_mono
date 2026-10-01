@@ -621,3 +621,6 @@ export {
 
 /** The analytics writer (P6-01): a widget batch in one statement, under the scope's tenant. */
 export { recordWidgetEvents, type EventBatch, type EventToRecord } from './widget-events.js';
+
+/** The funnel's counts (P6-02): visits reaching each stage, read in the scope's tenant. */
+export { readFunnel, type FunnelQuery } from './funnel.js';

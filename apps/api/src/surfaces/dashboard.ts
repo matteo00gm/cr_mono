@@ -8,6 +8,7 @@ import {
   billingPlanChangeResponse,
   billingPortalResponse,
   billingTopUpResponse,
+  funnelResponse,
   usageResponse,
   catalogueReindexedResponse,
   claimWithdrawnResponse,
@@ -53,6 +54,7 @@ import {
   MAX_IMPORT_ROWS,
   NotFoundError,
   PLAN_IDS,
+  RANGE_EXPECTED,
   rangeOfBand,
   readVariantId,
   VARIANT_ID_EXPECTED,
@@ -69,6 +71,7 @@ import {
   type ProductInsert,
 } from '@catalogorosso/db';
 
+import { unconfiguredAnalytics, type AnalyticsPort } from '../analytics.js';
 import { unconfiguredBilling, type BillingPort } from '../billing.js';
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
@@ -157,6 +160,12 @@ export interface DashboardOptions {
    * call with a wiring error, never a Checkout page for the wrong thing.
    */
   readonly billing?: BillingPort | undefined;
+  /**
+   * The analytics panels (P6). Optional on the same terms: absent refuses
+   * every call with a wiring error, never an empty funnel a seller would read
+   * as a quiet month.
+   */
+  readonly analytics?: AnalyticsPort | undefined;
   /** Where state-changing requests must come from (review, R5). */
   readonly dashboardOrigin?: string | undefined;
 }
@@ -504,6 +513,16 @@ const verifyBody = z.object({ method: z.enum(VERIFY_METHODS) }).strict();
  */
 const checkoutBody = z.object({ plan: z.enum(PLAN_IDS) }).strict();
 
+/**
+ * An analytics range (P6-02): two optional days, and nothing else read. Whether
+ * they make a range is core's `analyticsRange`, which takes nothing that is not
+ * exactly `YYYY-MM-DD`.
+ */
+const rangeQuery = z.object({
+  from: z.string().optional(),
+  to: z.string().optional(),
+});
+
 export const createDashboardApp = ({
   auth,
   readMemberships,
@@ -515,6 +534,7 @@ export const createDashboardApp = ({
   keys = unconfiguredKeys,
   turnstileSettings = unconfiguredTurnstileSettings,
   billing = unconfiguredBilling,
+  analytics = unconfiguredAnalytics,
 }: DashboardOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
@@ -1369,6 +1389,19 @@ export const createDashboardApp = ({
   app.get('/usage', requireCapability('analytics:read'), async (c) =>
     c.json(await billing.usage(c.get('tenantId'))),
   );
+
+  /**
+   * The funnel (P6-02, §2.4): visits reaching each stage over a range of whole
+   * UTC days. **Every member**, through `analytics:read`. The range is read
+   * here and checked in `packages/core`, which says what is wrong with one.
+   */
+  app.get('/analytics/funnel', requireCapability('analytics:read'), async (c) => {
+    const parsed = rangeQuery.safeParse(c.req.query());
+
+    if (!parsed.success) throw new InvalidRequestError(RANGE_EXPECTED);
+
+    return c.json(await analytics.funnel(c.get('tenantId'), parsed.data));
+  });
 
   app.post('/keys', requireCapability('keys:manage'), stepUp, async (c) =>
     c.json(await keys.create(c.get('tenantId')), 201),
@@ -2444,6 +2477,34 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         byOrigin: [{ origin: 'https://www.cantina.example', messages: 1_230 }],
       },
       response: usageResponse,
+    },
+  ],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/analytics/funnel`),
+    {
+      access: requires('analytics:read'),
+      summary: 'Visits reaching each stage of the funnel',
+      description:
+        'How many visits opened the sommelier, asked something, were shown a recommendation and ' +
+        'added a wine to the cart, between `from` and `to` (whole UTC days, both included, ' +
+        '`YYYY-MM-DD`; the last thirty days when absent, a year at most). A visit is the ' +
+        "widget's anonymous per-tab id, and counts at every stage up to the furthest it " +
+        'reached, so the numbers never grow down the funnel. `rate` is the share of the ' +
+        'previous stage, null for the first and after a stage nobody reached. The last stage is ' +
+        'an add to cart, not a sale: an order is seen only once the Shopify webhook is ' +
+        'connected. A range that is not one is refused with a 422 saying what is wanted. ' +
+        'Readable by every member.',
+      example: {
+        from: '2026-09-02',
+        to: '2026-10-01',
+        stages: [
+          { stage: 'WIDGET_OPEN', sessions: 1_200, rate: null },
+          { stage: 'MESSAGE_SENT', sessions: 480, rate: 0.4 },
+          { stage: 'RECOMMENDATION_SHOWN', sessions: 360, rate: 0.75 },
+          { stage: 'ADD_TO_CART', sessions: 45, rate: 0.125 },
+        ],
+      },
+      response: funnelResponse,
     },
   ],
   [
