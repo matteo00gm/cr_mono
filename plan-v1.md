@@ -1417,7 +1417,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 
 | # | Task | How / notes | Deps |
 |---|---|---|---|
-| P5-14 | 🔒 Tenant lifecycle fixtures | Stripe test clocks + failing test cards + non-prod forced-status endpoint; one tenant per state | P5-06 |
+| ✅ P5-14 | 🔒 Tenant lifecycle fixtures | Stripe test clocks + failing test cards + non-prod forced-status endpoint; one tenant per state | P5-06 |
 | P3-22 | Widget state matrix E2E | every tenant state → rendered widget; mid-conversation block, stale edge cache, capped-vs-blocked, auto-recovery | P5-14 |
 | P6-01 | Event ingestion endpoint | batched, rate-limited | P3-20 |
 | P6-02 | Funnel query + dashboard panel | open → message → recommendation → add-to-cart | P6-01 |
@@ -7391,6 +7391,24 @@ Quota check reads `current_usage < (plan_cap + purchased_top_up_messages)`.
 **Tests.** Each fixture lands in the intended status **via the webhook path**, not a direct write; the dev endpoint is absent from the production route table (asserted in CI, not just by convention); a test clock advanced past trial end produces `DISABLED`.
 
 **Files.** `scripts/seed-states.ts`, `apps/api/src/routes/dev.ts`, `packages/testing/src/stripe-clock.ts`, tests. **~170 lines.**
+
+**As built (2026-10-01).** `syntheticBillingEvent` in `packages/core/src/billing/synthetic-events.ts`; `createDevBillingPort` (`apps/api/src/dev-billing.ts`) and `createDevApp` (`apps/api/src/surfaces/dev.ts`, rather than a `routes/` directory this codebase does not have); `seedStates` and the test-clock helpers in `packages/testing`; `scripts/seed-states.mjs` behind `pnpm seed:states`; `docs/runbooks/billing-states.md`.
+
+- **Every paid state by the webhook path.** A transition (`activate`, `fail_payment`, `recover`, `end_subscription`) is a Stripe-shaped event we write — the shapes the readers parse at the pinned version, test mode, `evt_dev_…` ids — recorded through the same port a signed delivery reaches: attributed, claimed, run through the state machine, audited. A state the machine would refuse is refused here too, and the answer says whether the event applied.
+- **⚠ `POST /v1/dev/billing-state` acts on the session's own winery** *(deviation from `/v1/dev/tenants/:id/status`)*. A tenant id in the path is the read CLAUDE.md forbids (P0-48), and a dev stage holds real accounts too. So the route runs the dashboard's chain — same origin, a session, the tenant from a membership, `billing:manage` with its second factor — and takes a transition, not a status: a status written directly would skip the machine the fixtures exist to exercise.
+- **Absent in production, by one check that can fail.** The composition root wires the port only off production, and `createApp` refuses to start a production app with any route under `/v1/dev` — which also catches the port being handed in by mistake, since mounting it is what creates the route. `dev-surface.test.ts` builds the production app from the composition root and asserts the table holds none, in CI.
+- **`seedStates`**: the plan's eight wineries, each with its own storefront origin (4201–4208), a key and three wines, as `app_rw` under each winery's scope. The trials start as the verify route starts them (`startTrial`); the capped states are real ledger rows; **one fixture fakes time** — `trialing-expired` has its trial date written into the past, because our trial is card-free and lives in `trial_ends_at` (P5-05a), so neither a webhook nor a Stripe test clock can end it. **⚠ `canceled` is `subscription-ended`, in `DISABLED`** *(the plan's name, corrected)*: a deleted subscription disables the widget and clears the subscription (P5-05); `CANCELED` is a closed account, which nothing from Stripe produces.
+- **`pnpm seed:states [--serve]`** seeds against a running stack and prints each fixture's status, expected widget, origin and key; `--serve` puts a storefront on each origin. It refuses `SST_STAGE=production`.
+- **Stripe test clocks** (`stripe-clock.ts`): create a clock and a customer on it, advance and wait until Stripe has run everything due. Test-mode keys only, refused otherwise and never echoed; a refusal reports Stripe's type and code, never its prose. **⚠ The row's "a test clock advanced past trial end produces `DISABLED`" does not apply**: we run no Stripe-side trials, so the clock is for renewals and retries — the runbook says how, with the two test cards. Exercising it needs the stage's Stripe test key: an operator step.
+
+**Verified.** 5,152 unit tests and the full integration suite (81 files, 1,059 tests — one rate-limiter conformance case failed once under load and passed three reruns, a window-edge flake flagged separately). Unit, route, composition and script suites; against real Postgres, every fixture landing in its recipe's status, the paid ones through one or two claimed, audited Stripe events, an ended subscription cleared, and the gate serving exactly the running trial and the paying winery. Run against the local stack, `pnpm seed:states` printed all eight where the recipes put them. 10 mutants, 10 killed.
+
+| Mutation | Caught by |
+|---|---|
+| An activation left unpaid · a second activation written · a failure written as a success | `synthetic-events.test.ts` |
+| A refusal escaping as a 500 · production starting with dev routes · the dev port wired in production · any role may switch billing | `dev-surface.test.ts` |
+| No trial started · no transition taken | `billing-states.integration.test.ts` |
+| Production seeded | `seed-states.test.mjs` |
 
 ---
 
