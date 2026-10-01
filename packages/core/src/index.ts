@@ -21,6 +21,7 @@ export * from './billing/state.js';
 export * from './billing/downgrade.js';
 export * from './billing/usage-meter.js';
 export * from './billing/tax-details.js';
+export * from './billing/charges.js';
 export * from './domains.js';
 export * from './domain-claims.js';
 export * from './dev-mode.js';

@@ -271,6 +271,13 @@ describe('app_rw privileges', () => {
     expect(await hasPrivilege('notification_events', 'INSERT')).toBe(true);
   });
 
+  it('cannot erase a charge an e-invoice may be owed for (P5-03a)', async () => {
+    /* The bridge records what it did, so UPDATE stays; a deleted charge is an invoice nobody issues. */
+    expect(await hasPrivilege('e_invoices', 'DELETE')).toBe(false);
+    expect(await hasPrivilege('e_invoices', 'UPDATE')).toBe(true);
+    expect(await hasPrivilege('e_invoices', 'INSERT')).toBe(true);
+  });
+
   it('cannot read the migration ledger', async () => {
     // app_rw gets no USAGE on the drizzle schema (P0-21). The ledger decides
     // whether a migration is re-applied, so the runtime role has no business

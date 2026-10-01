@@ -229,6 +229,8 @@ const topUpSession = z.object({
   customer: id,
   payment_intent: id,
   payment_status: z.enum(['paid', 'unpaid', 'no_payment_required']),
+  amount_total: z.number().int().nonnegative(),
+  currency: z.string().min(1),
   metadata: z.record(z.string(), z.string()).nullish(),
 });
 
@@ -244,6 +246,10 @@ export interface TopUpPayment {
    * clicked into the Dashboard does not hand out free messages.
    */
   readonly paid: boolean;
+  /** What was paid, in minor units, for the charge the invoicing bridge reads (P5-03a). */
+  readonly amountCents: number;
+  /** Lowercase, as Stripe writes it. */
+  readonly currency: string;
   /** When Stripe reported it: the month the messages count towards. */
   readonly occurredAt: Date;
   readonly livemode: boolean;
@@ -280,6 +286,8 @@ export const readTopUpEvent = (payload: unknown): TopUpPayment | undefined => {
     customerId: parsed.data.customer,
     paymentIntentId: parsed.data.payment_intent,
     paid: parsed.data.payment_status === 'paid',
+    amountCents: parsed.data.amount_total,
+    currency: parsed.data.currency.toLowerCase(),
     occurredAt: new Date(created * 1000),
     livemode,
   };

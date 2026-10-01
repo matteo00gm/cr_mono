@@ -525,6 +525,8 @@ describe('a top-up, paid (P5-11a)', () => {
         subscription: null,
         payment_intent: paymentIntent,
         payment_status: paid ? 'paid' : 'unpaid',
+        amount_total: 1500,
+        currency: 'eur',
         client_reference_id: tenantId,
         metadata: { tenant_id: tenantId, top_up: 'MESSAGES_1000' },
       },
@@ -747,5 +749,113 @@ describe('the invoice details a paid Checkout brings (P5-02a)', () => {
     );
 
     expect((await details(tenantId))?.vat_id).toBeNull();
+  });
+});
+
+describe('the charges an e-invoice may be owed for (P5-03a)', () => {
+  const charges = async (tenantId: string) => {
+    const rows = await admin().execute(sql`
+      SELECT stripe_object_id, source, amount_cents::int AS amount, currency, status
+      FROM e_invoices WHERE tenant_id = ${tenantId} ORDER BY created_at
+    `);
+
+    return [...rows];
+  };
+
+  const paidInvoice = (
+    type: 'invoice.paid' | 'invoice.payment_succeeded',
+    tenantId: string,
+    customer: string,
+    subscription: string,
+    invoiceId: string,
+    amount = 2900,
+  ) =>
+    event(type, {
+      id: invoiceId,
+      customer,
+      amount_paid: amount,
+      currency: 'eur',
+      status_transitions: { paid_at: 1_790_000_000 },
+      parent: { subscription_details: { subscription, metadata: { tenant_id: tenantId } } },
+    });
+
+  it('records a paid invoice once, under both of Stripe’s names for it', async () => {
+    const { tenantId, customer, subscription } = await paying();
+    const invoiceId = `in_${randomUUID()}`;
+
+    await port.record(paidInvoice('invoice.paid', tenantId, customer, subscription, invoiceId));
+    await port.record(
+      paidInvoice('invoice.payment_succeeded', tenantId, customer, subscription, invoiceId),
+    );
+
+    expect(await charges(tenantId)).toEqual([
+      {
+        stripe_object_id: invoiceId,
+        source: 'invoice',
+        amount: 2900,
+        currency: 'eur',
+        status: 'pending',
+      },
+    ]);
+  });
+
+  it('records the first invoice even when it arrives before the Checkout that binds the customer', async () => {
+    const tenantId = await trialing();
+
+    await port.record(
+      paidInvoice(
+        'invoice.paid',
+        tenantId,
+        `cus_${randomUUID()}`,
+        `sub_${randomUUID()}`,
+        `in_${randomUUID()}`,
+      ),
+    );
+
+    expect(await charges(tenantId)).toHaveLength(1);
+  });
+
+  it('records nothing paid by a customer that is not the winery’s, or for an invoice of nothing', async () => {
+    const { tenantId, customer, subscription } = await paying();
+
+    await port.record(
+      paidInvoice('invoice.paid', tenantId, 'cus_stranger', subscription, `in_${randomUUID()}`),
+    );
+    await port.record(
+      paidInvoice('invoice.paid', tenantId, customer, subscription, `in_${randomUUID()}`, 0),
+    );
+
+    expect(await charges(tenantId)).toEqual([]);
+  });
+
+  it('records a top-up once it is credited, and not before', async () => {
+    const { tenantId, customer } = await paying();
+    const payment = `pi_${randomUUID()}`;
+    const topUp = (type: string, paid: boolean) =>
+      event(type, {
+        mode: 'payment',
+        customer,
+        subscription: null,
+        payment_intent: payment,
+        payment_status: paid ? 'paid' : 'unpaid',
+        amount_total: 1500,
+        currency: 'eur',
+        client_reference_id: tenantId,
+        metadata: { tenant_id: tenantId, top_up: 'MESSAGES_1000' },
+      });
+
+    await port.record(topUp('checkout.session.completed', false));
+    expect(await charges(tenantId)).toEqual([]);
+
+    await port.record(topUp('checkout.session.async_payment_succeeded', true));
+    expect(await charges(tenantId)).toEqual([
+      {
+        stripe_object_id: payment,
+        source: 'top_up',
+        amount: 1500,
+        currency: 'eur',
+        status: 'pending',
+      },
+    ]);
   });
 });
