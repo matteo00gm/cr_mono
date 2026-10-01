@@ -1397,7 +1397,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 |---|---|---|---|
 | ✅ P5-01 | Stripe products/prices script | Cantina (€29/mo, 1.5k msg, 300 SKU) + E-comm (€79/mo, 6k msg, 2.5k SKU) | P0-11 |
 | ✅ P5-02 | Checkout session endpoint | custom tax metadata fields (P.IVA/CF, SdI/PEC) | P5-01 |
-| P5-02a | Italian tax metadata fields on Checkout | collects optional P.IVA/CF, Codice Destinatario SdI or PEC | P5-02 |
+| ✅ P5-02a | Italian tax metadata fields on Checkout | collects optional P.IVA/CF, Codice Destinatario SdI or PEC | P5-02 |
 | ✅ P5-03 | 🔒 Webhook: raw-body signature verify | before any body parser touches it | P5-01 |
 | P5-03a | 🔒 SdI / FatturaPA e-invoicing bridge | async job on `invoice.paid` → Fatture in Cloud API to emit FatturaPA XML | P5-03,P5-04 |
 | ✅ P5-04 | 🔒 Webhook idempotency | `processed_webhooks`, replay is a no-op | P5-03 |
@@ -6913,7 +6913,7 @@ Store the resulting price ids in SSM. Include the plan limits in `packages/core/
 - **No Stripe SDK** *(decision)*. A two-verb client with a Zod schema per call, the P5-01 encoder (now `encodeStripeForm` in core, which the script also uses, indexing arrays so `line_items` keeps each item's keys together), the pinned API version and a ten-second timeout. A Stripe error surfaces as its type and code only — its prose can quote a customer's email.
 - **No step-up** *(decision)*: nothing changes until the owner pays on Stripe's page, and paying is the confirmation. A plan *change* takes one (P5-09).
 - **An unknown plan is a 422**, as every malformed dashboard body is here; the row's "refused" holds, and the message names the plans there are.
-- **Deferred to P5-02a:** the tax fields on the session, and saving them on completion. **To P5-12:** the Fatturazione screen that calls this.
+- **Deferred to P5-02a**, and done there: the tax fields on the session, and saving them on completion. **To P5-12**, and done there: the Fatturazione screen that calls this.
 
 **Verified.** Unit, route and composition suites; `readBillingState` under RLS in `packages/db`, and the port with its default reader in `apps/api`, against real Postgres. 18 mutants, 18 killed.
 
@@ -6943,6 +6943,21 @@ Save these fields to `tenants` (`vat_id`, `sdi_code`, `pec_address` columns, nul
 **Tests.** Custom fields configured on checkout session; metadata extracted and saved to tenant row; non-Italian checkout without tax fields leaves columns null and succeeds.
 
 **Files.** `billing.ts`, migration (`tenants` tax fields), tests. **~70 lines.**
+
+**As built (2026-10-01).** `packages/core/src/billing/tax-details.ts` (`TAX_CUSTOM_FIELDS`, the normalisers, `readCheckoutTaxDetails`), `custom_fields` on `checkoutSessionParams`, migration 0066 (`vat_id`, `sdi_code`, `pec_address` with format CHECKs), `writeTaxDetails` in `packages/db/src/billing.ts`, and the save in `billing-events.ts`.
+
+- **Three optional custom fields** on the plan's Checkout, under the keys `partitaiva`, `codicesdi` and `pec` — Stripe allows letters and digits only — with Italian labels and Stripe's length limits. Stripe cannot make a field depend on the buyer's country, so all three are optional for everyone and a Checkout outside Italy is no longer than it was. Not on the top-up's Checkout (P5-11a): the details are the winery's, already on file from its plan.
+- **⚠ Checked before they are saved** *(addition)*. Stripe checks lengths and nothing else, and an invoice sent to SdI with a mistyped Partita IVA is rejected after the payment. A Partita IVA must pass its check digit (an `IT` prefix, spaces, dots and dashes are dropped); a Codice Fiscale must have its shape, omocodia letters included; a Codice Destinatario is seven letters and digits, uppercased; a PEC is an address, lowercased. The shapes are CHECKs in the database too, so nothing malformed reaches P5-03a whatever wrote it.
+- **A field filled in wrongly is left out and named, never quoted** (`stripe_tax_field_invalid`, with the field names): a Codice Fiscale is a person's. The winery is activated regardless — the payment is not refused for an invoice detail.
+- **Saved with the activation, on the claim's transaction, and only when it applied**: a second Checkout the machine refused is not this winery's to describe. A field left empty keeps what is on file, so a winery buying again after cancelling has not withdrawn its details by skipping them. **Open:** nowhere in the dashboard to correct them yet — the Customer Portal does not edit custom fields.
+
+**Verified.** 5,076 unit tests and the full integration suite (79 files, 1,028 tests). The normalisers against a check digit computed for the test, `IT` prefixes, separators, omocodia and every refusal; the encoded fields on the session; the CHECKs refusing every malformed shape to the owner role; and the production effect saving the details with an activation, nothing for a winery that gave none, a wrong field left out and logged without its value, and nothing from a Checkout the machine refused. 13 mutants, 13 killed.
+
+| Mutation | Caught by |
+|---|---|
+| The check digit ignored · the wrong places doubled · the `IT` prefix kept · any sixteen characters a Codice Fiscale · a Codice Destinatario left lowercase · any PEC taken · a wrong field not named · a blank field called wrong · nothing asked on Checkout | `tax-details.test.ts`, `checkout.test.ts` |
+| An empty field erasing one on file · any Codice Destinatario stored | `billing.integration.test.ts` (db) |
+| The details never saved · a wrong field not logged | `billing-events.integration.test.ts` |
 
 ---
 

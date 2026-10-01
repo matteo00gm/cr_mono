@@ -207,3 +207,28 @@ export const readPlanFootprint = async (
 
   return { wines, domains: await countDomains(tx) };
 };
+
+/** What an Italian business needs on its invoice (P5-02a), already checked. */
+export interface TaxDetailsRow {
+  readonly vatId: string | null;
+  readonly sdiCode: string | null;
+  readonly pecAddress: string | null;
+}
+
+/**
+ * Saves the tax details a completed Checkout carried, on the claim's own
+ * transaction (P5-02a).
+ *
+ * **A field left empty keeps what is on file**: a winery that buys again after
+ * cancelling and skips the fields has not withdrawn them. The CHECKs in
+ * migration 0066 refuse a malformed value, so the caller checks first
+ * (`readCheckoutTaxDetails`) and passes `null` for anything that failed.
+ */
+export const writeTaxDetails = async (tx: DbTransaction, details: TaxDetailsRow): Promise<void> => {
+  await tx.execute(sql`
+    UPDATE tenants
+    SET vat_id = coalesce(${details.vatId}, vat_id),
+        sdi_code = coalesce(${details.sdiCode}, sdi_code),
+        pec_address = coalesce(${details.pecAddress}, pec_address)
+  `);
+};

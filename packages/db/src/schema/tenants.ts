@@ -93,6 +93,17 @@ export const tenants = pgTable('tenants', {
    */
   billingEventAt: timestamp('billing_event_at', { withTimezone: true, mode: 'date' }),
 
+  /**
+   * What an Italian business needs on its invoice (P5-02a), from Checkout's
+   * optional fields: a Partita IVA or Codice Fiscale, and a Codice Destinatario
+   * SdI or a PEC address for delivery. Null for a winery that gave none. The
+   * shapes are CHECKs in migration 0066, so a malformed one cannot reach the
+   * e-invoicing bridge (P5-03a) whatever wrote it.
+   */
+  vatId: text('vat_id'),
+  sdiCode: text('sdi_code'),
+  pecAddress: text('pec_address'),
+
   locale: text('locale').notNull().default('it'),
   currency: text('currency').notNull().default('EUR'),
 
