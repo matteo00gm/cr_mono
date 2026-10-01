@@ -1404,7 +1404,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P5-05 | ⛔ Status state machine | TRIALING→ACTIVE→PAST_DUE→DISABLED→CANCELED; **adds `tenants.trial_ends_at`** and the `tenant_status_coherent` CHECK that reads it (§5.2b); `livemode` + customer↔tenant binding | P5-04 |
 | ✅ P5-05a | 🔒 Payment-failure blocking | **no grace** — `PAST_DUE` blocks the widget on first failure; dashboard stays open; Stripe retries restore automatically (§5.2b) | P5-05 |
 | ✅ P5-06 | 🔒 Webhook fixture test suite | every transition; unsigned and mis-signed rejected | P5-05 |
-| P5-07 | Test: DISABLED propagation split | chat refused immediately; `/config` may lag 60 s | P5-05,P2-13 |
+| ✅ P5-07 | Test: DISABLED propagation split | chat refused immediately; `/config` may lag 60 s | P5-05,P2-13 |
 | P5-08 | Customer Portal link endpoint | | P5-02 |
 | P5-09 | Upgrade (prorated) / downgrade (period end) | | P5-05 |
 | P5-10 | Downgrade guard | blocked when catalog (>300/2,500 SKUs) or domains exceed target plan | P5-09 |
@@ -7119,6 +7119,14 @@ Also send the P0-64 payment-failed email on entry to `PAST_DUE`, since the tenan
 **How.** Process a `DISABLED` webhook, then in the same test: assert `POST /widget/session` is refused **immediately**; assert an existing valid token is refused on `/widget/chat` immediately; assert `GET /widget/config` **may** still return the old status (documenting the 60s edge TTL as intended, not a bug). Then assert **zero** provider calls occurred. Name it so the intent survives: `disabled tenant loses access immediately even while config is still cached`.
 
 **Files.** `apps/api/test/disabled-propagation.spec.ts`. **~90 test lines.**
+
+**As built (2026-10-01).** `apps/api/test/disabled-propagation.integration.test.ts`, named as the row asks. Everything behind the edge is real: the signed Stripe endpoint, the state machine, the widget's resolution against Postgres as `app_rw`, the token keyset and the gate; only the model is counted rather than called (P1-47).
+
+- **The switch comes through the webhook**, not a status written by hand — the row's "process a DISABLED webhook". A served winery mints a session and asks a question (one model call); Stripe ends the subscription; then a new mint is refused `unavailable` at once, the token minted before the switch is refused `unavailable` mid-conversation, and **the model is never asked again**.
+- **The same for a failed payment** *(addition)*: `invoice.payment_failed` darkens a widget exactly as fast, which is §5.2b's whole point, so the case runs for both.
+- **The config's lag is asserted as intended, not merely tolerated**: its `Cache-Control` allows sixty seconds at the edge (P2-10), and the origin already answers `DISABLED` from the first request. There is no edge in the test; the header is the promise, and a change to it is a change to this row.
+
+**Verified.** Two cases against real Postgres. 4 mutants, 4 killed: the session mint ignoring the status, a token outliving the switch, the origin config showing enabled, and a resolution that reports a stale status.
 
 ---
 
