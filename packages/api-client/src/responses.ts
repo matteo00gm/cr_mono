@@ -420,6 +420,17 @@ export const billingPortalResponse = z.strictObject({
 export type BillingPortalResponse = z.infer<typeof billingPortalResponse>;
 
 /**
+ * Where to send the owner to buy messages on top of the plan (P5-11a): a
+ * Stripe-hosted Checkout page for a one-time payment. The messages count from
+ * the moment Stripe tells us it is paid, for the month it is paid in.
+ */
+export const billingTopUpResponse = z.strictObject({
+  url: z.url({ protocol: /^https$/u }),
+});
+
+export type BillingTopUpResponse = z.infer<typeof billingTopUpResponse>;
+
+/**
  * A plan change, asked for (P5-09). `now` is an upgrade — prorated, with the
  * new limits as soon as Stripe confirms the payment; `period_end` is a
  * downgrade, which takes effect at `effectiveAt` and not before.
@@ -855,6 +866,7 @@ export const DASHBOARD_RESPONSES = {
   'POST /v1/dashboard/billing/checkout': billingCheckoutResponse,
   'POST /v1/dashboard/billing/portal': billingPortalResponse,
   'POST /v1/dashboard/billing/plan': billingPlanChangeResponse,
+  'POST /v1/dashboard/billing/top-up': billingTopUpResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

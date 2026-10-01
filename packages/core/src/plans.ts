@@ -95,3 +95,33 @@ export const TRIAL: PlanLimits & { readonly name: string; readonly days: number 
   messagesPerMonth: 150,
   productionDomains: 1,
 };
+
+/**
+ * Messages bought on top of a plan, once, for the month they are bought in
+ * (P5-11a).
+ *
+ * **Sold through the same catalogue as the plans**, so `stripe-setup.mjs`
+ * creates its price as it creates theirs and Checkout finds it by its lookup
+ * key. One-time, so `interval` is `null`: a top-up is a purchase, not a second
+ * subscription.
+ */
+export interface TopUp {
+  readonly id: 'MESSAGES_1000';
+  readonly name: string;
+  readonly lookupKey: string;
+  readonly amountCents: number;
+  readonly currency: 'eur';
+  readonly interval: null;
+  /** What one purchase adds to the month's allowance. */
+  readonly messages: number;
+}
+
+export const TOP_UP: TopUp = {
+  id: 'MESSAGES_1000',
+  name: '1,000 messages',
+  lookupKey: 'messages_1000_eur',
+  amountCents: 1_500,
+  currency: 'eur',
+  interval: null,
+  messages: 1_000,
+};

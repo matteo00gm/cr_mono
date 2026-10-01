@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { createBillingEffect } from '../src/billing-events.js';
 import { createBillingNotifier, type BillingNotice } from '../src/billing-notices.js';
 import { logger } from '../src/middleware/logger.js';
+import { createQuotaPort } from '../src/quota.js';
 import { createStripeEventsPort, type StripeDelivery } from '../src/stripe-events.js';
 
 /**
@@ -501,5 +502,160 @@ describe('a downgrade re-checked as it applies (P5-10)', () => {
 
     expect((await row(tenantId)).plan).toBe('ECOMMERCE');
     expect(told).toEqual([]);
+  });
+});
+
+describe('a top-up, paid (P5-11a)', () => {
+  const topUp = (
+    type: 'checkout.session.completed' | 'checkout.session.async_payment_succeeded',
+    tenantId: string,
+    customer: string,
+    paymentIntent: string,
+    {
+      paid = true,
+      livemode = false,
+      created,
+    }: { paid?: boolean; livemode?: boolean; created?: number } = {},
+  ) =>
+    event(
+      type,
+      {
+        mode: 'payment',
+        customer,
+        subscription: null,
+        payment_intent: paymentIntent,
+        payment_status: paid ? 'paid' : 'unpaid',
+        client_reference_id: tenantId,
+        metadata: { tenant_id: tenantId, top_up: 'MESSAGES_1000' },
+      },
+      { livemode, ...(created === undefined ? {} : { created }) },
+    );
+
+  const credited = async (tenantId: string) => {
+    const rows = await admin().execute(sql`
+      SELECT period, messages_purchased AS messages FROM usage_top_ups
+      WHERE tenant_id = ${tenantId} ORDER BY created_at
+    `);
+
+    return [...rows] as { period: string; messages: number }[];
+  };
+
+  /** The `YYYYMM` an event's `created` second falls in, as the ledger writes it. */
+  const periodAt = (seconds: number) =>
+    new Date(seconds * 1000).toISOString().slice(0, 7).replace('-', '');
+
+  it('credits 1,000 messages to the month it was paid in, and is audited with no actor', async () => {
+    const { tenantId, customer } = await paying();
+    const at = 1_790_000_000;
+
+    expect(
+      await port.record(
+        topUp('checkout.session.completed', tenantId, customer, `pi_${randomUUID()}`, {
+          created: at,
+        }),
+      ),
+    ).toEqual({ duplicate: false, applied: true });
+    expect(await credited(tenantId)).toEqual([{ period: periodAt(at), messages: 1_000 }]);
+
+    const audit = await admin().execute(sql`
+      SELECT actor_user_id, metadata FROM audit_log
+      WHERE tenant_id = ${tenantId} AND action = 'billing.top_up_credited'
+    `);
+
+    expect([...audit]).toEqual([
+      {
+        actor_user_id: null,
+        metadata: { messages: 1_000, period: periodAt(at), event: 'checkout.session.completed' },
+      },
+    ]);
+  });
+
+  it('credits one payment once, whatever else Stripe sends about it', async () => {
+    const { tenantId, customer } = await paying();
+    const payment = `pi_${randomUUID()}`;
+
+    await port.record(topUp('checkout.session.completed', tenantId, customer, payment));
+
+    expect(
+      await port.record(
+        topUp('checkout.session.async_payment_succeeded', tenantId, customer, payment),
+      ),
+    ).toEqual({ duplicate: false, applied: false });
+    expect(await credited(tenantId)).toHaveLength(1);
+  });
+
+  it('waits for a delayed payment to clear, and credits its success', async () => {
+    const { tenantId, customer } = await paying();
+    const payment = `pi_${randomUUID()}`;
+
+    await port.record(
+      topUp('checkout.session.completed', tenantId, customer, payment, { paid: false }),
+    );
+    expect(await credited(tenantId)).toEqual([]);
+
+    await port.record(
+      topUp('checkout.session.async_payment_succeeded', tenantId, customer, payment),
+    );
+    expect(await credited(tenantId)).toHaveLength(1);
+  });
+
+  it('credits nothing paid by a customer that is not the winery’s', async () => {
+    const { tenantId } = await paying();
+
+    expect(
+      await port.record(
+        topUp('checkout.session.completed', tenantId, 'cus_stranger', `pi_${randomUUID()}`),
+      ),
+    ).toEqual({ duplicate: false, applied: false });
+    expect(await credited(tenantId)).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      { kind: 'stripe_event_ignored', type: 'customer_mismatch' },
+      expect.any(String),
+    );
+  });
+
+  it('credits nothing from the other mode', async () => {
+    const { tenantId, customer } = await paying();
+
+    await port.record(
+      topUp('checkout.session.completed', tenantId, customer, `pi_${randomUUID()}`, {
+        livemode: true,
+      }),
+    );
+
+    expect(await credited(tenantId)).toEqual([]);
+  });
+
+  it('opens a spent month again at once: the gate reads what was just credited', async () => {
+    const tenantId = await trialing();
+    const customer = `cus_${randomUUID()}`;
+    const now = Math.floor(Date.now() / 1000);
+
+    await port.record(paidCheckout(tenantId, customer, `sub_${randomUUID()}`, 'CANTINA'));
+    await admin().execute(sql`
+      INSERT INTO usage_events (tenant_id, period, kind)
+      SELECT ${tenantId}::uuid, ${periodAt(now)}, 'chat_message' FROM generate_series(1, 1500)
+    `);
+
+    const quota = createQuotaPort();
+    const winery = {
+      tenantId,
+      plan: 'CANTINA' as const,
+      status: 'ACTIVE' as const,
+      trialEndsAt: null,
+      locale: 'it',
+      turnstile: false,
+      originKind: 'production' as const,
+    };
+
+    expect((await quota.check(winery)).allowed).toBe(false);
+
+    await port.record(
+      topUp('checkout.session.completed', tenantId, customer, `pi_${randomUUID()}`, {
+        created: now,
+      }),
+    );
+
+    expect(await quota.check(winery)).toMatchObject({ allowed: true, used: 1_500, limit: 2_500 });
   });
 });

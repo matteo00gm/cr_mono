@@ -252,6 +252,18 @@ describe('app_rw privileges', () => {
     expect(await hasPrivilege('processed_webhooks', 'SELECT')).toBe(true);
   });
 
+  it('cannot rewrite what a winery bought on top of its plan (P5-11a)', async () => {
+    /*
+     * A ledger like `usage_events`: the row that says a winery paid for a
+     * thousand messages must not be editable by the code path that serves
+     * them. INSERT and SELECT stay — the webhook credits, the quota gate sums.
+     */
+    expect(await hasPrivilege('usage_top_ups', 'UPDATE')).toBe(false);
+    expect(await hasPrivilege('usage_top_ups', 'DELETE')).toBe(false);
+    expect(await hasPrivilege('usage_top_ups', 'INSERT')).toBe(true);
+    expect(await hasPrivilege('usage_top_ups', 'SELECT')).toBe(true);
+  });
+
   it('cannot read the migration ledger', async () => {
     // app_rw gets no USAGE on the drizzle schema (P0-21). The ledger decides
     // whether a migration is re-applied, so the runtime role has no business

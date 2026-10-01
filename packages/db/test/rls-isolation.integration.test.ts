@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { sql, type SQL } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -24,7 +26,7 @@ const pgErrorCode = (error: unknown): string | undefined =>
 const INSUFFICIENT_PRIVILEGE = '42501';
 
 /** Tables where `app_rw` holds no UPDATE, so the update probe cannot apply. */
-const APPEND_ONLY = new Set(['usage_events', 'audit_log', 'security_events']);
+const APPEND_ONLY = new Set(['usage_events', 'usage_top_ups', 'audit_log', 'security_events']);
 
 interface SeedContext {
   readonly conversationId: string;
@@ -106,6 +108,14 @@ const INSERTS: Record<string, (tenantId: string, ctx: SeedContext) => SQL> = {
         values (${tenantId}::uuid, '202609', 'CHAT')`,
   usage_daily: (tenantId) =>
     sql`insert into usage_daily (tenant_id, day) values (${tenantId}::uuid, '2026-09-01')`,
+  /*
+   * P5-11a. A fresh payment intent on every call, for `invitations`' reason:
+   * the key is unique across tenants, so a fixed one would make B's attempted
+   * write fail on the key rather than on the policy.
+   */
+  usage_top_ups: (tenantId) =>
+    sql`insert into usage_top_ups (tenant_id, period, messages_purchased, stripe_payment_intent_id)
+        values (${tenantId}::uuid, '202610', 1000, ${`pi_${randomUUID()}`})`,
   audit_log: (tenantId) =>
     sql`insert into audit_log (tenant_id, action) values (${tenantId}::uuid, 'x')`,
   security_events: (tenantId) =>

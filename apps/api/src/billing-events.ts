@@ -3,16 +3,22 @@ import {
   downgradeBlockers,
   downgradeRefusal,
   isDowngrade,
+  periodOf,
   readBillingEvent,
+  readTopUpEvent,
+  TOP_UP,
   transition,
   type BillingChange,
   type IgnoreReason,
+  type TopUpPayment,
 } from '@catalogorosso/core';
 import {
   insertAuditRow,
   readBillingSnapshot,
   readPlanFootprint,
+  recordTopUp,
   writeBillingChange,
+  type DbTransaction,
 } from '@catalogorosso/db';
 
 import type { BillingNotice } from './billing-notices.js';
@@ -59,9 +65,87 @@ const ACTED_ON: ReadonlySet<string> = new Set(BILLING_EVENT_TYPES);
 /** An event that changed nothing and leaves nobody to tell. */
 const NOTHING = { applied: false } as const;
 
+const wrongMode = (type: string, eventLivemode: boolean) => {
+  logger.error(
+    { kind: 'stripe_event_wrong_mode', type },
+    `a ${eventLivemode ? 'live' : 'test'}-mode event reached a stage that takes the other (§5.2b)`,
+  );
+};
+
+/**
+ * Credits a paid top-up to the month it was paid in (P5-11a), on the claim's
+ * own transaction — so the credit and "this event was handled" are one write.
+ *
+ * **Bound to the customer on file**, as every billing event is (P5-05): a
+ * payment from a customer that is not this winery's credits nothing. **Once per
+ * payment**: the ledger's unique payment intent turns a second event about the
+ * same money into a no-op. Credited whatever the winery's status, because the
+ * money was taken; a paused widget uses it once it is paid up.
+ */
+const creditTopUp = async (
+  tx: DbTransaction,
+  tenantId: string,
+  type: string,
+  payment: TopUpPayment,
+  livemode: boolean,
+): Promise<{ readonly applied: boolean }> => {
+  if (payment.livemode !== livemode) {
+    wrongMode(type, payment.livemode);
+
+    return NOTHING;
+  }
+
+  /* A delayed method completes unpaid; its async success is the one that credits. */
+  if (!payment.paid) return NOTHING;
+
+  const current = await readBillingSnapshot(tx);
+
+  if (current === undefined) return NOTHING;
+
+  if (current.customerId !== payment.customerId) {
+    logger.warn(
+      { kind: 'stripe_event_ignored', type: 'customer_mismatch' },
+      `a ${type} top-up was paid by a customer that is not this winery's (P5-11a)`,
+    );
+
+    return NOTHING;
+  }
+
+  const period = periodOf(payment.occurredAt);
+  const credited = await recordTopUp(tx, {
+    period,
+    messages: TOP_UP.messages,
+    paymentIntentId: payment.paymentIntentId,
+  });
+
+  if (credited === 'duplicate') return NOTHING;
+
+  await insertAuditRow(tx, {
+    tenantId,
+    actorUserId: undefined,
+    action: 'billing.top_up_credited',
+    target: `tenant:${tenantId}`,
+    metadata: JSON.stringify({ messages: TOP_UP.messages, period, event: type }),
+    ip: undefined,
+    userAgent: undefined,
+  });
+
+  return { applied: true };
+};
+
 export const createBillingEffect =
   ({ livemode }: BillingEffectDeps): StripeEffect =>
   async (tx, delivery) => {
+    /*
+     * A top-up first: its Checkout is a payment, not a subscription, and the
+     * machine below has nothing to say about it (P5-11a).
+     */
+    const topUp = readTopUpEvent(delivery.payload);
+
+    if (topUp !== undefined) {
+      return creditTopUp(tx, delivery.tenantId, delivery.type, topUp, livemode);
+    }
+
     const read = readBillingEvent(delivery.payload);
 
     if (read === undefined) {
@@ -81,10 +165,7 @@ export const createBillingEffect =
     }
 
     if (read.livemode !== livemode) {
-      logger.error(
-        { kind: 'stripe_event_wrong_mode', type: delivery.type },
-        `a ${read.livemode ? 'live' : 'test'}-mode event reached a stage that takes the other (§5.2b)`,
-      );
+      wrongMode(delivery.type, read.livemode);
 
       return NOTHING;
     }

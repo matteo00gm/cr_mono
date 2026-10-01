@@ -548,7 +548,14 @@ export {
  * live in `packages/core/src/usage.ts`. `recordUsage` takes the caller's
  * transaction so the bill and P2-30's turn are one write.
  */
-export { countUsage, recordUsage, type UsageToRecord } from './usage.js';
+export {
+  countPurchased,
+  countUsage,
+  recordTopUp,
+  recordUsage,
+  type TopUpToRecord,
+  type UsageToRecord,
+} from './usage.js';
 
 /**
  * Recording a turn (P2-30).

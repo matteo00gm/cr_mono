@@ -1409,7 +1409,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P5-09 | Upgrade (prorated) / downgrade (period end) | | P5-05 |
 | ✅ P5-10 | Downgrade guard | blocked when catalog (>300/2,500 SKUs) or domains exceed target plan | P5-09 |
 | ✅ P5-11 | Quota enforcement wiring | hard cap at 100% messages; zero model calls past cap | P2-36 |
-| P5-11a | Message top-up purchase | €15 for 1,000 extra messages one-time checkout + credit counter | P5-11 |
+| ✅ P5-11a | Message top-up purchase | €15 for 1,000 extra messages one-time checkout + credit counter | P5-11 |
 | P5-12 | Usage notifications (80% & 100%) | dashboard banners + automated emails with upgrade & top-up CTAs | P5-11 |
 | P5-13 | `usage_daily` rollup job | EventBridge nightly | P0-30 |
 
@@ -6994,6 +6994,8 @@ Save these fields to `tenants` (`vat_id`, `sdi_code`, `pec_address` columns, nul
 
 **Files.** `apps/worker/src/invoicing.ts`, `packages/core/src/billing/sdi.ts`, tests. **~130 lines.**
 
+**Carried from P5-11a.** A message top-up is a one-time Checkout with no Stripe invoice behind it (`invoice_creation` off), so the `checkout.session.completed` path above is the only one that sees it. Its metadata carries `top_up: MESSAGES_1000` beside the tenant; the amount is the session's.
+
 ---
 
 ### P5-04 · Webhook idempotency 🔒
@@ -7220,7 +7222,7 @@ Quota check reads `current_usage < (plan_cap + purchased_top_up_messages)`.
 - **One allowance, three readers.** The plan's messages plus what was bought is `planCapCheck(tenant, plan, purchased)`, and the limiter's monthly bucket (P2-04), the config route's `quotaState` (P2-10) and the ledger gate (P2-36) all build it. ADR 0024 keeps both counters, and the stricter one wins — so a top-up that raised one and not the other would be paid for and still refused. The key does not change with a top-up, so what was already spent this month still counts.
 - **Read for chat alone.** The limiter asks what was bought only on the one endpoint that spends the month; config reads it for the banner; session never does. A count that is not a non-negative integer throws rather than becoming a limit: `NaN` would read `ok` on the banner and refuse every message.
 - **The boundaries**, against real Postgres with a counting provider: the 1,500th Cantina message is answered, the 1,501st is refused with zero provider calls; with 1,000 bought, the 1,501st is answered and the 2,501st refused with zero calls.
-- **⚠ Nothing can be bought yet** *(staging)*. `readPurchased` defaults to nought — the true answer until P5-11a's ledger exists, and the restrictive one. P5-11a replaces the default with the real read; every reader already asks.
+- **⚠ Nothing could be bought yet** *(staging, closed by P5-11a)*. `readPurchased` defaulted to nought — the true answer until P5-11a's ledger existed, and the restrictive one. P5-11a replaced the default with the real read; every reader already asked.
 - **The 80% notification is P5-12's**, as the row says; `quotaState: 'near'` already reaches the widget at four fifths.
 
 **Verified.** 4,949 unit tests, with `packages/security` at 100% of 315 branches; the full integration suite (76 files, 988 tests — one MFA timing test failed once under load and passed three reruns, unrelated). 10 mutants, 10 killed.
@@ -7248,6 +7250,27 @@ Quota check reads `current_usage < (plan_cap + purchased_top_up_messages)`.
 **Tests.** One-time checkout created with correct price; webhook credits +1,000 messages; quota gate immediately unblocks; double webhook delivery does not credit twice.
 
 **Files.** `apps/api/src/routes/billing-topup.ts`, migration (`usage_top_ups`), tests. **~110 lines.**
+
+**As built (2026-10-01).** `POST /v1/dashboard/billing/top-up` (`billing:manage`, no step-up) and `topUp` on the billing port, in `billing.ts` beside the other purchases rather than in a `routes/` file this codebase does not have; migrations 0062 (`usage_top_ups`, append-only) and 0063 (its policy, generated); `TOP_UP` in `plans.ts`; `topUpSessionParams` and `readTopUpEvent` in core; the credit in `billing-events.ts`; `countPurchased` behind P5-11's `readPurchased`.
+
+- **⚠ The top-up is in the catalogue** *(addition)*. `stripe-setup.mjs` built plans only; it now reconciles `CATALOG_ITEMS` — both plans and `TOP_UP`, a one-time price (`interval: null`, so no `recurring`) under `messages_1000_eur` on product `top_up_messages_1000`. A monthly price under that key differs on `interval` and stops the run, since it would subscribe a winery to messages it meant to buy once. Steps and results name an `item` now rather than a `plan`. **Operator:** run `stripe-setup.mjs --apply` again on each account to create the top-up's price.
+- **For a winery on a plan, and paid up.** A trial has no customer for the payment to land on and its messages are a taste; a winery whose payment failed (`PAST_DUE`) has a paused widget, so it is told to fix the payment method instead — messages bought then could not be used. Both are 409s that say what to do. No step-up, as for Checkout (P5-02): paying on Stripe's page is the confirmation.
+- **A one-time Checkout for the customer the winery already is**: `mode: 'payment'`, the tenant in `client_reference_id` and metadata (ADR 0029's attribution reads it unchanged), and `top_up: MESSAGES_1000` in the session's and the payment intent's metadata — which is how the webhook tells it from a plan's Checkout, and how a refund in the Dashboard traces back to a winery.
+- **Credited on the claim's own transaction**, before the state machine looks at the event: right mode, paid (`no_payment_required` is not paid — a coupon is not money), and from the customer on file, or nothing. **Once per payment**: the payment intent is unique across every tenant, so `checkout.session.completed` and a later `async_payment_succeeded` for the same money credit it once — the event claim (P5-04) dedupes deliveries, the key dedupes the payment. Audited as `billing.top_up_credited` with no actor. Credited whatever the winery's status, because the money was taken.
+- **For the month it is paid in**, from the event's `created` second in UTC — the ledger's own period. A top-up paid on the last evening of a month is mostly unused; that is the row's "active period", stated rather than softened.
+- **Applies at once**: the quota port sums the ledger for the period on every check (P5-11), so the next message is answered and the next config fetch reads `ok` — through the edge cache's TTL for config, as P5-07 documents.
+- **⚠ A top-up has no Stripe invoice** *(carried to P5-03a)*. Checkout's `invoice_creation` is off, so no `invoice.paid` follows; P5-03a's `checkout.session.completed` path is the one that must issue its FatturaPA, and an Italian sale needs one.
+- **The Fatturazione button is P5-12's**, with the 80% and 100% notices that point at it.
+
+**Verified.** 4,979 unit tests and the full integration suite (77 files, 1,007 tests). Against real Postgres: a paid top-up credits 1,000 messages to the month of the event, audited with no actor; `completed` then `async_payment_succeeded` for one payment credits once; an unpaid completion waits for its async success; a stranger's customer and the other mode credit nothing; and a Cantina winery at 1,500 messages is refused, then answered with a limit of 2,500 the moment the credit lands. The ledger refuses UPDATE and DELETE to `app_rw`, sums by month and by winery only, and passes the RLS isolation matrix and migration reversibility. 19 mutants, 19 killed.
+
+| Mutation | Caught by |
+|---|---|
+| A coupon counted as paid · any payment Checkout taken for a top-up · a delayed payment never credited · the top-up sold as a subscription · its payment intent untraceable · filed under a plan's product · the interval not compared | `stripe-events.test.ts`, `checkout.test.ts`, `stripe-catalog.test.ts` |
+| The one-time price made recurring | `stripe-setup.test.mjs` |
+| A past-due winery, or any status, sold messages | `billing-top-up.test.ts` |
+| The wrong mode, an unpaid session or a stranger's payment credited · a duplicate reported applied · the credit unaudited · credited to today rather than the month paid · the gate not reading the ledger | `billing-events.integration.test.ts` |
+| One payment credited twice · every month summed | `usage-top-ups.integration.test.ts` |
 
 ---
 

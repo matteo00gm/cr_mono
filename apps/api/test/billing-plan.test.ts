@@ -275,6 +275,7 @@ describe('the route', () => {
         asked.push(`${tenantId}:${plan}`);
         return Promise.resolve({ plan, effective: 'now', effectiveAt: null });
       },
+      topUp: () => Promise.reject(new Error('not this route')),
     };
     const app = createApp({
       auth: signedIn(undefined, { fresh }),

@@ -6,13 +6,15 @@ import {
   differencesFrom,
   planCatalog,
   productIdFor,
+  type CatalogItem,
   type CatalogPrice,
   type StripeCatalog,
 } from '../../src/billing/stripe-catalog.js';
-import { PLANS } from '../../src/plans.js';
+import { PLANS, TOP_UP } from '../../src/plans.js';
 
 /**
- * Reconciling the Stripe catalogue with `plans.ts` (P5-01).
+ * Reconciling the Stripe catalogue with `plans.ts` (P5-01): the plans, and the
+ * one-time message top-up (P5-11a).
  *
  * Against an in-memory Stripe that behaves as the real one does in the ways
  * that matter here: `pricesByLookupKey` answers active prices only, and
@@ -24,6 +26,12 @@ interface Seed {
   readonly prices?: CatalogPrice[];
   readonly products?: string[];
 }
+
+/** `plan=CANTINA`, or `top_up=MESSAGES_1000`: whatever a product or price carries. */
+const tags = (metadata: object): string =>
+  Object.entries(metadata)
+    .map(([name, value]) => `${name}=${String(value)}`)
+    .join(',');
 
 const memoryStripe = ({ prices = [], products = [] }: Seed = {}) => {
   const held = prices.map((price) => ({ ...price }));
@@ -38,15 +46,15 @@ const memoryStripe = ({ prices = [], products = [] }: Seed = {}) => {
       ),
     hasProduct: (id) => Promise.resolve(known.has(id)),
     createProduct: (product) => {
-      writes.push(`product ${product.id} "${product.name}" plan=${product.metadata.plan}`);
+      writes.push(`product ${product.id} "${product.name}" ${tags(product.metadata)}`);
       known.add(product.id);
 
       return Promise.resolve();
     },
     createPrice: (price) => {
       writes.push(
-        `price ${price.lookupKey} ${String(price.unitAmount)} ${price.currency}/${price.interval} ` +
-          `on ${price.productId} "${price.nickname}" plan=${price.metadata.plan}`,
+        `price ${price.lookupKey} ${String(price.unitAmount)} ${price.currency}/${price.interval ?? 'once'} ` +
+          `on ${price.productId} "${price.nickname}" ${tags(price.metadata)}`,
       );
 
       /* The transfer: whoever held the key no longer does. */
@@ -75,7 +83,7 @@ const memoryStripe = ({ prices = [], products = [] }: Seed = {}) => {
 };
 
 /** A live price exactly as `plans.ts` describes it. */
-const agreeing = (plan: (typeof PLANS)[keyof typeof PLANS], id: string): CatalogPrice => ({
+const agreeing = (plan: CatalogItem, id: string): CatalogPrice => ({
   id,
   lookupKey: plan.lookupKey,
   productId: productIdFor(plan),
@@ -85,12 +93,13 @@ const agreeing = (plan: (typeof PLANS)[keyof typeof PLANS], id: string): Catalog
 });
 
 describe('an account with nothing in it', () => {
-  it('plans a product and a price for every plan, and writes nothing while planning', async () => {
+  it('plans a product and a price for every item, and writes nothing while planning', async () => {
     const stripe = memoryStripe();
 
     expect(await planCatalog(stripe.catalog)).toEqual([
-      { kind: 'create', plan: 'CANTINA', productExists: false },
-      { kind: 'create', plan: 'ECOMMERCE', productExists: false },
+      { kind: 'create', item: 'CANTINA', productExists: false },
+      { kind: 'create', item: 'ECOMMERCE', productExists: false },
+      { kind: 'create', item: 'MESSAGES_1000', productExists: false },
     ]);
     expect(stripe.writes).toEqual([]);
   });
@@ -105,10 +114,13 @@ describe('an account with nothing in it', () => {
       'price cantina_monthly_eur 2900 eur/month on plan_cantina "Cantina" plan=CANTINA',
       'product plan_ecommerce "E-commerce" plan=ECOMMERCE',
       'price ecommerce_monthly_eur 7900 eur/month on plan_ecommerce "E-commerce" plan=ECOMMERCE',
+      'product top_up_messages_1000 "1,000 messages" top_up=MESSAGES_1000',
+      'price messages_1000_eur 1500 eur/once on top_up_messages_1000 "1,000 messages" top_up=MESSAGES_1000',
     ]);
     expect(results).toEqual([
-      { plan: 'CANTINA', kind: 'create', priceId: 'price_1' },
-      { plan: 'ECOMMERCE', kind: 'create', priceId: 'price_2' },
+      { item: 'CANTINA', kind: 'create', priceId: 'price_1' },
+      { item: 'ECOMMERCE', kind: 'create', priceId: 'price_2' },
+      { item: 'MESSAGES_1000', kind: 'create', priceId: 'price_3' },
     ]);
   });
 });
@@ -124,15 +136,16 @@ describe('running it twice', () => {
 
     expect(stripe.writes).toEqual(first);
     expect(again).toEqual([
-      { plan: 'CANTINA', kind: 'unchanged', priceId: 'price_1' },
-      { plan: 'ECOMMERCE', kind: 'unchanged', priceId: 'price_2' },
+      { item: 'CANTINA', kind: 'unchanged', priceId: 'price_1' },
+      { item: 'ECOMMERCE', kind: 'unchanged', priceId: 'price_2' },
+      { item: 'MESSAGES_1000', kind: 'unchanged', priceId: 'price_3' },
     ]);
   });
 
   it('finishes a run that stopped between the product and its price', async () => {
     const stripe = memoryStripe({
-      prices: [agreeing(PLANS.CANTINA, 'price_live')],
-      products: ['plan_cantina', 'plan_ecommerce'],
+      prices: [agreeing(PLANS.CANTINA, 'price_live'), agreeing(TOP_UP, 'price_top_up')],
+      products: ['plan_cantina', 'plan_ecommerce', 'top_up_messages_1000'],
     });
 
     await applyCatalog(stripe.catalog, await planCatalog(stripe.catalog));
@@ -151,7 +164,7 @@ describe('a price that disagrees with its plan', () => {
 
     expect((await planCatalog(stripe.catalog))[0]).toEqual({
       kind: 'differs',
-      plan: 'CANTINA',
+      item: 'CANTINA',
       previous: cheaper,
       fields: ['amount'],
     });
@@ -184,14 +197,14 @@ describe('a price that disagrees with its plan', () => {
 
   it('is replaced under --reprice, the key moving and the old price left for its subscribers', async () => {
     const stripe = memoryStripe({
-      prices: [cheaper, agreeing(PLANS.ECOMMERCE, 'price_e')],
-      products: ['plan_cantina', 'plan_ecommerce'],
+      prices: [cheaper, agreeing(PLANS.ECOMMERCE, 'price_e'), agreeing(TOP_UP, 'price_t')],
+      products: ['plan_cantina', 'plan_ecommerce', 'top_up_messages_1000'],
     });
     const steps = await planCatalog(stripe.catalog, { reprice: true });
 
     expect(steps[0]).toEqual({
       kind: 'reprice',
-      plan: 'CANTINA',
+      item: 'CANTINA',
       productExists: true,
       previous: cheaper,
       fields: ['amount'],
@@ -200,8 +213,9 @@ describe('a price that disagrees with its plan', () => {
     const results = await applyCatalog(stripe.catalog, steps);
 
     expect(results).toEqual([
-      { plan: 'CANTINA', kind: 'reprice', priceId: 'price_1' },
-      { plan: 'ECOMMERCE', kind: 'unchanged', priceId: 'price_e' },
+      { item: 'CANTINA', kind: 'reprice', priceId: 'price_1' },
+      { item: 'ECOMMERCE', kind: 'unchanged', priceId: 'price_e' },
+      { item: 'MESSAGES_1000', kind: 'unchanged', priceId: 'price_t' },
     ]);
     expect(stripe.writes).toEqual([
       'price cantina_monthly_eur 2900 eur/month on plan_cantina "Cantina" plan=CANTINA',
@@ -252,5 +266,24 @@ describe('product ids', () => {
   it('are ours and stable, so a product is found rather than searched for', () => {
     expect(productIdFor(PLANS.CANTINA)).toBe('plan_cantina');
     expect(productIdFor(PLANS.ECOMMERCE)).toBe('plan_ecommerce');
+    expect(productIdFor(TOP_UP)).toBe('top_up_messages_1000');
+  });
+});
+
+describe('the top-up (P5-11a)', () => {
+  const live = agreeing(TOP_UP, 'price_t');
+
+  it('is a one-time price: a monthly one under its key differs', () => {
+    expect(differencesFrom(TOP_UP, live)).toEqual([]);
+    expect(differencesFrom(TOP_UP, { ...live, interval: 'month' })).toEqual(['interval']);
+  });
+
+  it('is held to plans.ts like a plan, and stops the run when it is not', async () => {
+    const stripe = memoryStripe({ prices: [{ ...live, unitAmount: 1_000 }] });
+
+    await expect(applyCatalog(stripe.catalog, await planCatalog(stripe.catalog))).rejects.toThrow(
+      'MESSAGES_1000 (amount)',
+    );
+    expect(stripe.writes).toEqual([]);
   });
 });

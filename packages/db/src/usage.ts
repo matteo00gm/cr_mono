@@ -93,3 +93,54 @@ export const countUsage = async (
 
   return row.used;
 };
+
+/** One paid top-up, as the webhook credits it (P5-11a). */
+export interface TopUpToRecord {
+  /** `YYYYMM`: the month the payment completed in, which is the month it counts towards. */
+  readonly period: string;
+  readonly messages: number;
+  /** One payment is one credit, however many events Stripe sends about it. */
+  readonly paymentIntentId: string;
+}
+
+/**
+ * Credits messages bought on top of the plan (P5-11a), in the caller's
+ * transaction — the webhook claim's, so the credit and the claim are one write.
+ *
+ * **`duplicate` when this payment was already credited**: the unique payment
+ * intent makes a second event about the same payment a no-op rather than a
+ * second thousand messages. Append-only at the grant (migration 0062), so
+ * there is no update path to get wrong.
+ */
+export const recordTopUp = async (
+  tx: DbTransaction,
+  topUp: TopUpToRecord,
+): Promise<'credited' | 'duplicate'> => {
+  const rows = await tx.execute(sql`
+    insert into usage_top_ups (tenant_id, period, messages_purchased, stripe_payment_intent_id)
+    values (
+      nullif(current_setting('app.tenant_id', true), '')::uuid,
+      ${topUp.period}, ${topUp.messages}, ${topUp.paymentIntentId}
+    )
+    on conflict (stripe_payment_intent_id) do nothing
+    returning id
+  `);
+
+  return [...rows].length === 0 ? 'duplicate' : 'credited';
+};
+
+/**
+ * Messages a tenant bought on top of its plan for a period (P5-11a): what
+ * `planCapCheck` raises the month by (P5-11). Nought when nothing was bought.
+ */
+export const countPurchased = async (tx: DbTransaction, period: string): Promise<number> => {
+  const rows = await tx.execute(sql`
+    select coalesce(sum(messages_purchased), 0)::int as purchased
+    from usage_top_ups
+    where tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+      and period = ${period}
+  `);
+  const row = [...rows][0] as { purchased?: number } | undefined;
+
+  return row?.purchased ?? 0;
+};

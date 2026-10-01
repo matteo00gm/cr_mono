@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BILLING_EVENT_TYPES,
   readBillingEvent,
+  readTopUpEvent,
   tenantOfStripeEvent,
 } from '../../src/billing/stripe-events.js';
 
@@ -295,5 +296,84 @@ describe('a billing event, read', () => {
       'invoice.payment_failed',
       'invoice.payment_succeeded',
     ]);
+  });
+});
+
+/* ------------------------------------------------------------ readTopUpEvent */
+
+describe('a top-up payment, read (P5-11a)', () => {
+  const topUpSession = (overrides: Record<string, unknown> = {}) => ({
+    object: 'checkout.session',
+    mode: 'payment',
+    customer: 'cus_1',
+    subscription: null,
+    payment_intent: 'pi_1',
+    payment_status: 'paid',
+    client_reference_id: TENANT,
+    metadata: { tenant_id: TENANT, top_up: 'MESSAGES_1000' },
+    ...overrides,
+  });
+
+  it('is a paid top-up, from the customer, with its payment and when it was paid', () => {
+    expect(readTopUpEvent(stripeEvent('checkout.session.completed', topUpSession(), true))).toEqual(
+      {
+        customerId: 'cus_1',
+        paymentIntentId: 'pi_1',
+        paid: true,
+        occurredAt: new Date(CREATED * 1000),
+        livemode: true,
+      },
+    );
+  });
+
+  it('is unpaid while a delayed method clears, and paid on its async success', () => {
+    expect(
+      readTopUpEvent(
+        stripeEvent('checkout.session.completed', topUpSession({ payment_status: 'unpaid' })),
+      )?.paid,
+    ).toBe(false);
+    expect(
+      readTopUpEvent(stripeEvent('checkout.session.async_payment_succeeded', topUpSession()))?.paid,
+    ).toBe(true);
+  });
+
+  it('is not paid when nothing was paid: a coupon is not money', () => {
+    expect(
+      readTopUpEvent(
+        stripeEvent(
+          'checkout.session.completed',
+          topUpSession({ payment_status: 'no_payment_required' }),
+        ),
+      )?.paid,
+    ).toBe(false);
+  });
+
+  it.each([
+    ['a plan’s Checkout', stripeEvent('checkout.session.completed', session())],
+    [
+      'a payment somebody made in the Dashboard, without our metadata',
+      stripeEvent('checkout.session.completed', topUpSession({ metadata: { tenant_id: TENANT } })),
+    ],
+    [
+      'a top-up plans.ts does not sell',
+      stripeEvent(
+        'checkout.session.completed',
+        topUpSession({ metadata: { tenant_id: TENANT, top_up: 'MESSAGES_9000' } }),
+      ),
+    ],
+    ['a session expiring', stripeEvent('checkout.session.expired', topUpSession())],
+    [
+      'a payment with no payment intent',
+      stripeEvent('checkout.session.completed', topUpSession({ payment_intent: null })),
+    ],
+    ['something that is not an event', { hello: 'world' }],
+  ])('is nothing for %s', (_what, payload) => {
+    expect(readTopUpEvent(payload)).toBeUndefined();
+  });
+
+  it('is never read by the state machine, whose Checkout is a subscription’s', () => {
+    expect(readBillingEvent(stripeEvent('checkout.session.completed', topUpSession()))).toBe(
+      undefined,
+    );
   });
 });

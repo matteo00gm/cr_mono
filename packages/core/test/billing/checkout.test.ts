@@ -5,8 +5,10 @@ import {
   checkoutSessionParams,
   STRIPE_PLAN_KEY,
   STRIPE_TENANT_KEY,
+  topUpSessionParams,
   type CheckoutRequest,
 } from '../../src/billing/checkout.js';
+import { tenantOfStripeEvent } from '../../src/billing/stripe-events.js';
 import { encodeStripeForm } from '../../src/billing/stripe-form.js';
 
 /**
@@ -78,5 +80,53 @@ describe('the Checkout session', () => {
     ['de', 'auto'],
   ])('shows Checkout in %s as %s', (locale, expected) => {
     expect(form({ locale })).toMatchObject({ locale: expected });
+  });
+});
+
+describe('a top-up’s Checkout session (P5-11a)', () => {
+  const topUp = (locale = 'it') =>
+    Object.fromEntries(
+      encodeStripeForm(
+        topUpSessionParams({
+          tenantId: TENANT,
+          priceId: 'price_top_up',
+          customerId: 'cus_1',
+          locale,
+          dashboardOrigin: 'https://app.catalogorosso.com',
+        }),
+      ),
+    );
+
+  it('sells one top-up, once, to the customer the winery already is', () => {
+    expect(topUp()).toEqual({
+      mode: 'payment',
+      'line_items[0][price]': 'price_top_up',
+      'line_items[0][quantity]': '1',
+      client_reference_id: TENANT,
+      customer: 'cus_1',
+      'metadata[tenant_id]': TENANT,
+      'metadata[top_up]': 'MESSAGES_1000',
+      'payment_intent_data[metadata][tenant_id]': TENANT,
+      'payment_intent_data[metadata][top_up]': 'MESSAGES_1000',
+      locale: 'it',
+      success_url: `https://app.catalogorosso.com${BILLING_PATH}?top_up=success`,
+      cancel_url: `https://app.catalogorosso.com${BILLING_PATH}?top_up=cancelled`,
+    });
+  });
+
+  it('leaves a language Checkout does not share with us to Stripe', () => {
+    expect(topUp('de').locale).toBe('auto');
+  });
+
+  it('names its winery where the webhook reads one back', () => {
+    const params = topUpSessionParams({
+      tenantId: TENANT,
+      priceId: 'price_top_up',
+      customerId: 'cus_1',
+      locale: 'it',
+      dashboardOrigin: 'https://app.catalogorosso.com',
+    });
+
+    expect(tenantOfStripeEvent({ data: { object: params } })).toBe(TENANT);
   });
 });

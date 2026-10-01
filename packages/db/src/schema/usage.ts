@@ -87,6 +87,47 @@ export const usageEvents = pgTable(
 );
 
 /**
+ * Messages bought on top of a plan (P5-11a). A ledger, like `usage_events`:
+ * append-only at the grant level (`0062_usage_top_ups.sql`), because the row
+ * that says what a winery paid for must not be editable by the code path that
+ * serves it.
+ */
+export const usageTopUps = pgTable(
+  'usage_top_ups',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+
+    /**
+     * The `YYYYMM` the messages count towards, in the ledger's own format and
+     * for the same reason: the quota gate sums this with an indexed equality
+     * before every model call (P5-11).
+     */
+    period: text('period').notNull(),
+
+    messagesPurchased: integer('messages_purchased').notNull(),
+
+    /**
+     * What makes a credit happen once (P5-11a). The webhook claim already
+     * dedupes an event; this dedupes the *payment*, which Stripe can report in
+     * two events — completed, and later an async success for the same session.
+     */
+    stripePaymentIntentId: text('stripe_payment_intent_id').notNull().unique(),
+
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('usage_top_ups_tenant_period_idx').on(table.tenantId, table.period),
+
+    check('usage_top_ups_period_format', sql`period ~ '^[0-9]{6}$'`),
+    check('usage_top_ups_messages_positive', sql`messages_purchased > 0`),
+  ],
+);
+
+/**
  * The nightly rollup (P5-13).
  *
  * Not append-only: a day's row is upserted as the job re-runs, so `app_rw`
