@@ -178,3 +178,51 @@ describe('reading the month for the banner', () => {
     ).resolves.toBe(0);
   });
 });
+
+describe('what was bought on top (P5-11)', () => {
+  it('raises the cap by it, for the period being spent', async () => {
+    const topped = await createTenant('quota-topped');
+    const asked: [string, string][] = [];
+    const port = createQuotaPort({
+      readPurchased: (id, period) => {
+        asked.push([id, period]);
+        return Promise.resolve(1_000);
+      },
+    });
+
+    await expect(port.check(tenant(topped))).resolves.toMatchObject({
+      allowed: true,
+      limit: CANTINA_CAP + 1_000,
+    });
+    expect(asked).toEqual([[topped, periodOf(new Date())]]);
+  });
+
+  it('counts the month already spent against the raised cap', async () => {
+    const spentThenTopped = await createTenant('quota-spent-topped');
+
+    await meter(spentThenTopped, 3, periodOf(new Date()));
+
+    const port = createQuotaPort({ readPurchased: () => Promise.resolve(2) });
+
+    await expect(port.check({ ...tenant(spentThenTopped), plan: null })).resolves.toMatchObject({
+      used: 3,
+      limit: 152,
+      allowed: true,
+    });
+  });
+
+  it('reads the period off the same clock as the ledger', async () => {
+    const periods: string[] = [];
+    const port = createQuotaPort({
+      now: () => new Date(Date.UTC(2026, 1, 3)),
+      readPurchased: (_id, period) => {
+        periods.push(period);
+        return Promise.resolve(0);
+      },
+    });
+
+    await port.readPurchased(tenantId);
+
+    expect(periods).toEqual(['202602']);
+  });
+});

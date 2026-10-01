@@ -80,6 +80,12 @@ export interface WidgetDependencies {
    * that refuses its messages.
    */
   readonly readUsage: (check: MonthlyCheck) => Promise<number>;
+  /**
+   * Messages a tenant bought on top of its plan this month (P5-11). The limiter
+   * and the config route raise the plan cap by it, as the cost gate does.
+   * Absent, nothing was bought: the plan's own cap.
+   */
+  readonly readPurchased?: ((tenantId: string) => Promise<number>) | undefined;
   /** What the daily address salt is derived from (P2-04). */
   readonly ipSecret: string;
   readonly environment?: 'production' | 'development' | undefined;
@@ -353,7 +359,14 @@ const mountGuarded = (
     );
   }
 
-  guards.push(limitWidgetRequest({ limiter: widget.limiter, endpoint, ipSecret: widget.ipSecret }));
+  guards.push(
+    limitWidgetRequest({
+      limiter: widget.limiter,
+      endpoint,
+      ipSecret: widget.ipSecret,
+      readPurchased: widget.readPurchased,
+    }),
+  );
 
   app.on([...methods], [path], ...guards, handler);
 };
@@ -426,7 +439,8 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
     { methods: ['GET', 'OPTIONS'], path: CONFIG_PATH, endpoint: 'config' },
     async (c) => {
       const tenant = c.get('widgetTenant');
-      const cap = planCapCheck(tenant.tenantId, tenant.plan);
+      const purchased = (await widget.readPurchased?.(tenant.tenantId)) ?? 0;
+      const cap = planCapCheck(tenant.tenantId, tenant.plan, purchased);
       const used = await widget.readUsage(cap);
 
       c.header('Cache-Control', WIDGET_CONFIG_CACHE_CONTROL);

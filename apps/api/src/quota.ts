@@ -27,6 +27,8 @@ import type { WidgetTenant } from './env.js';
 export interface QuotaPort {
   /** How much of the month a check's tenant has spent. Reads, never consumes. */
   readonly readUsage: (check: MonthlyCheck) => Promise<number>;
+  /** Messages a tenant bought on top of its plan this month (P5-11a). */
+  readonly readPurchased: (tenantId: string) => Promise<number>;
   /** Whether one more message may be answered by this tenant. */
   readonly check: (tenant: WidgetTenant) => Promise<QuotaDecision>;
 }
@@ -34,9 +36,20 @@ export interface QuotaPort {
 export interface QuotaPortOptions {
   /** The clock the period is read from. Injected so a test can cross a month boundary. */
   readonly now?: () => Date;
+  /**
+   * Messages bought on top of the plan for a period (P5-11a's ledger). Until
+   * there is one, nothing can be bought, and nought is the true answer — the
+   * restrictive one too, since it is the plan's cap and nothing more.
+   */
+  readonly readPurchased?: ((tenantId: string, period: string) => Promise<number>) | undefined;
 }
 
-export const createQuotaPort = ({ now = () => new Date() }: QuotaPortOptions = {}): QuotaPort => {
+export const createQuotaPort = ({
+  now = () => new Date(),
+  readPurchased = () => Promise.resolve(0),
+}: QuotaPortOptions = {}): QuotaPort => {
+  const purchased = (tenantId: string): Promise<number> => readPurchased(tenantId, periodOf(now()));
+
   const used = (tenantId: string): Promise<number> =>
     withTenant(tenantId, (tx) => countUsage(tx, periodOf(now()), CHAT_MESSAGE));
 
@@ -53,10 +66,22 @@ export const createQuotaPort = ({ now = () => new Date() }: QuotaPortOptions = {
       return tenantId === undefined ? 0 : await used(tenantId);
     },
 
-    check: async (tenant) => {
-      const cap = planCapCheck(tenant.tenantId, tenant.plan);
+    readPurchased: purchased,
 
-      return checkQuota({ used: await used(tenant.tenantId), limit: cap.limit });
+    /*
+     * **The plan's messages plus what was bought, compared against the
+     * ledger** (P5-11). A top-up raises this and the limiter's bucket by the
+     * same number, through the one `planCapCheck`, so a message bought is a
+     * message served.
+     */
+    check: async (tenant) => {
+      const [spent, bought] = await Promise.all([
+        used(tenant.tenantId),
+        purchased(tenant.tenantId),
+      ]);
+      const cap = planCapCheck(tenant.tenantId, tenant.plan, bought);
+
+      return checkQuota({ used: spent, limit: cap.limit });
     },
   };
 };

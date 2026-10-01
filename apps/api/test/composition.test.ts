@@ -292,6 +292,12 @@ describe('the widget surface (P2-10)', () => {
     ).resolves.toBe(0);
   });
 
+  it('raises the limiter and the banner by what was bought, read as the gate reads it (P5-11)', () => {
+    const built = buildDependencies(config);
+
+    expect(built.widget.readPurchased).toBe(built.quota.readPurchased);
+  });
+
   it("buckets addresses under the deployment's own secret", () => {
     expect(buildDependencies(config).widget.ipSecret).toBe(config.authSecret);
   });

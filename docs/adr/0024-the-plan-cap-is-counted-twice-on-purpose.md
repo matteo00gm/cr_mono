@@ -54,6 +54,10 @@ error rate, which is small and observable.
   spends the key it builds, the config route reads the month with the same key,
   and `tenantOfPlanCap` reads the tenant back out of it (P2-36).
 - The open item in `plan-v1.md` that recorded this as unresolved points here.
+- **A top-up raises both counters by the same number** (P5-11): `planCapCheck`
+  takes what was bought, so the bucket, the banner and the ledger gate share
+  one allowance. A top-up that raised one would be paid for and still refused
+  by the other, since the stricter wins.
 
 ## Alternatives rejected
 

@@ -64,13 +64,14 @@ interface AppOptions {
   readonly tenant: WidgetTenant | undefined;
   readonly limits?: WidgetLimits;
   readonly now?: () => number;
+  readonly readPurchased?: (tenantId: string) => Promise<number>;
 }
 
 /**
  * A widget surface in miniature: the context and error handling the real one
  * has, a stand-in for tenant resolution, and one route per endpoint.
  */
-const widgetApp = ({ limiter, tenant, limits = ROOMY, now }: AppOptions) => {
+const widgetApp = ({ limiter, tenant, limits = ROOMY, now, readPurchased }: AppOptions) => {
   const app = new Hono<AppEnv>();
 
   app.use('*', requestContext());
@@ -85,7 +86,13 @@ const widgetApp = ({ limiter, tenant, limits = ROOMY, now }: AppOptions) => {
     await next();
   });
 
-  const shared = { limiter, ipSecret: SECRET, limits, ...(now === undefined ? {} : { now }) };
+  const shared = {
+    limiter,
+    ipSecret: SECRET,
+    limits,
+    readPurchased,
+    ...(now === undefined ? {} : { now }),
+  };
 
   app.get('/config', limitWidgetRequest({ ...shared, endpoint: 'config' }), (c) =>
     c.json({ ok: true }),
@@ -199,6 +206,42 @@ describe('each dimension trips on its own', () => {
 
     // Page views do not spend a winery's messages.
     expect((await call(app, 'GET /config', { ip: '198.51.100.3' })).status).toBe(200);
+  });
+});
+
+describe('a top-up (P5-11)', () => {
+  it('raises the month by what was bought, and stops hard at the new cap', async () => {
+    const app = widgetApp({
+      limiter: memoryRateLimiter(),
+      tenant: CANTINA,
+      limits: { ...ROOMY, messagesPerMonth: { ...ROOMY.messagesPerMonth, CANTINA: 1 } },
+      readPurchased: () => Promise.resolve(2),
+    });
+    const chat = (n: number) => call(app, 'POST /chat', { ip: `198.51.100.${String(n)}` });
+
+    expect((await chat(1)).status).toBe(200);
+    expect((await chat(2)).status).toBe(200);
+    expect((await chat(3)).status).toBe(200);
+    expect((await chat(4)).status).toBe(429);
+  });
+
+  it('is read for chat alone — the one endpoint that spends the month', async () => {
+    const asked: string[] = [];
+    const app = widgetApp({
+      limiter: memoryRateLimiter(),
+      tenant: CANTINA,
+      readPurchased: (tenantId) => {
+        asked.push(tenantId);
+        return Promise.resolve(0);
+      },
+    });
+
+    await call(app, 'GET /config');
+    await call(app, 'POST /session');
+    expect(asked).toEqual([]);
+
+    await call(app, 'POST /chat');
+    expect(asked).toEqual([TENANT]);
   });
 });
 

@@ -1408,7 +1408,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P5-08 | Customer Portal link endpoint | | P5-02 |
 | ✅ P5-09 | Upgrade (prorated) / downgrade (period end) | | P5-05 |
 | ✅ P5-10 | Downgrade guard | blocked when catalog (>300/2,500 SKUs) or domains exceed target plan | P5-09 |
-| P5-11 | Quota enforcement wiring | hard cap at 100% messages; zero model calls past cap | P2-36 |
+| ✅ P5-11 | Quota enforcement wiring | hard cap at 100% messages; zero model calls past cap | P2-36 |
 | P5-11a | Message top-up purchase | €15 for 1,000 extra messages one-time checkout + credit counter | P5-11 |
 | P5-12 | Usage notifications (80% & 100%) | dashboard banners + automated emails with upgrade & top-up CTAs | P5-11 |
 | P5-13 | `usage_daily` rollup job | EventBridge nightly | P0-30 |
@@ -7213,6 +7213,23 @@ Quota check reads `current_usage < (plan_cap + purchased_top_up_messages)`.
 **Tests.** Cap boundary tests: allowed at cap−1, allowed at cap, rejected at cap+1 with zero model calls; purchased top-up increases the threshold accordingly and restores service.
 
 **Files.** `packages/core/src/quota.ts`, tests. **~80 lines.**
+
+**As built (2026-10-01).** `planCapCheck` in `packages/security/src/rate-limit/widget.ts`, `apps/api/src/quota.ts`, the limiter middleware, the config route and the composition root. `packages/core/src/quota.ts` needed no change: `checkQuota` already compares against whatever limit it is handed.
+
+- **The plan limits were already P5-01's.** `WIDGET_LIMITS.messagesPerMonth` is pinned equal to `PLANS` and `TRIAL` by `plans.test.ts`, and `packages/security` cannot import `core`, so the pin is the connection rather than a second import.
+- **One allowance, three readers.** The plan's messages plus what was bought is `planCapCheck(tenant, plan, purchased)`, and the limiter's monthly bucket (P2-04), the config route's `quotaState` (P2-10) and the ledger gate (P2-36) all build it. ADR 0024 keeps both counters, and the stricter one wins — so a top-up that raised one and not the other would be paid for and still refused. The key does not change with a top-up, so what was already spent this month still counts.
+- **Read for chat alone.** The limiter asks what was bought only on the one endpoint that spends the month; config reads it for the banner; session never does. A count that is not a non-negative integer throws rather than becoming a limit: `NaN` would read `ok` on the banner and refuse every message.
+- **The boundaries**, against real Postgres with a counting provider: the 1,500th Cantina message is answered, the 1,501st is refused with zero provider calls; with 1,000 bought, the 1,501st is answered and the 2,501st refused with zero calls.
+- **⚠ Nothing can be bought yet** *(staging)*. `readPurchased` defaults to nought — the true answer until P5-11a's ledger exists, and the restrictive one. P5-11a replaces the default with the real read; every reader already asks.
+- **The 80% notification is P5-12's**, as the row says; `quotaState: 'near'` already reaches the widget at four fifths.
+
+**Verified.** 4,949 unit tests, with `packages/security` at 100% of 315 branches; the full integration suite (76 files, 988 tests — one MFA timing test failed once under load and passed three reruns, unrelated). 10 mutants, 10 killed.
+
+| Mutation | Caught by |
+|---|---|
+| What was bought not added · any number taken as a count · a negative count lowering the cap · chat spending against the plan alone | `widget-limits.test.ts` |
+| Read for every endpoint · the limiter never told · the banner on the plan alone · the widget never wired | `widget-rate-limit.test.ts`, `widget-config.test.ts`, `composition.test.ts` |
+| The gate on the plan alone · the period off another clock | `quota.integration.test.ts`, `chat-port.integration.test.ts` |
 
 ---
 
