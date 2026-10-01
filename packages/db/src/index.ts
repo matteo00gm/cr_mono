@@ -275,6 +275,7 @@ export {
 export {
   readBillingSnapshot,
   readBillingState,
+  readPlanFootprint,
   startTrial,
   writeBillingChange,
   type BillingChangeRow,

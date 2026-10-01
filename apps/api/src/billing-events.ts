@@ -1,11 +1,21 @@
 import {
   BILLING_EVENT_TYPES,
+  downgradeBlockers,
+  downgradeRefusal,
+  isDowngrade,
   readBillingEvent,
   transition,
+  type BillingChange,
   type IgnoreReason,
 } from '@catalogorosso/core';
-import { insertAuditRow, readBillingSnapshot, writeBillingChange } from '@catalogorosso/db';
+import {
+  insertAuditRow,
+  readBillingSnapshot,
+  readPlanFootprint,
+  writeBillingChange,
+} from '@catalogorosso/db';
 
+import type { BillingNotice } from './billing-notices.js';
 import { logger } from './middleware/logger.js';
 import type { StripeEffect } from './stripe-events.js';
 
@@ -97,7 +107,38 @@ export const createBillingEffect =
       return NOTHING;
     }
 
-    if ((await writeBillingChange(tx, decided.change)) === 'customer_taken') {
+    /*
+     * **A downgrade is re-checked as it applies** (P5-10). It was allowed when
+     * it was scheduled, but a winery can grow in the month to its period end,
+     * and moving it now to a plan it does not fit would break a live widget.
+     * So our record keeps the plan it has, and the notice asks the port — after
+     * this commits — to put Stripe's price back and tell the owners what to
+     * reduce. Read on the claim's own transaction: the count and the decision
+     * are one snapshot.
+     */
+    let change: BillingChange = decided.change;
+    let deferred: BillingNotice | undefined;
+
+    if (current.plan !== null && change.plan !== null && isDowngrade(current.plan, change.plan)) {
+      const blockers = downgradeBlockers(await readPlanFootprint(tx), change.plan);
+
+      if (blockers.length > 0) {
+        logger.warn(
+          { kind: 'stripe_downgrade_deferred', type: change.plan },
+          'a downgrade reached its period end with the winery over the lower plan; kept (P5-10)',
+        );
+
+        deferred = {
+          kind: 'downgrade_deferred',
+          kept: current.plan,
+          wanted: change.plan,
+          reason: downgradeRefusal(change.plan, blockers),
+        };
+        change = { ...change, plan: current.plan };
+      }
+    }
+
+    if ((await writeBillingChange(tx, change)) === 'customer_taken') {
       logger.warn(
         { kind: 'stripe_event_ignored', type: 'customer_taken' },
         'a Stripe customer or subscription is already bound to another winery (§5.2b)',
@@ -106,7 +147,7 @@ export const createBillingEffect =
       return NOTHING;
     }
 
-    if (decided.change.status !== current.status) {
+    if (change.status !== current.status) {
       /*
        * On the claim's own transaction (P0-53), and with no actor: Stripe did
        * this, not a member of the winery.
@@ -118,7 +159,7 @@ export const createBillingEffect =
         target: `tenant:${delivery.tenantId}`,
         metadata: JSON.stringify({
           from: current.status,
-          to: decided.change.status,
+          to: change.status,
           event: delivery.type,
         }),
         ip: undefined,
@@ -131,7 +172,9 @@ export const createBillingEffect =
      * (§5.2b): their widget went dark on this event. Entering, not being — a
      * second failure while already past due tells nobody twice.
      */
-    const enteredPastDue = decided.change.status === 'PAST_DUE' && current.status !== 'PAST_DUE';
+    const enteredPastDue = change.status === 'PAST_DUE' && current.status !== 'PAST_DUE';
 
-    return enteredPastDue ? { applied: true, notice: 'payment_failed' } : { applied: true };
+    if (enteredPastDue) return { applied: true, notice: { kind: 'payment_failed' } };
+
+    return deferred === undefined ? { applied: true } : { applied: true, notice: deferred };
   };

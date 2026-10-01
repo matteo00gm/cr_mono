@@ -10,6 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 import { createApp } from '../src/app.js';
 import { createBillingEffect } from '../src/billing-events.js';
+import type { BillingNotice } from '../src/billing-notices.js';
 import { logger } from '../src/middleware/logger.js';
 import { WEBHOOK_PREFIX } from '../src/routes.js';
 import { webhookRejectionRecorder } from '../src/security-events.js';
@@ -59,7 +60,7 @@ beforeEach(() => {
   vi.spyOn(logger, 'error').mockImplementation(() => undefined);
 });
 
-const told: [string, string][] = [];
+const told: [string, BillingNotice][] = [];
 
 /** The endpoint as production composes it, with a recording notifier. */
 const app = createApp({
@@ -209,7 +210,7 @@ describe('a winery’s life, as Stripe tells it', () => {
     told.length = 0;
     await deliver(fixture('invoice.payment_failed', winery));
     expect((await row(tenantId)).status).toBe('PAST_DUE');
-    expect(told).toEqual([[tenantId, 'payment_failed']]);
+    expect(told).toEqual([[tenantId, { kind: 'payment_failed' }]]);
 
     /* Stripe's retry succeeds: back on, with no human. */
     await deliver(fixture('invoice.paid', winery));

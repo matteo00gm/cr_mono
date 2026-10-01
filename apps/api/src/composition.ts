@@ -28,7 +28,7 @@ import {
   withUser,
 } from '@catalogorosso/db';
 
-import { createBillingPort, type BillingPort } from './billing.js';
+import { createBillingPort, createPlanRestorer, type BillingPort } from './billing.js';
 import { createBillingEffect } from './billing-events.js';
 import { createBillingNotifier } from './billing-notices.js';
 import { createDomainsPort, type DomainsPort } from './domains.js';
@@ -593,6 +593,14 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
             isSuppressed: (address) => withTenant(tenantId, (tx) => isSuppressed(tx, address)),
           }),
         dashboardOrigin: new URL(config.authBaseUrl).origin,
+        /* A downgrade refused as it applies is put back in Stripe (P5-10). */
+        ...(config.stripeSecretKey === undefined
+          ? {}
+          : {
+              restorePlan: createPlanRestorer({
+                stripe: createStripeClient({ secretKey: config.stripeSecretKey }),
+              }),
+            }),
       }),
     }),
 

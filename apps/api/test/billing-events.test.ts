@@ -79,7 +79,10 @@ afterEach(() => {
 
 describe('an event the machine acts on', () => {
   it('writes the change, audits the move with no actor, and leaves the owners to be told', async () => {
-    expect(await effect(tx, failedInvoice())).toEqual({ applied: true, notice: 'payment_failed' });
+    expect(await effect(tx, failedInvoice())).toEqual({
+      applied: true,
+      notice: { kind: 'payment_failed' },
+    });
     expect(state.written).toEqual([
       { ...paying, status: 'PAST_DUE', lastEventAt: new Date(1_790_000_100_000) },
     ]);

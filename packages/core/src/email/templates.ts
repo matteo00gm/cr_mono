@@ -78,6 +78,15 @@ export interface TemplateProps {
     /** The Fatturazione screen, where the Stripe portal link is. */
     readonly billingUrl: string;
   };
+  'downgrade-deferred': {
+    readonly tenantName: string;
+    /** The plan the winery stays on, as a seller calls it. */
+    readonly keptPlan: string;
+    readonly wantedPlan: string;
+    /** What to reduce and by how much, already worded (P5-10). */
+    readonly reason: string;
+    readonly billingUrl: string;
+  };
 }
 
 export type TemplateName = keyof TemplateProps;
@@ -93,6 +102,7 @@ export const TEMPLATE_NAMES = [
   'domain-claim-won',
   'domain-claim-withdrawn',
   'payment-failed',
+  'downgrade-deferred',
 ] as const satisfies readonly TemplateName[];
 
 interface Content {
@@ -464,6 +474,44 @@ const paymentFailed: Copy<TemplateProps['payment-failed']> = {
   }),
 };
 
+/**
+ * A downgrade that could not happen at period end (P5-10).
+ *
+ * **Says what did not change, then why, then what to do**: the widget is
+ * untouched, which is the reassurance; the reason names the cut to make; and
+ * asking again from Fatturazione is the way through. The reason is our own
+ * wording and in English, like every refusal the API writes.
+ */
+const downgradeDeferred: Copy<TemplateProps['downgrade-deferred']> = {
+  it: (p) => ({
+    subject: `${p.tenantName}: resti sul piano ${p.keptPlan}`,
+    blocks: [
+      {
+        kind: 'text',
+        value:
+          `Il passaggio al piano ${p.wantedPlan} non è avvenuto: il catalogo o i domini ` +
+          `superano ciò che il piano include. Resti su ${p.keptPlan}, e il widget funziona ` +
+          'come prima.',
+      },
+      { kind: 'note', value: p.reason },
+      { kind: 'action', label: 'Vai a Fatturazione', url: p.billingUrl },
+    ],
+  }),
+  en: (p) => ({
+    subject: `${p.tenantName}: you stay on ${p.keptPlan}`,
+    blocks: [
+      {
+        kind: 'text',
+        value:
+          `The move to ${p.wantedPlan} did not happen: the catalogue or the domains go beyond ` +
+          `what that plan includes. You stay on ${p.keptPlan}, and the widget works as before.`,
+      },
+      { kind: 'note', value: p.reason },
+      { kind: 'action', label: 'Open billing', url: p.billingUrl },
+    ],
+  }),
+};
+
 const TEMPLATES = {
   invite,
   'password-reset': passwordReset,
@@ -475,6 +523,7 @@ const TEMPLATES = {
   'domain-claim-won': domainClaimWon,
   'domain-claim-withdrawn': domainClaimWithdrawn,
   'payment-failed': paymentFailed,
+  'downgrade-deferred': downgradeDeferred,
 } satisfies { [K in TemplateName]: Copy<TemplateProps[K]> };
 
 /**
