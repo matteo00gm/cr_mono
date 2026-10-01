@@ -2,6 +2,8 @@ import type { JSX } from 'preact';
 import { useMemo } from 'preact/hooks';
 import { Link, Route, Switch, useLocation } from 'wouter-preact';
 
+import { BillingBanner } from './features/billing/BillingBanner.js';
+import { BillingScreen } from './features/billing/BillingScreen.js';
 import { CatalogScreen } from './features/catalog/CatalogScreen.js';
 import { ClaimNotice } from './features/domains/ClaimNotice.js';
 import { EnrolmentScreen } from './features/security/EnrolmentScreen.js';
@@ -134,6 +136,18 @@ const CatalogRoute = ({
   return <CatalogScreen client={client} />;
 };
 
+/** Fatturazione (P5-12), with a client built once per winery for `CatalogRoute`'s reason. */
+const BillingRoute = ({
+  tenantId,
+  clientFor,
+}: {
+  readonly tenantId: string;
+  readonly clientFor: (tenantId: string) => ApiClient;
+}): JSX.Element => {
+  const client = useMemo(() => clientFor(tenantId), [tenantId, clientFor]);
+  return <BillingScreen client={client} />;
+};
+
 /**
  * The signed-in layout.
  *
@@ -211,6 +225,15 @@ export const Layout = ({
         <ClaimNotice client={shellClient} />
       ) : null}
 
+      {shellClient === undefined ? null : (
+        /*
+         * The month and the payment (P5-12, §2.5), for every role: an editor
+         * cannot fix either, but is often the first to notice the widget going
+         * quiet, and is told to tell an owner.
+         */
+        <BillingBanner client={shellClient} role={active.role} />
+      )}
+
       <main class="shell-main">
         <Switch>
           <Route path="/">
@@ -221,6 +244,9 @@ export const Layout = ({
           </Route>
           <Route path="/membri">
             <Placeholder title="Membri" />
+          </Route>
+          <Route path="/fatturazione">
+            <BillingRoute tenantId={active.tenantId} clientFor={clientFor} />
           </Route>
           <Route path="/sicurezza">
             <EnrolmentScreen enrolled={twoFactorEnabled} />

@@ -276,6 +276,7 @@ describe('the route', () => {
         return Promise.resolve({ plan, effective: 'now', effectiveAt: null });
       },
       topUp: () => Promise.reject(new Error('not this route')),
+      usage: () => Promise.reject(new Error('not this route')),
     };
     const app = createApp({
       auth: signedIn(undefined, { fresh }),

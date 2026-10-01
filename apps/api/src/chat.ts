@@ -33,7 +33,9 @@ import type { PairingUsage } from '@catalogorosso/llm';
 import { redactPii } from '@catalogorosso/security';
 
 import type { WidgetTenant } from './env.js';
+import { logger } from './middleware/logger.js';
 import type { QuotaPort } from './quota.js';
+import type { QuotaNotifier } from './quota-notices.js';
 import { retrieve } from './retrieval.js';
 
 /**
@@ -136,6 +138,12 @@ export interface ChatPortOptions {
   /** The model each tier names, for the bill. Asserted priced at startup (P2-31). */
   readonly models: { readonly base: string; readonly strong: string };
   readonly quota: QuotaPort;
+  /**
+   * The 80% and 100% notices (P5-12), asked after every billed turn with the
+   * month as it now stands. Absent, nobody is told — a wiring choice for a
+   * test, never a deployment's.
+   */
+  readonly quotaNotices?: QuotaNotifier | undefined;
   readonly now?: () => Date;
 }
 
@@ -186,6 +194,7 @@ export const createChatPort = ({
   providers,
   models,
   quota,
+  quotaNotices,
   now = () => new Date(),
 }: ChatPortOptions): ChatPort => {
   /*
@@ -205,7 +214,9 @@ export const createChatPort = ({
          * generation is a bill; a quota checked after either has already cost
          * what it exists to save (P2-36, §3.6).
          */
-        if (!(await quota.check(tenant)).allowed) throw new QuotaExceededError();
+        const month = await quota.check(tenant);
+
+        if (!month.allowed) throw new QuotaExceededError();
 
         /*
          * **Redacted once, here, and nowhere else** (P2-33, §1.4). The same
@@ -402,6 +413,24 @@ export const createChatPort = ({
             historyDropped: recent.dropped,
             costMicros,
           });
+
+          /*
+           * **The month as it now stands: one more than the gate counted**,
+           * because this turn was billed above. Asked every turn and sent at
+           * most once per threshold — the claim, not this call, is the guard.
+           * A notice that fails is logged and the visitor's answer stands: an
+           * email is never a reason to fail a turn that was already paid for.
+           */
+          if (quotaNotices !== undefined) {
+            try {
+              await quotaNotices(tenant, month.used + 1, month.limit);
+            } catch (error) {
+              logger.error(
+                { kind: 'quota_notice_unsent', err: error },
+                'a quota notice could not be sent (P5-12)',
+              );
+            }
+          }
         }
       })(),
   };

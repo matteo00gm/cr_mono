@@ -549,11 +549,15 @@ export {
  * transaction so the bill and P2-30's turn are one write.
  */
 export {
+  claimQuotaNotice,
   countPurchased,
   countUsage,
+  readUsageBreakdown,
   recordTopUp,
   recordUsage,
   type TopUpToRecord,
+  type UsageBreakdown,
+  type UsageSlice,
   type UsageToRecord,
 } from './usage.js';
 

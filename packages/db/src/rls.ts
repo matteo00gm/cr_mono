@@ -221,6 +221,7 @@ const HEADERS: Readonly<Record<string, string>> = {
   '0059_dev_mode_rls':
     'A winery in development mode is reachable from its one local origin (P4-19b).',
   '0063_usage_top_ups_rls': 'Row-level security for message top-ups (P5-11a).',
+  '0065_notification_events_rls': 'Row-level security for quota notices sent (P5-12).',
 };
 
 /** Every migration file this list generates, in first-appearance order. */
@@ -508,6 +509,7 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
       'tenant-only, and the widget scope cannot write.',
   },
   { ...boilerplate('usage_top_ups'), migration: '0063_usage_top_ups_rls' },
+  { ...boilerplate('notification_events'), migration: '0065_notification_events_rls' },
 ];
 
 /**

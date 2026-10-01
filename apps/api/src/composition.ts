@@ -41,6 +41,7 @@ import { logger } from './middleware/logger.js';
 import { createProductsPort, type ProductsPort } from './products.js';
 import { createChatPort, type ChatPort } from './chat.js';
 import { createQuotaPort, type QuotaPort } from './quota.js';
+import { createQuotaNotifier } from './quota-notices.js';
 import { createRagPort, type RagPort } from './rag.js';
 import { refusalRecorders, webhookRejectionRecorder } from './security-events.js';
 import { createStripeClient } from './stripe.js';
@@ -295,26 +296,6 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
   const quota = createQuotaPort();
 
   /*
-   * Answering a question (P2-29). The providers are factories rather than
-   * instances because tokens are reported per construction (P1-42's `onUsage`)
-   * and the bill is per turn — the SDK client is the expensive part, and
-   * `bedrockNovaProvider` builds one per call unless given one, so this is the
-   * place that keeps that cost in check.
-   */
-  const chat = createChatPort({
-    embeddings: assertQueryProviderMatchesIndex(
-      titanEmbeddingProvider(QUERY_EMBEDDING),
-      INDEXED_EMBEDDING,
-    ),
-    providers: {
-      base: (onUsage) => bedrockNovaProvider({ modelId: CHAT_MODELS.base, onUsage }),
-      strong: (onUsage) => bedrockNovaProvider({ modelId: CHAT_MODELS.strong, onUsage }),
-    },
-    models: CHAT_MODELS,
-    quota,
-  });
-
-  /*
    * The provider is built only when there is a key. Without one the log
    * transport stands in on every stage, which is correct rather than degraded:
    * the sending domain is not authenticated yet (E6), so a real send would be
@@ -342,6 +323,34 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
     });
 
   const suppressionFor = config.suppression ?? suppressionForUser;
+
+  /*
+   * Answering a question (P2-29). The providers are factories rather than
+   * instances because tokens are reported per construction (P1-42's `onUsage`)
+   * and the bill is per turn — the SDK client is the expensive part, and
+   * `bedrockNovaProvider` builds one per call unless given one, so this is the
+   * place that keeps that cost in check.
+   */
+  const chat = createChatPort({
+    embeddings: assertQueryProviderMatchesIndex(
+      titanEmbeddingProvider(QUERY_EMBEDDING),
+      INDEXED_EMBEDDING,
+    ),
+    providers: {
+      base: (onUsage) => bedrockNovaProvider({ modelId: CHAT_MODELS.base, onUsage }),
+      strong: (onUsage) => bedrockNovaProvider({ modelId: CHAT_MODELS.strong, onUsage }),
+    },
+    models: CHAT_MODELS,
+    quota,
+    /* The 80% and 100% notices, once per threshold per month (P5-12). */
+    quotaNotices: createQuotaNotifier({
+      sendEmailFor: (tenantId) =>
+        sendEmailWith({
+          isSuppressed: (address) => withTenant(tenantId, (tx) => isSuppressed(tx, address)),
+        }),
+      dashboardOrigin: new URL(config.authBaseUrl).origin,
+    }),
+  });
 
   /**
    * The real reset sender, replacing the placeholder that logged and resolved.

@@ -419,3 +419,60 @@ body {
   margin: var(--cr-gap) 0;
   padding-inline-start: 1.25rem;
 }
+
+/* Billing (P5-12). The banner sits under the nav on every screen; critical is
+   the widget already quiet, warning is the month nearly spent. */
+.cr-banner {
+  margin: 0;
+  padding: 10px var(--cr-gap);
+  border-bottom: 1px solid var(--cr-line);
+}
+
+.cr-banner--critical {
+  background: #fdecea;
+  color: var(--cr-wine-dark);
+}
+
+.cr-banner--warning {
+  background: #fff7e0;
+}
+
+.cr-banner__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--cr-gap);
+}
+
+.cr-meter {
+  margin-bottom: var(--cr-gap);
+}
+
+.cr-meter__bar {
+  width: 100%;
+  max-width: 480px;
+  height: 12px;
+}
+
+.cr-meter__note {
+  color: var(--cr-ink-soft);
+}
+
+.cr-billing section {
+  margin-bottom: var(--cr-gap);
+}
+
+.cr-billing button {
+  margin: 0 var(--cr-gap) var(--cr-gap) 0;
+}
+
+.cr-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--cr-gap) * 2);
+}
+
+.cr-breakdown td {
+  padding-inline-start: var(--cr-gap);
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}

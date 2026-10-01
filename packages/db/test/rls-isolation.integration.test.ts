@@ -26,7 +26,16 @@ const pgErrorCode = (error: unknown): string | undefined =>
 const INSUFFICIENT_PRIVILEGE = '42501';
 
 /** Tables where `app_rw` holds no UPDATE, so the update probe cannot apply. */
-const APPEND_ONLY = new Set(['usage_events', 'usage_top_ups', 'audit_log', 'security_events']);
+const APPEND_ONLY = new Set([
+  'usage_events',
+  'usage_top_ups',
+  'notification_events',
+  'audit_log',
+  'security_events',
+]);
+
+/** A period no other call has used, for `notification_events`' key. */
+let noticePeriod = 100_000;
 
 interface SeedContext {
   readonly conversationId: string;
@@ -116,6 +125,17 @@ const INSERTS: Record<string, (tenantId: string, ctx: SeedContext) => SQL> = {
   usage_top_ups: (tenantId) =>
     sql`insert into usage_top_ups (tenant_id, period, messages_purchased, stripe_payment_intent_id)
         values (${tenantId}::uuid, '202610', 1000, ${`pi_${randomUUID()}`})`,
+  /*
+   * P5-12. The key is `(tenant_id, period, threshold)`, so B's attempted write
+   * with A's id and A's period would fail on the key — a fresh period each call
+   * makes it fail on the policy, which is what is under test.
+   */
+  notification_events: (tenantId) => {
+    noticePeriod += 1;
+
+    return sql`insert into notification_events (tenant_id, period, threshold)
+        values (${tenantId}::uuid, ${String(noticePeriod)}, 80)`;
+  },
   audit_log: (tenantId) =>
     sql`insert into audit_log (tenant_id, action) values (${tenantId}::uuid, 'x')`,
   security_events: (tenantId) =>

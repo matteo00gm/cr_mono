@@ -144,3 +144,84 @@ export const countPurchased = async (tx: DbTransaction, period: string): Promise
 
   return row?.purchased ?? 0;
 };
+
+/**
+ * Claims a quota notice for this winery, this period and this threshold
+ * (P5-12): `true` for the caller who should send it, `false` for every other.
+ *
+ * **The key is the idempotency.** Two messages crossing 80% together both try
+ * the insert; one finds the row its own, the other finds the key taken. Claimed
+ * before the send rather than after, so a notice is sent at most once — a send
+ * that fails after its claim is a lost email, which `sendEmail`'s retries and
+ * its alarm already answer for, not a second one in the same month.
+ */
+export const claimQuotaNotice = async (
+  tx: DbTransaction,
+  period: string,
+  threshold: 80 | 100,
+): Promise<boolean> => {
+  const rows = await tx.execute(sql`
+    insert into notification_events (tenant_id, period, threshold)
+    values (nullif(current_setting('app.tenant_id', true), '')::uuid, ${period}, ${threshold})
+    on conflict do nothing
+    returning threshold
+  `);
+
+  return [...rows].length > 0;
+};
+
+/** One day, or one origin, and the messages it took (P5-12, §2.3). */
+export interface UsageSlice {
+  readonly key: string;
+  readonly messages: number;
+}
+
+export interface UsageBreakdown {
+  /** `YYYY-MM-DD` in UTC, oldest first; days with nothing are absent. */
+  readonly byDay: readonly UsageSlice[];
+  /**
+   * The origin each message was asked from, busiest first. A message with no
+   * conversation behind it — work with no visitor — is under `null`'s key, `''`.
+   */
+  readonly byOrigin: readonly UsageSlice[];
+}
+
+/**
+ * Where a winery's month went (P5-12, §2.3): by day, and by the origin the
+ * widget was asked from — a winery may have several domains, and a staging
+ * one shares the month (P4-19).
+ *
+ * The origin is the conversation's: a session is bound to one origin (P2-12)
+ * and holds one conversation, so the join adds a column and no rows.
+ */
+export const readUsageBreakdown = async (
+  tx: DbTransaction,
+  period: string,
+  kind: string,
+): Promise<UsageBreakdown> => {
+  const days = await tx.execute(sql`
+    select to_char(created_at at time zone 'utc', 'YYYY-MM-DD') as key, count(*)::int as messages
+    from usage_events
+    where tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+      and period = ${period}
+      and kind = ${kind}
+    group by 1
+    order by 1
+  `);
+  const origins = await tx.execute(sql`
+    select coalesce(c.origin, '') as key, count(*)::int as messages
+    from usage_events u
+    left join conversations c
+      on c.tenant_id = u.tenant_id and c.session_id = u.session_id
+    where u.tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+      and u.period = ${period}
+      and u.kind = ${kind}
+    group by 1
+    order by 2 desc, 1
+  `);
+
+  const slices = (rows: Iterable<Record<string, unknown>>): UsageSlice[] =>
+    [...rows].map((row) => ({ key: String(row.key), messages: Number(row.messages) }));
+
+  return { byDay: slices(days), byOrigin: slices(origins) };
+};

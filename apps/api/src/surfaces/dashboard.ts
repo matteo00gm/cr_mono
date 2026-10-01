@@ -8,6 +8,7 @@ import {
   billingPlanChangeResponse,
   billingPortalResponse,
   billingTopUpResponse,
+  usageResponse,
   catalogueReindexedResponse,
   claimWithdrawnResponse,
   devModeResponse,
@@ -1360,6 +1361,15 @@ export const createDashboardApp = ({
     c.json(await billing.topUp(c.get('tenantId'))),
   );
 
+  /**
+   * The month so far (P5-12, §2.3). **Every member**, through `analytics:read`:
+   * an editor sees the banner too, and is the one most likely to notice the
+   * widget going quiet — they are told to ask an owner, who can act on it.
+   */
+  app.get('/usage', requireCapability('analytics:read'), async (c) =>
+    c.json(await billing.usage(c.get('tenantId'))),
+  );
+
   app.post('/keys', requireCapability('keys:manage'), stepUp, async (c) =>
     c.json(await keys.create(c.get('tenantId')), 201),
   );
@@ -2406,6 +2416,34 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         '409 saying what to do instead; a 409 also means payments are not set up on this service.',
       example: { url: 'https://checkout.stripe.com/c/pay/cs_test_a1b2c3' },
       response: billingTopUpResponse,
+    },
+  ],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/usage`),
+    {
+      access: requires('analytics:read'),
+      summary: "The month's messages, against what the winery may send",
+      description:
+        'Messages answered this calendar month (UTC), against what the plan includes plus what ' +
+        'was bought on top (`allowance`), with a projection to the end of the month at the rate ' +
+        'so far and a breakdown by day and by the origin the widget was asked from. `state` is ' +
+        'what the widget itself is told: `near` from four fifths, `exceeded` from all of it, when ' +
+        'the widget stops answering. Readable by every member.',
+      example: {
+        period: '202610',
+        resetsAt: '2026-11-01T00:00:00.000Z',
+        plan: 'CANTINA',
+        status: 'ACTIVE',
+        used: 1_230,
+        included: 1_500,
+        purchased: 0,
+        allowance: 1_500,
+        state: 'near',
+        projected: 1_810,
+        byDay: [{ day: '2026-10-01', messages: 58 }],
+        byOrigin: [{ origin: 'https://www.cantina.example', messages: 1_230 }],
+      },
+      response: usageResponse,
     },
   ],
   [

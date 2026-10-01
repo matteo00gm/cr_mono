@@ -449,6 +449,20 @@
       "when": 1788654188598,
       "tag": "0063_usage_top_ups_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1788654188599,
+      "tag": "0064_notification_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1788654188600,
+      "tag": "0065_notification_events_rls",
+      "breakpoints": true
     }
   ]
 }

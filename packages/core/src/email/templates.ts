@@ -18,6 +18,33 @@ export const LOCALES = ['it', 'en'] as const;
 export type Locale = (typeof LOCALES)[number];
 
 /**
+ * What both quota notices carry (P5-12, §2.3): the two ways out of a spent
+ * month, as links to the Fatturazione screen where an owner takes them.
+ */
+export interface QuotaNoticeProps {
+  readonly tenantName: string;
+  /** When the quota resets, already formatted for the reader. */
+  readonly periodEndsOn: string;
+  /**
+   * The top-up on the Fatturazione screen (P5-11a), or `null` for a winery with
+   * no plan — a top-up is added to one.
+   */
+  readonly topUp: {
+    readonly url: string;
+    /** Already formatted: `€15`. */
+    readonly price: string;
+    readonly messages: number;
+  } | null;
+  /** The next plan up, or `null` on the top plan — where a top-up is the only way. */
+  readonly upgrade: {
+    readonly plan: string;
+    /** Already formatted: `€79`. */
+    readonly price: string;
+    readonly url: string;
+  } | null;
+}
+
+/**
  * Every template and the props it needs.
  *
  * The map is what makes `sendEmail` typed end to end: naming a template fixes
@@ -35,17 +62,13 @@ export interface TemplateProps {
     readonly resetUrl: string;
     readonly expiresInMinutes: number;
   };
-  'quota-warning': {
-    readonly tenantName: string;
-    readonly usedPercent: number;
-    readonly periodEndsOn: string;
-    readonly upgradeUrl: string;
-  };
-  'quota-exhausted': {
-    readonly tenantName: string;
-    readonly periodEndsOn: string;
-    readonly upgradeUrl: string;
-  };
+  /*
+   * `Readonly<…>` rather than the interface itself: a mapped type is read as a
+   * plain object, so these props stay assignable where props are taken as
+   * `Record<string, unknown>` — an interface, lacking an index signature, is not.
+   */
+  'quota-warning': Readonly<QuotaNoticeProps & { readonly usedPercent: number }>;
+  'quota-exhausted': Readonly<QuotaNoticeProps>;
   'trial-expiry': {
     readonly tenantName: string;
     readonly daysLeft: number;
@@ -178,17 +201,55 @@ const passwordReset: Copy<TemplateProps['password-reset']> = {
   }),
 };
 
+/** The ways out, as the notice's buttons: a top-up first, it is the immediate one. */
+const quotaActions = (
+  p: QuotaNoticeProps,
+  topUpLabel: (messages: number, price: string) => string,
+  upgradeLabel: (plan: string, price: string) => string,
+): Block[] => [
+  ...(p.topUp === null
+    ? []
+    : [
+        {
+          kind: 'action',
+          label: topUpLabel(p.topUp.messages, p.topUp.price),
+          url: p.topUp.url,
+        } as const,
+      ]),
+  ...(p.upgrade === null
+    ? []
+    : [
+        {
+          kind: 'action',
+          label: upgradeLabel(p.upgrade.plan, p.upgrade.price),
+          url: p.upgrade.url,
+        } as const,
+      ]),
+];
+
+/** `1.000` and `1,000`: Italian leaves four digits ungrouped unless told, and a price list does not. */
+const thousands = (n: number, locale: 'it' | 'en'): string =>
+  new Intl.NumberFormat(locale === 'it' ? 'it-IT' : 'en-GB', { useGrouping: 'always' }).format(n);
+
+/**
+ * Four fifths of the month used (P5-12): written now rather than at the limit,
+ * so there is time to choose — and with both choices one click away.
+ */
 const quotaWarning: Copy<TemplateProps['quota-warning']> = {
   it: (p) => ({
-    subject: `${p.tenantName}: hai usato l’${String(p.usedPercent)}% delle conversazioni incluse`,
+    subject: `${p.tenantName}: hai usato l’${String(p.usedPercent)}% dei messaggi del mese`,
     blocks: [
       {
         kind: 'text',
         value:
-          `${p.tenantName} ha usato l’${String(p.usedPercent)}% delle conversazioni incluse nel piano. ` +
-          `Il periodo si chiude il ${p.periodEndsOn}.`,
+          `${p.tenantName} ha usato l’${String(p.usedPercent)}% dei messaggi inclusi questo mese. ` +
+          `Quando finiscono, il sommelier smette di rispondere fino al ${p.periodEndsOn}.`,
       },
-      { kind: 'action', label: 'Vedi i consumi', url: p.upgradeUrl },
+      ...quotaActions(
+        p,
+        (messages, price) => `Acquista Ricarica +${thousands(messages, 'it')} messaggi (${price})`,
+        (plan, price) => `Passa al piano ${plan} (${price}/mese)`,
+      ),
       {
         kind: 'note',
         value: 'Ti scriviamo ora, non a quota esaurita, così hai il tempo di decidere.',
@@ -196,15 +257,19 @@ const quotaWarning: Copy<TemplateProps['quota-warning']> = {
     ],
   }),
   en: (p) => ({
-    subject: `${p.tenantName}: ${String(p.usedPercent)}% of included conversations used`,
+    subject: `${p.tenantName}: ${String(p.usedPercent)}% of this month’s messages used`,
     blocks: [
       {
         kind: 'text',
         value:
-          `${p.tenantName} has used ${String(p.usedPercent)}% of the conversations included in its plan. ` +
-          `The period ends on ${p.periodEndsOn}.`,
+          `${p.tenantName} has used ${String(p.usedPercent)}% of the messages included this month. ` +
+          `When they run out, the sommelier stops answering until ${p.periodEndsOn}.`,
       },
-      { kind: 'action', label: 'See usage', url: p.upgradeUrl },
+      ...quotaActions(
+        p,
+        (messages, price) => `Buy a top-up of ${thousands(messages, 'en')} messages (${price})`,
+        (plan, price) => `Move to ${plan} (${price}/month)`,
+      ),
       {
         kind: 'note',
         value: 'We write now rather than at the limit, so there is time to decide.',
@@ -213,31 +278,47 @@ const quotaWarning: Copy<TemplateProps['quota-warning']> = {
   }),
 };
 
+/**
+ * The month spent (P5-12): the widget is paused, said first, then the two ways
+ * to switch it back on today.
+ */
 const quotaExhausted: Copy<TemplateProps['quota-exhausted']> = {
   it: (p) => ({
-    subject: `${p.tenantName}: conversazioni incluse esaurite`,
+    subject: `${p.tenantName}: messaggi del mese esauriti, il widget è in pausa`,
     blocks: [
       {
         kind: 'text',
         value:
-          `${p.tenantName} ha esaurito le conversazioni incluse. ` +
-          `La quota si azzera il ${p.periodEndsOn}; fino ad allora il sommelier risponde ai visitatori ` +
-          'con un messaggio di cortesia invece che con un consiglio.',
+          `${p.tenantName} ha usato tutti i messaggi inclusi questo mese, quindi il sommelier non ` +
+          `risponde più ai visitatori fino al ${p.periodEndsOn}. ` +
+          (p.topUp === null
+            ? 'Scegliere un piano lo riattiva subito.'
+            : 'Una ricarica lo riattiva subito.'),
       },
-      { kind: 'action', label: 'Aumenta il piano', url: p.upgradeUrl },
+      ...quotaActions(
+        p,
+        (_messages, price) => `Ricarica immediata (${price})`,
+        (plan, price) => `Passa al piano ${plan} (${price}/mese)`,
+      ),
     ],
   }),
   en: (p) => ({
-    subject: `${p.tenantName}: included conversations used up`,
+    subject: `${p.tenantName}: this month’s messages used up, the widget is paused`,
     blocks: [
       {
         kind: 'text',
         value:
-          `${p.tenantName} has used every conversation included in its plan. ` +
-          `The quota resets on ${p.periodEndsOn}; until then the sommelier answers visitors ` +
-          'with a courtesy message rather than a recommendation.',
+          `${p.tenantName} has used every message included this month, so the sommelier is no ` +
+          `longer answering visitors until ${p.periodEndsOn}. ` +
+          (p.topUp === null
+            ? 'Choosing a plan switches it back on at once.'
+            : 'A top-up switches it back on at once.'),
       },
-      { kind: 'action', label: 'Increase the plan', url: p.upgradeUrl },
+      ...quotaActions(
+        p,
+        (_messages, price) => `Top up now (${price})`,
+        (plan, price) => `Move to ${plan} (${price}/month)`,
+      ),
     ],
   }),
 };

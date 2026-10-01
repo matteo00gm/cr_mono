@@ -111,6 +111,9 @@ describe('where the shell mounts it', () => {
     const { client, request } = served();
     render(<Layout session={signedIn} clientFor={() => client} />);
 
-    expect(request).not.toHaveBeenCalled();
+    /* The claims, specifically: the shell's billing banner reads the month for every role (P5-12). */
+    expect(request.mock.calls.map(([endpoint]) => endpoint)).not.toContain(
+      'GET /v1/dashboard/domains/claims/served',
+    );
   });
 });
