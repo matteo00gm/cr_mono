@@ -1,4 +1,4 @@
-import type { PlanId } from '../plans.js';
+import { TOP_UP, type PlanId } from '../plans.js';
 
 import type { StripeParams } from './stripe-form.js';
 
@@ -22,6 +22,8 @@ export const BILLING_PATH = '/fatturazione';
 /** The metadata keys the webhook reads back. One definition for both ends. */
 export const STRIPE_TENANT_KEY = 'tenant_id';
 export const STRIPE_PLAN_KEY = 'plan';
+/** On a top-up's session (P5-11a): which top-up was bought. */
+export const STRIPE_TOP_UP_KEY = 'top_up';
 
 export interface CheckoutRequest {
   readonly tenantId: string;
@@ -58,5 +60,48 @@ export const checkoutSessionParams = ({
     locale: STRIPE_LOCALES.has(locale) ? locale : 'auto',
     success_url: `${dashboardOrigin}${BILLING_PATH}?checkout=success`,
     cancel_url: `${dashboardOrigin}${BILLING_PATH}?checkout=cancelled`,
+  };
+};
+
+export interface TopUpRequest {
+  readonly tenantId: string;
+  /** The active price under the top-up's lookup key. */
+  readonly priceId: string;
+  /** Required: a top-up is for a winery that already pays, so it has a customer. */
+  readonly customerId: string;
+  readonly locale: string;
+  readonly dashboardOrigin: string;
+}
+
+/**
+ * The Checkout session for messages bought on top of the plan (P5-11a).
+ *
+ * **A one-time payment, not a subscription**: `mode: 'payment'`, for the
+ * customer the winery already is, so the purchase lands on its own account and
+ * the webhook can bind it to the customer on file. The tenant travels as it
+ * does for a plan — `client_reference_id` and the session's metadata — and the
+ * metadata says which top-up, which is how the webhook tells this Checkout from
+ * a plan's. The payment intent carries the same, so a refund issued from the
+ * Dashboard can be traced back to a winery.
+ */
+export const topUpSessionParams = ({
+  tenantId,
+  priceId,
+  customerId,
+  locale,
+  dashboardOrigin,
+}: TopUpRequest): StripeParams => {
+  const metadata = { [STRIPE_TENANT_KEY]: tenantId, [STRIPE_TOP_UP_KEY]: TOP_UP.id };
+
+  return {
+    mode: 'payment',
+    line_items: [{ price: priceId, quantity: 1 }],
+    client_reference_id: tenantId,
+    customer: customerId,
+    metadata,
+    payment_intent_data: { metadata },
+    locale: STRIPE_LOCALES.has(locale) ? locale : 'auto',
+    success_url: `${dashboardOrigin}${BILLING_PATH}?top_up=success`,
+    cancel_url: `${dashboardOrigin}${BILLING_PATH}?top_up=cancelled`,
   };
 };

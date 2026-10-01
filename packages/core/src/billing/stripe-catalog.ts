@@ -1,7 +1,8 @@
-import { PLAN_IDS, PLANS, type Plan, type PlanId } from '../plans.js';
+import { PLAN_IDS, PLANS, TOP_UP, type Plan, type PlanId, type TopUp } from '../plans.js';
 
 /**
- * The Stripe catalogue, reconciled against `plans.ts` (P5-01).
+ * The Stripe catalogue, reconciled against `plans.ts` (P5-01): every plan, and
+ * the one-time message top-up (P5-11a).
  *
  * **Planned first, applied second, and applied whole or not at all.** An
  * operator sees every step before anything is written, and a run that finds a
@@ -36,10 +37,26 @@ export interface CatalogPrice {
   readonly interval: string | null;
 }
 
+/** Something we sell through Stripe: a plan, billed monthly, or a top-up, bought once. */
+export type CatalogItem = Plan | TopUp;
+export type CatalogItemId = CatalogItem['id'];
+
+/** Everything the catalogue holds, plans first, in the order a run reports them. */
+export const CATALOG_ITEMS: readonly CatalogItem[] = [...PLAN_IDS.map((id) => PLANS[id]), TOP_UP];
+
+export const catalogItem = (id: CatalogItemId): CatalogItem =>
+  id === TOP_UP.id ? TOP_UP : PLANS[id];
+
+/** What a product and its price carry, so the Dashboard says what each one is. */
+export type CatalogMetadata = { readonly plan: PlanId } | { readonly top_up: TopUp['id'] };
+
+export const metadataFor = (item: CatalogItem): CatalogMetadata =>
+  item.id === TOP_UP.id ? { top_up: item.id } : { plan: item.id };
+
 export interface NewProduct {
   readonly id: string;
   readonly name: string;
-  readonly metadata: { readonly plan: PlanId };
+  readonly metadata: CatalogMetadata;
 }
 
 export interface NewPrice {
@@ -48,8 +65,9 @@ export interface NewPrice {
   readonly nickname: string;
   readonly unitAmount: number;
   readonly currency: string;
-  readonly interval: string;
-  readonly metadata: { readonly plan: PlanId };
+  /** `null` for a one-time price: the adapter sends no `recurring`. */
+  readonly interval: string | null;
+  readonly metadata: CatalogMetadata;
 }
 
 export interface StripeCatalog {
@@ -69,18 +87,18 @@ export interface StripeCatalog {
 }
 
 export type CatalogStep =
-  | { readonly kind: 'unchanged'; readonly plan: PlanId; readonly priceId: string }
-  | { readonly kind: 'create'; readonly plan: PlanId; readonly productExists: boolean }
+  | { readonly kind: 'unchanged'; readonly item: CatalogItemId; readonly priceId: string }
+  | { readonly kind: 'create'; readonly item: CatalogItemId; readonly productExists: boolean }
   | {
       readonly kind: 'reprice';
-      readonly plan: PlanId;
+      readonly item: CatalogItemId;
       readonly productExists: boolean;
       readonly previous: CatalogPrice;
       readonly fields: readonly string[];
     }
   | {
       readonly kind: 'differs';
-      readonly plan: PlanId;
+      readonly item: CatalogItemId;
       readonly previous: CatalogPrice;
       readonly fields: readonly string[];
     };
@@ -89,22 +107,28 @@ type Conflict = Extract<CatalogStep, { readonly kind: 'differs' }>;
 type Actionable = Exclude<CatalogStep, Conflict>;
 
 export interface CatalogResult {
-  readonly plan: PlanId;
+  readonly item: CatalogItemId;
   readonly kind: 'unchanged' | 'create' | 'reprice';
   readonly priceId: string;
 }
 
 /** Ours, and stable across environments, so a product is found rather than searched for. */
-export const productIdFor = (plan: Plan): string => `plan_${plan.id.toLowerCase()}`;
+export const productIdFor = (item: CatalogItem): string =>
+  `${item.id === TOP_UP.id ? 'top_up' : 'plan'}_${item.id.toLowerCase()}`;
 
-/** What about a live price disagrees with the plan it is filed under. */
-export const differencesFrom = (plan: Plan, price: CatalogPrice): string[] => {
+/**
+ * What about a live price disagrees with the item it is filed under.
+ *
+ * The interval included, both ways: a monthly price under the top-up's key
+ * would subscribe a winery to messages it meant to buy once.
+ */
+export const differencesFrom = (item: CatalogItem, price: CatalogPrice): string[] => {
   const fields: string[] = [];
 
-  if (price.productId !== productIdFor(plan)) fields.push('product');
-  if (price.unitAmount !== plan.amountCents) fields.push('amount');
-  if (price.currency !== plan.currency) fields.push('currency');
-  if (price.interval !== plan.interval) fields.push('interval');
+  if (price.productId !== productIdFor(item)) fields.push('product');
+  if (price.unitAmount !== item.amountCents) fields.push('amount');
+  if (price.currency !== item.currency) fields.push('currency');
+  if (price.interval !== item.interval) fields.push('interval');
 
   return fields;
 };
@@ -126,37 +150,36 @@ export const planCatalog = async (
   catalog: StripeCatalog,
   { reprice = false }: PlanCatalogOptions = {},
 ): Promise<CatalogStep[]> => {
-  const plans = PLAN_IDS.map((id) => PLANS[id]);
-  const live = await catalog.pricesByLookupKey(plans.map((plan) => plan.lookupKey));
+  const live = await catalog.pricesByLookupKey(CATALOG_ITEMS.map((item) => item.lookupKey));
   const steps: CatalogStep[] = [];
 
   /* One at a time: an operator's script, where a readable request log beats speed. */
-  for (const plan of plans) {
-    const price = live.find((candidate) => candidate.lookupKey === plan.lookupKey);
+  for (const item of CATALOG_ITEMS) {
+    const price = live.find((candidate) => candidate.lookupKey === item.lookupKey);
 
     if (price === undefined) {
       steps.push({
         kind: 'create',
-        plan: plan.id,
-        productExists: await catalog.hasProduct(productIdFor(plan)),
+        item: item.id,
+        productExists: await catalog.hasProduct(productIdFor(item)),
       });
       continue;
     }
 
-    const fields = differencesFrom(plan, price);
+    const fields = differencesFrom(item, price);
 
     if (fields.length === 0) {
-      steps.push({ kind: 'unchanged', plan: plan.id, priceId: price.id });
+      steps.push({ kind: 'unchanged', item: item.id, priceId: price.id });
     } else if (reprice) {
       steps.push({
         kind: 'reprice',
-        plan: plan.id,
-        productExists: await catalog.hasProduct(productIdFor(plan)),
+        item: item.id,
+        productExists: await catalog.hasProduct(productIdFor(item)),
         previous: price,
         fields,
       });
     } else {
-      steps.push({ kind: 'differs', plan: plan.id, previous: price, fields });
+      steps.push({ kind: 'differs', item: item.id, previous: price, fields });
     }
   }
 
@@ -167,7 +190,7 @@ export class CatalogConflictError extends Error {
   constructor(readonly conflicts: readonly Conflict[]) {
     super(
       'Stripe disagrees with plans.ts, so nothing was changed: ' +
-        conflicts.map((step) => `${step.plan} (${step.fields.join(', ')})`).join('; ') +
+        conflicts.map((step) => `${step.item} (${step.fields.join(', ')})`).join('; ') +
         '. Run again with --reprice to replace those prices for new subscribers.',
     );
     this.name = 'CatalogConflictError';
@@ -187,28 +210,29 @@ export const applyCatalog = async (
 
   for (const step of steps as readonly Actionable[]) {
     if (step.kind === 'unchanged') {
-      results.push({ plan: step.plan, kind: step.kind, priceId: step.priceId });
+      results.push({ item: step.item, kind: step.kind, priceId: step.priceId });
       continue;
     }
 
-    const plan = PLANS[step.plan];
-    const productId = productIdFor(plan);
+    const item = catalogItem(step.item);
+    const productId = productIdFor(item);
+    const metadata = metadataFor(item);
 
     if (!step.productExists) {
-      await catalog.createProduct({ id: productId, name: plan.name, metadata: { plan: plan.id } });
+      await catalog.createProduct({ id: productId, name: item.name, metadata });
     }
 
     const created = await catalog.createPrice({
       productId,
-      lookupKey: plan.lookupKey,
-      nickname: plan.name,
-      unitAmount: plan.amountCents,
-      currency: plan.currency,
-      interval: plan.interval,
-      metadata: { plan: plan.id },
+      lookupKey: item.lookupKey,
+      nickname: item.name,
+      unitAmount: item.amountCents,
+      currency: item.currency,
+      interval: item.interval,
+      metadata,
     });
 
-    results.push({ plan: step.plan, kind: step.kind, priceId: created.id });
+    results.push({ item: step.item, kind: step.kind, priceId: created.id });
   }
 
   return results;

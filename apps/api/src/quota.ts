@@ -1,5 +1,5 @@
 import { CHAT_MESSAGE, checkQuota, periodOf, type QuotaDecision } from '@catalogorosso/core';
-import { countUsage, withTenant } from '@catalogorosso/db';
+import { countPurchased, countUsage, withTenant } from '@catalogorosso/db';
 import { planCapCheck, tenantOfPlanCap, type MonthlyCheck } from '@catalogorosso/security';
 
 import type { WidgetTenant } from './env.js';
@@ -37,16 +37,15 @@ export interface QuotaPortOptions {
   /** The clock the period is read from. Injected so a test can cross a month boundary. */
   readonly now?: () => Date;
   /**
-   * Messages bought on top of the plan for a period (P5-11a's ledger). Until
-   * there is one, nothing can be bought, and nought is the true answer — the
-   * restrictive one too, since it is the plan's cap and nothing more.
+   * Messages bought on top of the plan for a period: `usage_top_ups` (P5-11a),
+   * summed in the tenant's own scope.
    */
   readonly readPurchased?: ((tenantId: string, period: string) => Promise<number>) | undefined;
 }
 
 export const createQuotaPort = ({
   now = () => new Date(),
-  readPurchased = () => Promise.resolve(0),
+  readPurchased = (tenantId, period) => withTenant(tenantId, (tx) => countPurchased(tx, period)),
 }: QuotaPortOptions = {}): QuotaPort => {
   const purchased = (tenantId: string): Promise<number> => readPurchased(tenantId, periodOf(now()));
 

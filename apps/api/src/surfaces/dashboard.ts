@@ -7,6 +7,7 @@ import {
   billingCheckoutResponse,
   billingPlanChangeResponse,
   billingPortalResponse,
+  billingTopUpResponse,
   catalogueReindexedResponse,
   claimWithdrawnResponse,
   devModeResponse,
@@ -1348,6 +1349,17 @@ export const createDashboardApp = ({
     c.json(await billing.portal(c.get('tenantId'))),
   );
 
+  /**
+   * Buy 1,000 messages on top of the plan, once (P5-11a).
+   *
+   * **No step-up**, as for buying a plan (P5-02): nothing changes until the
+   * owner pays on Stripe's page, and paying is the confirmation. No body: there
+   * is one top-up, and the winery is the session's.
+   */
+  app.post('/billing/top-up', requireCapability('billing:manage'), async (c) =>
+    c.json(await billing.topUp(c.get('tenantId'))),
+  );
+
   app.post('/keys', requireCapability('keys:manage'), stepUp, async (c) =>
     c.json(await keys.create(c.get('tenantId')), 201),
   );
@@ -2379,6 +2391,21 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'service where payments are not set up.',
       example: { url: 'https://billing.stripe.com/p/session/test_a1b2c3' },
       response: billingPortalResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/billing/top-up`),
+    {
+      access: requires('billing:manage'),
+      summary: 'Buy 1,000 messages on top of the plan',
+      description:
+        'No body. Answers with the URL of a Stripe-hosted Checkout page for a one-time payment of ' +
+        '€15; send the owner there. The messages count from the moment Stripe tells us it is ' +
+        'paid, for the calendar month it is paid in, and a widget that had run out answers again ' +
+        'straight away. A winery with no plan, or whose last payment failed, is refused with a ' +
+        '409 saying what to do instead; a 409 also means payments are not set up on this service.',
+      example: { url: 'https://checkout.stripe.com/c/pay/cs_test_a1b2c3' },
+      response: billingTopUpResponse,
     },
   ],
   [

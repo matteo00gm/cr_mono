@@ -74,8 +74,9 @@ patch will not, because the ORM's own documentation shows the forbidden form.
 - Never hand-write a type that duplicates a table's shape. Contracts are
   derived from the schema with `drizzle-zod` (P0-42).
 - Never grant the runtime role a way to rewrite a ledger. `audit_log`,
-  `usage_events`, `security_events` and `processed_webhooks` are append-only at
-  the grant level, and `app_rw` cannot delete a tenant (P0-31, P0-33a).
+  `usage_events`, `usage_top_ups`, `security_events` and `processed_webhooks`
+  are append-only at the grant level, and `app_rw` cannot delete a tenant
+  (P0-31, P0-33a, P5-11a).
 - Every migration has a hand-written reverse in `migrations/down/` (P0-40).
 
 **API**

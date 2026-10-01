@@ -104,7 +104,9 @@ const fakeStripe = async ({ prices = [], products = [], refuseWith, refuseProduc
         product: params.get('product'),
         unit_amount: Number(params.get('unit_amount')),
         currency: params.get('currency'),
-        recurring: { interval: params.get('recurring[interval]') },
+        recurring: params.has('recurring[interval]')
+          ? { interval: params.get('recurring[interval]') }
+          : null,
       };
 
       state.prices.push(price);
@@ -252,13 +254,16 @@ describe('an empty account', () => {
       expect(stdout).toMatch(
         /ECOMMERCE\s+ecommerce_monthly_eur\s+€79\.00\/month\s+create product and price/u,
       );
+      expect(stdout).toMatch(
+        /MESSAGES_1000\s+messages_1000_eur\s+€15\.00 once\s+create product and price/u,
+      );
       expect(stdout).toContain('Nothing written');
       expect(stripe.writes()).toEqual([]);
       expect(stdout).not.toContain(key);
     });
   });
 
-  it('gets both plans on --apply, encoded as Stripe reads them', async () => {
+  it('gets both plans and the top-up on --apply, encoded as Stripe reads them', async () => {
     await within({}, async (stripe) => {
       const key = keyFor('test');
       const { status, stdout } = await run(['--apply'], {
@@ -302,9 +307,30 @@ describe('an empty account', () => {
             'metadata[plan]': 'ECOMMERCE',
           },
         ],
+        [
+          '/v1/products',
+          {
+            id: 'top_up_messages_1000',
+            name: '1,000 messages',
+            'metadata[top_up]': 'MESSAGES_1000',
+          },
+        ],
+        [
+          '/v1/prices',
+          {
+            product: 'top_up_messages_1000',
+            lookup_key: 'messages_1000_eur',
+            transfer_lookup_key: 'true',
+            nickname: '1,000 messages',
+            unit_amount: '1500',
+            currency: 'eur',
+            'metadata[top_up]': 'MESSAGES_1000',
+          },
+        ],
       ]);
       expect(stdout).toMatch(/CANTINA\s+create\s+price_1/u);
       expect(stdout).toMatch(/ECOMMERCE\s+create\s+price_2/u);
+      expect(stdout).toMatch(/MESSAGES_1000\s+create\s+price_3/u);
       expect(stdout).not.toContain(key);
     });
   });
@@ -319,9 +345,10 @@ describe('an empty account', () => {
 
       expect(list.path).toBe('/v1/prices');
       expect(list.params.get('active')).toBe('true');
-      expect([list.params.get('lookup_keys[0]'), list.params.get('lookup_keys[1]')]).toEqual([
+      expect([0, 1, 2].map((index) => list.params.get(`lookup_keys[${String(index)}]`))).toEqual([
         'cantina_monthly_eur',
         'ecommerce_monthly_eur',
+        'messages_1000_eur',
       ]);
 
       for (const request of stripe.requests) {
@@ -337,9 +364,9 @@ describe('an empty account', () => {
 
       const keys = stripe.writes().map((request) => request.headers['idempotency-key']);
 
-      expect(keys).toHaveLength(4);
+      expect(keys).toHaveLength(6);
       for (const idempotency of keys) expect(idempotency).toMatch(/^p5-01-[0-9a-f]{40}$/u);
-      expect(new Set(keys).size).toBe(4);
+      expect(new Set(keys).size).toBe(6);
     });
   });
 });
@@ -357,6 +384,7 @@ describe('running it twice', () => {
       expect(stripe.writes()).toHaveLength(written);
       expect(again.stdout).toMatch(/CANTINA\s+unchanged\s+price_1/u);
       expect(again.stdout).toMatch(/ECOMMERCE\s+unchanged\s+price_2/u);
+      expect(again.stdout).toMatch(/MESSAGES_1000\s+unchanged\s+price_3/u);
     });
   });
 });
@@ -394,7 +422,10 @@ describe('a price that disagrees with plans.ts', () => {
 
   it('is replaced under --reprice, and the operator is told what became of the old one', async () => {
     await within(
-      { prices: [cantina({ unit_amount: 2_500 })], products: ['plan_cantina', 'plan_ecommerce'] },
+      {
+        prices: [cantina({ unit_amount: 2_500 })],
+        products: ['plan_cantina', 'plan_ecommerce', 'top_up_messages_1000'],
+      },
       async (stripe) => {
         const { status, stdout } = await run(['--apply', '--reprice'], {
           STRIPE_SECRET_KEY: keyFor('test'),
@@ -406,6 +437,7 @@ describe('a price that disagrees with plans.ts', () => {
           [
             ['/v1/prices', 'cantina_monthly_eur'],
             ['/v1/prices', 'ecommerce_monthly_eur'],
+            ['/v1/prices', 'messages_1000_eur'],
           ],
         );
         expect(stdout).toMatch(/CANTINA\s+reprice\s+price_1/u);

@@ -254,6 +254,68 @@
           }
         }
       },
+      "/v1/dashboard/billing/top-up": {
+        "post": {
+          "summary": "Buy 1,000 messages on top of the plan",
+          "description": "No body. Answers with the URL of a Stripe-hosted Checkout page for a one-time payment of €15; send the owner there. The messages count from the moment Stripe tells us it is paid, for the calendar month it is paid in, and a widget that had run out answers again straight away. A winery with no plan, or whose last payment failed, is refused with a 409 saying what to do instead; a 409 also means payments are not set up on this service.\n\nRequires the `billing:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
+          "operationId": "postV1DashboardBillingTop-up",
+          "x-required-capability": "billing:manage",
+          "responses": {
+            "200": {
+              "description": "Buy 1,000 messages on top of the plan",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "url": {
+                        "type": "string",
+                        "format": "uri"
+                      }
+                    },
+                    "required": [
+                      "url"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "url": "https://checkout.stripe.com/c/pay/cs_test_a1b2c3"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/context": {
         "get": {
           "summary": "The resolved tenant and role for this request",

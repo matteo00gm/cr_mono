@@ -220,6 +220,7 @@ const HEADERS: Readonly<Record<string, string>> = {
     'The claim sweep finds its work, and a notice counts once sent (P4-18b).',
   '0059_dev_mode_rls':
     'A winery in development mode is reachable from its one local origin (P4-19b).',
+  '0063_usage_top_ups_rls': 'Row-level security for message top-ups (P5-11a).',
 };
 
 /** Every migration file this list generates, in first-appearance order. */
@@ -506,6 +507,7 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
       'the database’s, and the grant ends on time whatever the code believes. WITH CHECK stays ' +
       'tenant-only, and the widget scope cannot write.',
   },
+  { ...boilerplate('usage_top_ups'), migration: '0063_usage_top_ups_rls' },
 ];
 
 /**

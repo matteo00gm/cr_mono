@@ -2,6 +2,7 @@ import type {
   BillingCheckoutResponse,
   BillingPlanChangeResponse,
   BillingPortalResponse,
+  BillingTopUpResponse,
 } from '@catalogorosso/api-client';
 import {
   BILLING_PATH,
@@ -13,6 +14,9 @@ import {
   NotFoundError,
   planForLookupKey,
   PLANS,
+  TOP_UP,
+  topUpSessionParams,
+  type CatalogItem,
   type PlanId,
 } from '@catalogorosso/core';
 import {
@@ -64,6 +68,18 @@ export const NO_SUBSCRIPTION =
 
 export const SAME_PLAN = 'This winery is already on that plan.';
 
+/** Messages on top of a plan are for a winery on one (P5-11a). */
+export const NO_PLAN_FOR_TOP_UP =
+  'Extra messages are added to a plan. Choose a plan on the Fatturazione screen first.';
+
+/**
+ * A winery whose payment failed has its widget paused (P5-05a): messages bought
+ * now could not be used until it pays, and paying is what it needs to do.
+ */
+export const PAYMENT_OVERDUE =
+  'The last payment for this winery failed, so its widget is paused. Update the payment method ' +
+  'on the Fatturazione screen first; extra messages can be bought once it is paid.';
+
 export interface BillingPort {
   readonly checkout: (tenantId: string, plan: PlanId) => Promise<BillingCheckoutResponse>;
   /**
@@ -74,6 +90,11 @@ export interface BillingPort {
   readonly changePlan: (tenantId: string, plan: PlanId) => Promise<BillingPlanChangeResponse>;
   /** Stripe's Billing Portal, for the payment method, invoices and cancellation (P5-08). */
   readonly portal: (tenantId: string) => Promise<BillingPortalResponse>;
+  /**
+   * Buy messages on top of the plan, once (P5-11a): a Checkout page for a
+   * one-time payment. Credited when Stripe's webhook says it is paid.
+   */
+  readonly topUp: (tenantId: string) => Promise<BillingTopUpResponse>;
 }
 
 /** The port with nothing behind it: a wiring error, loudly, never a plausible answer. */
@@ -91,6 +112,7 @@ export const unconfiguredBilling: BillingPort = {
   checkout: () => Promise.reject(new BillingPortNotConfiguredError()),
   changePlan: () => Promise.reject(new BillingPortNotConfiguredError()),
   portal: () => Promise.reject(new BillingPortNotConfiguredError()),
+  topUp: () => Promise.reject(new BillingPortNotConfiguredError()),
 };
 
 export interface BillingDeps {
@@ -137,11 +159,12 @@ const schedule = z.object({ id: z.string(), phases: z.tuple([phase], phase) });
 const acknowledged = z.object({ id: z.string() });
 
 /**
- * The active price under a plan's lookup key (P5-01), or a refusal that tells
- * the owner payments are unavailable and the operator what to run.
+ * The active price under a catalogue item's lookup key (P5-01, P5-11a), or a
+ * refusal that tells the owner payments are unavailable and the operator what
+ * to run.
  */
-const currentPriceId = async (stripe: StripeClient, plan: PlanId): Promise<string> => {
-  const { lookupKey } = PLANS[plan];
+const priceIdFor = async (stripe: StripeClient, item: CatalogItem): Promise<string> => {
+  const { lookupKey } = item;
   const prices = await stripe.get(
     '/v1/prices',
     { lookup_keys: [lookupKey], active: true, limit: 1 },
@@ -156,8 +179,8 @@ const currentPriceId = async (stripe: StripeClient, plan: PlanId): Promise<strin
      * run, by a log line an alarm can match.
      */
     logger.error(
-      { kind: 'stripe_price_missing', type: plan },
-      'no active Stripe price under a plan lookup key; run scripts/stripe-setup.mjs (P5-01)',
+      { kind: 'stripe_price_missing', type: item.id },
+      'no active Stripe price under a catalogue lookup key; run scripts/stripe-setup.mjs (P5-01)',
     );
 
     throw new ConflictError(BILLING_UNAVAILABLE);
@@ -165,6 +188,9 @@ const currentPriceId = async (stripe: StripeClient, plan: PlanId): Promise<strin
 
   return price.id;
 };
+
+const currentPriceId = (stripe: StripeClient, plan: PlanId): Promise<string> =>
+  priceIdFor(stripe, PLANS[plan]);
 
 /**
  * A portal session, with the configuration it was opened under expanded — the
@@ -358,6 +384,46 @@ export const createBillingPort = ({
 
       throw new ConflictError(BILLING_UNAVAILABLE);
     }
+
+    return { url: session.url };
+  },
+
+  async topUp(tenantId) {
+    if (stripe === undefined) throw new ConflictError(BILLING_UNAVAILABLE);
+
+    const state = await readState(tenantId);
+
+    /* The guard resolved this tenant a moment ago; absent is a race with deletion. */
+    if (state === undefined) throw new NotFoundError();
+
+    /*
+     * **For a winery on a plan, and paid up.** A trial's messages are a taste,
+     * not something to buy more of, and a winery with no customer has no
+     * account for the payment to land on. One whose payment failed has a
+     * paused widget: messages bought now could not be used, so it is told what
+     * would help instead.
+     */
+    if (state.status === 'PAST_DUE') throw new ConflictError(PAYMENT_OVERDUE);
+
+    if (
+      state.status !== 'ACTIVE' ||
+      state.stripeCustomerId === null ||
+      state.stripeSubscriptionId === null
+    ) {
+      throw new ConflictError(NO_PLAN_FOR_TOP_UP);
+    }
+
+    const session = await stripe.post(
+      '/v1/checkout/sessions',
+      topUpSessionParams({
+        tenantId,
+        priceId: await priceIdFor(stripe, TOP_UP),
+        customerId: state.stripeCustomerId,
+        locale: state.locale,
+        dashboardOrigin,
+      }),
+      checkoutSession,
+    );
 
     return { url: session.url };
   },

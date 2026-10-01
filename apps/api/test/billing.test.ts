@@ -193,6 +193,7 @@ describe('the route', () => {
         return Promise.resolve({ url: 'https://billing.stripe.com/p/session/test_1' });
       },
       changePlan: () => Promise.reject(new Error('not this route')),
+      topUp: () => Promise.reject(new Error('not this route')),
     };
 
     return { asked, billing };
@@ -344,6 +345,7 @@ describe('the Billing Portal (P5-08)', () => {
       const billing: BillingPort = {
         checkout: () => Promise.reject(new Error('not this route')),
         changePlan: () => Promise.reject(new Error('not this route')),
+        topUp: () => Promise.reject(new Error('not this route')),
         portal: (tenantId) => {
           asked.push(tenantId);
           return Promise.resolve({ url: 'https://billing.stripe.com/p/session/test_1' });

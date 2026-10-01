@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Builds a Stripe account's plan catalogue from `plans.ts` (P5-01).
+ * Builds a Stripe account's catalogue from `plans.ts`: every plan (P5-01) and
+ * the one-time message top-up (P5-11a).
  *
  *   STRIPE_SECRET_KEY=… node scripts/stripe-setup.mjs                    what it would do
  *   STRIPE_SECRET_KEY=… node scripts/stripe-setup.mjs --apply            do it
@@ -34,9 +35,8 @@ import { URLSearchParams } from 'node:url';
 
 import { die, table } from './lib/report.mjs';
 
-const { applyCatalog, CatalogConflictError, planCatalog, STRIPE_API_VERSION } =
+const { applyCatalog, CatalogConflictError, catalogItem, planCatalog, STRIPE_API_VERSION } =
   await import('../packages/core/dist/billing/stripe-catalog.js');
-const { PLANS } = await import('../packages/core/dist/plans.js');
 const { encodeStripeForm } = await import('../packages/core/dist/billing/stripe-form.js');
 
 const FLAGS = new Set(['--apply', '--reprice', '--live']);
@@ -202,7 +202,8 @@ const catalog = {
         nickname: price.nickname,
         unit_amount: price.unitAmount,
         currency: price.currency,
-        recurring: { interval: price.interval },
+        /* A one-time price has no `recurring` at all, not an empty one. */
+        ...(price.interval === null ? {} : { recurring: { interval: price.interval } }),
         metadata: price.metadata,
       }),
       `creating the ${price.lookupKey} price`,
@@ -212,7 +213,8 @@ const catalog = {
   },
 };
 
-const euros = (plan) => `€${(plan.amountCents / 100).toFixed(2)}/${plan.interval}`;
+const euros = (item) =>
+  `€${(item.amountCents / 100).toFixed(2)}${item.interval === null ? ' once' : `/${item.interval}`}`;
 
 const stepCells = (step) => {
   switch (step.kind) {
@@ -235,11 +237,11 @@ const main = async () => {
   );
   console.log(
     table(
-      ['Plan', 'Lookup key', 'Price', 'Step', 'Live price'],
+      ['Item', 'Lookup key', 'Price', 'Step', 'Live price'],
       steps.map((step) => [
-        step.plan,
-        PLANS[step.plan].lookupKey,
-        euros(PLANS[step.plan]),
+        step.item,
+        catalogItem(step.item).lookupKey,
+        euros(catalogItem(step.item)),
         ...stepCells(step),
       ]),
     ),
@@ -269,8 +271,8 @@ const main = async () => {
 
   console.log(
     `\n${table(
-      ['Plan', 'Step', 'Price id'],
-      results.map((result) => [result.plan, result.kind, result.priceId]),
+      ['Item', 'Step', 'Price id'],
+      results.map((result) => [result.item, result.kind, result.priceId]),
     )}\n`,
   );
 
@@ -278,7 +280,7 @@ const main = async () => {
     if (step.kind === 'reprice') {
       console.log(
         `  ${step.previous.id} keeps its subscribers and no longer holds ` +
-          `${PLANS[step.plan].lookupKey}. Archive it in the Dashboard once none remain.`,
+          `${catalogItem(step.item).lookupKey}. Archive it in the Dashboard once none remain.`,
       );
     }
   }

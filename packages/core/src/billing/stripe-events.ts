@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
-import { PLAN_IDS, planForLookupKey, type PlanId } from '../plans.js';
+import { PLAN_IDS, planForLookupKey, TOP_UP, type PlanId } from '../plans.js';
 
-import { STRIPE_PLAN_KEY, STRIPE_TENANT_KEY } from './checkout.js';
+import { STRIPE_PLAN_KEY, STRIPE_TENANT_KEY, STRIPE_TOP_UP_KEY } from './checkout.js';
 import type { BillingEvent } from './state.js';
 
 /**
@@ -220,4 +220,67 @@ export const readBillingEvent = (payload: unknown): ReadBillingEvent | undefined
     default:
       return undefined;
   }
+};
+
+/* ------------------------------------------------------------------ top-ups */
+
+const topUpSession = z.object({
+  mode: z.literal('payment'),
+  customer: id,
+  payment_intent: id,
+  payment_status: z.enum(['paid', 'unpaid', 'no_payment_required']),
+  metadata: z.record(z.string(), z.string()).nullish(),
+});
+
+/** A top-up's Checkout, as the webhook credits it (P5-11a). */
+export interface TopUpPayment {
+  readonly customerId: string;
+  /** One payment is one credit: the ledger's unique key. */
+  readonly paymentIntentId: string;
+  /**
+   * Whether the money has arrived. A delayed method completes `unpaid` and
+   * sends `checkout.session.async_payment_succeeded` once it clears; only a
+   * paid session credits anything. `no_payment_required` is not paid: a coupon
+   * clicked into the Dashboard does not hand out free messages.
+   */
+  readonly paid: boolean;
+  /** When Stripe reported it: the month the messages count towards. */
+  readonly occurredAt: Date;
+  readonly livemode: boolean;
+}
+
+/**
+ * A verified Stripe event, read as a top-up payment — or `undefined` for
+ * anything else, a plan's Checkout included (P5-11a).
+ *
+ * **A top-up is told apart by what we wrote**: `mode: 'payment'` and our
+ * `top_up` metadata naming the one top-up `plans.ts` sells. A payment-mode
+ * Checkout somebody made in the Dashboard carries neither, and credits
+ * nothing.
+ */
+export const readTopUpEvent = (payload: unknown): TopUpPayment | undefined => {
+  const outer = envelope.safeParse(payload);
+
+  if (!outer.success) return undefined;
+
+  const { type, created, livemode, data } = outer.data;
+
+  if (
+    type !== 'checkout.session.completed' &&
+    type !== 'checkout.session.async_payment_succeeded'
+  ) {
+    return undefined;
+  }
+
+  const parsed = topUpSession.safeParse(data.object);
+
+  if (!parsed.success || parsed.data.metadata?.[STRIPE_TOP_UP_KEY] !== TOP_UP.id) return undefined;
+
+  return {
+    customerId: parsed.data.customer,
+    paymentIntentId: parsed.data.payment_intent,
+    paid: parsed.data.payment_status === 'paid',
+    occurredAt: new Date(created * 1000),
+    livemode,
+  };
 };
