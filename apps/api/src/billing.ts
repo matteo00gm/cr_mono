@@ -1,5 +1,6 @@
-import type { BillingCheckoutResponse } from '@catalogorosso/api-client';
+import type { BillingCheckoutResponse, BillingPortalResponse } from '@catalogorosso/api-client';
 import {
+  BILLING_PATH,
   checkoutSessionParams,
   ConflictError,
   NotFoundError,
@@ -36,8 +37,18 @@ export const ALREADY_SUBSCRIBED =
   'This winery already has a subscription. To move to another plan, change plan on the ' +
   'Fatturazione screen rather than buying a second one.';
 
+/**
+ * A winery that has never bought anything has no Stripe customer, and so no
+ * account for the portal to open (P5-08).
+ */
+export const NO_BILLING_ACCOUNT =
+  'This winery has not bought a plan yet, so there is no billing account to manage. ' +
+  'Choose a plan on the Fatturazione screen first.';
+
 export interface BillingPort {
   readonly checkout: (tenantId: string, plan: PlanId) => Promise<BillingCheckoutResponse>;
+  /** Stripe's Billing Portal, for the payment method, invoices and cancellation (P5-08). */
+  readonly portal: (tenantId: string) => Promise<BillingPortalResponse>;
 }
 
 /** The port with nothing behind it: a wiring error, loudly, never a plausible answer. */
@@ -53,6 +64,7 @@ export class BillingPortNotConfiguredError extends Error {
 
 export const unconfiguredBilling: BillingPort = {
   checkout: () => Promise.reject(new BillingPortNotConfiguredError()),
+  portal: () => Promise.reject(new BillingPortNotConfiguredError()),
 };
 
 export interface BillingDeps {
@@ -69,6 +81,19 @@ const priceList = z.object({
 });
 
 const checkoutSession = z.object({ id: z.string(), url: z.url() });
+
+/**
+ * A portal session, with the configuration it was opened under expanded — the
+ * one feature we read is whether the portal lets the customer change plan.
+ */
+const portalSession = z.object({
+  url: z.url(),
+  configuration: z.object({
+    features: z.object({
+      subscription_update: z.object({ enabled: z.boolean() }),
+    }),
+  }),
+});
 
 export const createBillingPort = ({
   stripe,
@@ -119,6 +144,46 @@ export const createBillingPort = ({
       }),
       checkoutSession,
     );
+
+    return { url: session.url };
+  },
+
+  async portal(tenantId) {
+    if (stripe === undefined) throw new ConflictError(BILLING_UNAVAILABLE);
+
+    const state = await readState(tenantId);
+
+    if (state === undefined) throw new NotFoundError();
+    if (state.stripeCustomerId === null) throw new ConflictError(NO_BILLING_ACCOUNT);
+
+    const session = await stripe.post(
+      '/v1/billing_portal/sessions',
+      {
+        customer: state.stripeCustomerId,
+        return_url: `${dashboardOrigin}${BILLING_PATH}`,
+        locale: state.locale === 'en' ? 'en' : 'it',
+        expand: ['configuration'],
+      },
+      portalSession,
+    );
+
+    /*
+     * **A portal that lets the customer change plan is refused, loudly.** Plan
+     * changes go through P5-09 — prorated up, at period end down — and past
+     * P5-10's guard, which refuses a downgrade the catalogue or the domains
+     * would not fit. A portal configured to switch plans would walk around
+     * both. It is a Dashboard setting, so it is checked on every session
+     * rather than trusted: the operator hears it from the log, the owner is
+     * told payments are unavailable, and nothing is handed out.
+     */
+    if (session.configuration.features.subscription_update.enabled) {
+      logger.error(
+        { kind: 'stripe_portal_allows_plan_changes' },
+        'the Stripe Billing Portal lets customers change plan; switch it off in the Dashboard (P5-08)',
+      );
+
+      throw new ConflictError(BILLING_UNAVAILABLE);
+    }
 
     return { url: session.url };
   },

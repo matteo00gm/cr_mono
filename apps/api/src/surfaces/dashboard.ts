@@ -5,6 +5,7 @@ import { publicRoute, requires, ROLES, type RouteAccess } from '@catalogorosso/s
 import {
   acceptInviteResponse,
   billingCheckoutResponse,
+  billingPortalResponse,
   catalogueReindexedResponse,
   claimWithdrawnResponse,
   devModeResponse,
@@ -1316,6 +1317,17 @@ export const createDashboardApp = ({
     return c.json(await billing.checkout(c.get('tenantId'), parsed.data.plan));
   });
 
+  /**
+   * Manage what the winery pays for: Stripe's Billing Portal (P5-08).
+   *
+   * **Step-up** (P4-11): the portal can cancel the subscription, which
+   * switches the widget off, and change who is charged. A stolen session can
+   * browse; it cannot end the winery's service.
+   */
+  app.post('/billing/portal', requireCapability('billing:manage'), stepUp, async (c) =>
+    c.json(await billing.portal(c.get('tenantId'))),
+  );
+
   app.post('/keys', requireCapability('keys:manage'), stepUp, async (c) =>
     c.json(await keys.create(c.get('tenantId')), 201),
   );
@@ -2311,6 +2323,22 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'service.',
       example: { url: 'https://checkout.stripe.com/c/pay/cs_test_a1b2c3' },
       response: billingCheckoutResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/billing/portal`),
+    {
+      access: requires('billing:manage'),
+      summary: "Manage the winery's subscription",
+      description:
+        'Answers with the URL of a Stripe-hosted Billing Portal page for the winery’s account: the ' +
+        'payment method, invoices and cancellation. Send the owner there; they come back to the ' +
+        'Fatturazione screen. Changing plan is not there — that is a change to the subscription ' +
+        'made here. Needs a fresh second factor, because the portal can end the service. A winery ' +
+        'that has never bought a plan has no account yet and is refused with a 409, as is a ' +
+        'service where payments are not set up.',
+      example: { url: 'https://billing.stripe.com/p/session/test_a1b2c3' },
+      response: billingPortalResponse,
     },
   ],
   [
