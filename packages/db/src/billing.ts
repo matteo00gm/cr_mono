@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 
+import { countDomains } from './domains-write.js';
 import type { TenantPlan, TenantStatus } from './widget-resolution.js';
 import type { DbTransaction } from './with-tenant.js';
 
@@ -186,4 +187,23 @@ export const startTrial = async (tx: DbTransaction, days: number): Promise<Date 
   const row = [...rows][0] as { trial_ends_at: string | Date } | undefined;
 
   return row === undefined ? undefined : new Date(row.trial_ends_at);
+};
+
+/**
+ * What a winery holds that a plan caps (P5-10): its active wines, and its
+ * production domains counted the way the domain cap counts them.
+ *
+ * On the caller's transaction, under the tenant policy. The effect that
+ * re-checks a downgrade as it applies reads this inside the event's claim,
+ * so the answer and the decision are one snapshot.
+ */
+export const readPlanFootprint = async (
+  tx: DbTransaction,
+): Promise<{ readonly wines: number; readonly domains: number }> => {
+  const rows = await tx.execute(sql`
+    SELECT count(*)::int AS wines FROM products WHERE status = 'ACTIVE'
+  `);
+  const wines = ([...rows][0] as { wines?: number } | undefined)?.wines ?? 0;
+
+  return { wines, domains: await countDomains(tx) };
 };

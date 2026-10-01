@@ -7,13 +7,20 @@ import {
   BILLING_PATH,
   checkoutSessionParams,
   ConflictError,
+  downgradeBlockers,
+  downgradeRefusal,
+  isDowngrade,
   NotFoundError,
-  PLAN_IDS,
   planForLookupKey,
   PLANS,
   type PlanId,
 } from '@catalogorosso/core';
-import { readBillingState, withTenant, type BillingState } from '@catalogorosso/db';
+import {
+  readBillingState,
+  readPlanFootprint,
+  withTenant,
+  type BillingState,
+} from '@catalogorosso/db';
 import { z } from 'zod';
 
 import { logger } from './middleware/logger.js';
@@ -92,6 +99,10 @@ export interface BillingDeps {
   /** Where Stripe sends the owner back to, finished or not. */
   readonly dashboardOrigin: string;
   readonly readState?: ((tenantId: string) => Promise<BillingState | undefined>) | undefined;
+  /** What the winery holds that a plan caps (P5-10). */
+  readonly readFootprint?:
+    | ((tenantId: string) => Promise<{ readonly wines: number; readonly domains: number }>)
+    | undefined;
 }
 
 /** Only the fields read: a price's id, and the key it was found under. */
@@ -124,9 +135,6 @@ const phase = z.object({ start_date: z.number().int(), end_date: z.number().int(
 const schedule = z.object({ id: z.string(), phases: z.tuple([phase], phase) });
 
 const acknowledged = z.object({ id: z.string() });
-
-/** Where a plan sits in the ladder: `PLAN_IDS` is ordered cheapest first. */
-const rank = (plan: PlanId): number => PLAN_IDS.indexOf(plan);
 
 /**
  * The active price under a plan's lookup key (P5-01), or a refusal that tells
@@ -175,6 +183,7 @@ export const createBillingPort = ({
   stripe,
   dashboardOrigin,
   readState = (tenantId) => withTenant(tenantId, readBillingState),
+  readFootprint = (tenantId) => withTenant(tenantId, readPlanFootprint),
 }: BillingDeps): BillingPort => ({
   async checkout(tenantId, plan) {
     if (stripe === undefined) throw new ConflictError(BILLING_UNAVAILABLE);
@@ -228,6 +237,19 @@ export const createBillingPort = ({
 
     if (current === plan) throw new ConflictError(SAME_PLAN);
 
+    const down = current !== null && isDowngrade(current, plan);
+
+    /*
+     * **A downgrade the winery does not fit is refused before anything is
+     * written** (P5-10) — naming what to reduce and by how much, and leaving
+     * any downgrade already pending exactly as it was.
+     */
+    if (down) {
+      const blockers = downgradeBlockers(await readFootprint(tenantId), plan);
+
+      if (blockers.length > 0) throw new ConflictError(downgradeRefusal(plan, blockers));
+    }
+
     const priceId = await currentPriceId(stripe, plan);
 
     /*
@@ -243,7 +265,7 @@ export const createBillingPort = ({
       );
     }
 
-    if (current === null || rank(plan) > rank(current)) {
+    if (!down) {
       /*
        * **Up, now, prorated**: the winery pays the difference for the rest of
        * the period and gets the higher limits when Stripe's webhook confirms
@@ -340,3 +362,53 @@ export const createBillingPort = ({
     return { url: session.url };
   },
 });
+
+/**
+ * Puts a winery's subscription back on a plan's price, with nothing prorated
+ * (P5-10).
+ *
+ * The other half of a downgrade refused as it applies: Stripe moved the
+ * subscription to the lower price at period end, the winery no longer fits it,
+ * and our record stayed on the higher plan. This moves Stripe back, so the
+ * winery is billed for what it is served; the webhook that follows confirms
+ * the plan our record already holds.
+ */
+export const createPlanRestorer =
+  ({
+    stripe,
+    readState = (tenantId) => withTenant(tenantId, readBillingState),
+  }: Pick<BillingDeps, 'stripe' | 'readState'>) =>
+  async (tenantId: string, plan: PlanId): Promise<void> => {
+    if (stripe === undefined) throw new ConflictError(BILLING_UNAVAILABLE);
+
+    const subscriptionId = (await readState(tenantId))?.stripeSubscriptionId ?? null;
+
+    /* A subscription since ended has nothing to put back. */
+    if (subscriptionId === null) return;
+
+    const live = await stripe.get(
+      `/v1/subscriptions/${encodeURIComponent(subscriptionId)}`,
+      {},
+      subscription,
+    );
+    const [item] = live.items.data;
+    const priceId = await currentPriceId(stripe, plan);
+
+    /*
+     * The downgrade's schedule is still attached through its second phase: it
+     * is released first, so nothing it holds moves the price again.
+     */
+    if (live.schedule !== null) {
+      await stripe.post(
+        `/v1/subscription_schedules/${encodeURIComponent(live.schedule)}/release`,
+        {},
+        acknowledged,
+      );
+    }
+
+    await stripe.post(
+      `/v1/subscriptions/${encodeURIComponent(live.id)}`,
+      { items: [{ id: item.id, price: priceId }], proration_behavior: 'none' },
+      acknowledged,
+    );
+  };

@@ -6,7 +6,7 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createBillingEffect } from '../src/billing-events.js';
-import { createBillingNotifier } from '../src/billing-notices.js';
+import { createBillingNotifier, type BillingNotice } from '../src/billing-notices.js';
 import { logger } from '../src/middleware/logger.js';
 import { createStripeEventsPort, type StripeDelivery } from '../src/stripe-events.js';
 
@@ -131,13 +131,14 @@ const subscriptionEvent = (
   customer: string,
   subscription: string,
   status = 'active',
+  lookupKey = 'ecommerce_monthly_eur',
 ) =>
   event(type, {
     id: subscription,
     customer,
     status,
     metadata: { tenant_id: tenantId },
-    items: { data: [{ price: { lookup_key: 'ecommerce_monthly_eur' } }] },
+    items: { data: [{ price: { lookup_key: lookupKey } }] },
   });
 
 /** A winery that has bought E-commerce and been activated. */
@@ -293,7 +294,7 @@ describe('an event that changes nothing, and is still handled', () => {
 });
 
 describe('the owners, told (P5-05a)', () => {
-  const told: [string, string][] = [];
+  const told: [string, BillingNotice][] = [];
   const telling = createStripeEventsPort({
     apply: createBillingEffect({ livemode: false }),
     notify: (tenantId, notice) => {
@@ -315,7 +316,7 @@ describe('the owners, told (P5-05a)', () => {
     await telling.record(invoiceFor('invoice.payment_failed', tenantId, customer, subscription));
     await telling.record(invoiceFor('invoice.paid', tenantId, customer, subscription));
 
-    expect(told).toEqual([[tenantId, 'payment_failed']]);
+    expect(told).toEqual([[tenantId, { kind: 'payment_failed' }]]);
   });
 
   it('never for a redelivered failure, which is a duplicate', async () => {
@@ -326,7 +327,7 @@ describe('the owners, told (P5-05a)', () => {
     await telling.record(failure);
     await telling.record(failure);
 
-    expect(told).toEqual([[tenantId, 'payment_failed']]);
+    expect(told).toEqual([[tenantId, { kind: 'payment_failed' }]]);
   });
 });
 
@@ -363,7 +364,7 @@ describe('who is told (P5-05a)', () => {
         }) as never,
     });
 
-    await notify(tenantId, 'payment_failed');
+    await notify(tenantId, { kind: 'payment_failed' });
 
     expect(sent.map((message) => message.to).sort()).toEqual([
       `anna-${tenantId}@rossi.example`,
@@ -377,5 +378,128 @@ describe('who is told (P5-05a)', () => {
         billingUrl: 'https://app.catalogorosso.com/fatturazione',
       },
     });
+  });
+});
+
+describe('a downgrade re-checked as it applies (P5-10)', () => {
+  const told: [string, BillingNotice][] = [];
+  const telling = createStripeEventsPort({
+    apply: createBillingEffect({ livemode: false }),
+    notify: (tenantId, notice) => {
+      told.push([tenantId, notice]);
+      return Promise.resolve();
+    },
+  });
+
+  beforeEach(() => {
+    told.length = 0;
+  });
+
+  /** `count` wines in `status`, as the catalogue holds them. */
+  const wines = async (tenantId: string, count: number, status = 'ACTIVE') => {
+    await admin().execute(sql`
+      INSERT INTO products (tenant_id, sku, name, wine_type, price_cents, currency, stock_status, status)
+      SELECT ${tenantId}::uuid, ${status} || '-' || g, 'Barolo', 'red', 4500, 'EUR', 'IN_STOCK',
+             ${status}::product_status
+      FROM generate_series(1, ${count}) g
+    `);
+  };
+
+  const periodEnd = (tenantId: string, customer: string, subscription: string) =>
+    subscriptionEvent(
+      'customer.subscription.updated',
+      tenantId,
+      customer,
+      subscription,
+      'active',
+      'cantina_monthly_eur',
+    );
+
+  it('moves a winery that fits to the lower plan, and leaves nothing to do', async () => {
+    const { tenantId, customer, subscription } = await paying();
+
+    await wines(tenantId, 300);
+    await telling.record(periodEnd(tenantId, customer, subscription));
+
+    expect((await row(tenantId)).plan).toBe('CANTINA');
+    expect(told).toEqual([]);
+  });
+
+  it('keeps a winery that grew past the lower plan where it is, and says what to reduce', async () => {
+    const { tenantId, customer, subscription } = await paying();
+
+    await wines(tenantId, 412);
+
+    expect(await telling.record(periodEnd(tenantId, customer, subscription))).toEqual({
+      duplicate: false,
+      applied: true,
+    });
+    expect(await row(tenantId)).toEqual({
+      status: 'ACTIVE',
+      plan: 'ECOMMERCE',
+      customer,
+      subscription,
+    });
+    expect(told).toEqual([
+      [
+        tenantId,
+        {
+          kind: 'downgrade_deferred',
+          kept: 'ECOMMERCE',
+          wanted: 'CANTINA',
+          reason:
+            'Cantina allows 300 wines and 1 domain. To move to Cantina, archive 112 wines (412 of 300) first.',
+        },
+      ],
+    ]);
+  });
+
+  it('counts only active wines, and only the winery’s own', async () => {
+    const { tenantId, customer, subscription } = await paying();
+    const neighbour = await paying();
+
+    await wines(tenantId, 300);
+    await wines(tenantId, 50, 'ARCHIVED');
+    await wines(neighbour.tenantId, 50);
+    await telling.record(periodEnd(tenantId, customer, subscription));
+
+    expect((await row(tenantId)).plan).toBe('CANTINA');
+  });
+
+  it('counts production domains as the domain cap counts them', async () => {
+    const { tenantId, customer, subscription } = await paying();
+    const domain = (registrable: string, kind: 'production' | 'staging') =>
+      admin().execute(sql`
+        INSERT INTO tenant_domains (tenant_id, origin, registrable_domain, status, verified_at, kind)
+        VALUES (${tenantId}, ${`https://${registrable}`}, ${registrable}, 'VERIFIED', now(),
+                ${kind}::domain_kind)
+      `);
+
+    await domain(`a-${tenantId}.example`, 'production');
+    await domain(`b-${tenantId}.example`, 'production');
+    await domain(`c-${tenantId}.example`, 'staging');
+    await telling.record(periodEnd(tenantId, customer, subscription));
+
+    expect((await row(tenantId)).plan).toBe('ECOMMERCE');
+    expect(told[0]?.[1]).toMatchObject({
+      kind: 'downgrade_deferred',
+      reason:
+        'Cantina allows 300 wines and 1 domain. To move to Cantina, remove 1 domain (2 of 1) first.',
+    });
+  });
+
+  it('never re-checks a move up', async () => {
+    const tenantId = await trialing();
+    const customer = `cus_${randomUUID()}`;
+    const subscription = `sub_${randomUUID()}`;
+
+    await port.record(paidCheckout(tenantId, customer, subscription, 'CANTINA'));
+    await wines(tenantId, 412);
+    await telling.record(
+      subscriptionEvent('customer.subscription.updated', tenantId, customer, subscription),
+    );
+
+    expect((await row(tenantId)).plan).toBe('ECOMMERCE');
+    expect(told).toEqual([]);
   });
 });

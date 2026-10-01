@@ -7,6 +7,7 @@ import { createApp } from '../src/app.js';
 import {
   BILLING_UNAVAILABLE,
   createBillingPort,
+  createPlanRestorer,
   NO_SUBSCRIPTION,
   SAME_PLAN,
   type BillingPort,
@@ -99,12 +100,20 @@ const scripted = ({
   return { stripe, calls };
 };
 
-const portWith = (state: BillingState | undefined, stripe = scripted()) => ({
+/** A winery that fits Cantina: under its 300 wines and its one domain. */
+const SMALL = { wines: 120, domains: 1 };
+
+const portWith = (
+  state: BillingState | undefined,
+  stripe = scripted(),
+  footprint: { wines: number; domains: number } = SMALL,
+) => ({
   ...stripe,
   port: createBillingPort({
     stripe: stripe.stripe,
     dashboardOrigin: 'https://app.catalogorosso.com',
     readState: () => Promise.resolve(state),
+    readFootprint: () => Promise.resolve(footprint),
   }),
 });
 
@@ -318,5 +327,103 @@ describe('the route', () => {
 
     expect((await request()).status).toBe(422);
     expect(asked).toEqual([]);
+  });
+});
+
+describe('a downgrade the winery does not fit (P5-10)', () => {
+  const onEcommerce: BillingState = { ...onCantina, plan: 'ECOMMERCE' };
+  const onEcommerceStripe = () =>
+    scripted({ lookupKey: 'ecommerce_monthly_eur', pendingSchedule: 'sub_sched_pending' });
+
+  it('is refused before anything is written, naming what to reduce and by how much', async () => {
+    const { port, calls } = portWith(onEcommerce, onEcommerceStripe(), { wines: 412, domains: 2 });
+
+    await expect(port.changePlan(TENANT, 'CANTINA')).rejects.toThrow(
+      new ConflictError(
+        'Cantina allows 300 wines and 1 domain. To move to Cantina, archive 112 wines (412 of 300) ' +
+          'and remove 1 domain (2 of 1) first.',
+      ),
+    );
+    /* The downgrade already pending is left exactly as it was. */
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it('is refused for the catalogue alone', async () => {
+    const { port } = portWith(onEcommerce, onEcommerceStripe(), { wines: 301, domains: 1 });
+
+    await expect(port.changePlan(TENANT, 'CANTINA')).rejects.toThrow(
+      'Cantina allows 300 wines and 1 domain. To move to Cantina, archive 1 wine (301 of 300) first.',
+    );
+  });
+
+  it('is allowed at the caps exactly', async () => {
+    const { port } = portWith(onEcommerce, onEcommerceStripe(), { wines: 300, domains: 1 });
+
+    expect(await port.changePlan(TENANT, 'CANTINA')).toMatchObject({ effective: 'period_end' });
+  });
+
+  it('is not asked of an upgrade, which fits by definition', async () => {
+    const { port } = portWith(onCantina, scripted(), { wines: 9_999, domains: 9 });
+
+    expect(await port.changePlan(TENANT, 'ECOMMERCE')).toMatchObject({ effective: 'now' });
+  });
+});
+
+describe('putting a refused downgrade back (P5-10)', () => {
+  const restorerWith = (state: BillingState | undefined, stripe = scripted()) => ({
+    ...stripe,
+    restore: createPlanRestorer({ stripe: stripe.stripe, readState: () => Promise.resolve(state) }),
+  });
+
+  it('moves the item back to the kept plan’s price, charging nothing for the move', async () => {
+    const { restore, calls } = restorerWith(onCantina);
+
+    await restore(TENANT, 'ECOMMERCE');
+
+    expect(writes(calls)).toEqual([
+      {
+        path: '/v1/subscriptions/sub_1',
+        params: { items: [{ id: 'si_1', price: 'price_e' }], proration_behavior: 'none' },
+      },
+    ]);
+  });
+
+  it('releases the schedule still attached first, so it cannot move the price again', async () => {
+    const { restore, calls } = restorerWith(
+      onCantina,
+      scripted({ pendingSchedule: 'sub_sched_9' }),
+    );
+
+    await restore(TENANT, 'ECOMMERCE');
+
+    expect(writes(calls).map(({ path }) => path)).toEqual([
+      '/v1/subscription_schedules/sub_sched_9/release',
+      '/v1/subscriptions/sub_1',
+    ]);
+  });
+
+  it('does nothing for a winery whose subscription has since ended', async () => {
+    const { restore, calls } = restorerWith({ ...onCantina, stripeSubscriptionId: null });
+
+    await restore(TENANT, 'ECOMMERCE');
+
+    expect(calls).toEqual([]);
+  });
+
+  it('does nothing for a winery that is gone', async () => {
+    const { restore, calls } = restorerWith(undefined);
+
+    await restore(TENANT, 'ECOMMERCE');
+
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses where there is no Stripe', async () => {
+    const restore = createPlanRestorer({
+      stripe: undefined,
+      readState: () => Promise.resolve(onCantina),
+    });
+
+    await expect(restore(TENANT, 'ECOMMERCE')).rejects.toThrow(BILLING_UNAVAILABLE);
   });
 });

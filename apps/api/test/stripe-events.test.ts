@@ -1,6 +1,7 @@
 import type { ClaimedRun, DbTransaction, WebhookEvent } from '@catalogorosso/db';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { BillingNotice } from '../src/billing-notices.js';
 import { logger } from '../src/middleware/logger.js';
 import {
   createStripeEventsPort,
@@ -114,9 +115,11 @@ describe('an event that names nobody', () => {
   });
 });
 
+const PAYMENT_FAILED = { kind: 'payment_failed' } as const;
+
 describe('a notice an applied event leaves (P5-05a)', () => {
-  const notifying = (notice: 'payment_failed' | undefined) => {
-    const told: [string, string][] = [];
+  const notifying = (notice: BillingNotice | undefined) => {
+    const told: [string, BillingNotice][] = [];
     const { claim } = recordingClaim(true);
     const port = createStripeEventsPort({
       claim,
@@ -131,11 +134,11 @@ describe('a notice an applied event leaves (P5-05a)', () => {
   };
 
   it('is sent once the claim has committed, for the winery the event named', async () => {
-    const { told, port } = notifying('payment_failed');
+    const { told, port } = notifying(PAYMENT_FAILED);
 
     await port.record(delivery({ metadata: { tenant_id: TENANT } }));
 
-    expect(told).toEqual([[TENANT, 'payment_failed']]);
+    expect(told).toEqual([[TENANT, PAYMENT_FAILED]]);
   });
 
   it('is not sent for an event that leaves none', async () => {
@@ -151,7 +154,7 @@ describe('a notice an applied event leaves (P5-05a)', () => {
     const { claim } = recordingClaim(false);
     const port = createStripeEventsPort({
       claim,
-      apply: () => Promise.resolve({ applied: true, notice: 'payment_failed' }),
+      apply: () => Promise.resolve({ applied: true, notice: PAYMENT_FAILED }),
       notify: (tenantId) => {
         told.push(tenantId);
         return Promise.resolve();
@@ -168,7 +171,7 @@ describe('a notice an applied event leaves (P5-05a)', () => {
     const { claim } = recordingClaim(true);
     const port = createStripeEventsPort({
       claim,
-      apply: () => Promise.resolve({ applied: true, notice: 'payment_failed' }),
+      apply: () => Promise.resolve({ applied: true, notice: PAYMENT_FAILED }),
       notify: () => Promise.reject(new Error('Resend is down')),
     });
 
@@ -186,7 +189,7 @@ describe('a notice an applied event leaves (P5-05a)', () => {
     const { claim } = recordingClaim(true);
     const port = createStripeEventsPort({
       claim,
-      apply: () => Promise.resolve({ applied: true, notice: 'payment_failed' }),
+      apply: () => Promise.resolve({ applied: true, notice: PAYMENT_FAILED }),
     });
 
     expect(await port.record(delivery({ metadata: { tenant_id: TENANT } }))).toEqual({

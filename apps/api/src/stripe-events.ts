@@ -153,7 +153,7 @@ export const createStripeEventsPort = ({
          * tells nobody anything. The seam has already retried and alarmed.
          */
         logger.error(
-          { kind: 'billing_notice_unsent', type: notice, err: error },
+          { kind: 'billing_notice_unsent', type: notice.kind, err: error },
           'an owner could not be told what a billing event did (P5-05a)',
         );
       }
