@@ -528,6 +528,8 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
        * that nothing had been used.
        */
       readUsage: config.readUsage ?? quota.readUsage,
+      /* A top-up raises the bucket and the banner as it raises the gate (P5-11). */
+      readPurchased: quota.readPurchased,
       ipSecret: config.authSecret,
       environment: config.stage === 'unknown' ? 'development' : 'production',
       ...(config.widgetTokenKeys === undefined

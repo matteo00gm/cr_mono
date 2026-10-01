@@ -136,6 +136,7 @@ const portWith = (base: LlmProvider, strong: LlmProvider = base, allowed = true)
     models: { base: 'amazon.nova-lite-v1:0', strong: 'amazon.nova-2-lite-v1:0' },
     quota: {
       readUsage: () => Promise.resolve(0),
+      readPurchased: () => Promise.resolve(0),
       check: () =>
         Promise.resolve({ allowed, state: 'ok' as const, inOverage: false, used: 0, limit: 1500 }),
     },
@@ -198,6 +199,7 @@ describe('which model answers', () => {
         models: { base: 'some-new-model', strong: 'amazon.nova-2-lite-v1:0' },
         quota: {
           readUsage: () => Promise.resolve(0),
+          readPurchased: () => Promise.resolve(0),
           check: () =>
             Promise.resolve({ allowed: true, state: 'ok', inOverage: false, used: 0, limit: 1 }),
         },

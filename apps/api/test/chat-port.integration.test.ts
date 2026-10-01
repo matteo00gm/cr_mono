@@ -100,12 +100,12 @@ const addWine = async (id: string): Promise<string> => {
   return productId;
 };
 
-const portWith = (provider: ReturnType<typeof counting>): ChatPort =>
+const portWith = (provider: ReturnType<typeof counting>, purchased = 0): ChatPort =>
   createChatPort({
     embeddings,
     providers: { base: () => provider.build(), strong: () => provider.build() },
     models: { base: 'amazon.nova-lite-v1:0', strong: 'amazon.nova-2-lite-v1:0' },
-    quota: createQuotaPort(),
+    quota: createQuotaPort({ readPurchased: () => Promise.resolve(purchased) }),
   });
 
 const ask = async (
@@ -173,6 +173,51 @@ describe('the cost gate', () => {
 
     await expect(ask(portWith(provider), spent)).rejects.toThrow(QuotaExceededError);
     expect(provider.calls.count).toBe(0);
+  });
+
+  /** `count` billed turns this month, as the ledger holds them. */
+  const spend = async (id: string, count: number) => {
+    await useTenant(id);
+    await db.execute(sql`
+      insert into usage_events (tenant_id, period, kind, session_id, cost_micros)
+      select ${id}::uuid, to_char(now() at time zone 'utc', 'YYYYMM'), 'chat_message', null, 1
+      from generate_series(1, ${count})
+    `);
+  };
+
+  it('answers the last message the plan sells, and refuses the next with zero provider calls (P5-11)', async () => {
+    /* Cantina sells 1,500 messages a month. */
+    const edge = await createTenant('chat-edge');
+
+    await addWine(edge);
+    await spend(edge, 1_499);
+
+    const last = counting({ type: 'text', delta: 'Un Barolo.' });
+    await ask(portWith(last), edge);
+    expect(last.calls.count).toBe(1);
+
+    await spend(edge, 1);
+
+    const over = counting({ type: 'text', delta: 'ciao' });
+    await expect(ask(portWith(over), edge)).rejects.toThrow(QuotaExceededError);
+    expect(over.calls.count).toBe(0);
+  });
+
+  it('answers past the plan on what was bought, and stops hard at its end (P5-11)', async () => {
+    const topped = await createTenant('chat-topped');
+
+    await addWine(topped);
+    await spend(topped, 1_500);
+
+    const bought = counting({ type: 'text', delta: 'Un Barolo.' });
+    await ask(portWith(bought, 1_000), topped);
+    expect(bought.calls.count).toBe(1);
+
+    await spend(topped, 1_000);
+
+    const over = counting({ type: 'text', delta: 'ciao' });
+    await expect(ask(portWith(over, 1_000), topped)).rejects.toThrow(QuotaExceededError);
+    expect(over.calls.count).toBe(0);
   });
 
   it('answers a tenant with room left', async () => {

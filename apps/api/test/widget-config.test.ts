@@ -205,6 +205,37 @@ describe('the quota', () => {
     expect(body.quotaState).toBe(state);
   });
 
+  it('reads a spent month as ok again once messages are bought on top (P5-11)', async () => {
+    const built = app({
+      readUsage: () => Promise.resolve(1_500),
+      readPurchased: () => Promise.resolve(1_000),
+    });
+
+    const body = widgetConfigResponse.parse(await (await getConfig(built)).json());
+
+    expect(body.quotaState).toBe('ok');
+  });
+
+  it('reads what was bought for the tenant it resolved, into the same check', async () => {
+    const asked: MonthlyCheck[] = [];
+    const bought: string[] = [];
+    const built = app({
+      readUsage: (check) => {
+        asked.push(check);
+        return Promise.resolve(0);
+      },
+      readPurchased: (tenantId) => {
+        bought.push(tenantId);
+        return Promise.resolve(1_000);
+      },
+    });
+
+    await getConfig(built);
+
+    expect(bought).toEqual([TENANT]);
+    expect(asked).toEqual([planCapCheck(TENANT, 'CANTINA', 1_000)]);
+  });
+
   it('reads the month through the same plan-cap check chat spends', async () => {
     const asked: MonthlyCheck[] = [];
     const built = app({

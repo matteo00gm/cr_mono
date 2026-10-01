@@ -263,6 +263,30 @@ describe('planCapCheck (P2-10)', () => {
   });
 });
 
+describe('a top-up (P5-11)', () => {
+  it('raises the plan cap by exactly what was bought', () => {
+    expect(planCapCheck(TENANT, 'CANTINA', 1_000).limit).toBe(2_500);
+    expect(planCapCheck(TENANT, null, 1_000).limit).toBe(1_150);
+  });
+
+  it('keeps the month’s key, so what was already spent still counts', () => {
+    expect(planCapCheck(TENANT, 'CANTINA', 1_000).key).toBe(planCapCheck(TENANT, 'CANTINA').key);
+  });
+
+  it('is what chat spends against, so a message bought is a message served', () => {
+    const chat = widgetLimitChecks(request({ endpoint: 'chat', purchased: 1_000 }));
+
+    expect(chat.at(-1)).toEqual(planCapCheck(TENANT, 'CANTINA', 1_000));
+  });
+
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'refuses %s as a count rather than make a limit of it',
+    (purchased) => {
+      expect(() => planCapCheck(TENANT, 'CANTINA', purchased)).toThrow(RangeError);
+    },
+  );
+});
+
 describe('quotaStateOf (P2-10)', () => {
   it.each<[number, number, 'ok' | 'near' | 'exceeded']>([
     [0, 1_000, 'ok'],

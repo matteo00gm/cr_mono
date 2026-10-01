@@ -62,6 +62,12 @@ export interface WidgetLimitOptions {
   readonly limits?: WidgetLimits | undefined;
   /** Injected so the daily salt rotation is testable. */
   readonly now?: (() => number) | undefined;
+  /**
+   * Messages the tenant bought on top of its plan this month (P5-11). Read for
+   * chat only — the one endpoint that spends the month — and nothing when
+   * absent, which is the plan's own cap.
+   */
+  readonly readPurchased?: ((tenantId: string) => Promise<number>) | undefined;
 }
 
 export const limitWidgetRequest =
@@ -71,10 +77,16 @@ export const limitWidgetRequest =
     ipSecret,
     limits = WIDGET_LIMITS,
     now = Date.now,
+    readPurchased,
   }: WidgetLimitOptions): MiddlewareHandler<AppEnv> =>
   async (c, next) => {
     const tenant = c.get('widgetTenant') as WidgetTenant | undefined;
     if (tenant === undefined) throw new WidgetTenantUnresolvedError(endpoint);
+
+    const purchased =
+      endpoint === 'chat' && readPurchased !== undefined
+        ? await readPurchased(tenant.tenantId)
+        : undefined;
 
     const result = await limiter.check(
       widgetLimitChecks(
@@ -87,6 +99,7 @@ export const limitWidgetRequest =
           sessionId: c.get('widgetSessionId'),
           /* A staging origin draws its own, lower allowance as well (P4-19). */
           originKind: tenant.originKind,
+          purchased,
         },
         limits,
       ),

@@ -95,6 +95,11 @@ export interface WidgetRequest {
    * a development origin (P4-19b) is limited as staging is.
    */
   readonly originKind?: 'production' | 'staging' | 'development' | undefined;
+  /**
+   * Messages bought on top of the plan for this month (P5-11, P5-11a). Read
+   * only for chat, the one endpoint that spends the month; nothing when absent.
+   */
+  readonly purchased?: number | undefined;
 }
 
 const MINUTE = 60;
@@ -125,23 +130,38 @@ export const unresolvedLimitCheck = (
 const PLAN_CAP_SUFFIX = ':month';
 
 /**
- * A tenant's monthly plan cap, as a check.
+ * A tenant's monthly allowance, as a check: the plan's messages plus whatever
+ * was bought on top of them this month (P5-11).
  *
- * **One definition for spending the month and for reading it** (P2-10). Chat
- * spends it through `widgetLimitChecks`; the config route reads how much is left
- * with the same key and the same window. Two definitions would be two chances
- * to disagree, and the symptom of that is a widget told `ok` by one and refused
- * by the other.
+ * **One definition for spending the month, reading it and gating on it**
+ * (P2-10, P2-36). Chat spends it through `widgetLimitChecks`, the config route
+ * reads how much is left with the same key and the same window, and the cost
+ * gate compares the ledger against the same limit. Two definitions would be
+ * two chances to disagree — and a top-up that raised one counter and not the
+ * other would be paid for and never served, because the stricter one refuses.
+ *
+ * **What was bought must be a count.** Anything else throws rather than
+ * becoming a limit: `NaN` here would read as `ok` to the widget and refuse
+ * every message, and nobody would see why.
  */
 export const planCapCheck = (
   tenantId: string,
   plan: WidgetPlan | null,
+  purchased = 0,
   limits: WidgetLimits = WIDGET_LIMITS,
-): MonthlyCheck => ({
-  key: `tenant:${tenantId}${PLAN_CAP_SUFFIX}`,
-  limit: limits.messagesPerMonth[plan ?? 'none'],
-  window: 'month',
-});
+): MonthlyCheck => {
+  if (!Number.isSafeInteger(purchased) || purchased < 0) {
+    throw new RangeError(
+      `planCapCheck: purchased messages must be a count, got ${String(purchased)}`,
+    );
+  }
+
+  return {
+    key: `tenant:${tenantId}${PLAN_CAP_SUFFIX}`,
+    limit: limits.messagesPerMonth[plan ?? 'none'] + purchased,
+    window: 'month',
+  };
+};
 
 /**
  * The checks one widget request makes.
@@ -207,7 +227,9 @@ export const widgetLimitChecks = (
    * message that was never billed. The stricter wins, which over-refuses by
    * that margin: the safe direction, and bounded by the error rate.
    */
-  if (endpoint === 'chat') checks.push(planCapCheck(tenantId, request.plan, limits));
+  if (endpoint === 'chat') {
+    checks.push(planCapCheck(tenantId, request.plan, request.purchased, limits));
+  }
 
   return checks;
 };
