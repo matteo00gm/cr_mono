@@ -12,7 +12,12 @@ complete only because raw `fetch` to our own API is forbidden outside
 | `GET /v1/dashboard/domains/claims/served` | apps/dashboard/src/features/domains/ClaimNotice.tsx:38 |
 | `GET /v1/dashboard/me` | apps/dashboard/src/session.ts:152 |
 | `GET /v1/dashboard/products` | apps/dashboard/src/features/catalog/CatalogScreen.tsx:134<br>apps/dashboard/src/features/catalog/catalogue-export.ts:70 |
+| `GET /v1/dashboard/usage` | apps/dashboard/src/features/billing/BillingBanner.tsx:49<br>apps/dashboard/src/features/billing/BillingScreen.tsx:107 |
 | `PATCH /v1/dashboard/products/:id` | apps/dashboard/src/features/catalog/InlineEdit.tsx:221 |
+| `POST /v1/dashboard/billing/checkout` | apps/dashboard/src/features/billing/BillingScreen.tsx:146 |
+| `POST /v1/dashboard/billing/plan` | apps/dashboard/src/features/billing/BillingScreen.tsx:150 |
+| `POST /v1/dashboard/billing/portal` | apps/dashboard/src/features/billing/BillingScreen.tsx:166 |
+| `POST /v1/dashboard/billing/top-up` | apps/dashboard/src/features/billing/BillingScreen.tsx:162 |
 | `POST /v1/dashboard/domains/claims/:id/withdraw` | apps/dashboard/src/features/domains/ClaimNotice.tsx:56 |
 | `POST /v1/dashboard/products/:id/reindex` | apps/dashboard/src/features/catalog/IndexStatus.tsx:197 |
 | `POST /v1/dashboard/products/import` | apps/dashboard/src/features/catalog/ImportSummary.tsx:236 |
