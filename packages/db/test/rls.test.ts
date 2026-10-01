@@ -228,13 +228,23 @@ describe('rls migration', () => {
           {
             widget_keys: '0049_secret_key_rls',
             tenant_domains: '0056_domain_claim_sweep_rls',
-            tenants: '0059_dev_mode_rls',
+            /* And `tenants` by P5-13's directory branch, the widget branches kept. */
+            tenants: '0069_tenant_directory_rls',
           }[table as string] ?? '0042_widget_key_rls',
         );
         expect(current(table)?.using, table).toContain('app.widget_');
         expect(current(table)?.withCheck, table).not.toContain('app.widget_');
         expect(current(table)?.withCheck, table).toContain("current_setting('app.tenant_id'");
       }
+    });
+
+    it('lets the tenant directory read every tenant and write none (P5-13, ADR 0030)', () => {
+      const tenants = current('tenants');
+
+      expect(tenants?.using).toContain("current_setting('app.tenant_directory', true)");
+      expect(tenants?.withCheck).not.toContain('app.tenant_directory');
+      /* The widget branches P4-19b left are still there, word for word. */
+      expect(tenants?.using).toContain('dev_mode_expires_at > now()');
     });
 
     it("ties a domain to the presented key's own tenant, not to any holder of the origin", () => {

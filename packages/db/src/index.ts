@@ -558,7 +558,9 @@ export {
   recordPaidCharge,
   recordTopUp,
   recordUsage,
+  rollupUsageDay,
   type ChargeToRecord,
+  type DayRollup,
   type TopUpToRecord,
   type UsageBreakdown,
   type UsageSlice,
@@ -605,3 +607,14 @@ export {
   type VectorCandidate,
   type VectorSearchRequest,
 } from './retrieval.js';
+
+/**
+ * Every tenant, by id (P5-13, ADR 0030) — the ninth RLS scope, and not one a
+ * caller can hold: the list comes back, and each tenant is reached through
+ * `withTenant`.
+ */
+export {
+  listTenantDirectory,
+  TENANT_DIRECTORY_GUC,
+  type TenantDirectoryEntry,
+} from './tenant-directory.js';

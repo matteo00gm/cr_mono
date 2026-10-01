@@ -258,3 +258,84 @@ export const recordPaidCharge = async (
 
   return [...rows].length === 0 ? 'duplicate' : 'recorded';
 };
+
+/** What one tenant's day came to, as `usage_daily` holds it (P5-13). */
+export interface DayRollup {
+  readonly messages: number;
+  readonly conversations: number;
+  readonly addToCarts: number;
+  readonly tokensIn: number;
+  readonly tokensOut: number;
+  readonly costMicros: number;
+}
+
+/**
+ * Recomputes one UTC day for the scope's tenant and writes it (P5-13).
+ *
+ * **A recompute, never an increment**: the day is read whole from the ledger
+ * and the events, and the row is replaced — so a retried run, or one re-run by
+ * hand after a late write, reports the same day the same way rather than
+ * doubling it. **A day with nothing is a row of noughts**, not a gap: a chart
+ * that reads a missing day as "no data" draws a line through it.
+ *
+ * Messages are billed chat turns; tokens and cost are every billed action,
+ * embedding included, because the cost is what the margin dashboard reads.
+ */
+export const rollupUsageDay = async (tx: DbTransaction, day: string): Promise<DayRollup> => {
+  const rows = await tx.execute(sql`
+    WITH bounds AS (
+      SELECT ${day}::date::timestamp AT TIME ZONE 'UTC' AS start_at,
+             (${day}::date + 1)::timestamp AT TIME ZONE 'UTC' AS end_at
+    ),
+    billed AS (
+      SELECT
+        count(*) FILTER (WHERE u.kind = 'chat_message')::int AS messages,
+        coalesce(sum(u.input_tokens), 0)::bigint AS tokens_in,
+        coalesce(sum(u.output_tokens), 0)::bigint AS tokens_out,
+        coalesce(sum(u.cost_micros), 0)::bigint AS cost_micros
+      FROM usage_events u, bounds b
+      WHERE u.tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        AND u.created_at >= b.start_at AND u.created_at < b.end_at
+    ),
+    opened AS (
+      SELECT count(*)::int AS conversations
+      FROM conversations c, bounds b
+      WHERE c.tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        AND c.started_at >= b.start_at AND c.started_at < b.end_at
+    ),
+    carted AS (
+      SELECT count(*)::int AS add_to_carts
+      FROM widget_events e, bounds b
+      WHERE e.tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        AND e.type = 'ADD_TO_CART'
+        AND e.created_at >= b.start_at AND e.created_at < b.end_at
+    )
+    INSERT INTO usage_daily
+      (tenant_id, day, messages, conversations, add_to_carts, tokens_in, tokens_out, cost_micros)
+    SELECT nullif(current_setting('app.tenant_id', true), '')::uuid, ${day}::date,
+           billed.messages, opened.conversations, carted.add_to_carts,
+           billed.tokens_in, billed.tokens_out, billed.cost_micros
+    FROM billed, opened, carted
+    ON CONFLICT (tenant_id, day) DO UPDATE SET
+      messages = excluded.messages,
+      conversations = excluded.conversations,
+      add_to_carts = excluded.add_to_carts,
+      tokens_in = excluded.tokens_in,
+      tokens_out = excluded.tokens_out,
+      cost_micros = excluded.cost_micros
+    RETURNING messages, conversations, add_to_carts, tokens_in, tokens_out, cost_micros
+  `);
+  const row = [...rows][0];
+
+  /* The INSERT always yields its row; nothing returned is a statement that did not run. */
+  if (row === undefined) throw new Error('Rolling up a day returned no row (P5-13).');
+
+  return {
+    messages: Number(row.messages),
+    conversations: Number(row.conversations),
+    addToCarts: Number(row.add_to_carts),
+    tokensIn: Number(row.tokens_in),
+    tokensOut: Number(row.tokens_out),
+    costMicros: Number(row.cost_micros),
+  };
+};

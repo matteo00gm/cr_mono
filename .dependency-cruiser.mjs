@@ -159,6 +159,12 @@ export default {
           // because the limiter also counts callers who belong to no tenant — so
           // there is no scoped read for a missing context to narrow.
           '|^packages/db/src/rate-limit[.]ts$' +
+          // src/tenant-directory.ts is exempt from P5-13, and it is the ninth
+          // RLS context — a design change, recorded in ADR 0030. It widens: the
+          // nightly rollup needs every tenant's id. What bounds it is that it
+          // exports no scope a caller can hold — one READ ONLY transaction, one
+          // statement selecting id and created_at, and the list returned.
+          '|^packages/db/src/tenant-directory[.]ts$' +
           // src/webhooks.ts is exempt from P0-64b, and unlike the two files
           // above it really does open a connection. A webhook arrives outside
           // any request — no session, no membership row, no tenant to set — and
