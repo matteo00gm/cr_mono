@@ -1410,7 +1410,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P5-10 | Downgrade guard | blocked when catalog (>300/2,500 SKUs) or domains exceed target plan | P5-09 |
 | ✅ P5-11 | Quota enforcement wiring | hard cap at 100% messages; zero model calls past cap | P2-36 |
 | ✅ P5-11a | Message top-up purchase | €15 for 1,000 extra messages one-time checkout + credit counter | P5-11 |
-| P5-12 | Usage notifications (80% & 100%) | dashboard banners + automated emails with upgrade & top-up CTAs | P5-11 |
+| ✅ P5-12 | Usage notifications (80% & 100%) | dashboard banners + automated emails with upgrade & top-up CTAs | P5-11 |
 | P5-13 | `usage_daily` rollup job | EventBridge nightly | P0-30 |
 
 ### P6 — Analytics and attribution
@@ -7285,6 +7285,27 @@ Quota check reads `current_usage < (plan_cap + purchased_top_up_messages)`.
 
 **Files.** `UsageMeter.tsx`, notification job, email templates, tests. **~150 lines.**
 
+**As built (2026-10-01).** `GET /v1/dashboard/usage` (`analytics:read`) and `usage` on the billing port; `thresholdReached`, `projectMonth` and `periodEnd` in `packages/core/src/billing/usage-meter.ts`; `apps/api/src/quota-notices.ts`, asked from the chat port; migrations 0064 (`notification_events`, append-only) and 0065 (its policy, generated); the `quota-warning` and `quota-exhausted` templates, rewritten; `BillingScreen.tsx` (with `UsageMeter`) and `BillingBanner.tsx` in the dashboard, and the `/fatturazione` route that was a 404 until now.
+
+- **One allowance, one state.** The meter reads the ledger the gate counts and P5-11's `planCapCheck` with what was bought, and `state` is the widget's own `quotaStateOf` — so the banner, the emails and the widget cannot disagree about where a winery stands. The thresholds are that state renamed: `near` is the 80% notice, `exceeded` the 100% one.
+- **The projection is the rate so far, carried to the month's end** (UTC, the ledger's calendar), taken over at least a day so the first hours of a month do not project into thousands, and never below what is already used.
+- **⚠ No notification job** *(deviation from "notification job")*. The notices are asked by the chat port after every billed turn, with the month as it now stands — one more than the gate counted. A job would need a scope that reads across wineries to find the ones over a line, which is a design change (CLAUDE.md); the turn that crosses the line is the moment, and it is already in the winery's scope. **Once per winery, period and threshold**: the notice is claimed in `notification_events` — the row's own key, `(tenant_id, period, threshold)` — before it is sent, so turns crossing the line together tell the owners once, and the failure mode is a lost email (P0-64's retries and alarm), never a second. A failed notice is logged (`quota_notice_unsent`) and the visitor's answer stands. The send happens after the turn is recorded, inside the request, at most twice a month per winery.
+- **⚠ The emails link to the Fatturazione screen, not to Checkout** *(deviation from "checkout links with valid tenant context")*. A Checkout session is opened by a signed-in owner (P5-02, P5-11a); one made in advance and mailed would be a payment page for anybody holding the email, and a Stripe call per notice for a click most owners do not make. The tenant context is the session's, as everywhere else (P0-48). The links land on their buttons (`#ricarica`, `#piano`).
+- **Both ways out, where they exist**: the top-up for a winery on a plan, and the next plan up — none on E-commerce, where the top-up is the only way. A trial is offered a plan and no top-up, which P5-11a refuses it. The row's "Passa al piano Pro (€79/mo)" is E-commerce's name and price, read from `plans.ts` like every other price on screen.
+- **Owners are emailed; every role sees the banner.** The banner sits under the nav on every screen: for an owner, the ways out as links; for an editor, what is happening and a request to tell an owner, with no button that would refuse them. A failed payment (§2.5) leads with the fix. The usage read is `analytics:read` for that reason. The claim banner's shell test now asserts the claims endpoint specifically, since the shell asks for the month for every role.
+- **Fatturazione**: the meter (`<meter>` with the projection and the reset date), the top-up (a plan and `ACTIVE` only), the next plan up and any lower one — through P5-09, with the step-up prompt and a retry when the API asks (P4-11) — the portal, plan cards for a winery with none, the breakdown by day and by site, and a plain thank-you on the way back from Stripe that does not claim the purchase is done.
+- **⚠ Refusals are shown in the API's words, which are English** *(open)*. A `DomainError`'s message is the contract (P0-55), so the screen shows P5-10's "Cantina allows 300 wines…" verbatim in an Italian dashboard. Localising refusals is a contract change across every route: an open item, not this row's.
+
+**Verified.** 5,051 unit tests and the full integration suite (79 files, 1,018 tests). The thresholds at 79/80/99/100/101%; the projection mid-month, on a month's last instant, in its first hours and in February; three turns crossing 80% together emailing the one owner once, a second email only at 100%, and no editor; the meter read from the real ledger with a top-up and a breakdown by site; and each role's banner and the screen's buttons in the dashboard, the step-up retry included. 19 mutants, 19 killed. A twentieth — the projection's floor at `used` — survived because it could not fire, so the floor was removed and the property stated instead.
+
+| Mutation | Caught by |
+|---|---|
+| No 80% notice · the first hours projected wild · the upgrade never offered by email | `usage-meter.test.ts`, `templates.test.ts` |
+| Sent without a claim · a trial offered a top-up · a spent month sent the warning · the month before this turn · notices never asked · a failed notice failing the turn · the meter ignoring what was bought · the state against the plan alone · no origin shown as an empty one · editors refused the month | `quota-notices.test.ts`, `chat-port.test.ts`, `billing-usage.test.ts` |
+| A notice claimed twice | `usage-meter.integration.test.ts` (db) |
+| Every kind of usage counted by site | `usage-meter.integration.test.ts` (api) |
+| An editor shown the owner's buttons · a failed payment not said · a top-up offered while overdue · no step-up, only an error | `billing-banner.test.tsx`, `billing-screen.test.tsx` |
+
 ---
 
 ### P5-13 · `usage_daily` rollup job
@@ -7989,6 +8010,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 
 | Item | Owner | Note |
 |---|---|---|
+| API refusals are English in an Italian dashboard | before launch | A `DomainError`'s message reaches the caller verbatim (P0-55), and the messages are English — P5-10's downgrade refusal, P5-11a's top-up refusals — while the dashboard is Italian. P5-12's Fatturazione screen shows them as they are. Localising means a code-to-copy map in the dashboard or a locale on the contract; either touches every route. |
 | P0-17a unblocked | ~~needs the API origin~~ | **Resolved by P0-54**, which creates the `Api` Function URL. The cache behaviour now has an origin to target: `CachingDisabled` managed policy, compression off, >=30s origin read timeout. Note the *streaming* function itself is still P2-29 — P0-17a can add the behaviour against the buffered origin and repoint it, or wait. |
 | CloudFront error mapping vs P4-15 | before the API joins the CDN | `customErrorResponses` is distribution-wide, so SPA 404->200 would turn API 404s into 200 HTML. Split the distribution or move SPA routing into a CloudFront Function. |
 | Integration suite in CI | **closed** | An `integration` job in `ci.yml` runs all 304 tests on every pull request, in parallel with `verify` and `test`. Not yet a *required* check — see **E4**. Detail and the follow-up optimisation in **E1**. |

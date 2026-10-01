@@ -3,16 +3,21 @@ import type {
   BillingPlanChangeResponse,
   BillingPortalResponse,
   BillingTopUpResponse,
+  UsageResponse,
 } from '@catalogorosso/api-client';
 import {
   BILLING_PATH,
+  CHAT_MESSAGE,
   checkoutSessionParams,
   ConflictError,
   downgradeBlockers,
   downgradeRefusal,
   isDowngrade,
   NotFoundError,
+  periodEnd,
+  periodOf,
   planForLookupKey,
+  projectMonth,
   PLANS,
   TOP_UP,
   topUpSessionParams,
@@ -20,11 +25,16 @@ import {
   type PlanId,
 } from '@catalogorosso/core';
 import {
+  countPurchased,
+  countUsage,
   readBillingState,
   readPlanFootprint,
+  readUsageBreakdown,
   withTenant,
   type BillingState,
+  type UsageBreakdown,
 } from '@catalogorosso/db';
+import { planCapCheck, quotaStateOf } from '@catalogorosso/security';
 import { z } from 'zod';
 
 import { logger } from './middleware/logger.js';
@@ -95,6 +105,11 @@ export interface BillingPort {
    * one-time payment. Credited when Stripe's webhook says it is paid.
    */
   readonly topUp: (tenantId: string) => Promise<BillingTopUpResponse>;
+  /**
+   * The month so far (P5-12, §2.3): used against the allowance, the projection
+   * and the breakdown. Needs no Stripe: it is our ledger, read in our scope.
+   */
+  readonly usage: (tenantId: string) => Promise<UsageResponse>;
 }
 
 /** The port with nothing behind it: a wiring error, loudly, never a plausible answer. */
@@ -113,7 +128,16 @@ export const unconfiguredBilling: BillingPort = {
   changePlan: () => Promise.reject(new BillingPortNotConfiguredError()),
   portal: () => Promise.reject(new BillingPortNotConfiguredError()),
   topUp: () => Promise.reject(new BillingPortNotConfiguredError()),
+  usage: () => Promise.reject(new BillingPortNotConfiguredError()),
 };
+
+/** Everything the meter reads for one month, in one transaction (P5-12). */
+export interface MonthRead {
+  readonly state: BillingState;
+  readonly used: number;
+  readonly purchased: number;
+  readonly breakdown: UsageBreakdown;
+}
 
 export interface BillingDeps {
   /** Absent on a deployment with no Stripe key: every purchase is refused, plainly. */
@@ -125,7 +149,30 @@ export interface BillingDeps {
   readonly readFootprint?:
     | ((tenantId: string) => Promise<{ readonly wines: number; readonly domains: number }>)
     | undefined;
+  /** The month's ledger, for the meter (P5-12). `undefined` for a winery that is gone. */
+  readonly readMonth?:
+    ((tenantId: string, period: string) => Promise<MonthRead | undefined>) | undefined;
+  /** The clock the month is read from. Injected so a test can stand anywhere in it. */
+  readonly now?: (() => Date) | undefined;
 }
+
+/**
+ * One snapshot: the count, the purchases and the breakdown are read on one
+ * transaction, so the meter cannot show a total its own days do not add up to.
+ */
+const readMonthFromLedger = (tenantId: string, period: string): Promise<MonthRead | undefined> =>
+  withTenant(tenantId, async (tx) => {
+    const state = await readBillingState(tx);
+
+    if (state === undefined) return undefined;
+
+    return {
+      state,
+      used: await countUsage(tx, period, CHAT_MESSAGE),
+      purchased: await countPurchased(tx, period),
+      breakdown: await readUsageBreakdown(tx, period, CHAT_MESSAGE),
+    };
+  });
 
 /** Only the fields read: a price's id, and the key it was found under. */
 const priceList = z.object({
@@ -210,6 +257,8 @@ export const createBillingPort = ({
   dashboardOrigin,
   readState = (tenantId) => withTenant(tenantId, readBillingState),
   readFootprint = (tenantId) => withTenant(tenantId, readPlanFootprint),
+  readMonth = readMonthFromLedger,
+  now = () => new Date(),
 }: BillingDeps): BillingPort => ({
   async checkout(tenantId, plan) {
     if (stripe === undefined) throw new ConflictError(BILLING_UNAVAILABLE);
@@ -426,6 +475,40 @@ export const createBillingPort = ({
     );
 
     return { url: session.url };
+  },
+
+  async usage(tenantId) {
+    const at = now();
+    const period = periodOf(at);
+    const month = await readMonth(tenantId, period);
+
+    /* The guard resolved this tenant a moment ago; absent is a race with deletion. */
+    if (month === undefined) throw new NotFoundError();
+
+    /*
+     * **The gate's own allowance** (`planCapCheck`, P5-11), so the meter can
+     * never say a winery has room the widget would refuse it.
+     */
+    const included = planCapCheck(tenantId, month.state.plan).limit;
+    const allowance = planCapCheck(tenantId, month.state.plan, month.purchased).limit;
+
+    return {
+      period,
+      resetsAt: periodEnd(at).toISOString(),
+      plan: month.state.plan,
+      status: month.state.status,
+      used: month.used,
+      included,
+      purchased: month.purchased,
+      allowance,
+      state: quotaStateOf(month.used, allowance),
+      projected: projectMonth(month.used, at),
+      byDay: month.breakdown.byDay.map(({ key, messages }) => ({ day: key, messages })),
+      byOrigin: month.breakdown.byOrigin.map(({ key, messages }) => ({
+        origin: key === '' ? null : key,
+        messages,
+      })),
+    };
   },
 });
 

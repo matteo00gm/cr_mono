@@ -430,6 +430,49 @@ export const billingTopUpResponse = z.strictObject({
 
 export type BillingTopUpResponse = z.infer<typeof billingTopUpResponse>;
 
+/** A number of messages: whole, and never negative. */
+const tally = z.number().int().nonnegative();
+
+/**
+ * The month as a seller reads it (P5-12, §2.3): messages used against what the
+ * plan includes plus what was bought, where the month is heading, and where
+ * the messages went. `state` is the widget's own (P2-10), so the banner, the
+ * notices and the widget agree about where the winery stands.
+ *
+ * Readable by every member: an editor is told when the month runs low, so
+ * they can tell an owner — the one who can act on it.
+ */
+export const usageResponse = z.strictObject({
+  /** `YYYYMM`, in UTC: the ledger's period. */
+  period: z.string().regex(/^[0-9]{6}$/u),
+  /** When the month's messages reset: the first instant of the next, UTC. */
+  resetsAt: z.iso.datetime(),
+  plan: z.enum(['CANTINA', 'ECOMMERCE']).nullable(),
+  status: z.enum([
+    'PENDING_VERIFICATION',
+    'TRIALING',
+    'ACTIVE',
+    'PAST_DUE',
+    'DISABLED',
+    'CANCELED',
+  ]),
+  used: tally,
+  /** What the plan includes; a winery with no plan has the trial's. */
+  included: tally,
+  /** Bought on top this month (P5-11a). */
+  purchased: tally,
+  /** `included + purchased`: what the gate counts against. */
+  allowance: tally,
+  state: z.enum(['ok', 'near', 'exceeded']),
+  /** Where the month is heading at the rate so far. Never less than `used`. */
+  projected: tally,
+  byDay: z.array(z.strictObject({ day: z.iso.date(), messages: tally })),
+  /** `null` for messages with no conversation behind them. */
+  byOrigin: z.array(z.strictObject({ origin: z.string().nullable(), messages: tally })),
+});
+
+export type UsageResponse = z.infer<typeof usageResponse>;
+
 /**
  * A plan change, asked for (P5-09). `now` is an upgrade — prorated, with the
  * new limits as soon as Stripe confirms the payment; `period_end` is a
@@ -867,6 +910,7 @@ export const DASHBOARD_RESPONSES = {
   'POST /v1/dashboard/billing/portal': billingPortalResponse,
   'POST /v1/dashboard/billing/plan': billingPlanChangeResponse,
   'POST /v1/dashboard/billing/top-up': billingTopUpResponse,
+  'GET /v1/dashboard/usage': usageResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

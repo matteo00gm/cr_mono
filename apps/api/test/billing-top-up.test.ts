@@ -182,6 +182,7 @@ describe('the route', () => {
         asked.push(tenantId);
         return Promise.resolve({ url: 'https://checkout.stripe.com/c/pay/cs_test_1' });
       },
+      usage: () => Promise.reject(new Error('not this route')),
     };
 
     return { asked, billing };

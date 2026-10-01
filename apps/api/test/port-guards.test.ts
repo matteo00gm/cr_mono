@@ -121,6 +121,7 @@ describe('unconfiguredBilling', () => {
     changePlan: () =>
       unconfiguredBilling.changePlan('11111111-1111-1111-1111-111111111111', 'ECOMMERCE'),
     topUp: () => unconfiguredBilling.topUp('11111111-1111-1111-1111-111111111111'),
+    usage: () => unconfiguredBilling.usage('11111111-1111-1111-1111-111111111111'),
   };
 
   it.each(Object.keys(calls) as (keyof BillingPort)[])(

@@ -264,6 +264,13 @@ describe('app_rw privileges', () => {
     expect(await hasPrivilege('usage_top_ups', 'SELECT')).toBe(true);
   });
 
+  it('cannot forget a quota notice it sent (P5-12)', async () => {
+    /* Deleting the row sends the notice again; INSERT is the claim, SELECT is unused but harmless. */
+    expect(await hasPrivilege('notification_events', 'UPDATE')).toBe(false);
+    expect(await hasPrivilege('notification_events', 'DELETE')).toBe(false);
+    expect(await hasPrivilege('notification_events', 'INSERT')).toBe(true);
+  });
+
   it('cannot read the migration ledger', async () => {
     // app_rw gets no USAGE on the drizzle schema (P0-21). The ledger decides
     // whether a migration is re-applied, so the runtime role has no business

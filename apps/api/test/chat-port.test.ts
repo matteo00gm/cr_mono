@@ -49,6 +49,7 @@ vi.mock('@catalogorosso/db', () => ({
 }));
 
 const { createChatPort, QuotaExceededError } = await import('../src/chat.js');
+const { logger } = await import('../src/middleware/logger.js');
 
 /*
  * Derived rather than imported: `chat.ts` is loaded with `await import` so the
@@ -472,5 +473,67 @@ describe('the card a visitor is shown', () => {
     );
 
     expect(cardsFrom(chunks)).toEqual([]);
+  });
+});
+
+describe('the month’s notices (P5-12)', () => {
+  const noticed = (allowed = true, notify?: () => Promise<void>) => {
+    const asked: [string, string | null, number, number][] = [];
+    const port = createChatPort({
+      embeddings,
+      providers: {
+        base: () => speaking({ type: 'text', delta: 'Un Barolo.' }),
+        strong: () => speaking({ type: 'text', delta: 'Un Barolo.' }),
+      },
+      models: { base: 'amazon.nova-lite-v1:0', strong: 'amazon.nova-2-lite-v1:0' },
+      quota: {
+        readUsage: () => Promise.resolve(0),
+        readPurchased: () => Promise.resolve(0),
+        check: () =>
+          Promise.resolve({
+            allowed,
+            state: 'near' as const,
+            inOverage: false,
+            used: 1_199,
+            limit: 1_500,
+          }),
+      },
+      quotaNotices: (winery, used, allowance) => {
+        asked.push([winery.tenantId, winery.plan, used, allowance]);
+        return notify === undefined ? Promise.resolve() : notify();
+      },
+    });
+
+    return { asked, port };
+  };
+
+  it('are asked after the turn is billed, with the month as it now stands', async () => {
+    const { asked, port } = noticed();
+
+    await ask(port);
+
+    expect(recorded.usage).toHaveLength(1);
+    expect(asked).toEqual([[tenant.tenantId, tenant.plan, 1_200, 1_500]]);
+  });
+
+  it('are never asked for a message the gate refused', async () => {
+    const { asked, port } = noticed(false);
+
+    await expect(ask(port)).rejects.toThrow(QuotaExceededError);
+    expect(asked).toEqual([]);
+  });
+
+  it('never fail a turn that was already answered and paid for', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const { port } = noticed(true, () => Promise.reject(new Error('mail down')));
+
+    const { chunks } = await ask(port);
+
+    expect(chunks).toContainEqual({ type: 'text', delta: 'Un Barolo.' });
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'quota_notice_unsent' }),
+      expect.any(String),
+    );
+    error.mockRestore();
   });
 });

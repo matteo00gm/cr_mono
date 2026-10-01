@@ -14,6 +14,7 @@ export {
   renderTemplate,
   type Locale,
   type TemplateName,
+  type QuotaNoticeProps,
   type TemplateProps,
 } from './templates.js';
 export {

@@ -4547,6 +4547,210 @@
           }
         }
       },
+      "/v1/dashboard/usage": {
+        "get": {
+          "summary": "The month's messages, against what the winery may send",
+          "description": "Messages answered this calendar month (UTC), against what the plan includes plus what was bought on top (`allowance`), with a projection to the end of the month at the rate so far and a breakdown by day and by the origin the widget was asked from. `state` is what the widget itself is told: `near` from four fifths, `exceeded` from all of it, when the widget stops answering. Readable by every member.\n\nRequires the `analytics:read` capability.",
+          "operationId": "getV1DashboardUsage",
+          "x-required-capability": "analytics:read",
+          "responses": {
+            "200": {
+              "description": "The month's messages, against what the winery may send",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "period": {
+                        "type": "string",
+                        "pattern": "^[0-9]{6}$"
+                      },
+                      "resetsAt": {
+                        "type": "string",
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                      },
+                      "plan": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "CANTINA",
+                              "ECOMMERCE"
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "PENDING_VERIFICATION",
+                          "TRIALING",
+                          "ACTIVE",
+                          "PAST_DUE",
+                          "DISABLED",
+                          "CANCELED"
+                        ]
+                      },
+                      "used": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "included": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "purchased": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "allowance": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "ok",
+                          "near",
+                          "exceeded"
+                        ]
+                      },
+                      "projected": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "byDay": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "day": {
+                              "type": "string",
+                              "format": "date",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                            },
+                            "messages": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "day",
+                            "messages"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "byOrigin": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "origin": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "messages": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "origin",
+                            "messages"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "period",
+                      "resetsAt",
+                      "plan",
+                      "status",
+                      "used",
+                      "included",
+                      "purchased",
+                      "allowance",
+                      "state",
+                      "projected",
+                      "byDay",
+                      "byOrigin"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "period": "202610",
+                    "resetsAt": "2026-11-01T00:00:00.000Z",
+                    "plan": "CANTINA",
+                    "status": "ACTIVE",
+                    "used": 1230,
+                    "included": 1500,
+                    "purchased": 0,
+                    "allowance": 1500,
+                    "state": "near",
+                    "projected": 1810,
+                    "byDay": [
+                      {
+                        "day": "2026-10-01",
+                        "messages": 58
+                      }
+                    ],
+                    "byOrigin": [
+                      {
+                        "origin": "https://www.cantina.example",
+                        "messages": 1230
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/widget/dev-mode": {
         "delete": {
           "summary": "Turn development mode off",

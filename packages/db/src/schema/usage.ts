@@ -7,6 +7,7 @@ import {
   integer,
   pgTable,
   primaryKey,
+  smallint,
   text,
   timestamp,
   uuid,
@@ -124,6 +125,38 @@ export const usageTopUps = pgTable(
 
     check('usage_top_ups_period_format', sql`period ~ '^[0-9]{6}$'`),
     check('usage_top_ups_messages_positive', sql`messages_purchased > 0`),
+  ],
+);
+
+/**
+ * The quota notices a month has already sent (P5-12): one row per winery, per
+ * period, per threshold, and the primary key is the idempotency. A notice is
+ * claimed by inserting its row; a second claim finds the key taken and sends
+ * nothing — so two messages crossing 80% at once tell the owners once.
+ *
+ * Append-only at the grant (`0064_notification_events.sql`): deleting a row
+ * would send the notice again.
+ */
+export const notificationEvents = pgTable(
+  'notification_events',
+  {
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+
+    /** `YYYYMM`, the ledger's period: a new month sends its notices afresh. */
+    period: text('period').notNull(),
+
+    /** 80 or 100: the share of the month's allowance that was reached. */
+    threshold: smallint('threshold').notNull(),
+
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.tenantId, table.period, table.threshold] }),
+
+    check('notification_events_period_format', sql`period ~ '^[0-9]{6}$'`),
+    check('notification_events_threshold', sql`threshold in (80, 100)`),
   ],
 );
 

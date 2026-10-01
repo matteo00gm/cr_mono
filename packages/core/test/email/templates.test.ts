@@ -34,13 +34,15 @@ const PROPS: { [K in TemplateName]: TemplateProps[K] } = {
   'quota-warning': {
     tenantName: 'Cantina <script>alert(1)</script>',
     usedPercent: 80,
-    periodEndsOn: '30/09/2026',
-    upgradeUrl: 'https://app.example/billing',
+    periodEndsOn: '1 ottobre 2026',
+    topUp: { url: 'https://app.example/fatturazione#ricarica', price: '€15', messages: 1000 },
+    upgrade: { plan: 'E-commerce', price: '€79', url: 'https://app.example/fatturazione#piano' },
   },
   'quota-exhausted': {
     tenantName: 'Cantina <script>alert(1)</script>',
-    periodEndsOn: '30/09/2026',
-    upgradeUrl: 'https://app.example/billing',
+    periodEndsOn: '1 ottobre 2026',
+    topUp: { url: 'https://app.example/fatturazione#ricarica', price: '€15', messages: 1000 },
+    upgrade: null,
   },
   'trial-expiry': {
     tenantName: 'Cantina <script>alert(1)</script>',
@@ -178,6 +180,46 @@ describe('templates', () => {
     // client is exactly the one who cannot click anything.
     expect(renderTemplate('password-reset', PROPS['password-reset'], 'it').text).toContain(
       'https://app.example/reset/xyz',
+    );
+  });
+});
+
+describe('the quota notices (P5-12)', () => {
+  it('offer the top-up and the next plan, each as a link to the Fatturazione screen', () => {
+    const rendered = renderTemplate('quota-warning', PROPS['quota-warning'], 'it');
+
+    expect(rendered.text).toContain('Acquista Ricarica +1.000 messaggi (€15)');
+    expect(rendered.text).toContain('https://app.example/fatturazione#ricarica');
+    expect(rendered.text).toContain('Passa al piano E-commerce (€79/mese)');
+    expect(rendered.text).toContain('https://app.example/fatturazione#piano');
+  });
+
+  it('offer only the top-up on the top plan, where there is nothing to move up to', () => {
+    const rendered = renderTemplate('quota-exhausted', PROPS['quota-exhausted'], 'it');
+
+    expect(rendered.text).toContain('Ricarica immediata (€15)');
+    expect(rendered.text).not.toContain('Passa al piano');
+  });
+
+  it('offer a plan alone to a winery with none, which a top-up cannot be added to', () => {
+    const rendered = renderTemplate(
+      'quota-exhausted',
+      {
+        ...PROPS['quota-exhausted'],
+        topUp: null,
+        upgrade: { plan: 'Cantina', price: '€29', url: 'https://app.example/fatturazione#piano' },
+      },
+      'it',
+    );
+
+    expect(rendered.text).not.toContain('Ricarica');
+    expect(rendered.text).toContain('Passa al piano Cantina (€29/mese)');
+    expect(rendered.text).toContain('Scegliere un piano lo riattiva subito.');
+  });
+
+  it('say the widget is paused when the month is spent, and until when', () => {
+    expect(renderTemplate('quota-exhausted', PROPS['quota-exhausted'], 'en').text).toContain(
+      'no longer answering visitors until 1 ottobre 2026',
     );
   });
 });
