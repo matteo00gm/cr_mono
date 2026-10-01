@@ -5,6 +5,7 @@ import { publicRoute, requires, ROLES, type RouteAccess } from '@catalogorosso/s
 import {
   acceptInviteResponse,
   billingCheckoutResponse,
+  billingPlanChangeResponse,
   billingPortalResponse,
   catalogueReindexedResponse,
   claimWithdrawnResponse,
@@ -1318,6 +1319,25 @@ export const createDashboardApp = ({
   });
 
   /**
+   * Change plan (P5-09): up now and prorated, down at the end of the period.
+   *
+   * **Step-up** (P4-11, carried here from P4-11's own row): a plan change is one
+   * of §3's sensitive actions — it changes what the winery pays and what it may
+   * do. The body names only a plan; the subscription is the session's winery's.
+   */
+  app.post('/billing/plan', requireCapability('billing:manage'), stepUp, async (c) => {
+    const parsed = checkoutBody.safeParse(await readJson(c));
+
+    if (!parsed.success) {
+      throw new InvalidRequestError(
+        `Send a JSON body naming the plan: ${PLAN_IDS.map((id) => `{"plan": "${id}"}`).join(' or ')}.`,
+      );
+    }
+
+    return c.json(await billing.changePlan(c.get('tenantId'), parsed.data.plan));
+  });
+
+  /**
    * Manage what the winery pays for: Stripe's Billing Portal (P5-08).
    *
    * **Step-up** (P4-11): the portal can cancel the subscription, which
@@ -2323,6 +2343,26 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         'service.',
       example: { url: 'https://checkout.stripe.com/c/pay/cs_test_a1b2c3' },
       response: billingCheckoutResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/billing/plan`),
+    {
+      access: requires('billing:manage'),
+      summary: 'Change plan',
+      description:
+        'Body `{"plan": "CANTINA"}` or `{"plan": "ECOMMERCE"}`. Up is now: the difference for the ' +
+        'rest of the period is charged, and the higher limits apply as soon as Stripe confirms it. ' +
+        'Down is at the end of the period already paid for (`effectiveAt`), with nothing refunded; ' +
+        'until then the winery keeps what it has. A downgrade asked for again, or an upgrade after ' +
+        'one, replaces the one pending. Needs a fresh second factor. A winery with no subscription, ' +
+        'or already on the plan, is refused with a 409.',
+      example: {
+        plan: 'CANTINA',
+        effective: 'period_end',
+        effectiveAt: '2026-11-01T00:00:00.000Z',
+      },
+      response: billingPlanChangeResponse,
     },
   ],
   [

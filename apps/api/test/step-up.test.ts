@@ -110,6 +110,7 @@ describe('the routes that need it', () => {
         'DELETE /v1/dashboard/domains/:id',
         'DELETE /v1/dashboard/members/:userId',
         'PATCH /v1/dashboard/members/:userId',
+        'POST /v1/dashboard/billing/plan',
         'POST /v1/dashboard/billing/portal',
         'POST /v1/dashboard/keys',
         'POST /v1/dashboard/keys/public/rotate',
