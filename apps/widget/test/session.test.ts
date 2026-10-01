@@ -428,6 +428,63 @@ describe('refreshing before a visitor notices', () => {
   });
 });
 
+describe('the token already held (P6-01)', () => {
+  /*
+   * What the unload path reads: there is no time to mint while a page goes, so
+   * the analytics batch takes the token in hand or none.
+   */
+  it('is nothing before the first mint', () => {
+    expect(session(minting(tokenFor())).current()).toBeUndefined();
+  });
+
+  it('is the minted token while it lives', async () => {
+    const token = tokenFor(900);
+    const live = session(minting(token));
+
+    await live.token();
+
+    expect(live.current()).toBe(token);
+  });
+
+  it('is nothing once it has expired, by the clock it was given', async () => {
+    const token = tokenFor(120);
+    const expiry = expiryOf(token) ?? 0;
+    let clock = expiry - 1;
+    const live = createSession({ api: API, key: KEY, fetch: minting(token), now: () => clock });
+
+    await live.token();
+    expect(live.current()).toBe(token);
+
+    clock = expiry;
+    expect(live.current()).toBeUndefined();
+  });
+
+  it('is nothing for a token it cannot read, which it treats as expired', async () => {
+    const live = session(minting('not-a-token'));
+
+    await live.token();
+
+    expect(live.current()).toBeUndefined();
+  });
+
+  it('is nothing after being told to forget', async () => {
+    const live = session(minting(tokenFor()));
+
+    await live.token();
+    live.forget();
+
+    expect(live.current()).toBeUndefined();
+  });
+
+  it('never mints, because an unloading page has no time to', () => {
+    const fetch_ = minting(tokenFor());
+
+    session(fetch_).current();
+
+    expect(fetch_).not.toHaveBeenCalled();
+  });
+});
+
 describe('continuing the same conversation', () => {
   const authOf = (fetch_: ReturnType<typeof minting>, call: number): string | undefined =>
     (fetch_.mock.calls[call]?.[1]?.headers as Record<string, string> | undefined)?.authorization;

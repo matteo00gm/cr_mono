@@ -170,7 +170,21 @@ describe.each(GUARDED)('%s', (key) => {
          */
         authorization: `Bearer ${token}`,
       },
-      ...(method === 'POST' ? { body: JSON.stringify({ message: 'un rosso' }) } : {}),
+      /*
+       * The token in the body as well, for the analytics batch (P6-01), which
+       * reads it there because `sendBeacon` cannot set a header. The other
+       * routes ignore what they do not read.
+       */
+      ...(method === 'POST'
+        ? {
+            body: JSON.stringify({
+              message: 'un rosso',
+              token,
+              visitorId: 'visitor-0001',
+              events: [],
+            }),
+          }
+        : {}),
     });
 
   it('refuses an exhausted address before resolving the key', async () => {

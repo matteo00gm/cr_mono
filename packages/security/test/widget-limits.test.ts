@@ -84,12 +84,12 @@ describe('widgetLimitChecks', () => {
   it('takes its numbers from the table it is handed', () => {
     const tiny: WidgetLimits = {
       unresolvedPerMinute: 15,
-      sessionPerMinute: { session: 1, chat: 2 },
-      ipPerMinute: { config: 3, session: 4, chat: 5 },
+      sessionPerMinute: { session: 1, chat: 2, events: 19 },
+      ipPerMinute: { config: 3, session: 4, chat: 5, events: 20 },
       tenantPerMinute: { CANTINA: 6, ECOMMERCE: 7, none: 8 },
-      endpointPerMinute: { config: 9, session: 10, chat: 11 },
+      endpointPerMinute: { config: 9, session: 10, chat: 11, events: 21 },
       messagesPerMonth: { CANTINA: 12, ECOMMERCE: 13, none: 14 },
-      stagingPerMinute: { config: 16, session: 17, chat: 18 },
+      stagingPerMinute: { config: 16, session: 17, chat: 18, events: 22 },
     };
 
     expect(
@@ -135,7 +135,7 @@ describe('a staging origin (P4-19)', () => {
     );
   });
 
-  it.each(['config', 'session', 'chat'] as const)(
+  it.each(['config', 'session', 'chat', 'events'] as const)(
     'binds below the production endpoint limit for %s',
     (endpoint) => {
       expect(WIDGET_LIMITS.stagingPerMinute[endpoint]).toBeLessThan(
@@ -145,7 +145,12 @@ describe('a staging origin (P4-19)', () => {
   );
 
   it('holds the numbers the row set', () => {
-    expect(WIDGET_LIMITS.stagingPerMinute).toEqual({ config: 30, session: 10, chat: 10 });
+    expect(WIDGET_LIMITS.stagingPerMinute).toEqual({
+      config: 30,
+      session: 10,
+      chat: 10,
+      events: 20,
+    });
   });
 });
 
@@ -166,9 +171,9 @@ describe('WIDGET_LIMITS', () => {
 
   it('lets one address use every endpoint of a winery before the address-wide limit binds', () => {
     // A real visitor hits a winery's own limits first; the unresolved limit is for scripts.
-    const { config, session, chat } = WIDGET_LIMITS.ipPerMinute;
+    const { config, session, chat, events } = WIDGET_LIMITS.ipPerMinute;
 
-    expect(WIDGET_LIMITS.unresolvedPerMinute).toBeGreaterThan(config + session + chat);
+    expect(WIDGET_LIMITS.unresolvedPerMinute).toBeGreaterThan(config + session + chat + events);
   });
 
   it('gives a session less chat than its address, so visitors sharing one each get a turn', () => {
@@ -302,5 +307,42 @@ describe('quotaStateOf (P2-10)', () => {
 
   it('warns from four fifths of the cap', () => {
     expect(QUOTA_NEAR_SHARE).toBe(0.8);
+  });
+});
+
+describe('the analytics batch (P6-01)', () => {
+  it('draws from the session, the address and its endpoint — never the month', () => {
+    expect(widgetLimitChecks(request({ endpoint: 'events', sessionId: 'sid-1' }))).toEqual([
+      { key: 'session:sid-1:events', limit: 12, windowSec: 60 },
+      { key: `ip:bucket:${TENANT}:events`, limit: 24, windowSec: 60 },
+      { key: `endpoint:events:${TENANT}`, limit: 300, windowSec: 60 },
+    ]);
+  });
+
+  it("never spends the tenant's minute, which a shopper's question needs", () => {
+    /*
+     * A trial winery has thirty requests a minute across chat, config and the
+     * mint. Counted there, ten visitors browsing cards would refuse the next
+     * question anybody asked.
+     */
+    for (const plan of ['CANTINA', 'ECOMMERCE', null] as const) {
+      const keys = widgetLimitChecks(request({ endpoint: 'events', plan })).map(({ key }) => key);
+
+      expect(keys).not.toContain(`tenant:${TENANT}:min`);
+    }
+  });
+
+  it('is still bounded per tenant, by its endpoint', () => {
+    const endpoint = widgetLimitChecks(request({ endpoint: 'events' })).find(({ key }) =>
+      key.startsWith('endpoint:'),
+    );
+
+    expect(endpoint).toEqual({ key: `endpoint:events:${TENANT}`, limit: 300, windowSec: 60 });
+  });
+
+  it('gives a browsing session more batches than messages', () => {
+    expect(WIDGET_LIMITS.sessionPerMinute.events).toBeGreaterThan(
+      WIDGET_LIMITS.sessionPerMinute.chat,
+    );
   });
 });

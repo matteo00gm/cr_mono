@@ -92,6 +92,12 @@ export interface Session {
   readonly refresh: () => Promise<string>;
   /** Drops the token without minting. For a test, and for a panel going away. */
   readonly forget: () => void;
+  /**
+   * The token held now, if it is still valid — never minting. For a page
+   * unloading (P6-01): there is no time left to mint, and `sendBeacon` sends
+   * what it is handed synchronously or not at all.
+   */
+  readonly current: () => string | undefined;
 }
 
 /**
@@ -312,6 +318,12 @@ export const createSession = ({
     forget: () => {
       held = undefined;
       minting = undefined;
+    },
+
+    current: () => {
+      const live = held;
+
+      return live !== undefined && (live.expiresAt ?? 0) > now() ? live.token : undefined;
     },
   };
 };

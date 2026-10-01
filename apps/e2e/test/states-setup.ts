@@ -10,9 +10,11 @@ import { createStripeEventsPort } from '@catalogorosso/api/stripe-events';
 import {
   insertSecurityEvent,
   isTokenRevoked,
+  recordWidgetEvents,
   resolveTenantByKeyAndOrigin,
   resolveTenantBySecretKey,
   sessionCutoffAt,
+  withTenant,
 } from '@catalogorosso/db';
 import { memoryRateLimiter } from '@catalogorosso/security';
 import { generateWidgetTokenKey, loadWidgetTokenKeys } from '@catalogorosso/security/tokens';
@@ -44,6 +46,8 @@ export interface StatesHarness {
   readonly dev: DevBillingPort;
   /** How many times the scripted model was asked to answer. */
   readonly providerCalls: () => number;
+  /** The event types written for a winery, as the store accepted them (P6-01). */
+  readonly eventsRecorded: (tenantId: string) => readonly string[];
   readonly nextMinute: () => void;
   readonly close: () => Promise<void>;
 }
@@ -58,6 +62,7 @@ export const startStates = async (): Promise<StatesHarness> => {
 
   let skew = 0;
   let calls = 0;
+  const recorded = new Map<string, string[]>();
   const limiter = memoryRateLimiter(() => Date.now() + skew);
   const quota = createQuotaPort();
 
@@ -116,6 +121,17 @@ export const startStates = async (): Promise<StatesHarness> => {
         onRejected: refusalRecorders(insertSecurityEvent).onRejected,
         onTokenRejected: refusalRecorders(insertSecurityEvent).onTokenRejected,
         chat,
+        /* The real writer, in the winery's scope, with what it wrote kept for the test to read. */
+        recordEvents: async (tenantId: string, batch: Parameters<typeof recordWidgetEvents>[1]) => {
+          const accepted = await withTenant(tenantId, (tx) => recordWidgetEvents(tx, batch));
+
+          recorded.set(tenantId, [
+            ...(recorded.get(tenantId) ?? []),
+            ...batch.events.slice(0, accepted).map((event) => event.type),
+          ]);
+
+          return accepted;
+        },
       },
     }),
   });
@@ -146,6 +162,7 @@ export const startStates = async (): Promise<StatesHarness> => {
     pages,
     dev,
     providerCalls: () => calls,
+    eventsRecorded: (tenantId) => recorded.get(tenantId) ?? [],
     nextMinute: () => {
       skew += 60_000;
     },

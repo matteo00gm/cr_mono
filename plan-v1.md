@@ -575,7 +575,7 @@ Token buckets behind a **`RateLimiter` interface** — one atomic upsert per che
 | Per IP per tenant | Stops scripted abuse behind one key |
 | Per tenant per minute | Protects our infrastructure |
 | Per tenant per month (plan cap) | The billing boundary |
-| Per endpoint (config, session, chat) | Chat is expensive; config is not |
+| Per endpoint (config, session, chat, events) | Chat is expensive; config and analytics are not |
 
 - The **monthly quota is checked before the model call** — that is the actual cost gate.
 - `429` responses carry `Retry-After` and `X-RateLimit-Limit`/`-Remaining`/`-Reset`.
@@ -585,14 +585,14 @@ Token buckets behind a **`RateLimiter` interface** — one atomic upsert per che
 
 **The numbers (decided 2026-09-15), sized for §5.0's ten tenants.** Per minute unless marked. The source is `WIDGET_LIMITS` in `packages/security/src/rate-limit/widget.ts`, and the tests hold the relations between them.
 
-| Dimension | Config | Session | Chat | Why |
-|---|---|---|---|---|
-| Per session | — | 6 | 6 | A reply takes 3–8 s. One message every ten seconds is faster than anyone reads a recommendation. |
-| Per address, per tenant | 60 | 10 | 20 | Room for several visitors behind one carrier NAT. Config reaches the API only on an edge cache miss (P2-10). |
-| Per endpoint, per tenant | 120 | 60 | 60 | Chat at 60 a minute and ~5 s a reply is at most 5 concurrent executions, half the API's reserved concurrency of 10 (P1-48). |
-| Per tenant, all endpoints | trial 30 · Cantina 60 · E-commerce 120 | | | One winery of ten cannot take the function from the other nine. |
-| Per address, before resolution, across tenants and endpoints | 120 | | | Above one winery's 90 per address, so a real visitor meets that winery's limits first (P2-04 review fix). |
-| Per month, chat messages | trial 150 · Cantina 1,500 · E-commerce 6,000 | | | P5-01's plan allowances, and the trial's hard cap (Open Decisions). |
+| Dimension | Config | Session | Chat | Events | Why |
+|---|---|---|---|---|---|
+| Per session | — | 6 | 6 | 12 | A reply takes 3–8 s. One message every ten seconds is faster than anyone reads a recommendation. A browsing visitor flushes analytics every couple of seconds at most (P3-20's debounce). |
+| Per address, per tenant | 60 | 10 | 20 | 24 | Room for several visitors behind one carrier NAT. Config reaches the API only on an edge cache miss (P2-10). |
+| Per endpoint, per tenant | 120 | 60 | 60 | 300 | Chat at 60 a minute and ~5 s a reply is at most 5 concurrent executions, half the API's reserved concurrency of 10 (P1-48). A batch holds the function for milliseconds. |
+| Per tenant, all endpoints | trial 30 · Cantina 60 · E-commerce 120 | | | **not counted** | One winery of ten cannot take the function from the other nine. Analytics stays out of it, or a busy afternoon of browsing would refuse the next question (P6-01). |
+| Per address, before resolution, across tenants and endpoints | 120 | | | | Above one winery's 114 per address, so a real visitor meets that winery's limits first (P2-04 review fix). |
+| Per month, chat messages | trial 150 · Cantina 1,500 · E-commerce 6,000 | | | | P5-01's plan allowances, and the trial's hard cap (Open Decisions). |
 
 **At this scale the limits are about abuse, not load.** A Cantina's 1,500 messages is about 50 a day, and no legitimate pattern comes near a per-minute figure above. Two neighbouring numbers are sized against the same 10-second function:
 - An import spends at most 6 s applying batches (P1-25).
@@ -1419,7 +1419,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 |---|---|---|---|
 | ✅ P5-14 | 🔒 Tenant lifecycle fixtures | Stripe test clocks + failing test cards + non-prod forced-status endpoint; one tenant per state | P5-06 |
 | ✅ P3-22 | Widget state matrix E2E | every tenant state → rendered widget; mid-conversation block, stale edge cache, capped-vs-blocked, auto-recovery | P5-14 |
-| P6-01 | Event ingestion endpoint | batched, rate-limited | P3-20 |
+| ✅ P6-01 | Event ingestion endpoint | batched, rate-limited | P3-20 |
 | P6-02 | Funnel query + dashboard panel | open → message → recommendation → add-to-cart | P6-01 |
 | P6-03 | Top queries / top products panels | | P6-01 |
 | P6-04 | **ZERO_RESULTS panel** | the highest-value commercial insight | P6-01 |
@@ -6271,12 +6271,12 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 
 **As built (2026-09-25).** Shipped with **P3-21**, which touches the same session.
 
-- **⚠ The ingest endpoint is P6-01's and does not exist**, so every batch is a 404 today. That is not a gap in this row — it is precisely the case the row asks to survive, and `analytics.test.ts` asserts a 404, a rejection, a synchronous throw and a body that will not serialise are all invisible to a shopper.
+- **The ingest endpoint was P6-01's and did not exist then**, so every batch was a 404 until it landed. That was not a gap in this row — it is precisely the case the row asks to survive, and `analytics.test.ts` asserts a 404, a rejection, a synchronous throw and a body that will not serialise are all invisible to a shopper. *(P6-01 has since built it.)*
 - **`sendBeacon` on `pagehide`, `fetch` otherwise.** A `fetch` on unload is cancellable, and the events it loses are the interesting ones: the visitor who read three cards and left without asking anything. The beacon's return value is *read* rather than assumed — it answers `false` over 64 KB, which is exactly when losing a batch would matter most — and a throw from a sandboxed frame falls through to `fetch` as well.
 - **Events are stamped when they happened, not when they were sent** *(addition)*. A batch flushed on unload can be seconds after the click, and a send-time timestamp would put every event of a visit at the same instant.
 - **A cap of twenty as well as a debounce** *(addition)*. A shopper working through a long list should not be one lost `pagehide` away from us knowing nothing about the visit.
 - **Each event is recorded where the thing actually happened.** `ADD_TO_CART` after the cart accepted the wine, never before — an attempt that failed is not a sale, and counting it puts a number in front of a seller that their own order list contradicts. An answer with no cards is `ZERO_RESULTS` rather than a recommendation, because that is the one number worth acting on.
-- **It carries the anonymous per-tab id** (P3-16) and never the token, so a visit groups without naming anybody.
+- **It carries the anonymous per-tab id** (P3-16), so a visit groups without naming anybody. *Superseded in part by P6-01:* a batch now also carries the widget session token, **in the body**, because the endpoint authenticates by it and `sendBeacon` cannot set a header.
 - **The component runs without it.** Analytics is an optional prop and most of the widget suite passes none, which is the enforcement of "must never block or break the UI" rather than a claim about it.
 
 ---
@@ -7453,6 +7453,32 @@ Assert **zero provider calls** across every blocked case, since that is what the
 **Tests.** A valid batch inserts; one invalid event does not sink the batch; events cannot be attributed to another tenant by tampering; oversized batches are capped.
 
 **Files.** `widget-events.ts`, tests. **~100 lines.**
+
+**As built (2026-10-01).** `POST /v1/widget/events` behind the three widget guards in order (address, CORS, token) and its own limits; `readEventBatch` in `apps/api/src/widget-events.ts`, `recordWidgetEvents` in `packages/db/src/widget-events.ts`.
+
+- **⚠ The token rides in the body** *(deviation)*. The row says "authenticated by the widget session token", and P3-20 sent the key alone — while `sendBeacon`, the only send that survives an unload, cannot set a header. So the batch is `{ token, visitorId, events }`, sent as `text/plain` (the one beacon type that needs no CORS preflight), and `requireWidgetToken` takes a `tokenOf` that reads it out of the body; every other route keeps the `Authorization` header. A token in a header is **not** read here: one place, not two.
+- **The tenant is the token's, the session the token's sid** — a body naming either is not read (P0-48). The anonymous per-tab id (P3-16) is what `widget_events.session_id` holds, because it is what P3-11 plants as `_somm_session` and what P6-07 will attribute by; the token's sid goes into `metadata.widgetSession` and finds the conversation, in scope.
+- **One session per page** *(change in the widget)*. The panel builds one `createSession` and hands it to both the chat and the analytics, so a visitor who asks something mints once. On unload, `Session.current()` gives the token in hand without minting — there is no time to — and a batch with no token is not sent, rather than sent to be refused. A failed mint drops the batch silently.
+- **Each event checked on its own**, against `widgetEventInsert.pick({ type })` plus an optional UUID `productId` and the moment it happened, rather than a union: the seven types share one shape. A malformed one is dropped and counted; fifty are read at most (the widget sends twenty). A timestamp older than a day or more than five minutes ahead is replaced by arrival time — kept, not dropped.
+- **A foreign product is recorded as no product.** The id is `LEFT JOIN`ed to `products` under the tenant's policy, because a foreign key is checked without RLS and would accept another winery's id. The batch is one `INSERT … SELECT … FROM jsonb_to_recordset($1)`: one parameter, one round trip, whole or not at all.
+- **⚠ 202 with `{ accepted }`, not "no body"** *(deviation)*. The OpenAPI generator requires every route to document a response, and the count of what was kept is what a test, and an operator reading a log, can use. The widget never reads it.
+- **Limits**: 12 a minute per session, 24 per address, 300 per tenant on the endpoint, **and not the tenant's shared minute** *(addition)*. That minute is sized against chat holding the function for seconds; counted there, ten visitors browsing would refuse the next question — analytics breaking the widget one layer down. Never the month. §3.6's table carries the column.
+- **The body is bounded before the token is read**, at the widget's 16 KB: the guard is now the first thing to parse it, and unbounded it would parse a megabyte for every invented token.
+
+**Verified.** Unit, integration (`widget-events-write.integration.test.ts`, real Postgres with RLS on), coverage gates, every `:check`. The full browser suite (58 cases), with one new: a real visit's `WIDGET_OPEN` and `MESSAGE_SENT` reach Postgres by the unload beacon — shown to fail with the token left out of the body. 31 mutants, 31 killed.
+
+| Mutation | Caught by |
+|---|---|
+| A batch read without its cap; a malformed event kept; a token of any length; any visitor id | `widget-events.test.ts` (api) |
+| A timestamp of any age, or any future; a day old exactly refused; an unbelievable stamp kept | `widget-events.test.ts` (api) |
+| The token read from the header; a header token preferred by the guard; the guard reading an unbounded body | `widget-events.test.ts` (api) |
+| The session taken from the body; counted against the chat limit; answered 200 | `widget-events.test.ts` (api) |
+| An empty batch still asking the database | `widget-events.test.ts` (db) |
+| A foreign product trusted; no conversation found; grouped by the widget session; stamped on arrival | `widget-events-write.integration.test.ts` |
+| No token in the batch; minting on the way out; an unload sent without a token; a beacon of `application/json`; a failed mint thrown | `analytics.test.ts` |
+| An expired token held; a token good at its expiry instant | `session.test.ts` |
+| The panel's analytics unauthenticated; the chat minting a second session | `panel.test.ts` |
+| A session limit of six; batches spending the tenant's minute; the tenant's minute skipped for everyone | `widget-limits.test.ts` and `widget-events.test.ts` |
 
 ---
 

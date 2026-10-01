@@ -77,6 +77,14 @@ export interface AnalyticsOptions {
   /** Injected so a test can assert the unload path without unloading anything. */
   readonly sendBeacon?: ((url: string, body: BodyInit) => boolean) | undefined;
   readonly now?: (() => number) | undefined;
+  /**
+   * The widget session the batch is authenticated by (P6-01). A send while the
+   * page lives may mint one; a send on unload uses the token already held, and
+   * sends nothing if there is none — there is no time left to mint.
+   */
+  readonly session?:
+    | { readonly current: () => string | undefined; readonly token: () => Promise<string> }
+    | undefined;
   /** Where `pagehide` is listened for. Injected for the same reason. */
   readonly target?: EventTarget | undefined;
 }
@@ -96,6 +104,7 @@ export const createAnalytics = ({
   sendBeacon = (url, body) => globalThis.navigator.sendBeacon(url, body),
   now = () => Date.now(),
   target = globalThis,
+  session,
 }: AnalyticsOptions): Analytics => {
   const url = `${api}${EVENTS_PATH}?key=${encodeURIComponent(key)}`;
 
@@ -115,18 +124,23 @@ export const createAnalytics = ({
    * limited to 64 KB and returns `false` when it refuses, which is why the
    * result is read rather than assumed.
    */
-  const send = (events: readonly WidgetEvent[], unloading: boolean): void => {
+  const sendWith = (
+    events: readonly WidgetEvent[],
+    unloading: boolean,
+    token: string | undefined,
+  ): void => {
     let body: string;
 
     try {
-      body = JSON.stringify({ visitorId, events });
+      /* The token rides in the body: `sendBeacon` cannot set a header (P6-01). */
+      body = JSON.stringify({ token, visitorId, events });
     } catch {
       return;
     }
 
     if (unloading) {
       try {
-        if (sendBeacon(url, new Blob([body], { type: 'application/json' }))) return;
+        if (sendBeacon(url, new Blob([body], { type: 'text/plain;charset=UTF-8' }))) return;
       } catch {
         /* A sandboxed frame throws on the getter. Fall through and try `fetch`,
          * which will probably be cancelled — but probably is better than never. */
@@ -148,6 +162,29 @@ export const createAnalytics = ({
     } catch {
       /* Nothing left to try, and nothing a shopper could do about it. */
     }
+  };
+
+  const send = (events: readonly WidgetEvent[], unloading: boolean): void => {
+    if (session === undefined) {
+      sendWith(events, unloading, undefined);
+      return;
+    }
+
+    if (unloading) {
+      /* No time to mint on the way out: the token held, or nothing. */
+      const token = session.current();
+
+      if (token !== undefined) sendWith(events, unloading, token);
+      return;
+    }
+
+    session.token().then(
+      (token) => {
+        sendWith(events, unloading, token);
+      },
+      /* A mint that failed costs a batch of analytics, and a shopper nothing. */
+      () => undefined,
+    );
   };
 
   const flush = (unloading = false): void => {

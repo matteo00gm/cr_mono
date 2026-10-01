@@ -75,6 +75,27 @@ test.describe('a winery that is served', () => {
   }
 });
 
+test.describe('what a visit leaves behind (P6-01)', () => {
+  test('the events reach the store, authenticated, and the last batch survives leaving', async ({
+    page,
+  }) => {
+    const tenantId = tenantOf('active-healthy');
+    const before = harness.eventsRecorded(tenantId).length;
+
+    await visit(page, 'active-healthy');
+    await launcher(page).click();
+    await ask(page, 'Un rosso per la cena?');
+    await expect(panel(page).locator('.chat-log')).toContainText(STATE_REPLY);
+
+    /* Leaving flushes what is held by beacon: text/plain, cross-origin, the token in the body. */
+    await page.goto('about:blank');
+
+    await expect
+      .poll(() => harness.eventsRecorded(tenantId).slice(before), { timeout: 10_000 })
+      .toEqual(expect.arrayContaining(['WIDGET_OPEN', 'MESSAGE_SENT']));
+  });
+});
+
 test.describe('capped is not blocked', () => {
   for (const slug of ['trialing-capped', 'active-capped'] as const) {
     test(`${slug} says come back soon, and costs nothing`, async ({ page }) => {

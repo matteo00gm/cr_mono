@@ -1,6 +1,7 @@
 import {
   widgetChatEvent,
   widgetConfigResponse,
+  widgetEventsResponse,
   widgetSessionResponse,
   widgetSurfaceResponse,
   type WidgetChatEvent,
@@ -15,6 +16,7 @@ import {
   type WidgetEndpoint,
 } from '@catalogorosso/security';
 import type { WidgetTokenKeys } from '@catalogorosso/security/tokens';
+import { recordWidgetEvents, withTenant, type EventBatch } from '@catalogorosso/db';
 import { ForbiddenError, InvalidRequestError } from '@catalogorosso/core';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -28,7 +30,11 @@ import {
   CHAT_TURNS_METRIC,
 } from '../chat-metrics.js';
 import { QuotaExceededError, type ChatPort } from '../chat.js';
-import { requireWidgetToken, type RejectedWidgetToken } from '../middleware/widget-auth.js';
+import {
+  requireWidgetToken,
+  type RejectedWidgetToken,
+  type TokenSource,
+} from '../middleware/widget-auth.js';
 import { routeKey } from '../middleware/capability.js';
 import { widgetCors, type RejectedWidgetRequest, type WidgetResolver } from '../middleware/cors.js';
 import { clientIp, logger } from '../middleware/logger.js';
@@ -40,6 +46,7 @@ import {
 import { mintServerSession, type ServerSessionDeps } from '../server-session.js';
 import { WIDGET_PREFIX } from '../routes.js';
 import { widgetConfigFor } from '../widget-config.js';
+import { readEventBatch, tokenInBatch } from '../widget-events.js';
 import { TURNSTILE_REFUSED, type TurnstileVerifier } from '../turnstile.js';
 import { mintWidgetSession } from '../widget-session.js';
 import {
@@ -139,6 +146,11 @@ export interface WidgetDependencies {
    * widget nobody can debug.
    */
   readonly chat?: ChatPort | undefined;
+  /**
+   * Writes an analytics batch for a tenant (P6-01). Defaults to
+   * `recordWidgetEvents` in the tenant's own scope.
+   */
+  readonly recordEvents?: ((tenantId: string, batch: EventBatch) => Promise<number>) | undefined;
 }
 
 /**
@@ -193,6 +205,8 @@ const SESSION_PATH = '/session';
  */
 const SERVER_SESSION_PATH = '/session/server';
 const CHAT_PATH = '/chat';
+/** The analytics batch (P6-01, P3-20's `EVENTS_PATH`). */
+const EVENTS_PATH = '/events';
 
 /**
  * The only thing a chat body carries (P0-48).
@@ -204,6 +218,9 @@ const CHAT_PATH = '/chat';
 const chatRequest = z.object({ message: z.string().trim().min(1).max(500) }).strict();
 
 export const CHAT_BODY_EXPECTED = 'Send a JSON body with a message.';
+
+/** What a batch that is not one is told. The widget never reads it (P6-01). */
+export const EVENTS_BODY_EXPECTED = 'Send a JSON body with a token, a visitorId and events.';
 
 /**
  * The most any widget body may be (review, R6): a 500-character message, a
@@ -218,25 +235,34 @@ export const WIDGET_BODY_TOO_LARGE = `A widget request body may be at most ${Str
 )} KB.`;
 
 /**
- * A body, or null when there is not one — the dashboard surface's argument, on
- * this surface. Refused before it is parsed when it is larger than any widget
+ * The body as text, refused before it is read when it is larger than any widget
  * request needs: the declared length first, so an honest oversized request is
  * not read at all, and the real size after, so a dishonest one is not parsed.
+ * Shared by chat and by the analytics batch, whose token guard reads the body
+ * before any handler does (P6-01).
  */
-const readChatJson = async (c: {
-  req: { text: () => Promise<string>; header: (name: string) => string | undefined };
-}): Promise<unknown> => {
-  const declared = Number(c.req.header('content-length'));
+const boundedText = async (req: TokenSource): Promise<string> => {
+  const declared = Number(req.header('content-length'));
 
   if (Number.isFinite(declared) && declared > WIDGET_BODY_MAX_BYTES) {
     throw new InvalidRequestError(WIDGET_BODY_TOO_LARGE);
   }
 
-  const raw = await c.req.text();
+  const raw = await req.text();
 
   if (new TextEncoder().encode(raw).byteLength > WIDGET_BODY_MAX_BYTES) {
     throw new InvalidRequestError(WIDGET_BODY_TOO_LARGE);
   }
+
+  return raw;
+};
+
+/**
+ * A body, or null when there is not one — the dashboard surface's argument, on
+ * this surface, read within `boundedText`.
+ */
+const readChatJson = async (c: { req: TokenSource }): Promise<unknown> => {
+  const raw = await boundedText(c.req);
 
   try {
     return JSON.parse(raw) as unknown;
@@ -298,6 +324,11 @@ interface GuardedRoute {
    * and the limits need the session id the token carries.
    */
   readonly session?: boolean | undefined;
+  /**
+   * Read the token out of the JSON body rather than `Authorization` (P6-01):
+   * `sendBeacon`, the one send that survives an unload, cannot set a header.
+   */
+  readonly tokenInBody?: boolean | undefined;
 }
 
 /**
@@ -322,7 +353,7 @@ interface GuardedRoute {
 const mountGuarded = (
   app: Hono<AppEnv>,
   widget: WidgetDependencies,
-  { methods, path, endpoint, session = false }: GuardedRoute,
+  { methods, path, endpoint, session = false, tokenInBody = false }: GuardedRoute,
   handler: Handler<AppEnv>,
 ): void => {
   const guards: MiddlewareHandler<AppEnv>[] = [
@@ -355,6 +386,9 @@ const mountGuarded = (
         cutoffAt: widget.sessionCutoffAt ?? (() => Promise.resolve(new Date(8.64e15))),
         ...(widget.onTokenRejected === undefined ? {} : { onRejected: widget.onTokenRejected }),
         ipSecret: widget.ipSecret,
+        ...(tokenInBody
+          ? { tokenOf: async (request: TokenSource) => tokenInBatch(await boundedText(request)) }
+          : {}),
       }),
     );
   }
@@ -385,6 +419,9 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
       throw new WidgetNotConfiguredError();
     });
     app.on(['POST', 'OPTIONS'], CHAT_PATH, () => {
+      throw new WidgetNotConfiguredError();
+    });
+    app.on(['POST', 'OPTIONS'], EVENTS_PATH, () => {
       throw new WidgetNotConfiguredError();
     });
     app.post(SERVER_SESSION_PATH, () => {
@@ -629,6 +666,41 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
     },
   );
 
+  /**
+   * The analytics batch (P6-01). Behind the same three guards, with the token
+   * read from the body; each event checked on its own, and the batch written in
+   * one statement under the tenant the token's key and origin resolved.
+   */
+  mountGuarded(
+    app,
+    widget,
+    {
+      methods: ['POST', 'OPTIONS'],
+      path: EVENTS_PATH,
+      endpoint: 'events',
+      session: true,
+      tokenInBody: true,
+    },
+    async (c) => {
+      const batch = readEventBatch(await boundedText(c.req));
+
+      /* The guard read the token out of this same body, so it parsed; this is belt and braces. */
+      if (batch === undefined) throw new InvalidRequestError(EVENTS_BODY_EXPECTED);
+
+      const record =
+        widget.recordEvents ??
+        ((tenantId: string, events: EventBatch) =>
+          withTenant(tenantId, (tx) => recordWidgetEvents(tx, events)));
+
+      const accepted = await record(c.get('widgetTenant').tenantId, {
+        visitorId: batch.visitorId,
+        widgetSessionId: c.get('widgetSessionId'),
+        events: batch.events,
+      });
+
+      return c.json({ accepted }, 202);
+    },
+  );
   return app;
 };
 
@@ -739,6 +811,34 @@ export const WIDGET_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, Rout
     },
   ],
   [
+    routeKey('POST', `${WIDGET_PREFIX}${EVENTS_PATH}`),
+    {
+      access: publicRoute(
+        'A visitor has no account, so there is no capability to hold. What gates it is the ' +
+          '(pk_, Origin) pair and a verified session token bound to both - carried in the ' +
+          'body, because sendBeacon cannot set a header - so an event can only ever be ' +
+          'recorded for the tenant and session the token names. Limited per session, ' +
+          'address and tenant, generously; never against the month.',
+      ),
+      summary: 'Record a batch of widget events',
+      description:
+        "The widget's analytics: `{ token, visitorId, events: [{ type, productId?, at }] }`, " +
+        'twenty events at most from the widget and fifty read. Each event is checked on its ' +
+        'own and a malformed one is dropped rather than refusing the batch, because analytics ' +
+        'must never break the widget; the answer counts what was kept. A product the shop ' +
+        'does not hold is recorded as no product; a timestamp more than a day old, or more ' +
+        'than five minutes ahead, is replaced by the time it arrived. The body may be sent ' +
+        'as text/plain, which is what sendBeacon uses on unload. Refused with 401 when the ' +
+        "token is missing or not this site's; 403 when the key and Origin do not belong to " +
+        'one tenant, or the tenant is not served; 422 when the body is over 16 KB; 429 when a ' +
+        'limit is spent.',
+      example: { accepted: 3 },
+      response: widgetEventsResponse,
+      status: 202,
+      refusals: [401, 403, 422, 429],
+    },
+  ],
+  [
     routeKey('POST', `${WIDGET_PREFIX}${SESSION_PATH}`),
     {
       access: publicRoute(
@@ -777,6 +877,13 @@ export const WIDGET_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, Rout
  */
 export const WIDGET_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map<string, RouteAccess>([
   ...[...WIDGET_ROUTES].map(([key, doc]): [string, RouteAccess] => [key, doc.access]),
+  [
+    routeKey('OPTIONS', `${WIDGET_PREFIX}${EVENTS_PATH}`),
+    publicRoute(
+      'The CORS preflight for the analytics batch, sent when the widget posts it with fetch. ' +
+        'Answered by the same (pk_, Origin) resolution as the batch, with no body and no token.',
+    ),
+  ],
   [
     routeKey('OPTIONS', `${WIDGET_PREFIX}${CHAT_PATH}`),
     publicRoute(

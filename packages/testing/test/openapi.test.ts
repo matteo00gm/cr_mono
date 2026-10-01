@@ -127,8 +127,8 @@ describe('every operation', () => {
      * refuses nothing, and config and the session mint refuse for their key and
      * origin (403) or their rate (429). Only the mint refuses with a 401, for a
      * previous token that belongs elsewhere or was revoked (P2-12a); config
-     * takes no token at all. Chat needs a token *and* reads a body, so it is
-     * the only route that can refuse with a 422.
+     * takes no token at all. Chat and the analytics batch need a token *and*
+     * read a body, so they can refuse with a 422.
      */
     const refusals = Object.fromEntries(
       operations(doc.widget).map(([path, method, op]) => [
@@ -142,9 +142,8 @@ describe('every operation', () => {
       'GET /v1/widget/config': ['200', '403', '429'],
       'POST /v1/widget/session': ['200', '401', '403', '429'],
       /*
-       * Chat is the only widget route with a body, so it is the only one that
-       * can refuse a 422 — and the only one behind a token *and* a body, which
-       * is why its set is the union of the other two plus that.
+       * Chat is behind a token *and* reads a body, which is why its set is the
+       * union of the other two plus a 422.
        */
       'POST /v1/widget/chat': ['200', '401', '403', '422', '429'],
       /*
@@ -153,6 +152,12 @@ describe('every operation', () => {
        * request carrying an Origin — a secret key in a browser (422).
        */
       'POST /v1/widget/session/server': ['200', '401', '403', '422', '429'],
+      /*
+       * The analytics batch (P6-01) answers 202, not 200: it is accepted, and
+       * nothing the widget reads comes back. A token in the body, and a body
+       * over the widget limit, give it chat's refusals.
+       */
+      'POST /v1/widget/events': ['202', '401', '403', '422', '429'],
     });
   });
 

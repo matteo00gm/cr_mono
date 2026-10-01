@@ -18,7 +18,8 @@ import type { FixedWindowCheck, LimitCheck, MonthlyCheck } from './types.js';
  * everybody else's behalf.
  */
 
-export type WidgetEndpoint = 'config' | 'session' | 'chat';
+/** `events` is the analytics batch (P6-01): generous, because losing one is cheap and refusing it is pointless. */
+export type WidgetEndpoint = 'config' | 'session' | 'chat' | 'events';
 
 /** The launch plans (P5-01). */
 export type WidgetPlan = 'CANTINA' | 'ECOMMERCE';
@@ -67,18 +68,24 @@ export interface WidgetLimits {
  *   config reaches the API only on an edge cache miss (P2-10).
  * - The address-wide limit before resolution sits above one winery's
  *   per-address total, so a real visitor always meets that winery's limits first.
+ * - Analytics batches (P6-01) get the most room per session and the most per
+ *   tenant: a batch every couple of seconds while someone browses cards, and
+ *   one refused costs a funnel point, never a shopper anything. They are kept
+ *   out of the tenant's minute, which chat needs, so their endpoint limit is
+ *   their tenant-wide bound. Per address they stay under the unresolved limit
+ *   with the other three.
  *
  * The shape is what the tests hold — config gets the most room per address, a
  * paying tier outranks a trial — and changing a number is a plan edit too.
  */
 export const WIDGET_LIMITS: WidgetLimits = {
   unresolvedPerMinute: 120,
-  sessionPerMinute: { session: 6, chat: 6 },
-  ipPerMinute: { config: 60, session: 10, chat: 20 },
+  sessionPerMinute: { session: 6, chat: 6, events: 12 },
+  ipPerMinute: { config: 60, session: 10, chat: 20, events: 24 },
   tenantPerMinute: { CANTINA: 60, ECOMMERCE: 120, none: 30 },
-  endpointPerMinute: { config: 120, session: 60, chat: 60 },
+  endpointPerMinute: { config: 120, session: 60, chat: 60, events: 300 },
   messagesPerMonth: { CANTINA: 1_500, ECOMMERCE: 6_000, none: 150 },
-  stagingPerMinute: { config: 30, session: 10, chat: 10 },
+  stagingPerMinute: { config: 30, session: 10, chat: 10, events: 20 },
 };
 
 export interface WidgetRequest {
@@ -187,19 +194,32 @@ export const widgetLimitChecks = (
     });
   }
 
-  checks.push(
-    {
-      key: `ip:${request.ipBucket}:${tenantId}:${endpoint}`,
-      limit: limits.ipPerMinute[endpoint],
+  checks.push({
+    key: `ip:${request.ipBucket}:${tenantId}:${endpoint}`,
+    limit: limits.ipPerMinute[endpoint],
+    windowSec: MINUTE,
+  });
+
+  /*
+   * **Not the analytics batch** (P6-01). The tenant's minute is sized against
+   * the function a chat reply holds for seconds; a batch holds it for
+   * milliseconds, and counted here a busy afternoon of browsing would spend
+   * the minute a shopper's question needs — analytics breaking the widget,
+   * one layer down. Its own endpoint limit is its tenant-wide bound.
+   */
+  if (endpoint !== 'events') {
+    checks.push({
+      key: `tenant:${tenantId}:min`,
+      limit: limits.tenantPerMinute[tier],
       windowSec: MINUTE,
-    },
-    { key: `tenant:${tenantId}:min`, limit: limits.tenantPerMinute[tier], windowSec: MINUTE },
-    {
-      key: `endpoint:${endpoint}:${tenantId}`,
-      limit: limits.endpointPerMinute[endpoint],
-      windowSec: MINUTE,
-    },
-  );
+    });
+  }
+
+  checks.push({
+    key: `endpoint:${endpoint}:${tenantId}`,
+    limit: limits.endpointPerMinute[endpoint],
+    windowSec: MINUTE,
+  });
 
   /*
    * A staging or development origin's own, lower allowance, on top of

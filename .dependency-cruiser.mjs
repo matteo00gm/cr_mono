@@ -165,6 +165,10 @@ export default {
           // exports no scope a caller can hold — one READ ONLY transaction, one
           // statement selecting id and created_at, and the list returned.
           '|^packages/db/src/tenant-directory[.]ts$' +
+          // src/widget-events.ts is exempt from P6-01 on products.ts's terms: it
+          // writes one statement in the caller's withTenant transaction and
+          // opens nothing, and widget_events carries the boilerplate policy.
+          '|^packages/db/src/widget-events[.]ts$' +
           // src/webhooks.ts is exempt from P0-64b, and unlike the two files
           // above it really does open a connection. A webhook arrives outside
           // any request — no session, no membership row, no tenant to set — and
