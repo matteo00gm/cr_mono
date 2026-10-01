@@ -8,6 +8,7 @@ import {
   recordPaidCharge,
   recordTopUp,
   recordUsage,
+  rollupUsageDay,
 } from '../src/usage.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 import { text } from './support/sql-text.js';
@@ -188,5 +189,35 @@ describe('the charges an e-invoice may be owed for (P5-03a)', () => {
 
   it('reads a charge already recorded as a duplicate', async () => {
     expect(await recordPaidCharge(capturing([]).tx, CHARGE)).toBe('duplicate');
+  });
+});
+
+describe('a day, rolled up (P5-13)', () => {
+  it('replaces the day under the setting’s tenant, and reads back what it wrote', async () => {
+    const { statements, tx } = capturing([
+      {
+        messages: 3,
+        conversations: 1,
+        add_to_carts: 2,
+        tokens_in: '3500',
+        tokens_out: '850',
+        cost_micros: '404',
+      },
+    ]);
+
+    expect(await rollupUsageDay(tx, '2026-10-14')).toEqual({
+      messages: 3,
+      conversations: 1,
+      addToCarts: 2,
+      tokensIn: 3500,
+      tokensOut: 850,
+      costMicros: 404,
+    });
+    expect(text(statements[0])).toContain("current_setting('app.tenant_id'");
+    expect(text(statements[0])).toContain('ON CONFLICT (tenant_id, day) DO UPDATE');
+  });
+
+  it('refuses a statement that returned nothing rather than reporting a quiet day', async () => {
+    await expect(rollupUsageDay(capturing([]).tx, '2026-10-14')).rejects.toThrow(/no row/u);
   });
 });

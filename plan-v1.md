@@ -1411,7 +1411,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P5-11 | Quota enforcement wiring | hard cap at 100% messages; zero model calls past cap | P2-36 |
 | ✅ P5-11a | Message top-up purchase | €15 for 1,000 extra messages one-time checkout + credit counter | P5-11 |
 | ✅ P5-12 | Usage notifications (80% & 100%) | dashboard banners + automated emails with upgrade & top-up CTAs | P5-11 |
-| P5-13 | `usage_daily` rollup job | EventBridge nightly | P0-30 |
+| ✅ P5-13 | `usage_daily` rollup job | EventBridge nightly | P0-30 |
 
 ### P6 — Analytics and attribution
 
@@ -7346,9 +7346,22 @@ Quota check reads `current_usage < (plan_cap + purchased_top_up_messages)`.
 
 **Files.** `apps/worker/src/rollup.ts`, tests. **~100 lines.**
 
----
+**As built (2026-10-01).** `apps/worker/src/rollup.ts` on an `sst.aws.Cron` at 01:30 UTC (`infra/schedules.ts`, numbers in `infra/rollup-config.ts`), `rollupUsageDay` in `packages/db/src/usage.ts`, and `listTenantDirectory` in `packages/db/src/tenant-directory.ts` with its policy branch in migration 0069.
 
-### P5-14 · Tenant lifecycle fixtures and Stripe test clocks
+- **⚠ A ninth RLS scope** *(design change, ADR 0030)*. A row of noughts for a quiet day needs every tenant, and listing them is the read across tenants. `tenant_isolation` on `tenants` gains `OR app.tenant_directory = 'on'` in `USING` only; `WITH CHECK` stays tenant-only. Nobody can hold the scope: `listTenantDirectory` sets the flag in a `READ ONLY` transaction for one statement selecting `id` and `created_at` and returns the list, and the job reaches each tenant through `withTenant`. The integration suite asserts it lists every tenant as `app_rw`, leaves nothing visible after, and cannot write a tenant row even holding the flag. CLAUDE.md's scope list and the boundary rule name it.
+- **A recompute, never an increment**: each day is read whole — billed chat turns as messages, tokens and cost across every billed action (embedding included, for the margin dashboard), conversations by `started_at`, `ADD_TO_CART` events — and the row replaced by `ON CONFLICT (tenant_id, day) DO UPDATE`. A re-run reports the same day the same way.
+- **A bounded window**: the last two whole UTC days (yesterday, and the day before for a late write), never today; a run may be asked for up to 31 for a backfill. A day is rolled up only for a winery that existed by its end.
+- **One failing tenant does not stop the night**; the run logs its line (`Runs`, `RolledUpRows`, the days, the failures — Embedded Metric Format) and then fails, so Lambda's errors show it and the next night recomputes the day anyway. `UsageRollupSilent` alarms on a day with no run reported, missing data breaching.
+- **The current month's meter still reads the ledger** (P5-12): today is not in a rollup until tomorrow, and the meter has to say where the month stands now. The rollup serves history — P6's panels and anything past the current month.
+- **`READ ONLY` on the directory's transaction is defence in depth no test can fail**: the one statement inside it is a SELECT. It is there for the edit that adds a second one.
+
+**Verified.** Unit, worker and infra-config suites; against real Postgres, the directory and a day rolled up from a fixture worked out by hand — the day's own rows and nothing either side of midnight — twice with the same result, a row of noughts for a quiet day, and nothing read from a neighbour. 11 mutants, 11 killed.
+
+| Mutation | Caught by |
+|---|---|
+| A re-run adding to the day · the next midnight counted · every billed action a message · every widget event a cart · the directory seeing nobody · the flag allowed to write | `usage-rollup.integration.test.ts` |
+| Today rolled up before it is over · days before a winery existed · one tenant stopping the night · a failing night reported as fine · an unbounded window | `rollup.test.ts` |
+
 
 **What.** A way to put a tenant into any billing state — on demand, repeatably, without a real failed payment.
 

@@ -10,6 +10,13 @@ import {
   SWEEP_SILENCE_SECONDS,
   SWEEP_TIMEOUT_SECONDS,
 } from './sweep-config';
+import {
+  ROLLUP_METRIC_NAMESPACE,
+  ROLLUP_RUNS_METRIC,
+  ROLLUP_SCHEDULE,
+  ROLLUP_SILENCE_SECONDS,
+  ROLLUP_TIMEOUT_SECONDS,
+} from './rollup-config';
 import { vpc } from './vpc';
 
 /**
@@ -114,4 +121,57 @@ export const claimSweep = new sst.aws.Cron('ClaimSweep', {
     },
     permissions: [...parameterReadPermissions(['database/url'])],
   },
+});
+
+/** The rollup's timeout as the literal SST's type wants, asserted to agree with its config. */
+const ROLLUP_TIMEOUT = '300 seconds' as const;
+
+if (Number.parseInt(ROLLUP_TIMEOUT, 10) !== ROLLUP_TIMEOUT_SECONDS) {
+  throw new Error(
+    `The rollup's timeout literal (${ROLLUP_TIMEOUT}) and ROLLUP_TIMEOUT_SECONDS ` +
+      `(${String(ROLLUP_TIMEOUT_SECONDS)}) disagree (P5-13).`,
+  );
+}
+
+/**
+ * The nightly rollup (P5-13): every tenant's last two days, recomputed into
+ * `usage_daily`. In the VPC with the database URL and nothing else — it reads
+ * the ledger and writes the rollup, and needs no secret besides the connection.
+ */
+export const usageRollup = new sst.aws.Cron('UsageRollup', {
+  schedule: ROLLUP_SCHEDULE,
+  function: {
+    handler: 'apps/worker/src/rollup.handler',
+    architecture: 'arm64',
+    runtime: 'nodejs22.x',
+    memory: '256 MB',
+    timeout: ROLLUP_TIMEOUT,
+    vpc,
+    environment: {
+      DATABASE_URL: databaseUrl.value,
+      NODE_ENV: 'production',
+      SST_STAGE: $app.stage,
+    },
+    permissions: [...parameterReadPermissions(['database/url'])],
+  },
+});
+
+/**
+ * A night with no run reported. **Missing data is breaching**, for the sweep's
+ * reason: a run that never logs is a run that never ran, and the history
+ * charts would quietly stop at the last night that did.
+ */
+new aws.cloudwatch.MetricAlarm('UsageRollupSilent', {
+  alarmDescription:
+    'The nightly usage rollup reported no run for a day. usage_daily stops at the last night ' +
+    'that ran, and the dashboard history with it (P5-13).',
+  namespace: ROLLUP_METRIC_NAMESPACE,
+  metricName: ROLLUP_RUNS_METRIC,
+  dimensions: { Stage: $app.stage },
+  statistic: 'Sum',
+  period: ROLLUP_SILENCE_SECONDS,
+  evaluationPeriods: 1,
+  threshold: 1,
+  comparisonOperator: 'LessThanThreshold',
+  treatMissingData: 'breaching',
 });

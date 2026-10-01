@@ -155,6 +155,21 @@ const SETTLEABLE_CLAIM_ORIGIN = `SELECT c.origin FROM domain_claims c
         AND (c.status = 'PROVEN'
           OR (c.status = 'NOTICE' AND c.notified_at IS NOT NULL AND c.transfer_at <= now()))`;
 
+/** The tenants policy as P4-19b left it: the tenant, or the widget scope behind a domain or dev origin. */
+const TENANTS_WIDGET_USING_0059 = `id = ${TENANT}
+    OR id IN (SELECT d.tenant_id FROM tenant_domains d
+      WHERE d.origin = ${WIDGET_ORIGIN} AND d.status = 'VERIFIED'
+        AND d.tenant_id IN (${WIDGET_KEY_TENANT}))
+    OR (dev_origin = ${WIDGET_ORIGIN}
+      AND dev_mode_expires_at > now()
+      AND id IN (${WIDGET_KEY_TENANT}))`;
+
+/**
+ * The tenant directory's flag (P5-13, ADR 0030): every tenant row, for a
+ * read-only transaction that lists tenant ids and nothing else.
+ */
+const TENANT_DIRECTORY = "nullif(current_setting('app.tenant_directory', true), '') = 'on'";
+
 export interface RlsPolicy {
   /** Table the policy is attached to. */
   readonly table: string;
@@ -222,6 +237,7 @@ const HEADERS: Readonly<Record<string, string>> = {
     'A winery in development mode is reachable from its one local origin (P4-19b).',
   '0063_usage_top_ups_rls': 'Row-level security for message top-ups (P5-11a).',
   '0065_notification_events_rls': 'Row-level security for quota notices sent (P5-12).',
+  '0069_tenant_directory_rls': 'The nightly rollup lists every tenant, read only (P5-13).',
   '0068_e_invoices_rls': 'Row-level security for charges awaiting an e-invoice (P5-03a).',
 };
 
@@ -494,13 +510,7 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
     table: 'tenants',
     migration: '0059_dev_mode_rls',
     supersedes: true,
-    using: `id = ${TENANT}
-    OR id IN (SELECT d.tenant_id FROM tenant_domains d
-      WHERE d.origin = ${WIDGET_ORIGIN} AND d.status = 'VERIFIED'
-        AND d.tenant_id IN (${WIDGET_KEY_TENANT}))
-    OR (dev_origin = ${WIDGET_ORIGIN}
-      AND dev_mode_expires_at > now()
-      AND id IN (${WIDGET_KEY_TENANT}))`,
+    using: TENANTS_WIDGET_USING_0059,
     withCheck: `id = ${TENANT}`,
     note:
       'Development mode (P4-19b): a seller’s developer serves the widget from one exact local ' +
@@ -512,6 +522,21 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
   { ...boilerplate('usage_top_ups'), migration: '0063_usage_top_ups_rls' },
   { ...boilerplate('notification_events'), migration: '0065_notification_events_rls' },
   { ...boilerplate('e_invoices'), migration: '0068_e_invoices_rls' },
+  {
+    table: 'tenants',
+    migration: '0069_tenant_directory_rls',
+    supersedes: true,
+    using: `${TENANTS_WIDGET_USING_0059}
+    OR ${TENANT_DIRECTORY}`,
+    withCheck: `id = ${TENANT}`,
+    note:
+      'The nightly rollup (P5-13) writes a row for every tenant, each day, including days with ' +
+      'nothing in them — so it has to know every tenant, and learning that is itself the read ' +
+      'across tenants (ADR 0030). The branch admits every row, and what bounds it is where it is ' +
+      'set: only listTenantDirectory sets it, inside a READ ONLY transaction, for one statement ' +
+      'that selects the id and the creation time. WITH CHECK stays tenant-only, so even a writable ' +
+      'transaction holding the flag could not move a row.',
+  },
 ];
 
 /**
