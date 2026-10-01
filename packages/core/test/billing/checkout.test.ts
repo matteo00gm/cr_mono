@@ -83,6 +83,24 @@ describe('the Checkout session', () => {
   });
 });
 
+describe('the invoice details asked for (P5-02a)', () => {
+  it('asks for all three on Stripe’s page, each optional, encoded as Stripe reads them', () => {
+    expect(form()).toMatchObject({
+      'custom_fields[0][key]': 'partitaiva',
+      'custom_fields[0][label][type]': 'custom',
+      'custom_fields[0][label][custom]': 'Partita IVA o Codice Fiscale',
+      'custom_fields[0][type]': 'text',
+      'custom_fields[0][optional]': 'true',
+      'custom_fields[0][text][minimum_length]': '11',
+      'custom_fields[0][text][maximum_length]': '16',
+      'custom_fields[1][key]': 'codicesdi',
+      'custom_fields[1][optional]': 'true',
+      'custom_fields[2][key]': 'pec',
+      'custom_fields[2][optional]': 'true',
+    });
+  });
+});
+
 describe('a top-up’s Checkout session (P5-11a)', () => {
   const topUp = (locale = 'it') =>
     Object.fromEntries(

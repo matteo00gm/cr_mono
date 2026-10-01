@@ -1,6 +1,7 @@
 import { TOP_UP, type PlanId } from '../plans.js';
 
 import type { StripeParams } from './stripe-form.js';
+import { TAX_CUSTOM_FIELDS } from './tax-details.js';
 
 /**
  * The Checkout session a winery is sent to (P5-02).
@@ -57,6 +58,8 @@ export const checkoutSessionParams = ({
     customer: customerId ?? undefined,
     metadata,
     subscription_data: { metadata },
+    /* What an Italian business needs on its invoice, optional for everyone (P5-02a). */
+    custom_fields: TAX_CUSTOM_FIELDS,
     locale: STRIPE_LOCALES.has(locale) ? locale : 'auto',
     success_url: `${dashboardOrigin}${BILLING_PATH}?checkout=success`,
     cancel_url: `${dashboardOrigin}${BILLING_PATH}?checkout=cancelled`,

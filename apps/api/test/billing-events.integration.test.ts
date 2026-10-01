@@ -659,3 +659,93 @@ describe('a top-up, paid (P5-11a)', () => {
     expect(await quota.check(winery)).toMatchObject({ allowed: true, used: 1_500, limit: 2_500 });
   });
 });
+
+describe('the invoice details a paid Checkout brings (P5-02a)', () => {
+  const withFields = (
+    tenantId: string,
+    customer: string,
+    subscription: string,
+    fields: Record<string, string | null>,
+  ) =>
+    event('checkout.session.completed', {
+      mode: 'subscription',
+      customer,
+      subscription,
+      payment_status: 'paid',
+      client_reference_id: tenantId,
+      metadata: { tenant_id: tenantId, plan: 'CANTINA' },
+      custom_fields: Object.entries(fields).map(([key, value]) => ({
+        key,
+        type: 'text',
+        text: { value },
+      })),
+    });
+
+  const details = async (tenantId: string) => {
+    const rows = await admin().execute(sql`
+      SELECT vat_id, sdi_code, pec_address FROM tenants WHERE id = ${tenantId}
+    `);
+
+    return [...rows][0];
+  };
+
+  it('are saved with the activation, written as SdI reads them', async () => {
+    const tenantId = await trialing();
+
+    await port.record(
+      withFields(tenantId, `cus_${randomUUID()}`, `sub_${randomUUID()}`, {
+        partitaiva: 'IT12345678903',
+        codicesdi: 'm5uxcr1',
+        pec: null,
+      }),
+    );
+
+    expect((await row(tenantId)).status).toBe('ACTIVE');
+    expect(await details(tenantId)).toEqual({
+      vat_id: '12345678903',
+      sdi_code: 'M5UXCR1',
+      pec_address: null,
+    });
+  });
+
+  it('are nothing for a winery that gave none, whose Checkout still activates it', async () => {
+    const tenantId = await trialing();
+
+    await port.record(paidCheckout(tenantId, `cus_${randomUUID()}`, `sub_${randomUUID()}`));
+
+    expect((await row(tenantId)).status).toBe('ACTIVE');
+    expect(await details(tenantId)).toEqual({ vat_id: null, sdi_code: null, pec_address: null });
+  });
+
+  it('leave out a field filled in wrongly, and name it without quoting it', async () => {
+    const tenantId = await trialing();
+
+    await port.record(
+      withFields(tenantId, `cus_${randomUUID()}`, `sub_${randomUUID()}`, {
+        partitaiva: '12345678904',
+        pec: 'fatture@cantina.pec.it',
+      }),
+    );
+
+    expect(await details(tenantId)).toEqual({
+      vat_id: null,
+      sdi_code: null,
+      pec_address: 'fatture@cantina.pec.it',
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      { kind: 'stripe_tax_field_invalid', type: 'vat_id' },
+      expect.any(String),
+    );
+    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toContain('12345678904');
+  });
+
+  it('are not saved from a Checkout the machine refused', async () => {
+    const { tenantId, customer } = await paying();
+
+    await port.record(
+      withFields(tenantId, customer, `sub_${randomUUID()}`, { partitaiva: '12345678903' }),
+    );
+
+    expect((await details(tenantId))?.vat_id).toBeNull();
+  });
+});

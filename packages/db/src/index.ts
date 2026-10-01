@@ -278,10 +278,12 @@ export {
   readPlanFootprint,
   startTrial,
   writeBillingChange,
+  writeTaxDetails,
   type BillingChangeRow,
   type BillingSnapshotRow,
   type BillingState,
   type BillingWriteRefusal,
+  type TaxDetailsRow,
 } from './billing.js';
 
 export {

@@ -5,6 +5,7 @@ import {
   isDowngrade,
   periodOf,
   readBillingEvent,
+  readCheckoutTaxDetails,
   readTopUpEvent,
   TOP_UP,
   transition,
@@ -18,6 +19,7 @@ import {
   readPlanFootprint,
   recordTopUp,
   writeBillingChange,
+  writeTaxDetails,
   type DbTransaction,
 } from '@catalogorosso/db';
 
@@ -226,6 +228,26 @@ export const createBillingEffect =
       );
 
       return NOTHING;
+    }
+
+    /*
+     * **The invoice details a paid Checkout brought** (P5-02a), on the same
+     * transaction as the activation they belong to — and only when it applied:
+     * a second Checkout the machine refused is not this winery's to describe.
+     * A field filled in wrongly is left out and named, never quoted: a Codice
+     * Fiscale is a person's.
+     */
+    if (read.event.kind === 'checkout_completed') {
+      const { details, invalid } = readCheckoutTaxDetails(delivery.payload);
+
+      if (invalid.length > 0) {
+        logger.warn(
+          { kind: 'stripe_tax_field_invalid', type: invalid.join(',') },
+          'a Checkout tax field was not well formed and was not saved (P5-02a)',
+        );
+      }
+
+      await writeTaxDetails(tx, details);
     }
 
     if (change.status !== current.status) {

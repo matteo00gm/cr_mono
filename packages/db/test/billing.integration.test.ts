@@ -7,6 +7,7 @@ import {
   readBillingState,
   startTrial,
   writeBillingChange,
+  writeTaxDetails,
 } from '../src/billing.js';
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { withTenant } from '../src/with-tenant.js';
@@ -275,5 +276,64 @@ describe('writing the machine’s answer', () => {
     );
 
     expect((await withTenant(theirs, readBillingState, db))?.status).toBe('ACTIVE');
+  });
+});
+
+describe('the invoice details (P5-02a)', () => {
+  const details = async (tenantId: string) => {
+    const rows = await adminDb.execute(sql`
+      SELECT vat_id, sdi_code, pec_address FROM tenants WHERE id = ${tenantId}::uuid
+    `);
+
+    return [...rows][0];
+  };
+
+  it('saves what a Checkout brought, and keeps what one left empty', async () => {
+    const tenantId = await winery();
+
+    await withTenant(
+      tenantId,
+      (tx) => writeTaxDetails(tx, { vatId: '12345678903', sdiCode: 'M5UXCR1', pecAddress: null }),
+      db,
+    );
+    await withTenant(
+      tenantId,
+      (tx) =>
+        writeTaxDetails(tx, { vatId: null, sdiCode: null, pecAddress: 'fatture@cantina.pec.it' }),
+      db,
+    );
+
+    expect(await details(tenantId)).toEqual({
+      vat_id: '12345678903',
+      sdi_code: 'M5UXCR1',
+      pec_address: 'fatture@cantina.pec.it',
+    });
+  });
+
+  it('reaches only the scope’s own winery', async () => {
+    const theirs = await winery();
+    const mine = await winery();
+
+    await withTenant(
+      mine,
+      (tx) => writeTaxDetails(tx, { vatId: '12345678903', sdiCode: null, pecAddress: null }),
+      db,
+    );
+
+    expect((await details(theirs))?.vat_id).toBeNull();
+  });
+
+  it.each([
+    ['a Partita IVA of ten digits', 'vat_id', '1234567890'],
+    ['a lowercase Codice Fiscale', 'vat_id', 'rssmra80a01h501u'],
+    ['a Codice Destinatario of six', 'sdi_code', 'M5UXCR'],
+    ['a PEC with no @', 'pec_address', 'fatture.cantina.pec.it'],
+  ])('refuses %s to every role, the owner included', async (_what, name, value) => {
+    const tenantId = await winery();
+    await expect(
+      adminDb.execute(
+        sql`UPDATE tenants SET ${sql.identifier(name)} = ${value} WHERE id = ${tenantId}::uuid`,
+      ),
+    ).rejects.toMatchObject({ cause: { code: '23514' } });
   });
 });
