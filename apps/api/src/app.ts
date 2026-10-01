@@ -12,13 +12,15 @@ import type { TurnstileSettingsPort } from './turnstile-settings.js';
 import type { MembersPort } from './members.js';
 import type { ProductsPort } from './products.js';
 import type { RagPort } from './rag.js';
-import { assertEveryRouteDeclared } from './middleware/capability.js';
+import type { DevBillingPort } from './dev-billing.js';
+import { assertEveryRouteDeclared, registeredRoutes } from './middleware/capability.js';
 import { errorHandler, normaliseThrown, notFoundHandler } from './middleware/error.js';
 import { securityHeaders } from './middleware/security-headers.js';
-import { DASHBOARD_PREFIX, WEBHOOK_PREFIX, WIDGET_PREFIX } from './routes.js';
+import { DASHBOARD_PREFIX, DEV_PREFIX, WEBHOOK_PREFIX, WIDGET_PREFIX } from './routes.js';
 import { requestContext } from './middleware/logger.js';
 import { requireOriginSecret } from './middleware/origin-secret.js';
 import { createDashboardApp, DASHBOARD_ROUTE_ACCESS } from './surfaces/dashboard.js';
+import { createDevApp, DEV_ROUTE_ACCESS, DevSurfaceInProductionError } from './surfaces/dev.js';
 import {
   createWebhookApp,
   WEBHOOK_ROUTE_ACCESS,
@@ -154,6 +156,17 @@ export interface AppOptions {
    * answer with a wiring error rather than serving config with no CORS decision.
    */
   readonly widget?: WidgetDependencies | undefined;
+
+  /**
+   * The non-production billing-state switch (P5-14). The composition root
+   * supplies it off production only; absent, `/v1/dev` does not exist.
+   */
+  readonly dev?: DevBillingPort | undefined;
+  /**
+   * Whether this app serves production. With it, a `/v1/dev` port or route is
+   * a startup failure rather than a configuration (P5-14).
+   */
+  readonly production?: boolean | undefined;
 }
 
 export const createApp = ({
@@ -174,6 +187,8 @@ export const createApp = ({
   stripeEvents,
   onSignatureRejected,
   widget,
+  dev,
+  production = false,
 }: AppOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
@@ -256,6 +271,12 @@ export const createApp = ({
       dashboardOrigin,
     }),
   );
+  if (dev !== undefined) {
+    app.route(
+      DEV_PREFIX,
+      createDevApp({ auth, readMemberships, dashboardOrigin, devBilling: dev }),
+    );
+  }
   app.route(WIDGET_PREFIX, createWidgetApp(widget));
   app.route(
     WEBHOOK_PREFIX,
@@ -303,6 +324,24 @@ export const createApp = ({
    * is where each route says *why* it needs no session.
    */
   assertEveryRouteDeclared(app, WIDGET_ROUTE_ACCESS, WIDGET_PREFIX);
+
+  /*
+   * And the dev surface's (P5-14) — and, in production, that it has no route
+   * at all. One check covers both ways it could arrive: a port handed in by
+   * mistake mounts routes, and so does anything else that registers under the
+   * prefix. Refusing to start is the whole of the safety.
+   */
+  assertEveryRouteDeclared(app, DEV_ROUTE_ACCESS, DEV_PREFIX);
+
+  if (production) {
+    const devRoutes = registeredRoutes(app).filter((route) => route.path.startsWith(DEV_PREFIX));
+
+    if (devRoutes.length > 0) {
+      throw new DevSurfaceInProductionError(
+        `the route table holds ${devRoutes.map((route) => `${route.method} ${route.path}`).join(', ')}`,
+      );
+    }
+  }
 
   return app;
 };

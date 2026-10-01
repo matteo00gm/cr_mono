@@ -33,3 +33,9 @@ export const AUTH_PUBLIC_PATH = `${DASHBOARD_PREFIX}${AUTH_ROUTE_PREFIX}`;
  * request rather than needing a hole cut for it.
  */
 export const WEBHOOK_PREFIX = '/v1/webhooks';
+
+/**
+ * The non-production surface (P5-14). Never mounted in production, and
+ * `createApp` refuses to start a production app with a route under it.
+ */
+export const DEV_PREFIX = '/v1/dev';

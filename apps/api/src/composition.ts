@@ -40,6 +40,7 @@ import { recordTwoFactorChange } from './mfa-audit.js';
 import { logger } from './middleware/logger.js';
 import { createProductsPort, type ProductsPort } from './products.js';
 import { createChatPort, type ChatPort } from './chat.js';
+import { createDevBillingPort, type DevBillingPort } from './dev-billing.js';
 import { createQuotaPort, type QuotaPort } from './quota.js';
 import { createQuotaNotifier } from './quota-notices.js';
 import { createRagPort, type RagPort } from './rag.js';
@@ -242,6 +243,10 @@ export interface Dependencies {
   readonly widget: WidgetDependencies;
   /** Exposed so the wiring is assertable, not because anything else calls it. */
   readonly sendResetPassword: (email: ResetPasswordEmail) => Promise<void>;
+  /** The billing-state switch (P5-14): off production only, and absent there. */
+  readonly dev?: DevBillingPort | undefined;
+  /** Whether this is production, so `createApp` can refuse the dev surface there. */
+  readonly production: boolean;
 }
 
 /**
@@ -323,6 +328,34 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
     });
 
   const suppressionFor = config.suppression ?? suppressionForUser;
+
+  const stripeEvents = createStripeEventsPort({
+    apply: createBillingEffect({ livemode: config.stage === 'production' }),
+    /* The owners are told when their widget goes dark on a failed payment (P5-05a). */
+    notify: createBillingNotifier({
+      sendEmailFor: (tenantId) =>
+        sendEmailWith({
+          isSuppressed: (address) => withTenant(tenantId, (tx) => isSuppressed(tx, address)),
+        }),
+      dashboardOrigin: new URL(config.authBaseUrl).origin,
+      /* A downgrade refused as it applies is put back in Stripe (P5-10). */
+      ...(config.stripeSecretKey === undefined
+        ? {}
+        : {
+            restorePlan: createPlanRestorer({
+              stripe: createStripeClient({ secretKey: config.stripeSecretKey }),
+            }),
+          }),
+    }),
+  });
+
+  /*
+   * The billing-state switch (P5-14), off production only. It records through
+   * the same port a signed Stripe delivery reaches, so a fixture takes the
+   * webhook path; in production it is absent, and `createApp` refuses it.
+   */
+  const production = config.stage === 'production';
+  const dev = production ? undefined : createDevBillingPort({ stripeEvents });
 
   /*
    * Answering a question (P2-29). The providers are factories rather than
@@ -595,25 +628,10 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
      * run through the state machine on that claim (P5-05). Live-mode events
      * on production and test-mode events everywhere else (§5.2b).
      */
-    stripeEvents: createStripeEventsPort({
-      apply: createBillingEffect({ livemode: config.stage === 'production' }),
-      /* The owners are told when their widget goes dark on a failed payment (P5-05a). */
-      notify: createBillingNotifier({
-        sendEmailFor: (tenantId) =>
-          sendEmailWith({
-            isSuppressed: (address) => withTenant(tenantId, (tx) => isSuppressed(tx, address)),
-          }),
-        dashboardOrigin: new URL(config.authBaseUrl).origin,
-        /* A downgrade refused as it applies is put back in Stripe (P5-10). */
-        ...(config.stripeSecretKey === undefined
-          ? {}
-          : {
-              restorePlan: createPlanRestorer({
-                stripe: createStripeClient({ secretKey: config.stripeSecretKey }),
-              }),
-            }),
-      }),
-    }),
+    stripeEvents,
+
+    production,
+    ...(dev === undefined ? {} : { dev }),
 
     /* Every refused signature, either provider, is a security event (P5-03). */
     onSignatureRejected: webhookRejectionRecorder(insertSecurityEvent),
