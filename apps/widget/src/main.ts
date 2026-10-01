@@ -57,6 +57,21 @@ export const run = (deps: Deps = {}): void => {
      * never fetched, there is nothing that could fetch it. §1.3's disabled
      * notice is P3-07's, and it renders from the config this already holds.
      */
+    /*
+     * **A config nobody could read takes the launcher away** (P3-22). It is an
+     * unverified origin far more often than a network: a half-finished install,
+     * whose CORS refusal is the API saying "not here". A greyed button on a live
+     * storefront looks broken to a shopper and tells them nothing; an absent
+     * one is a page without a widget, which is what an unfinished install is.
+     * A winery that is merely not served (`disabled`) keeps its launcher and
+     * says so, below — that one is §1.3's state, and a shopper should read it.
+     */
+    if (state.kind === 'error') {
+      mounted.host.remove();
+
+      return;
+    }
+
     if (state.kind !== 'active') {
       mounted.launcher.setAttribute('aria-disabled', 'true');
       /* §1.3's disabled state, as much of it as exists before a bundle does. */

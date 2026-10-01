@@ -31,6 +31,26 @@
     "./security-events": {
       "types": "./dist/security-events.d.ts",
       "default": "./dist/security-events.js"
+    },
+    "./chat": {
+      "types": "./dist/chat.d.ts",
+      "default": "./dist/chat.js"
+    },
+    "./quota": {
+      "types": "./dist/quota.d.ts",
+      "default": "./dist/quota.js"
+    },
+    "./dev-billing": {
+      "types": "./dist/dev-billing.d.ts",
+      "default": "./dist/dev-billing.js"
+    },
+    "./stripe-events": {
+      "types": "./dist/stripe-events.d.ts",
+      "default": "./dist/stripe-events.js"
+    },
+    "./billing-events": {
+      "types": "./dist/billing-events.d.ts",
+      "default": "./dist/billing-events.js"
     }
   }
 }
