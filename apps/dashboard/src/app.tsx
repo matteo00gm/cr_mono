@@ -2,6 +2,7 @@ import type { JSX } from 'preact';
 import { useMemo } from 'preact/hooks';
 import { Link, Route, Switch, useLocation } from 'wouter-preact';
 
+import { AnalyticsScreen } from './features/analytics/AnalyticsScreen.js';
 import { BillingBanner } from './features/billing/BillingBanner.js';
 import { BillingScreen } from './features/billing/BillingScreen.js';
 import { CatalogScreen } from './features/catalog/CatalogScreen.js';
@@ -148,6 +149,18 @@ const BillingRoute = ({
   return <BillingScreen client={client} />;
 };
 
+/** Analisi (P6-02), with a client built once per winery for `CatalogRoute`'s reason. */
+const AnalyticsRoute = ({
+  tenantId,
+  clientFor,
+}: {
+  readonly tenantId: string;
+  readonly clientFor: (tenantId: string) => ApiClient;
+}): JSX.Element => {
+  const client = useMemo(() => clientFor(tenantId), [tenantId, clientFor]);
+  return <AnalyticsScreen client={client} />;
+};
+
 /**
  * The signed-in layout.
  *
@@ -241,6 +254,9 @@ export const Layout = ({
           </Route>
           <Route path="/catalogo">
             <CatalogRoute tenantId={active.tenantId} clientFor={clientFor} />
+          </Route>
+          <Route path="/analisi">
+            <AnalyticsRoute tenantId={active.tenantId} clientFor={clientFor} />
           </Route>
           <Route path="/membri">
             <Placeholder title="Membri" />

@@ -1420,7 +1420,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P5-14 | 🔒 Tenant lifecycle fixtures | Stripe test clocks + failing test cards + non-prod forced-status endpoint; one tenant per state | P5-06 |
 | ✅ P3-22 | Widget state matrix E2E | every tenant state → rendered widget; mid-conversation block, stale edge cache, capped-vs-blocked, auto-recovery | P5-14 |
 | ✅ P6-01 | Event ingestion endpoint | batched, rate-limited | P3-20 |
-| P6-02 | Funnel query + dashboard panel | open → message → recommendation → add-to-cart | P6-01 |
+| ✅ P6-02 | Funnel query + dashboard panel | open → message → recommendation → add-to-cart | P6-01 |
 | P6-03 | Top queries / top products panels | | P6-01 |
 | P6-04 | **ZERO_RESULTS panel** | the highest-value commercial insight | P6-01 |
 | P6-05 | Unauthorized-origin attempts panel | from `security_events` | P2-16 |
@@ -7489,6 +7489,28 @@ Assert **zero provider calls** across every blocked case, since that is what the
 **Tests.** Funnel matches a seeded scenario; a session skipping a stage is counted correctly; the range filter works; tenant-scoped.
 
 **Files.** `analytics/funnel.ts`, panel, tests. **~130 lines.**
+
+**As built (2026-10-01).** `GET /v1/dashboard/analytics/funnel?from&to`, `analytics:read` (every member), behind a new `AnalyticsPort` (`apps/api/src/analytics.ts`) that later panels extend; the **Analisi** screen in the dashboard (`/analisi`).
+
+- **Three layers, one definition each.** `packages/core/src/analytics/funnel.ts` names the stages and does the arithmetic (`funnelOf`); `packages/db/src/funnel.ts` is the repository function the row asks for — `readFunnel` counts, for each stage in the list it is *given*, the visits that reached it — so swapping raw events for an aggregate later changes that one function. The dashboard formats and decides nothing.
+- **A visit counts at every stage up to the furthest it reached** *(the row's "a session skipping a stage is counted correctly", decided)*. Events are fire-and-forget (P3-20): a `WIDGET_OPEN` lost to a closed tab, or stamped the night before the range, would otherwise leave a visit that added to its cart counted as never having opened the widget — a funnel that widens. Counted by the furthest stage, it cannot, and every step is at most 100%. `funnelOf` holds the counts to it anyway, clamping rather than trusting the store. A visit that opened twice is one visit; events that are not stages (`PRODUCT_DETAIL_VIEW`, `CART_OPEN`, `ZERO_RESULTS`) do not make one.
+- **A visit is the anonymous per-tab id** (`widget_events.session_id`, P6-01), not the widget session: a token refresh mid-visit must not split it in two.
+- **Whole UTC days, both ends included, thirty by default, a year at most** (`packages/core/src/analytics/range.ts`). UTC because the usage ledger and its rollup count days in UTC (P5-13), and two panels on one screen must not disagree about where a day ends. A day that does not exist (`2026-02-30`, which `Date` silently rolls into March) is refused with the words of `RANGE_EXPECTED`, as a 422.
+- **The panel picks among 7, 30 and 90 days** *(narrower than the API)*. The API takes any range within a year; a free date picker can come when a seller asks for one.
+- **The last stage is *"Aggiunte al carrello"*** and the panel says sales appear once the Shopify store is connected (§2.4). `rate` is `null` for the first stage and after a stage nobody reached — a rate of nothing is not a rate of zero.
+- **⚠ Open: the order stage.** §2.4's funnel ends at an order; it is a stage once P6-07 records attributions, and `FUNNEL_STAGES` is where it goes.
+
+**Verified.** Unit, integration (`funnel.integration.test.ts`: a seeded week with a visit for every shape easy to count wrong — a skipped stage, two opens, only non-stage events, an open the night before, both edges of `[start, end)` — and a second winery reusing the first's visit ids), coverage gates, every `:check`. 24 mutants, 24 killed. Two survived the first run, and both were redundant code: the stages as a `WHERE` predicate change no count — an event that is not a stage reaches nothing — and exist so the `(tenant_id, type, created_at)` index serves the read, so a statement test now pins them; and a ten-character cap on the query string, which core's anchored day check already enforces, is gone.
+
+| Mutation | Caught by |
+|---|---|
+| A widening funnel believed; a rate after a stage nobody reached; a rate inverted | `funnel.test.ts` (core) |
+| A backwards range; no year cap; a cap one day short; the last day excluded; a rolled-over day taken; a default of thirty-one days | `range.test.ts` (core) |
+| Counted at each stage seen rather than the furthest; the end included; the start excluded; every event a visit | `funnel.integration.test.ts` |
+| An empty stage list still asking; the stages not a predicate | `funnel.test.ts` (db) |
+| A stage the store did not answer read as `undefined`; the range not passed on | `analytics-funnel.test.ts` |
+| The route open to no capability | `rbac-matrix.test.ts` |
+| The range not asked for; a picked range ignored; a failure shown as nothing; a zero-visit range as a table of zeros; a range picked in Rome's day, not UTC's; an add to cart called *"Vendite"* | `analytics-screen.test.tsx` |
 
 ---
 

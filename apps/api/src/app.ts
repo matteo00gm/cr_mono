@@ -5,6 +5,7 @@ import type { MembershipReader } from '@catalogorosso/core';
 
 import type { AppEnv } from './env.js';
 import type { AuthPort } from './middleware/auth.js';
+import type { AnalyticsPort } from './analytics.js';
 import type { BillingPort } from './billing.js';
 import type { DomainsPort } from './domains.js';
 import type { KeysPort } from './keys.js';
@@ -97,6 +98,9 @@ export interface AppOptions {
   /** Billing (P5). Optional on the same terms. See `src/billing.ts`. */
   readonly billing?: BillingPort | undefined;
 
+  /** The analytics panels (P6). Optional on the same terms. See `src/analytics.ts`. */
+  readonly analytics?: AnalyticsPort | undefined;
+
   /**
    * The shared secret CloudFront attaches to origin requests (A2).
    *
@@ -177,6 +181,7 @@ export const createApp = ({
   keys,
   turnstileSettings,
   billing,
+  analytics,
   products,
   rag,
   originSecret,
@@ -266,6 +271,7 @@ export const createApp = ({
       keys,
       turnstileSettings,
       billing,
+      analytics,
       products,
       rag,
       dashboardOrigin,

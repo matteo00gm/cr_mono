@@ -28,6 +28,7 @@ import {
   withUser,
 } from '@catalogorosso/db';
 
+import { createAnalyticsPort, type AnalyticsPort } from './analytics.js';
 import { createBillingPort, createPlanRestorer, type BillingPort } from './billing.js';
 import { createBillingEffect } from './billing-events.js';
 import { createBillingNotifier } from './billing-notices.js';
@@ -223,6 +224,8 @@ export interface Dependencies {
   readonly turnstileSettings: TurnstileSettingsPort;
   /** Billing (P5). */
   readonly billing: BillingPort;
+  /** The analytics panels (P6). */
+  readonly analytics: AnalyticsPort;
   /** The catalogue (P1-02). */
   readonly products: ProductsPort;
   /** The retrieval sandbox (P2-37). */
@@ -509,6 +512,9 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
         : { stripe: createStripeClient({ secretKey: config.stripeSecretKey }) }),
       dashboardOrigin: new URL(config.authBaseUrl).origin,
     }),
+
+    /* The analytics panels (P6-02): our own events, read in the tenant's scope. */
+    analytics: createAnalyticsPort(),
 
     domains: createDomainsPort({
       environment: config.stage === 'unknown' ? 'development' : 'production',

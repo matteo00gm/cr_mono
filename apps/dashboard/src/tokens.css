@@ -476,3 +476,25 @@ body {
   text-align: end;
   font-variant-numeric: tabular-nums;
 }
+
+.cr-analytics label {
+  display: inline-block;
+  margin-bottom: var(--cr-gap);
+}
+
+.cr-funnel td {
+  padding-inline-start: var(--cr-gap);
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.cr-funnel__bar {
+  display: block;
+  width: 160px;
+  height: 8px;
+  margin-inline-start: auto;
+}
+
+.cr-funnel__note {
+  color: var(--cr-ink-soft);
+}

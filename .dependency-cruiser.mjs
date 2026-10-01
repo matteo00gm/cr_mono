@@ -169,6 +169,9 @@ export default {
           // writes one statement in the caller's withTenant transaction and
           // opens nothing, and widget_events carries the boilerplate policy.
           '|^packages/db/src/widget-events[.]ts$' +
+          // src/funnel.ts is exempt from P6-02 on the same terms: one read in
+          // the caller's withTenant transaction, over the same policy.
+          '|^packages/db/src/funnel[.]ts$' +
           // src/webhooks.ts is exempt from P0-64b, and unlike the two files
           // above it really does open a connection. A webhook arrives outside
           // any request — no session, no membership row, no tenant to set — and
