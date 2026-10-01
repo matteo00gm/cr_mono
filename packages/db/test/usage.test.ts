@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { countUsage, recordUsage } from '../src/usage.js';
+import {
+  claimQuotaNotice,
+  countPurchased,
+  countUsage,
+  readUsageBreakdown,
+  recordPaidCharge,
+  recordTopUp,
+  recordUsage,
+} from '../src/usage.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 import { text } from './support/sql-text.js';
 
@@ -107,5 +115,78 @@ describe('counting a period', () => {
     const { tx } = capturing([]);
 
     await expect(countUsage(tx, '202609', 'chat_message')).rejects.toThrow(/no row/);
+  });
+});
+
+/*
+ * The P5 ledgers' statements. Their behaviour against Postgres is the
+ * integration suites'; what only the text can say is that each one takes the
+ * tenant from the setting, and how each reads its own answer back.
+ */
+
+describe('the top-up ledger (P5-11a)', () => {
+  const TOP_UP = { period: '202610', messages: 1000, paymentIntentId: 'pi_1' };
+
+  it('credits under the setting’s tenant, once per payment', async () => {
+    const { statements, tx } = capturing([{ id: 'x' }]);
+
+    expect(await recordTopUp(tx, TOP_UP)).toBe('credited');
+    expect(text(statements[0])).toContain("current_setting('app.tenant_id'");
+    expect(text(statements[0])).toContain('on conflict (stripe_payment_intent_id) do nothing');
+  });
+
+  it('reads a payment already credited as a duplicate', async () => {
+    const { tx } = capturing([]);
+
+    expect(await recordTopUp(tx, TOP_UP)).toBe('duplicate');
+  });
+
+  it('sums the period, and reads nought where nothing was bought', async () => {
+    expect(await countPurchased(capturing([{ purchased: 2000 }]).tx, '202610')).toBe(2000);
+    expect(await countPurchased(capturing([]).tx, '202610')).toBe(0);
+  });
+});
+
+describe('the quota notices (P5-12)', () => {
+  it('is the claimer’s when the row is new, and nobody else’s', async () => {
+    const claimed = capturing([{ threshold: 80 }]);
+
+    expect(await claimQuotaNotice(claimed.tx, '202610', 80)).toBe(true);
+    expect(text(claimed.statements[0])).toContain("current_setting('app.tenant_id'");
+    expect(await claimQuotaNotice(capturing([]).tx, '202610', 80)).toBe(false);
+  });
+
+  it('breaks the month down by day and by origin, as strings and numbers', async () => {
+    const { tx } = capturing(
+      [{ key: '2026-10-01', messages: '3' }],
+      [{ key: 'https://www.cantina.example', messages: 3 }],
+    );
+
+    expect(await readUsageBreakdown(tx, '202610', 'chat_message')).toEqual({
+      byDay: [{ key: '2026-10-01', messages: 3 }],
+      byOrigin: [{ key: 'https://www.cantina.example', messages: 3 }],
+    });
+  });
+});
+
+describe('the charges an e-invoice may be owed for (P5-03a)', () => {
+  const CHARGE = {
+    stripeObjectId: 'in_1',
+    source: 'invoice' as const,
+    amountCents: 2900,
+    currency: 'eur',
+    paidAt: new Date('2026-10-01T10:00:00Z'),
+  };
+
+  it('records under the setting’s tenant, once per Stripe object', async () => {
+    const { statements, tx } = capturing([{ id: 'x' }]);
+
+    expect(await recordPaidCharge(tx, CHARGE)).toBe('recorded');
+    expect(text(statements[0])).toContain("current_setting('app.tenant_id'");
+    expect(text(statements[0])).toContain('on conflict (stripe_object_id) do nothing');
+  });
+
+  it('reads a charge already recorded as a duplicate', async () => {
+    expect(await recordPaidCharge(capturing([]).tx, CHARGE)).toBe('duplicate');
   });
 });
