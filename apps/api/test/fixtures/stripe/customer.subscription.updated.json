@@ -1,0 +1,49 @@
+{
+  "id": "__EVENT__",
+  "object": "event",
+  "api_version": "2026-08-26.dahlia",
+  "created": "__CREATED__",
+  "livemode": false,
+  "pending_webhooks": 1,
+  "request": { "id": null, "idempotency_key": null },
+  "type": "customer.subscription.updated",
+  "data": {
+    "object": {
+      "id": "__SUBSCRIPTION__",
+      "object": "subscription",
+      "cancel_at_period_end": "__CANCEL_AT_PERIOD_END__",
+      "collection_method": "charge_automatically",
+      "currency": "eur",
+      "customer": "__CUSTOMER__",
+      "items": {
+        "object": "list",
+        "data": [
+          {
+            "id": "si_REDACTED",
+            "object": "subscription_item",
+            "current_period_start": 1790000000,
+            "current_period_end": 1792592000,
+            "price": {
+              "id": "price_REDACTED",
+              "object": "price",
+              "currency": "eur",
+              "lookup_key": "__LOOKUP_KEY__",
+              "product": "__PRODUCT__",
+              "recurring": { "interval": "month", "interval_count": 1 },
+              "type": "recurring",
+              "unit_amount": "__UNIT_AMOUNT__"
+            },
+            "quantity": 1
+          }
+        ],
+        "has_more": false
+      },
+      "latest_invoice": "in_REDACTED",
+      "livemode": false,
+      "metadata": { "tenant_id": "__TENANT__", "plan": "ECOMMERCE" },
+      "start_date": 1790000000,
+      "status": "__STATUS__"
+    },
+    "previous_attributes": {}
+  }
+}

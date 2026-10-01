@@ -11,8 +11,8 @@ import { describeThreat, REPO } from './manifest.js';
  * A tenant's status and plan are never taken from a request, and nothing but a
  * verified billing event — or the first verified domain, which starts the
  * card-free trial — may ever change them. The signed webhook and its
- * idempotency are P5-03 and P5-04; the transitions end to end are P5-06, and
- * the todo below says so in every run.
+ * idempotency are P5-03 and P5-04, and the transitions end to end through it
+ * are P5-06's `stripe-webhooks.integration.test.ts`; the matrix names each.
  *
  * This file holds the other half: **production code writes `tenants.status`
  * and `tenants.plan` in one file only.** P5-05's statements are there, and a

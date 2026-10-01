@@ -211,14 +211,19 @@
           "path": "packages/core/test/billing/stripe-events.test.ts",
           "runner": "unit",
           "covers": "a winery is taken only from the two fields we write at Checkout, in UUID shape, and only when they agree"
+        },
+        {
+          "path": "apps/api/test/stripe-webhooks.integration.test.ts",
+          "runner": "integration",
+          "covers": "every transition, end to end through the signed endpoint, and nothing moved by an unsigned, altered, replayed, out-of-order or unattributed event"
+        },
+        {
+          "path": "packages/db/test/billing.integration.test.ts",
+          "runner": "integration",
+          "covers": "ACTIVE without a subscription and TRIALING without an end are refused by the database, to every role"
         }
       ],
-      "gaps": [
-        {
-          "what": "Every status transition driven only by a verified event",
-          "row": "P5-06"
-        }
-      ]
+      "gaps": []
     },
     {
       "id": "T7",

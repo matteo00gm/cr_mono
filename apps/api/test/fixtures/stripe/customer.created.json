@@ -1,0 +1,20 @@
+{
+  "id": "__EVENT__",
+  "object": "event",
+  "api_version": "2026-08-26.dahlia",
+  "created": "__CREATED__",
+  "livemode": false,
+  "pending_webhooks": 1,
+  "request": { "id": null, "idempotency_key": null },
+  "type": "customer.created",
+  "data": {
+    "object": {
+      "id": "__CUSTOMER__",
+      "object": "customer",
+      "email": "owner@example.invalid",
+      "livemode": false,
+      "metadata": {},
+      "name": "REDACTED"
+    }
+  }
+}

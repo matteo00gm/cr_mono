@@ -1,0 +1,36 @@
+{
+  "id": "__EVENT__",
+  "object": "event",
+  "api_version": "2026-08-26.dahlia",
+  "created": "__CREATED__",
+  "livemode": false,
+  "pending_webhooks": 1,
+  "request": { "id": null, "idempotency_key": null },
+  "type": "invoice.paid",
+  "data": {
+    "object": {
+      "id": "in_REDACTED",
+      "object": "invoice",
+      "amount_due": 7900,
+      "amount_paid": 7900,
+      "amount_remaining": 0,
+      "attempt_count": 1,
+      "attempted": true,
+      "billing_reason": "subscription_cycle",
+      "collection_method": "charge_automatically",
+      "currency": "eur",
+      "customer": "__CUSTOMER__",
+      "customer_email": "owner@example.invalid",
+      "livemode": false,
+      "parent": {
+        "type": "subscription_details",
+        "quote_details": null,
+        "subscription_details": {
+          "metadata": { "tenant_id": "__TENANT__", "plan": "ECOMMERCE" },
+          "subscription": "__SUBSCRIPTION__"
+        }
+      },
+      "status": "paid"
+    }
+  }
+}

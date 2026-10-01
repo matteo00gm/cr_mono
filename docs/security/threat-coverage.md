@@ -15,7 +15,7 @@ shows as a `todo` in every run.
 | [T3](#t3--poison-the-cors-allowlist-with-a-lookalike-domain) | Poison the CORS allowlist with a lookalike domain | 5 | — |
 | [T4](#t4--burn-a-competitors-message-quota) | Burn a competitor's message quota | 5 | P7-04 |
 | [T5](#t5--steer-the-model-via-product-descriptions) | Steer the model via product descriptions | 3 | — |
-| [T6](#t6--get-free-premium-tier) | Get free premium tier | 7 | P5-06 |
+| [T6](#t6--get-free-premium-tier) | Get free premium tier | 9 | — |
 | [T7](#t7--xss-the-sellers-storefront-through-the-widget) | XSS the seller's storefront through the widget | 3 | — |
 | [T8](#t8--escalate-editor--owner-or-act-with-no-membership-at-all) | Escalate `EDITOR` → `OWNER`, or act with no membership at all | 5 | — |
 | [T9](#t9--replay-a-captured-session-token) | Replay a captured session token | 4 | — |
@@ -117,10 +117,10 @@ shows as a `todo` in every run.
 | [`packages/db/test/tenant-webhooks.integration.test.ts`](../../packages/db/test/tenant-webhooks.integration.test.ts) | integration (Postgres) | an event is claimed and applied in one transaction under the winery it names, once, however many copies arrive together |
 | [`apps/api/test/stripe-events.integration.test.ts`](../../apps/api/test/stripe-events.integration.test.ts) | integration (Postgres) | a replayed event is answered as a duplicate and changes nothing, and one that names no winery of ours is never claimed |
 | [`packages/core/test/billing/stripe-events.test.ts`](../../packages/core/test/billing/stripe-events.test.ts) | unit | a winery is taken only from the two fields we write at Checkout, in UUID shape, and only when they agree |
+| [`apps/api/test/stripe-webhooks.integration.test.ts`](../../apps/api/test/stripe-webhooks.integration.test.ts) | integration (Postgres) | every transition, end to end through the signed endpoint, and nothing moved by an unsigned, altered, replayed, out-of-order or unattributed event |
+| [`packages/db/test/billing.integration.test.ts`](../../packages/db/test/billing.integration.test.ts) | integration (Postgres) | ACTIVE without a subscription and TRIALING without an end are refused by the database, to every role |
 
-**Gaps.** 
-
-- Every status transition driven only by a verified event — **P5-06**
+**Gaps.** _No known gap._
 
 ## T7 — XSS the seller's storefront through the widget
 
