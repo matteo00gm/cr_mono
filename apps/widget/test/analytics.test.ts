@@ -399,6 +399,109 @@ describe('an endpoint having a bad afternoon', () => {
   });
 });
 
+describe('authenticated by the widget session (P6-01)', () => {
+  const TOKEN = ['header', 'payload', 'signature'].join('.');
+
+  const holding = (held: string | undefined, minted: Promise<string> = Promise.resolve(TOKEN)) => ({
+    current: vi.fn(() => held),
+    token: vi.fn(() => minted),
+  });
+
+  const tokenIn = (body: string): unknown => (JSON.parse(body) as { token?: unknown }).token;
+
+  it('carries the token in the body, because a beacon cannot set a header', async () => {
+    const analytics = build({ session: holding(undefined) });
+
+    analytics.record('WIDGET_OPEN');
+    analytics.flush();
+    await vi.runAllTimersAsync();
+
+    expect(sent).toHaveLength(1);
+    expect(tokenIn(sent[0]?.body ?? '')).toBe(TOKEN);
+  });
+
+  it('carries the visitor id beside it, which is what a visit groups by', async () => {
+    const analytics = build({ session: holding(undefined) });
+
+    analytics.record('WIDGET_OPEN');
+    analytics.flush();
+    await vi.runAllTimersAsync();
+
+    expect(JSON.parse(sent[0]?.body ?? '{}')).toMatchObject({ visitorId: VISITOR });
+  });
+
+  it('mints while the page lives, and sends after', async () => {
+    let resolve: (token: string) => void = () => undefined;
+    const minted = new Promise<string>((done) => {
+      resolve = done;
+    });
+    const analytics = build({ session: holding(undefined, minted) });
+
+    analytics.record('WIDGET_OPEN');
+    analytics.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent).toHaveLength(0);
+
+    resolve(TOKEN);
+    await vi.runAllTimersAsync();
+    expect(sent).toHaveLength(1);
+  });
+
+  it('drops the batch when the mint fails, and throws nothing', async () => {
+    const analytics = build({ session: holding(undefined, Promise.reject(new Error('429'))) });
+
+    analytics.record('WIDGET_OPEN');
+    expect(() => {
+      analytics.flush();
+    }).not.toThrow();
+    await vi.runAllTimersAsync();
+
+    expect(sent).toHaveLength(0);
+    expect(beaconed).toHaveLength(0);
+  });
+
+  it('uses the token in hand on unload, and mints nothing', async () => {
+    const session = holding(TOKEN);
+    const analytics = build({ session });
+
+    analytics.record('PRODUCT_DETAIL_VIEW', 'p1');
+    target.dispatchEvent(new Event('pagehide'));
+
+    expect(session.token).not.toHaveBeenCalled();
+    expect(beaconed).toHaveLength(1);
+
+    const blob = beaconed[0]?.body as Blob;
+
+    expect(tokenIn(await blob.text())).toBe(TOKEN);
+  });
+
+  it('sends nothing on unload without a token, rather than a batch that would be refused', () => {
+    const session = holding(undefined);
+    const analytics = build({ session });
+
+    analytics.record('WIDGET_OPEN');
+    target.dispatchEvent(new Event('pagehide'));
+
+    expect(session.token).not.toHaveBeenCalled();
+    expect(beaconed).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('beacons as text/plain, which is the one type that needs no preflight', () => {
+    /*
+     * A beacon of `application/json` is a non-simple request: Chrome refuses to
+     * send it cross-origin at all. The body is still JSON; the server reads it
+     * as text.
+     */
+    const analytics = build({ session: holding(TOKEN) });
+
+    analytics.record('WIDGET_OPEN');
+    target.dispatchEvent(new Event('pagehide'));
+
+    expect((beaconed[0]?.body as Blob).type).toBe('text/plain;charset=utf-8');
+  });
+});
+
 describe('the seven types', () => {
   it('are the seven the schema names', () => {
     // A type outside this list is a migration, not a code change (P0-29).

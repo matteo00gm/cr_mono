@@ -432,6 +432,12 @@ describe('wiring', () => {
        * that carries an `Origin` at all — a secret key in a browser.
        */
       [`POST ${WIDGET_PREFIX}/session/server`]: [401, 403, 422, 429],
+      /*
+       * The analytics batch (P6-01) has a body but no 422: its token is inside
+       * it, so a body that is not a batch has no token and is a 401 — and a
+       * malformed event is dropped, never refused.
+       */
+      [`POST ${WIDGET_PREFIX}/events`]: [401, 403, 422, 429],
     });
   });
 });

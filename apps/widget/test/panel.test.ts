@@ -422,4 +422,31 @@ describe('a token the server has stopped accepting', () => {
     expect(mints()).toBe(1);
     expect(asks()).toBe(1);
   });
+
+  it("authenticates the analytics with the chat's own token, minting once (P6-01)", async () => {
+    /*
+     * One session for the page: a batch carries the token the question was
+     * asked with, so the visitor who asks something costs one mint, not two.
+     */
+    const { fetch_, mints } = await answer([stream('Un Barolo.')]);
+    const chat = fetch_.mock.calls.find(([url]) => (url as string).includes('/chat'));
+    const asked = new Headers(chat?.[1]?.headers).get('authorization')?.replace('Bearer ', '');
+    const beaconed: Blob[] = [];
+
+    vi.stubGlobal('navigator', {
+      sendBeacon: (_url: string, body: Blob) => {
+        beaconed.push(body);
+        return true;
+      },
+    });
+    globalThis.dispatchEvent(new Event('pagehide'));
+
+    const tokens = await Promise.all(
+      beaconed.map(async (blob) => (JSON.parse(await blob.text()) as { token?: string }).token),
+    );
+
+    expect(asked).toBeDefined();
+    expect(tokens).toContain(asked);
+    expect(mints()).toBe(1);
+  });
 });

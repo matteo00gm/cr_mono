@@ -974,6 +974,18 @@ export const widgetSessionResponse = z.strictObject({
 export type WidgetSessionResponse = z.infer<typeof widgetSessionResponse>;
 
 /**
+ * An analytics batch, taken (P6-01): how many of its events were kept. A batch
+ * is never refused for one bad event, so this is the only place a malformed
+ * event shows — and the widget does not read it, because analytics must never
+ * be something a shopper waits on.
+ */
+export const widgetEventsResponse = z.strictObject({
+  accepted: z.number().int().nonnegative(),
+});
+
+export type WidgetEventsResponse = z.infer<typeof widgetEventsResponse>;
+
+/**
  * A wine as a shopper sees it (P3-08, §1.5).
  *
  * **Every field here comes from our own row, and the model supplies none of

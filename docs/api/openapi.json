@@ -5575,6 +5575,96 @@
           }
         }
       },
+      "/v1/widget/events": {
+        "post": {
+          "summary": "Record a batch of widget events",
+          "description": "The widget's analytics: `{ token, visitorId, events: [{ type, productId?, at }] }`, twenty events at most from the widget and fifty read. Each event is checked on its own and a malformed one is dropped rather than refusing the batch, because analytics must never break the widget; the answer counts what was kept. A product the shop does not hold is recorded as no product; a timestamp more than a day old, or more than five minutes ahead, is replaced by the time it arrived. The body may be sent as text/plain, which is what sendBeacon uses on unload. Refused with 401 when the token is missing or not this site's; 403 when the key and Origin do not belong to one tenant, or the tenant is not served; 422 when the body is over 16 KB; 429 when a limit is spent.\n\nNo capability required. A visitor has no account, so there is no capability to hold. What gates it is the (pk_, Origin) pair and a verified session token bound to both - carried in the body, because sendBeacon cannot set a header - so an event can only ever be recorded for the tenant and session the token names. Limited per session, address and tenant, generously; never against the month.",
+          "operationId": "postV1WidgetEvents",
+          "responses": {
+            "202": {
+              "description": "Record a batch of widget events",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "accepted": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "accepted"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "accepted": 3
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The token sent to continue a session belongs to another site or another tenant, or was revoked — or, on the server mint, the secret key is unknown, revoked or rotated away. The same answer whatever the reason, so no key can be told apart from another.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "unauthenticated",
+                      "message": "This session is no longer valid. Start a new one.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The key and the request's Origin do not belong to one tenant. The same answer whatever the reason, and it carries no CORS headers, so a browser script cannot read it.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This widget is not available on this site.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "The body did not match what the route accepts. Chat reads nothing but the message, and the server mint nothing but the origin. The server mint also answers this to any request carrying an Origin header, because a browser sending one means a secret key is in code a browser can read.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "invalid",
+                      "message": "Send a JSON body with a message.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "429": {
+              "description": "A rate limit or the month refused the request. `Retry-After` says when to try again; a month says nothing about the plan, which is the seller business rather than the visitor.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "rate_limited",
+                      "message": "Too many requests. Try again shortly.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/widget/session": {
         "post": {
           "summary": "Mint a widget session token",

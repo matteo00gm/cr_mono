@@ -56,6 +56,18 @@ export interface WidgetAuthOptions {
   readonly ipSecret?: string | undefined;
   /** Injected so expiry is testable without waiting. */
   readonly now?: (() => Date) | undefined;
+  /**
+   * Where the token is read from: the `Authorization` header by default. The
+   * analytics batch carries it in its body instead, because `sendBeacon` — the
+   * one send that survives an unload — cannot set a header (P6-01).
+   */
+  readonly tokenOf?: ((request: TokenSource) => Promise<string | undefined>) | undefined;
+}
+
+/** The two things a token can be read out of. */
+export interface TokenSource {
+  readonly header: (name: string) => string | undefined;
+  readonly text: () => Promise<string>;
 }
 
 /** A route that needs a session was mounted where CORS had not resolved a tenant: a wiring bug. */
@@ -102,6 +114,7 @@ export const requireWidgetToken =
     onRejected = logRejection,
     ipSecret,
     now = () => new Date(),
+    tokenOf = (request) => Promise.resolve(bearerTokenOf(request.header('authorization'))),
   }: WidgetAuthOptions): MiddlewareHandler<AppEnv> =>
   async (c, next) => {
     const tenant = c.get('widgetTenant') as WidgetTenant | undefined;
@@ -114,7 +127,10 @@ export const requireWidgetToken =
 
     const check = await checkWidgetToken({
       keys: await loadKeys(),
-      token: bearerTokenOf(c.req.header('authorization')),
+      token: await tokenOf({
+        header: (name) => c.req.header(name),
+        text: () => c.req.text(),
+      }),
       tenant,
       origin,
       isRevoked,

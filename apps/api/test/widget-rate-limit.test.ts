@@ -37,12 +37,12 @@ const SECRET = randomUUID();
 /** Every dimension roomy, so each test can shrink exactly one. */
 const ROOMY: WidgetLimits = {
   unresolvedPerMinute: 100,
-  sessionPerMinute: { session: 100, chat: 100 },
-  ipPerMinute: { config: 100, session: 100, chat: 100 },
+  sessionPerMinute: { session: 100, chat: 100, events: 100 },
+  ipPerMinute: { config: 100, session: 100, chat: 100, events: 100 },
   tenantPerMinute: { CANTINA: 100, ECOMMERCE: 100, none: 100 },
-  endpointPerMinute: { config: 100, session: 100, chat: 100 },
+  endpointPerMinute: { config: 100, session: 100, chat: 100, events: 100 },
   messagesPerMonth: { CANTINA: 100, ECOMMERCE: 100, none: 100 },
-  stagingPerMinute: { config: 100, session: 100, chat: 100 },
+  stagingPerMinute: { config: 100, session: 100, chat: 100, events: 100 },
 };
 
 /** A limiter that remembers what it was asked. */
@@ -128,7 +128,7 @@ describe('each dimension trips on its own', () => {
     const app = widgetApp({
       limiter: memoryRateLimiter(),
       tenant: CANTINA,
-      limits: { ...ROOMY, sessionPerMinute: { session: 100, chat: 1 } },
+      limits: { ...ROOMY, sessionPerMinute: { session: 100, chat: 1, events: 100 } },
     });
 
     expect((await call(app, 'POST /chat', { session: 'sid-a' })).status).toBe(200);
@@ -423,7 +423,10 @@ describe('a staging origin (P4-19)', () => {
      * of the same winery, a moment later, is still served.
      */
     const { limiter } = recording();
-    const limits: WidgetLimits = { ...ROOMY, stagingPerMinute: { config: 2, session: 2, chat: 2 } };
+    const limits: WidgetLimits = {
+      ...ROOMY,
+      stagingPerMinute: { config: 2, session: 2, chat: 2, events: 2 },
+    };
     const staging = widgetApp({ limiter, tenant: { ...CANTINA, originKind: 'staging' }, limits });
     const production = widgetApp({ limiter, tenant: CANTINA, limits });
 

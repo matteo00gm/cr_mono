@@ -618,3 +618,6 @@ export {
   TENANT_DIRECTORY_GUC,
   type TenantDirectoryEntry,
 } from './tenant-directory.js';
+
+/** The analytics writer (P6-01): a widget batch in one statement, under the scope's tenant. */
+export { recordWidgetEvents, type EventBatch, type EventToRecord } from './widget-events.js';

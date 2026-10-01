@@ -12,7 +12,7 @@ import { Chat, type Asker } from './components/Chat.js';
 import { catalogues, localeFor } from './i18n/index.js';
 import { LocaleContext, MessagesContext } from './i18n/useT.js';
 import { ask, ChatRefused } from './send.js';
-import { anonId, createSession } from './session.js';
+import { anonId, createSession, type Session } from './session.js';
 import { createChallenge } from './turnstile.js';
 
 /**
@@ -192,9 +192,7 @@ const accentRule = (primaryColor: string): string => {
  * hands down two strings and nothing else, which is what keeps `send.ts`,
  * `session.ts` and Preact out of the 5 KB that runs on every page (§1.1).
  */
-const asker = (api: string, key: string, challenge: (() => Promise<string>) | undefined): Asker => {
-  const session = createSession({ api, key, challenge });
-
+const asker = (api: string, key: string, session: Session): Asker => {
   return async function* (message, signal) {
     /*
      * **Proactive first, reactive second** (P3-21). `token()` refreshes a token
@@ -256,11 +254,6 @@ export const mountPanel = ({
   adoptStyles,
   document: document_ = document,
 }: PanelOptions): Panel => {
-  /*
-   * One per panel, built here rather than per component: the debounce and the
-   * `pagehide` flush are properties of the page, not of a render (P3-20).
-   */
-  const analytics = analytics_ ?? createAnalytics({ api, key, visitorId: anonId() });
   const element = document_.createElement('div');
 
   element.className = 'panel';
@@ -286,6 +279,32 @@ export const mountPanel = ({
   element.append(header, body);
 
   /*
+   * **One session for the page, shared by the chat and the analytics** (P6-01):
+   * an event batch is authenticated by the same token a question is, so a
+   * visitor who asks something mints once, not twice. The challenge only for a
+   * winery that turned it on (P4-14): otherwise none exists and nothing is
+   * loaded from Cloudflare.
+   */
+  const session = createSession({
+    api,
+    key,
+    challenge:
+      config.turnstileSiteKey === null
+        ? undefined
+        : createChallenge({
+            siteKey: config.turnstileSiteKey,
+            container: body,
+            document: document_,
+          }),
+  });
+
+  /*
+   * One per panel, built here rather than per component: the debounce and the
+   * `pagehide` flush are properties of the page, not of a render (P3-20).
+   */
+  const analytics = analytics_ ?? createAnalytics({ api, key, visitorId: anonId(), session });
+
+  /*
    * Adopted rather than appended (P3-18), and the tenant's colour goes *into*
    * the sheet rather than onto a style attribute — which is the same CSP rule
    * from the other end: an inline `style=` is `'unsafe-inline'` too.
@@ -308,23 +327,7 @@ export const mountPanel = ({
         MessagesContext.Provider,
         { value: catalogues[locale] },
         h(Chat, {
-          ask:
-            ask_ ??
-            asker(
-              api,
-              key,
-              /*
-               * Only for a winery that turned it on (P4-14): otherwise no
-               * challenge exists and nothing is loaded from Cloudflare.
-               */
-              config.turnstileSiteKey === null
-                ? undefined
-                : createChallenge({
-                    siteKey: config.turnstileSiteKey,
-                    container: body,
-                    document: document_,
-                  }),
-            ),
+          ask: ask_ ?? asker(api, key, session),
           status: config.status,
           cart: cartPort ?? cartFor(cart),
           cartUrl: config.cartUrl,
