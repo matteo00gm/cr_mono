@@ -1,4 +1,5 @@
 import type { ChatFailure } from './conversation.js';
+import { SessionRefused } from './session.js';
 import { readEvents, type StreamEvent } from './sse.js';
 
 /**
@@ -51,8 +52,15 @@ export class ChatRefused extends Error {
 }
 
 /** True when the refusal means the winery is not serving, rather than that we broke. */
+/**
+ * Whether a refusal says the winery is not served: from the chat, or from the
+ * session mint before it (P3-22). A shopper handed a config from before the
+ * block — the edge caches it for a minute (§5.7) — opens an active-looking
+ * panel and is refused at the *mint*, and that must read as disabled too, not
+ * as a dropped connection with a retry that can never succeed.
+ */
 export const isLapsed = (error: unknown): boolean =>
-  error instanceof ChatRefused && error.code === 'unavailable';
+  (error instanceof ChatRefused || error instanceof SessionRefused) && error.code === 'unavailable';
 
 /** The default wait when a 429 arrives without a readable `Retry-After`. */
 export const FALLBACK_RETRY_AFTER = 30;

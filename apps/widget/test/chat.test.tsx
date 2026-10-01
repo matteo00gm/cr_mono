@@ -6,6 +6,7 @@ import type { CartPort } from '../src/cart/port.js';
 import { Chat, type Asker } from '../src/components/Chat.js';
 import { it as COPY } from '../src/i18n/it.js';
 import { ChatRefused } from '../src/send.js';
+import { SessionRefused } from '../src/session.js';
 import type { StreamEvent } from '../src/sse.js';
 
 /**
@@ -441,6 +442,24 @@ describe('when the winery stops serving mid-conversation', () => {
   const lapsing: Asker = () => {
     throw new ChatRefused(403, undefined, 'unavailable');
   };
+
+  it('renders the disabled notice when the refusal comes from the session mint (P3-22)', async () => {
+    /*
+     * The stale-edge-cache case: the config said ACTIVE from before the block,
+     * so the panel opened, and the *mint* is what refuses.
+     */
+    const refusedAtMint: Asker = () => {
+      throw new SessionRefused(403, 'unavailable');
+    };
+
+    render(<Chat ask={refusedAtMint} />);
+    await askAbout();
+
+    await waitFor(() => {
+      expect(screen.getByText(COPY.disabled)).toBeDefined();
+    });
+    expect(screen.queryByText(COPY.errorNetwork)).toBeNull();
+  });
 
   it('renders the disabled notice rather than an error', async () => {
     render(<Chat ask={lapsing} />);

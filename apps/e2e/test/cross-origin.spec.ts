@@ -258,17 +258,21 @@ test.describe('from a domain nobody verified', () => {
     await page.goto(harness.unverified.origin);
 
     /* The launcher mounts before the config is read — it is what a click would
-     * use — but the config never resolves, so nothing beyond it happens. */
-    await expect(launcher(page)).toHaveAttribute('aria-disabled', 'true');
+     * use — and goes once the config cannot be read (P3-22): an unverified
+     * origin is a half-finished install, and nothing beats a dead button. */
+    await expect(page.locator('sommelier-widget')).toHaveCount(0, { timeout: 20_000 });
 
     expect(lines.join('\n')).toMatch(/CORS|Access-Control-Allow-Origin|blocked/iu);
   });
 
   test('never opens a panel, however hard the visitor tries', async ({ page }) => {
     await page.goto(harness.unverified.origin);
-    await expect(launcher(page)).toHaveAttribute('aria-disabled', 'true');
 
-    await launcher(page).click({ force: true });
+    /* Clicked while it is still there, before the refused config takes it away. */
+    await launcher(page)
+      .click({ force: true, timeout: 5_000 })
+      .catch(() => undefined);
+    await expect(page.locator('sommelier-widget')).toHaveCount(0, { timeout: 20_000 });
 
     await expect(panel(page)).toHaveCount(0);
   });
@@ -279,7 +283,7 @@ test.describe('from a domain nobody verified', () => {
      * pasted their key on the wrong domain is discoverable at all (P2-16).
      */
     await page.goto(harness.unverified.origin);
-    await expect(launcher(page)).toHaveAttribute('aria-disabled', 'true');
+    await expect(page.locator('sommelier-widget')).toHaveCount(0, { timeout: 20_000 });
 
     await expect
       .poll(async () => await harness.api.securityEvents(), { timeout: 10_000 })

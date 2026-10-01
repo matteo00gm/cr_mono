@@ -268,7 +268,7 @@ Deferring the main bundle to first click keeps the seller's Core Web Vitals esse
 | `RATE_LIMITED` | burst limit | Inline notice + `Retry-After` countdown. |
 | `ERROR` / `OFFLINE` | 5xx or network | Retry affordance; conversation preserved in memory. |
 
-Every state has a Playwright test and a visual-regression snapshot in both locales.
+Every state has a Playwright test and a visual-regression snapshot in both locales. **A config that cannot be read at all renders nothing** (P3-22): that is an unverified origin far more often than a network, and a half-finished install is better absent than broken-looking. A winery that is merely not served keeps its greyed launcher, which is `DISABLED` above.
 
 ### 1.4 Conversation
 
@@ -1418,7 +1418,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | # | Task | How / notes | Deps |
 |---|---|---|---|
 | ✅ P5-14 | 🔒 Tenant lifecycle fixtures | Stripe test clocks + failing test cards + non-prod forced-status endpoint; one tenant per state | P5-06 |
-| P3-22 | Widget state matrix E2E | every tenant state → rendered widget; mid-conversation block, stale edge cache, capped-vs-blocked, auto-recovery | P5-14 |
+| ✅ P3-22 | Widget state matrix E2E | every tenant state → rendered widget; mid-conversation block, stale edge cache, capped-vs-blocked, auto-recovery | P5-14 |
 | P6-01 | Event ingestion endpoint | batched, rate-limited | P3-20 |
 | P6-02 | Funnel query + dashboard panel | open → message → recommendation → add-to-cart | P6-01 |
 | P6-03 | Top queries / top products panels | | P6-01 |
@@ -6240,7 +6240,7 @@ Copy per §1.3, Italian first. `quota` and `rateLimited` must never leak billing
 
 - **⚠ A quota or provider failure mid-answer never reached the shopper.** The API wrote the error frame as `{"code":…}` with no `type`, and the widget drops any frame its schema refuses — so the `QUOTA_EXCEEDED` screenshot never appeared. Fixed in the route, and recorded against P2-29, which shipped it.
 - **Every state arrives through the real network path**, bent at the wire with `route.fetch` + `route.fulfill` rather than rendered as a component: the config's `status`, a 429 with `Retry-After`, a 503, `route.abort`, and the quota frame exactly as the API writes it. A bent response keeps the real one's headers, so CORS is the API's own.
-- **The `DISABLED` case reads the response back** *(addition)*. A refused config renders the same greyed launcher, so the screenshot alone passed while the origin was being refused by CORS — which is how the first harness defect below hid. It now asserts a 200, the origin in `Access-Control-Allow-Origin`, and `status: 'DISABLED'`.
+- **The `DISABLED` case reads the response back** *(addition)*. A refused config rendered the same greyed launcher (until P3-22, which removes the launcher when the config cannot be read), so the screenshot alone passed while the origin was being refused by CORS — which is how the first harness defect below hid. It now asserts a 200, the origin in `Access-Control-Allow-Origin`, and `status: 'DISABLED'`.
 - **Only the countdown is masked** *(deviation)*. The row asks to mask the streaming region and any timestamp; the widget shows no timestamp, and every screenshot is taken after the stream's last event is asserted on screen, so there is no streaming region left to mask. The rate-limit countdown is the one moving part — masked and asserted instead, because freezing the clock freezes Preact's effect scheduling with it.
 - **Baselines are Linux's, from CI** *(decision)*. Fonts rasterise differently per platform, so `snapshotPathTemplate` carries `{platform}`, only `-linux.png` is committed, and a laptop writes its own files beside them (ignored). A missing baseline fails the run that lacks it and is uploaded as `visual-baselines`, so a new or changed baseline is the runner's own render, committed by hand and seen in review — never regenerated silently.
 - **Hostile CSS, closed from P3-18: one baseline, two pages.** The answered panel is screenshotted on the plain storefront and on the hostile one against the *same* file, so anything of the shop's that crossed the shadow root is a pixel diff — including inherited properties, which a shadow root does not stop and which the hostile page sets on the host (`font-size: 0`, `color: transparent`). It first failed for a harness reason: the hostile page's own `script-src 'self'` blocked the inline `window.Shopify`, so it was a shop with no cart and the widget rightly offered no button. The host server now serves `/shopify.js`, which is how a real theme on a strict policy gets its globals.
@@ -7430,6 +7430,19 @@ Plus: `pending-verification` renders **nothing at all** — no launcher, no erro
 Assert **zero provider calls** across every blocked case, since that is what the policy is protecting.
 
 **Files.** `e2e/widget-states.spec.ts`. **~160 test lines.**
+
+**As built (2026-10-01).** `apps/e2e/test/widget-states.spec.ts` on its own harness (`states-setup.ts`): the API with the **real chat port** — quota gate, retrieval, ledger — over a scripted model that counts its calls, P5-14's eight fixtures seeded by the webhook path, each on its own storefront (4201–4208), and the dev billing port to move one mid-test the same way. `apps/api` exports the five modules the harness composes.
+
+- **Every state, and the four hard cases**, from an Italian browser (`it-IT`: the widget writes its own words in the visitor's language and the welcome in the winery's): a running trial and a paying winery answer; both capped wineries say *"torna presto"* and never *"non attivo"*; an expired trial, a failed payment and an ended subscription show the greyed launcher with *"non attivo"* and open nothing; a never-verified install renders no widget at all. Blocked mid-conversation, three answers stay on screen under the disabled notice, with no retry. Behind a stale config (the edge's minute, served by `route.fulfill` as the cache would serve it), an active-looking panel turns disabled. After a paid retry, the next page view answers. **Zero model calls** in every blocked case, counted.
+- **⚠ It found a production defect on its first run.** Behind a stale config, the *session mint* is what refuses — and the widget read its `unavailable` as a dropped connection: *"Connessione interrotta. Riprova"*, a retry that can never succeed, which is the support ticket this row exists to prevent. `isLapsed` now reads the mint's refusal as it reads the chat's, with a unit test.
+- **⚠ A config that cannot be read now takes the launcher away** *(change, the row's own requirement)*. It used to stay greyed; an unverified origin is a half-finished install, and §1.3 now says nothing renders. A winery that is only not served keeps its launcher and says so. The cross-origin suite's three unverified-origin cases assert the absence instead.
+
+**Verified.** The full browser suite (57 cases) and the widget's 484 unit tests. 4 mutants, 4 killed — each of the two changes both in the unit suite and in the browser, so the matrix is shown to catch what it was written for.
+
+| Mutation | Caught by |
+|---|---|
+| A refused mint read as a dropped connection | `chat.test.tsx` and `widget-states.spec.ts` |
+| An unfinished install keeping a dead launcher | `main.test.ts` and `widget-states.spec.ts` |
 
 ---
 

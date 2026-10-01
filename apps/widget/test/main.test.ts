@@ -154,8 +154,14 @@ describe('a tenant who switched the widget off', () => {
     expect(DISABLED_LABEL).toBe(italian.disabled);
   });
 
-  it('treats a config that could not be read the same way', async () => {
+  it('takes the launcher away when the config could not be read at all (P3-22)', async () => {
+    /*
+     * An unverified origin, nearly always: a half-finished install. Nothing on
+     * the page beats a greyed button a shopper can make nothing of.
+     */
     const attach = vi.fn();
+
+    document.body.append(mounted.host);
 
     run({
       start: () => mounted,
@@ -167,6 +173,22 @@ describe('a tenant who switched the widget off', () => {
     await Promise.resolve();
 
     expect(attach).not.toHaveBeenCalled();
+    expect(mounted.host.isConnected).toBe(false);
+  });
+
+  it('keeps the launcher of a winery that is only not served, and says so', async () => {
+    document.body.append(mounted.host);
+
+    run({
+      start: () => mounted,
+      readConfig: () => Promise.resolve({ kind: 'disabled' as const, config }),
+      lazyPanel: () => lazy(),
+      attach: vi.fn(),
+    });
+
+    await Promise.resolve();
+
+    expect(mounted.host.isConnected).toBe(true);
   });
 });
 
