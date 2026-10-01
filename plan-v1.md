@@ -1399,7 +1399,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P5-02 | Checkout session endpoint | custom tax metadata fields (P.IVA/CF, SdI/PEC) | P5-01 |
 | ✅ P5-02a | Italian tax metadata fields on Checkout | collects optional P.IVA/CF, Codice Destinatario SdI or PEC | P5-02 |
 | ✅ P5-03 | 🔒 Webhook: raw-body signature verify | before any body parser touches it | P5-01 |
-| P5-03a | 🔒 SdI / FatturaPA e-invoicing bridge | async job on `invoice.paid` → Fatture in Cloud API to emit FatturaPA XML | P5-03,P5-04 |
+| P5-03a | 🔒 SdI / FatturaPA e-invoicing bridge | async job on `invoice.paid` → Fatture in Cloud API to emit FatturaPA XML. **Half done:** charges recorded (`e_invoices`); the bridge waits on a provider, its sandbox, spend and the VAT decision | P5-03,P5-04 |
 | ✅ P5-04 | 🔒 Webhook idempotency | `processed_webhooks`, replay is a no-op | P5-03 |
 | ✅ P5-05 | ⛔ Status state machine | TRIALING→ACTIVE→PAST_DUE→DISABLED→CANCELED; **adds `tenants.trial_ends_at`** and the `tenant_status_coherent` CHECK that reads it (§5.2b); `livemode` + customer↔tenant binding | P5-04 |
 | ✅ P5-05a | 🔒 Payment-failure blocking | **no grace** — `PAST_DUE` blocks the widget on first failure; dashboard stays open; Stripe retries restore automatically (§5.2b) | P5-05 |
@@ -7011,6 +7011,21 @@ Save these fields to `tenants` (`vat_id`, `sdi_code`, `pec_address` columns, nul
 
 **Carried from P5-11a.** A message top-up is a one-time Checkout with no Stripe invoice behind it (`invoice_creation` off), so the `checkout.session.completed` path above is the only one that sees it. Its metadata carries `top_up: MESSAGES_1000` beside the tenant; the amount is the session's.
 
+**As built (2026-10-01) — half done, by decision.** The in-repo half: `e_invoices` (migrations 0067, 0068), `readPaidInvoice` and `needsEInvoice` in `packages/core/src/billing/charges.ts`, and the recording in `billing-events.ts`. **Not built:** the queue, the worker job and the provider adapter, because each needs something no commit can supply — the row leaves the provider open (Fatture in Cloud, Fatturapertutti or Striptu), its account and sandbox are what a FatturaPA payload has to be verified against, the calls are spend (P1-47's rule), and the VAT treatment the invoice states is P5-01's open `tax_behavior` decision. Writing a provider's payload from its documentation alone, or deciding a tax treatment by default, would ship a bridge that looks done and files wrong invoices. **P5-03a closes when those three are decided and the bridge drains this table.**
+
+- **⚠ Every paid charge is recorded, and eligibility is decided at sending** *(deviation from "enqueue only when tax metadata is present")*. Stripe sends `invoice.paid` and `checkout.session.completed` in either order, so the first invoice can arrive before the Checkout that saves a winery's details (P5-02a) — a charge skipped for want of them would be an invoice nobody issues. `needsEInvoice` (a Partita IVA or Codice Fiscale, and a Codice Destinatario or PEC) is what the bridge asks of the row's winery when it sends; `not_required` is its answer for the rest.
+- **One row per charge**: the Stripe invoice id, or the top-up's payment intent, unique across every tenant — a successful payment is reported as both `invoice.paid` and `invoice.payment_succeeded`, and is one charge. That is the row's "webhook idempotency prevents duplicate invoice generation", held by the key rather than by the claim. An invoice of nought (a trial's, or one a credit covered) is no charge.
+- **On the claim's transaction**, whatever the state machine makes of the event — an invoice paid during an out-of-order burst is still paid — and from the customer on file or from one not bound yet, since the first invoice can precede the binding; the event named the winery in metadata we wrote (ADR 0029). Never from another customer. A top-up is recorded when it is credited, not before.
+- **The bridge may update a row and may not delete one**: `REVOKE DELETE` on `app_rw`, since a charge erased is an invoice nobody issues.
+
+**Verified.** Unit, RLS isolation, privilege and reversibility suites, and the production effect against real Postgres: an invoice recorded once under both of Stripe's names; the first invoice recorded before the Checkout binds its customer; nothing from a stranger's customer or for an invoice of nought; a top-up recorded when credited and not while unpaid. 10 mutants, 10 killed — one only after the harness rebuilt `dist` for it, since the suite imports `@catalogorosso/db` built.
+
+| Mutation | Caught by |
+|---|---|
+| Stripe's second name not read · an invoice of nothing a charge · the payment time ignored · an e-invoice owed without an identity | `charges.test.ts` |
+| A stranger's invoice recorded · the first invoice lost to ordering · paid invoices never recorded · a top-up filed as an invoice · one payment recorded twice | `billing-events.integration.test.ts` |
+| A charge the runtime may erase | `role-privileges.integration.test.ts` |
+
 ---
 
 ### P5-04 · Webhook idempotency 🔒
@@ -8025,6 +8040,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 
 | Item | Owner | Note |
 |---|---|---|
+| The SdI bridge has nothing to send through | **operator decision** | P5-03a records every paid charge in `e_invoices`, and nothing drains it yet. Choose the provider (Fatture in Cloud, Fatturapertutti or Striptu), open its account and sandbox, agree the spend (P1-47's rule), and decide `tax_behavior` — VAT-inclusive or exclusive — which the invoice must state. Then the queue, worker job and adapter, verified against the sandbox, close the row. |
 | API refusals are English in an Italian dashboard | before launch | A `DomainError`'s message reaches the caller verbatim (P0-55), and the messages are English — P5-10's downgrade refusal, P5-11a's top-up refusals — while the dashboard is Italian. P5-12's Fatturazione screen shows them as they are. Localising means a code-to-copy map in the dashboard or a locale on the contract; either touches every route. |
 | P0-17a unblocked | ~~needs the API origin~~ | **Resolved by P0-54**, which creates the `Api` Function URL. The cache behaviour now has an origin to target: `CachingDisabled` managed policy, compression off, >=30s origin read timeout. Note the *streaming* function itself is still P2-29 — P0-17a can add the behaviour against the buffered origin and repoint it, or wait. |
 | CloudFront error mapping vs P4-15 | before the API joins the CDN | `customErrorResponses` is distribution-wide, so SPA 404->200 would turn API 404s into 200 HTML. Split the distribution or move SPA routing into a CloudFront Function. |

@@ -225,3 +225,36 @@ export const readUsageBreakdown = async (
 
   return { byDay: slices(days), byOrigin: slices(origins) };
 };
+
+/** A paid charge, as the webhook records it (P5-03a). */
+export interface ChargeToRecord {
+  readonly stripeObjectId: string;
+  readonly source: 'invoice' | 'top_up';
+  readonly amountCents: number;
+  readonly currency: string;
+  readonly paidAt: Date;
+}
+
+/**
+ * Records a paid charge for the e-invoicing bridge (P5-03a), in the caller's
+ * transaction — the webhook claim's, so the charge and "this event was
+ * handled" are one write. `duplicate` when Stripe has already told us about
+ * this payment under its other name.
+ */
+export const recordPaidCharge = async (
+  tx: DbTransaction,
+  charge: ChargeToRecord,
+): Promise<'recorded' | 'duplicate'> => {
+  const rows = await tx.execute(sql`
+    insert into e_invoices (tenant_id, stripe_object_id, source, amount_cents, currency, paid_at)
+    values (
+      nullif(current_setting('app.tenant_id', true), '')::uuid,
+      ${charge.stripeObjectId}, ${charge.source}, ${charge.amountCents}, ${charge.currency},
+      ${charge.paidAt.toISOString()}::timestamptz
+    )
+    on conflict (stripe_object_id) do nothing
+    returning id
+  `);
+
+  return [...rows].length === 0 ? 'duplicate' : 'recorded';
+};

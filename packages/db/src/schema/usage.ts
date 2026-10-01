@@ -161,6 +161,50 @@ export const notificationEvents = pgTable(
 );
 
 /**
+ * Every paid charge a FatturaPA may be owed for (P5-03a): one row per Stripe
+ * invoice or top-up payment, written by the webhook on its claim's
+ * transaction. The e-invoicing bridge drains it, deciding at sending time
+ * whether a winery's details call for one — details that may arrive after
+ * the payment did.
+ *
+ * Not append-only: the bridge records what it did (`status`,
+ * `provider_document_id`). But `app_rw` holds no DELETE (`0067`): a charge
+ * erased is an invoice nobody issues.
+ */
+export const eInvoices = pgTable(
+  'e_invoices',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+
+    /** `in_…` or a payment intent: unique, so Stripe's second word for one payment is no second row. */
+    stripeObjectId: text('stripe_object_id').notNull().unique(),
+
+    source: text('source').notNull(),
+
+    amountCents: bigint('amount_cents', { mode: 'number' }).notNull(),
+    currency: text('currency').notNull(),
+    paidAt: timestamp('paid_at', { withTimezone: true, mode: 'date' }).notNull(),
+
+    /** `pending` until the bridge acts: `issued`, or `not_required` for a winery with no SdI details. */
+    status: text('status').notNull().default('pending'),
+    providerDocumentId: text('provider_document_id'),
+
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('e_invoices_tenant_status_idx').on(table.tenantId, table.status),
+
+    check('e_invoices_source', sql`source in ('invoice', 'top_up')`),
+    check('e_invoices_amount_positive', sql`amount_cents > 0`),
+    check('e_invoices_status', sql`status in ('pending', 'issued', 'not_required')`),
+  ],
+);
+
+/**
  * The nightly rollup (P5-13).
  *
  * Not append-only: a day's row is upserted as the job re-runs, so `app_rw`

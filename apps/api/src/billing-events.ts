@@ -6,6 +6,7 @@ import {
   periodOf,
   readBillingEvent,
   readCheckoutTaxDetails,
+  readPaidInvoice,
   readTopUpEvent,
   TOP_UP,
   transition,
@@ -17,6 +18,7 @@ import {
   insertAuditRow,
   readBillingSnapshot,
   readPlanFootprint,
+  recordPaidCharge,
   recordTopUp,
   writeBillingChange,
   writeTaxDetails,
@@ -122,6 +124,15 @@ const creditTopUp = async (
 
   if (credited === 'duplicate') return NOTHING;
 
+  /* A charge the e-invoicing bridge may owe a FatturaPA for (P5-03a). */
+  await recordPaidCharge(tx, {
+    stripeObjectId: payment.paymentIntentId,
+    source: 'top_up',
+    amountCents: payment.amountCents,
+    currency: payment.currency,
+    paidAt: payment.occurredAt,
+  });
+
   await insertAuditRow(tx, {
     tenantId,
     actorUserId: undefined,
@@ -176,6 +187,23 @@ export const createBillingEffect =
 
     /* The winery it names is gone: nothing to change, and the event is handled. */
     if (current === undefined) return NOTHING;
+
+    /*
+     * **A paid invoice is a charge the e-invoicing bridge may owe a FatturaPA
+     * for** (P5-03a), whatever the machine below makes of the event — an
+     * invoice paid during an out-of-order burst is still paid. From the
+     * customer on file, or from one not bound yet: the first invoice can
+     * arrive before the Checkout that binds it, and the event named this
+     * winery in metadata we wrote (ADR 0029). Never from somebody else's.
+     */
+    const charge = readPaidInvoice(delivery.payload);
+
+    if (
+      charge !== undefined &&
+      (current.customerId === null || current.customerId === charge.customerId)
+    ) {
+      await recordPaidCharge(tx, charge);
+    }
 
     const decided = transition(current, read.event);
 

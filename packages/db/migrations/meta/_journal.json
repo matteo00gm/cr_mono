@@ -470,6 +470,20 @@
       "when": 1788654188601,
       "tag": "0066_tenant_tax_details",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1788654188602,
+      "tag": "0067_e_invoices",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1788654188603,
+      "tag": "0068_e_invoices_rls",
+      "breakpoints": true
     }
   ]
 }

@@ -130,6 +130,10 @@ const INSERTS: Record<string, (tenantId: string, ctx: SeedContext) => SQL> = {
    * with A's id and A's period would fail on the key — a fresh period each call
    * makes it fail on the policy, which is what is under test.
    */
+  /* P5-03a. A fresh Stripe object each call: the key is unique across tenants. */
+  e_invoices: (tenantId) =>
+    sql`insert into e_invoices (tenant_id, stripe_object_id, source, amount_cents, currency, paid_at)
+        values (${tenantId}::uuid, ${`in_${randomUUID()}`}, 'invoice', 2900, 'eur', now())`,
   notification_events: (tenantId) => {
     noticePeriod += 1;
 
