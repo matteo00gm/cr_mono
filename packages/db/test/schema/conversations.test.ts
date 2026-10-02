@@ -57,6 +57,15 @@ describe('messages schema', () => {
     ).toEqual(['conversations', 'tenants']);
   });
 
+  it('records the cards shown without a foreign key either (P6-03)', () => {
+    // For the same reason as the candidates: a wine archived or deleted since
+    // was still recommended, and the panel that counts it must say so.
+    const column = messageConfig.columns.find((c) => c.name === 'recommended_product_ids');
+
+    expect(column?.getSQLType()).toBe('uuid[]');
+    expect(column?.notNull).toBe(false);
+  });
+
   it('cascades from its conversation', () => {
     const conversationFk = messageConfig.foreignKeys.find(
       (fk) => getTableConfig(fk.reference().foreignTable).name === 'conversations',

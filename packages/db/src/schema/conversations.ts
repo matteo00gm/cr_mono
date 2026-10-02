@@ -114,6 +114,20 @@ export const messages = pgTable(
      */
     retrievedProductIds: uuid('retrieved_product_ids').array(),
 
+    /**
+     * The cards the visitor was shown (P6-03): the model's choice among the
+     * candidates above, after the allowlist, in the order they were sent.
+     *
+     * Beside the candidates rather than instead of them, because they answer
+     * different questions — what the model was *given*, which a complaint
+     * asks, and what a visitor *saw*, which "top recommended wines" asks.
+     * Counting the candidates would credit a wine with every answer it was
+     * passed over in. Not a foreign key array, for the reason above: a wine
+     * archived since is still a wine that was recommended. `null` on a
+     * visitor's message, and on an answer written before this column existed.
+     */
+    recommendedProductIds: uuid('recommended_product_ids').array(),
+
     model: text('model'),
     inputTokens: integer('input_tokens'),
     outputTokens: integer('output_tokens'),

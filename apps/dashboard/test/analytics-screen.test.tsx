@@ -1,17 +1,22 @@
-import type { FunnelResponse } from '@catalogorosso/api-client';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
+import type { FunnelResponse, TopResponse } from '@catalogorosso/api-client';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/preact';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Layout } from '../src/app.js';
 
-import { AnalyticsScreen, FunnelPanel } from '../src/features/analytics/AnalyticsScreen.js';
+import {
+  AnalyticsScreen,
+  FunnelPanel,
+  TopPanels,
+} from '../src/features/analytics/AnalyticsScreen.js';
 import { rangeOf, STAGE_LABELS } from '../src/features/analytics/analytics-copy.js';
 import { fakeClient } from './support/client.js';
 
 /**
- * Analisi (P6-02, §2.4): the funnel as a seller reads it. The numbers are the
- * API's; what is held here is that they are shown as they came, labelled
- * honestly, and asked for over the range the seller picked.
+ * Analisi (P6-02, P6-03, §2.4): the funnel, the questions and the wines as a
+ * seller reads them. The numbers are the API's; what is held here is that they
+ * are shown as they came, labelled honestly, and asked for over the range the
+ * seller picked.
  */
 
 afterEach(cleanup);
@@ -30,11 +35,61 @@ const funnel = (overrides: Partial<FunnelResponse> = {}): FunnelResponse => ({
   ...overrides,
 });
 
-const answering = (answer: FunnelResponse | Error) =>
+const BAROLO = '9b2f4c1e-6a3d-4e8b-9f10-2c7d5e8a1b34';
+const CHIANTI = '1d2c3b4a-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+const GONE = '0c6f1d2a-5b4e-4c3d-8a9b-7e6f5d4c3b2a';
+
+const top = (overrides: Partial<TopResponse> = {}): TopResponse => ({
+  from: '2026-09-02',
+  to: '2026-10-01',
+  queries: [
+    { query: 'prosecco?', conversations: 21, lastAskedAt: '2026-09-30T19:12:00.000Z' },
+    {
+      query: 'un rosso per la bistecca',
+      conversations: 14,
+      lastAskedAt: '2026-09-28T10:00:00.000Z',
+    },
+  ],
+  products: [
+    {
+      productId: BAROLO,
+      name: 'Barolo',
+      archived: false,
+      recommended: 1_040,
+      addedToCart: 156,
+      rate: 0.15,
+    },
+    {
+      productId: CHIANTI,
+      name: 'Chianti',
+      archived: true,
+      recommended: 8,
+      addedToCart: 1,
+      rate: 0.125,
+    },
+    { productId: GONE, name: null, archived: false, recommended: 4, addedToCart: 0, rate: 0 },
+  ],
+  ...overrides,
+});
+
+const answering = (answer: FunnelResponse | Error, topAnswer: TopResponse | Error = top()) =>
   fakeClient({
     'GET /v1/dashboard/analytics/funnel': () =>
       answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer),
+    'GET /v1/dashboard/analytics/top': () =>
+      topAnswer instanceof Error ? Promise.reject(topAnswer) : Promise.resolve(topAnswer),
   });
+
+const RANGE = { from: '2026-09-02', to: '2026-10-01' };
+
+/** The rows of a table inside the region of that name, cell by cell. */
+const rowsIn = async (region: string): Promise<(string | undefined)[][]> => {
+  const table = within(await screen.findByRole('region', { name: region })).getByRole('table');
+
+  return [...table.querySelectorAll('tbody tr')].map((row) =>
+    [...row.querySelectorAll('th, td')].map((cell) => cell.textContent?.trim()),
+  );
+};
 
 describe('the funnel', () => {
   it('shows each stage, its visits and the share of the step before', async () => {
@@ -115,32 +170,114 @@ describe('the funnel', () => {
   });
 });
 
-describe('the screen', () => {
-  it('starts on the last thirty days, today included, in UTC', async () => {
-    const { client, request } = answering(funnel());
+describe('the questions and the wines (P6-03)', () => {
+  it('lists the questions with their conversations and when last asked', async () => {
+    const { client } = answering(funnel());
 
-    render(<AnalyticsScreen client={client} now={() => NOW} />);
+    render(<TopPanels client={client} range={RANGE} />);
 
-    await screen.findByRole('table');
-    expect(request).toHaveBeenLastCalledWith('GET /v1/dashboard/analytics/funnel', {
-      query: { from: '2026-09-02', to: '2026-10-01' },
-    });
+    expect(await rowsIn('Domande più frequenti')).toEqual([
+      ['prosecco?', '21', '30 settembre 2026'],
+      ['un rosso per la bistecca', '14', '28 settembre 2026'],
+    ]);
   });
 
-  it('asks again for the range a seller picks', async () => {
+  it('says why a question asked once is not there', async () => {
+    const { client } = answering(funnel());
+
+    render(<TopPanels client={client} range={RANGE} />);
+
+    expect(
+      (await screen.findByRole('region', { name: 'Domande più frequenti' })).textContent,
+    ).toContain('almeno 3 conversazioni');
+  });
+
+  it('lists the wines with what became of each, and its conversion', async () => {
+    const { client } = answering(funnel());
+
+    render(<TopPanels client={client} range={RANGE} />);
+
+    expect(await rowsIn('Vini più consigliati')).toEqual([
+      ['Barolo', '1.040', '156', '15%'],
+      ['Chianti (archiviato)', '8', '1', '12,5%'],
+      ['Vino non più in catalogo', '4', '0', '0%'],
+    ]);
+  });
+
+  it('says so when there is nothing to list, rather than an empty table', async () => {
+    const { client } = answering(funnel(), top({ queries: [], products: [] }));
+
+    render(<TopPanels client={client} range={RANGE} />);
+
+    expect(
+      await screen.findByText(
+        'Nessuna domanda è stata fatta in almeno 3 conversazioni in questo periodo.',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText('Il sommelier non ha consigliato nessun vino in questo periodo.'),
+    ).toBeTruthy();
+    expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  it('says it could not read them, rather than showing nothing', async () => {
+    const { client } = answering(funnel(), new Error('down'));
+
+    render(<TopPanels client={client} range={RANGE} />);
+
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'Non è stato possibile leggere domande e vini consigliati.',
+    );
+  });
+
+  it('asks for exactly the range it was given', async () => {
+    const { client, request } = answering(funnel());
+
+    render(<TopPanels client={client} range={{ from: '2026-08-01', to: '2026-08-31' }} />);
+
+    await screen.findByRole('region', { name: 'Vini più consigliati' });
+    expect(request).toHaveBeenCalledWith('GET /v1/dashboard/analytics/top', {
+      query: { from: '2026-08-01', to: '2026-08-31' },
+    });
+  });
+});
+
+describe('the screen', () => {
+  it('starts every panel on the last thirty days, today included, in UTC', async () => {
     const { client, request } = answering(funnel());
 
     render(<AnalyticsScreen client={client} now={() => NOW} />);
-    await screen.findByRole('table');
+
+    await screen.findByRole('region', { name: 'Vini più consigliati' });
+    for (const endpoint of [
+      'GET /v1/dashboard/analytics/funnel',
+      'GET /v1/dashboard/analytics/top',
+    ]) {
+      expect(request).toHaveBeenCalledWith(endpoint, {
+        query: { from: '2026-09-02', to: '2026-10-01' },
+      });
+    }
+  });
+
+  it('asks every panel again for the range a seller picks', async () => {
+    const { client, request } = answering(funnel());
+
+    render(<AnalyticsScreen client={client} now={() => NOW} />);
+    await screen.findByRole('region', { name: 'Vini più consigliati' });
 
     fireEvent.change(screen.getByRole('combobox', { name: /Periodo/u }), {
       target: { value: '7' },
     });
 
     await waitFor(() => {
-      expect(request).toHaveBeenLastCalledWith('GET /v1/dashboard/analytics/funnel', {
-        query: { from: '2026-09-25', to: '2026-10-01' },
-      });
+      for (const endpoint of [
+        'GET /v1/dashboard/analytics/funnel',
+        'GET /v1/dashboard/analytics/top',
+      ]) {
+        expect(request).toHaveBeenCalledWith(endpoint, {
+          query: { from: '2026-09-25', to: '2026-10-01' },
+        });
+      }
     });
   });
 });
@@ -177,7 +314,7 @@ describe('the /analisi route', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'Analisi' })).toBeTruthy();
-    expect(await screen.findByRole('table')).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Percorso dei visitatori' })).toBeTruthy();
     expect(clientFor).toHaveBeenCalledWith(TENANT);
     expect(screen.getByRole('link', { name: 'Analisi' }).getAttribute('href')).toBe('/analisi');
   });

@@ -50,6 +50,7 @@ const turn = (sessionId: string): TurnToRecord => ({
   question: 'qualcosa per una bistecca',
   reply: 'Le consiglio un Barolo.',
   retrievedProductIds: [],
+  recommendedProductIds: [],
   model: 'amazon.nova-lite-v1:0',
   inputTokens: 1000,
   outputTokens: 500,

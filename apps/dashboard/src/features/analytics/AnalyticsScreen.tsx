@@ -1,7 +1,8 @@
 import type { JSX } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 
-import type { ApiClient, FunnelResponse } from '@catalogorosso/api-client';
+import type { ApiClient, FunnelResponse, TopResponse } from '@catalogorosso/api-client';
+import { MIN_QUERY_CONVERSATIONS } from '@catalogorosso/core/analytics-top';
 
 import {
   count,
@@ -122,6 +123,129 @@ export const FunnelPanel = ({
   );
 };
 
+/** One question, as a seller reads it: what was asked, by how many, and when last. */
+const QueryRow = ({ query }: { readonly query: TopResponse['queries'][number] }): JSX.Element => (
+  <tr>
+    <th scope="row">{query.query}</th>
+    <td>{count(query.conversations)}</td>
+    <td>{day(query.lastAskedAt.slice(0, 10))}</td>
+  </tr>
+);
+
+/** A wine's name, or what became of it: a recommendation is not undone by the catalogue. */
+const wineName = (product: TopResponse['products'][number]): string => {
+  if (product.name === null) return 'Vino non più in catalogo';
+
+  return product.archived ? `${product.name} (archiviato)` : product.name;
+};
+
+/**
+ * The questions most asked and the wines most recommended (P6-03, §2.4),
+ * from one request over the funnel's range.
+ */
+export const TopPanels = ({
+  client,
+  range,
+}: {
+  readonly client: ApiClient;
+  readonly range: Range;
+}): JSX.Element => {
+  const [top, setTop] = useState<TopResponse | undefined>();
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+
+    setFailed(false);
+    client
+      .request('GET /v1/dashboard/analytics/top', { query: { from: range.from, to: range.to } })
+      .then((answer) => {
+        if (live) setTop(answer);
+      })
+      .catch(() => {
+        if (live) setFailed(true);
+      });
+
+    return () => {
+      live = false;
+    };
+  }, [client, range.from, range.to]);
+
+  if (failed) {
+    return (
+      <section class="cr-top" aria-label="Domande e vini">
+        <p role="alert">
+          Non è stato possibile leggere domande e vini consigliati. Riprova fra un momento.
+        </p>
+      </section>
+    );
+  }
+
+  if (top === undefined)
+    return <section class="cr-top" aria-label="Domande e vini" aria-busy="true" />;
+
+  return (
+    <section class="cr-top" aria-label="Domande e vini">
+      <section aria-label="Domande più frequenti">
+        <h2>Domande più frequenti</h2>
+        {top.queries.length === 0 ? (
+          <p>
+            Nessuna domanda è stata fatta in almeno {count(MIN_QUERY_CONVERSATIONS)} conversazioni
+            in questo periodo.
+          </p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Domanda</th>
+                <th scope="col">Conversazioni</th>
+                <th scope="col">Ultima volta</th>
+              </tr>
+            </thead>
+            <tbody>
+              {top.queries.map((query) => (
+                <QueryRow key={query.query} query={query} />
+              ))}
+            </tbody>
+          </table>
+        )}
+        <p class="cr-top__note">
+          Mostriamo una domanda solo quando l&apos;hanno fatta almeno{' '}
+          {count(MIN_QUERY_CONVERSATIONS)} conversazioni: così non compare mai ciò che un singolo
+          visitatore ha scritto di sé.
+        </p>
+      </section>
+      <section aria-label="Vini più consigliati">
+        <h2>Vini più consigliati</h2>
+        {top.products.length === 0 ? (
+          <p>Il sommelier non ha consigliato nessun vino in questo periodo.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Vino</th>
+                <th scope="col">Consigliato in</th>
+                <th scope="col">Aggiunte al carrello</th>
+                <th scope="col">Conversione</th>
+              </tr>
+            </thead>
+            <tbody>
+              {top.products.map((product) => (
+                <tr key={product.productId}>
+                  <th scope="row">{wineName(product)}</th>
+                  <td>{count(product.recommended)}</td>
+                  <td>{count(product.addedToCart)}</td>
+                  <td>{percent(product.rate)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </section>
+  );
+};
+
 export const AnalyticsScreen = ({
   client,
   now = () => new Date(),
@@ -155,6 +279,7 @@ export const AnalyticsScreen = ({
         </select>
       </label>
       <FunnelPanel client={client} range={range} />
+      <TopPanels client={client} range={range} />
     </section>
   );
 };

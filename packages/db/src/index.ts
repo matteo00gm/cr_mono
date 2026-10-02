@@ -624,3 +624,13 @@ export { recordWidgetEvents, type EventBatch, type EventToRecord } from './widge
 
 /** The funnel's counts (P6-02): visits reaching each stage, read in the scope's tenant. */
 export { readFunnel, type FunnelQuery } from './funnel.js';
+
+/** The top questions and wines (P6-03), read in the scope's tenant. */
+export {
+  readTopProducts,
+  readTopQueries,
+  type TopProduct,
+  type TopProductsQuery,
+  type TopQueriesQuery,
+  type TopQuery,
+} from './top.js';

@@ -175,8 +175,8 @@ product_embeddings  id, tenant_id, product_id, chunk_idx, content_hash,
 conversations    id, tenant_id, session_id, origin, visitor_hash, locale,
                  started_at, last_message_at
 messages         id, tenant_id, conversation_id, role, content,
-                 retrieved_product_ids[], model, input_tokens, output_tokens,
-                 latency_ms, created_at
+                 retrieved_product_ids[], recommended_product_ids[] (P6-03),
+                 model, input_tokens, output_tokens, latency_ms, created_at
 
 widget_events    id, tenant_id, conversation_id, session_id, type, product_id,
                  metadata jsonb, created_at
@@ -1421,7 +1421,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P3-22 | Widget state matrix E2E | every tenant state → rendered widget; mid-conversation block, stale edge cache, capped-vs-blocked, auto-recovery | P5-14 |
 | ✅ P6-01 | Event ingestion endpoint | batched, rate-limited | P3-20 |
 | ✅ P6-02 | Funnel query + dashboard panel | open → message → recommendation → add-to-cart | P6-01 |
-| P6-03 | Top queries / top products panels | | P6-01 |
+| ✅ P6-03 | Top queries / top products panels | | P6-01 |
 | P6-04 | **ZERO_RESULTS panel** | the highest-value commercial insight | P6-01 |
 | P6-05 | Unauthorized-origin attempts panel | from `security_events` | P2-16 |
 | P6-06 | Shopify OAuth app + install | also becomes a domain-verification method | P4-01 |
@@ -5736,7 +5736,7 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 - **`started` comes back from `xmax = 0`**, which is true only for a row the statement inserted. §2.4 counts sessions with it, and deriving it any other way needs a second query that can disagree with the first.
 - **`readConversation` lands here too** *(addition)*. The two messages of a turn share `now()`, so ordering a history by time alone can put the answer before the question — a history in which the model spoke first, which is exactly what a model will try to make sense of. The tie is broken by `role`, and that belongs next to the insert that creates it rather than in P2-35. *(Superseded in review, 2026-09-27: `role` breaks the tie within a turn and not across two. Turns written in one transaction share `now()`, a clock step can reverse two that were not, and then both questions sort before both answers — which is how `keeps the recent end` failed once under load. `messages.seq`, an identity in insertion order (migration 0052), now orders a conversation, and a test records two turns in one transaction to hold it.)*
 - **The cap keeps the recent end.** P2-35 bounds how much history a prompt carries; a cap that kept the oldest messages would send the model the opening of a conversation it is being asked to continue.
-- **`retrieved_product_ids` is on the answer, never on the question**, and survives the wine being deleted — asserted, because what a complaint asks is what the model was *shown*.
+- **`retrieved_product_ids` is on the answer, never on the question**, and survives the wine being deleted — asserted, because what a complaint asks is what the model was *shown*. *(P6-03 added `recommended_product_ids` beside it: the cards the visitor was shown, which is what "top recommended wines" counts.)*
 
 ---
 
@@ -7521,6 +7521,28 @@ Assert **zero provider calls** across every blocked case, since that is what the
 **Tests.** Grouping normalises case and whitespace; below-threshold queries are excluded; product join handles deleted products without dropping the row.
 
 **Files.** `analytics/top.ts`, panels, tests. **~130 lines.**
+
+**As built (2026-10-02).** `GET /v1/dashboard/analytics/top?from&to` on P6-02's port and range, `analytics:read`; `readTopQueries` and `readTopProducts` in `packages/db/src/top.ts`, read in one scope; two panels under the funnel on **Analisi**.
+
+- **⚠ Top wines count the cards, not the candidates** *(deviation, with a migration)*. The row reads `messages.retrieved_product_ids`, which holds the up-to-eight candidates the model was *given*; the visitor saw the model's choice among them. Counted, the candidates credit a wine with every answer it was passed over in, and its conversion is divided by answers that never showed it. Migration 0070 adds `messages.recommended_product_ids`, written by `recordTurn` from the cards actually sent — after the allowlist, so an id the model invented is never recorded as shown — beside the candidates, which stay for audit. Not a foreign key array, for the candidates' reason. Answers written before it carry `null`, read as no cards.
+- **The threshold is three conversations, and it is a privacy control as much as a noise one.** One visitor's phrasing is noise; it is also the only way a visitor's own words reach the seller, and a name or an address typed into the chat is asked once, by one person. Counted in conversations, so one visitor asking five times is one. `MIN_QUERY_CONVERSATIONS` is core's, reached by the dashboard through a new browser-safe subpath (`@catalogorosso/core/analytics-top`) so the panel's note cannot disagree with the query.
+- **Normalised lowercased, trimmed and with whitespace collapsed** — the row's two, plus the third that makes *"un rosso  per"* and *"un rosso per"* one question. Nothing cleverer: a seller reads these as what people typed. `[[:space:]]`, because `\s` in a template literal reaches Postgres as a plain `s`.
+- **Conversion per wine is per conversation: an add counts only in a conversation that was shown the wine**, joined on both, so the share reads as a conversion and is at most one by construction. Adds come from `widget_events` (P6-01), linked to the conversation by the token's session.
+- **"Deleted products" are archived ones, and both kinds keep their row.** The dashboard archives (`status = 'ARCHIVED'`) and the panel says *"(archiviato)"*; a hard delete happens only with the tenant, and a left join keeps a recommendation whose wine is gone as *"Vino non più in catalogo"*.
+- Ten of each, most first.
+
+**Verified.** Unit, integration (`top.integration.test.ts`: one question typed three ways, one visitor asking five times, two answers in one conversation, adds in the conversation shown the wine and in one that was not, a viewed wine that was not added, an archived wine, a deleted one, both edges of the range, and a second winery asking the same things; `chat-port.integration.test.ts`: two wines retrieved, one recommended, one invented id refused — the cards are the one), coverage gates, every `:check`. 24 mutants, 23 killed, and the one that lived is equivalent: recording the ids the model named rather than the cards built from them changes nothing, because the allowlist (P2-25) has already removed any id outside the candidates — the branch that would differ is the one `chat.ts` already calls unreachable. The test that would catch it is there: an invented id, refused, is not recorded as shown. Two more were dropped before the run as type narrowings with no observable difference.
+
+| Mutation | Caught by |
+|---|---|
+| Case kept; inner whitespace kept; the edges kept; messages counted rather than conversations; no threshold; answers read as questions; the end of the range included; least asked first | `top.integration.test.ts` |
+| The candidates counted rather than the cards; a deleted wine dropped by an inner join | `top.test.ts` (db) and `top.integration.test.ts` |
+| An add in any conversation; an archived wine not flagged; any event an add; every shown row a conversation | `top.integration.test.ts` |
+| The cards not written | `conversations.test.ts` and `conversations.integration.test.ts` |
+| The candidates written as the cards | `chat-port.integration.test.ts` |
+| A threshold of one | `top.test.ts` (core) |
+| The conversion halved; the range not passed on | `analytics-top.test.ts` |
+| A deleted wine left blank; an archived wine not said; a failure shown as nothing; the panel's range ignored | `analytics-screen.test.tsx` |
 
 ---
 

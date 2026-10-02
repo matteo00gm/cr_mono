@@ -316,6 +316,61 @@ describe('what a turn leaves behind', () => {
     expect(shown.retrieved_product_ids).toHaveLength(1);
   });
 
+  it('records the cards it sent beside the candidates, and never an id it refused (P6-03)', async () => {
+    /*
+     * Two wines retrieved, one recommended, and one id the model invented: the
+     * candidates are both wines, the cards are the one. "Top recommended
+     * wines" counts the cards — counting the candidates would credit the wine
+     * the model passed over.
+     */
+    const carded = await createTenant('chat-carded');
+    const chosen = await addWine(carded);
+    const passedOver = await addWine(carded);
+    const session = `sess-${randomUUID()}`;
+    const provider = counting({
+      type: 'recommendations',
+      items: [
+        { productId: chosen, reason: 'tannino per il grasso', confidence: 0.9 },
+        { productId: randomUUID(), reason: 'inventato', confidence: 0.9 },
+      ],
+    });
+
+    await ask(portWith(provider), carded, session);
+    await useTenant(carded);
+
+    const [answer] = [
+      ...(await db.execute(sql`
+        select m.retrieved_product_ids, m.recommended_product_ids from messages m
+        join conversations c on c.id = m.conversation_id
+        where c.session_id = ${session} and m.role = 'ASSISTANT'
+      `)),
+    ] as { retrieved_product_ids: string[]; recommended_product_ids: string[] }[];
+
+    expect([...(answer?.retrieved_product_ids ?? [])].sort()).toEqual([chosen, passedOver].sort());
+    expect(answer?.recommended_product_ids).toEqual([chosen]);
+  });
+
+  it('records no cards, as an empty list, for an answer that showed none', async () => {
+    const plain = await createTenant('chat-no-cards');
+
+    await addWine(plain);
+
+    const session = `sess-${randomUUID()}`;
+
+    await ask(portWith(counting({ type: 'text', delta: 'Nessun vino adatto.' })), plain, session);
+    await useTenant(plain);
+
+    const [answer] = [
+      ...(await db.execute(sql`
+        select m.recommended_product_ids from messages m
+        join conversations c on c.id = m.conversation_id
+        where c.session_id = ${session} and m.role = 'ASSISTANT'
+      `)),
+    ] as { recommended_product_ids: string[] | null }[];
+
+    expect(answer?.recommended_product_ids).toEqual([]);
+  });
+
   it('records a turn the provider abandoned part way', async () => {
     /*
      * A visitor who closes the tab still has what was generated recorded,

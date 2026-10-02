@@ -46,6 +46,11 @@ export interface TurnToRecord {
    * model was *shown*, and a list of what it chose cannot answer it.
    */
   readonly retrievedProductIds: readonly string[];
+  /**
+   * The cards the visitor was shown (P6-03): the model's choice among the
+   * candidates, after the allowlist. What "top recommended wines" counts.
+   */
+  readonly recommendedProductIds: readonly string[];
   readonly model: string | null;
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
@@ -103,11 +108,12 @@ export const recordTurn = async (tx: DbTransaction, turn: TurnToRecord): Promise
   await tx.execute(sql`
     insert into messages
       (tenant_id, conversation_id, role, content, retrieved_product_ids,
-       model, input_tokens, output_tokens, latency_ms)
+       recommended_product_ids, model, input_tokens, output_tokens, latency_ms)
     values
-      (${tenant}, ${row.id}::uuid, 'USER', ${turn.question}, null, null, null, null, null),
+      (${tenant}, ${row.id}::uuid, 'USER', ${turn.question}, null, null, null, null, null, null),
       (${tenant}, ${row.id}::uuid, 'ASSISTANT', ${turn.reply},
        ${`{${turn.retrievedProductIds.join(',')}}`}::uuid[],
+       ${`{${turn.recommendedProductIds.join(',')}}`}::uuid[],
        ${turn.model}, ${turn.inputTokens}, ${turn.outputTokens}, ${turn.latencyMs})
   `);
 

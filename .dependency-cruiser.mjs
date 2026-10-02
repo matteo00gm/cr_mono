@@ -172,6 +172,10 @@ export default {
           // src/funnel.ts is exempt from P6-02 on the same terms: one read in
           // the caller's withTenant transaction, over the same policy.
           '|^packages/db/src/funnel[.]ts$' +
+          // src/top.ts is exempt from P6-03 on the same terms: two reads in the
+          // caller's withTenant transaction, over messages' and widget_events'
+          // policies.
+          '|^packages/db/src/top[.]ts$' +
           // src/webhooks.ts is exempt from P0-64b, and unlike the two files
           // above it really does open a connection. A webhook arrives outside
           // any request — no session, no membership row, no tenant to set — and

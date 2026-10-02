@@ -97,6 +97,7 @@ describe('the route', () => {
         asked.push([tenantId, range]);
         return reading([10, 5, 4, 1]).port.funnel(tenantId, range);
       },
+      top: () => Promise.reject(new Error('not this route')),
     };
     const response = createApp({
       auth: signedIn(),

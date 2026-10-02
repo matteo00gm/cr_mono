@@ -291,6 +291,8 @@ export const createChatPort = ({
 
         let outcome: PairingOutcome = 'provider_error';
         const dropped: string[] = [];
+        /* The cards actually sent, which is what §2.4's top wines count (P6-03). */
+        const shown: string[] = [];
         let reply = '';
         let leaked = false;
 
@@ -349,14 +351,14 @@ export const createChatPort = ({
               continue;
             }
 
-            yield {
-              type: 'recommendations',
-              items: chunk.items.flatMap((item) => {
-                const row = byId.get(item.productId);
+            const items = chunk.items.flatMap((item) => {
+              const row = byId.get(item.productId);
 
-                return row === undefined ? [] : [{ ...item, product: asCard(row) }];
-              }),
-            };
+              return row === undefined ? [] : [{ ...item, product: asCard(row) }];
+            });
+
+            shown.push(...items.map((item) => item.productId));
+            yield { type: 'recommendations', items };
           }
         } finally {
           /*
@@ -383,6 +385,7 @@ export const createChatPort = ({
               question,
               reply,
               retrievedProductIds: candidates.map((candidate) => candidate.id),
+              recommendedProductIds: shown,
               model,
               inputTokens: usage?.inputTokens ?? null,
               outputTokens: usage?.outputTokens ?? null,
