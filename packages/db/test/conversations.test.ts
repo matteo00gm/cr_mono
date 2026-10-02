@@ -1,3 +1,5 @@
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import { readConversation, recordTurn, type TurnToRecord } from '../src/conversations.js';
@@ -36,6 +38,7 @@ const TURN: TurnToRecord = {
   question: 'qualcosa per una bistecca',
   reply: 'Le consiglio un Barolo.',
   retrievedProductIds: [],
+  recommendedProductIds: [],
   model: 'amazon.nova-lite-v1:0',
   inputTokens: 1200,
   outputTokens: 180,
@@ -59,6 +62,22 @@ describe('recording a turn', () => {
     expect(statements).toHaveLength(2);
     expect(text(statements[1])).toContain("'USER'");
     expect(text(statements[1])).toContain("'ASSISTANT'");
+  });
+
+  it('binds the cards as their own array, apart from the candidates (P6-03)', async () => {
+    const { statements, tx } = capturing(opened);
+
+    await recordTurn(tx, {
+      ...TURN,
+      retrievedProductIds: ['c-1', 'c-2'],
+      recommendedProductIds: ['c-2'],
+    });
+
+    const { params } = new PgDialect().sqlToQuery(statements[1] as SQL);
+
+    expect(text(statements[1])).toContain('recommended_product_ids');
+    expect(params).toContain('{c-1,c-2}');
+    expect(params).toContain('{c-2}');
   });
 
   it('upserts on the pair a session is unique by', async () => {

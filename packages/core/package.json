@@ -36,6 +36,10 @@
     "./contrast": {
       "types": "./dist/a11y/contrast.d.ts",
       "default": "./dist/a11y/contrast.js"
+    },
+    "./analytics-top": {
+      "types": "./dist/analytics/top.d.ts",
+      "default": "./dist/analytics/top.js"
     }
   },
   "files": [

@@ -1,6 +1,23 @@
-import type { FunnelResponse } from '@catalogorosso/api-client';
-import { analyticsRange, FUNNEL_STAGES, funnelOf, type FunnelStage } from '@catalogorosso/core';
-import { readFunnel, withTenant, type FunnelQuery } from '@catalogorosso/db';
+import type { FunnelResponse, TopResponse } from '@catalogorosso/api-client';
+import {
+  analyticsRange,
+  FUNNEL_STAGES,
+  funnelOf,
+  MIN_QUERY_CONVERSATIONS,
+  TOP_LIMIT,
+  type FunnelStage,
+} from '@catalogorosso/core';
+import {
+  readFunnel,
+  readTopProducts,
+  readTopQueries,
+  withTenant,
+  type FunnelQuery,
+  type TopProduct,
+  type TopProductsQuery,
+  type TopQueriesQuery,
+  type TopQuery,
+} from '@catalogorosso/db';
 
 /**
  * What visitors did with the sommelier (P6-02, §2.4), for the dashboard.
@@ -21,11 +38,24 @@ export interface RangeAsked {
 export interface AnalyticsPort {
   /** Visits reaching each stage, and the share of each step (P6-02). */
   readonly funnel: (tenantId: string, asked: RangeAsked) => Promise<FunnelResponse>;
+  /** The questions most asked and the wines most recommended (P6-03). */
+  readonly top: (tenantId: string, asked: RangeAsked) => Promise<TopResponse>;
 }
 
 export interface AnalyticsPortDeps {
   /** The funnel's counts for a tenant. Defaults to `readFunnel` in the tenant's scope. */
   readonly readFunnel?: ((tenantId: string, query: FunnelQuery) => Promise<number[]>) | undefined;
+  /**
+   * The top questions and wines for a tenant, in one scope. Defaults to
+   * `readTopQueries` and `readTopProducts` in one `withTenant`.
+   */
+  readonly readTop?:
+    | ((
+        tenantId: string,
+        queries: TopQueriesQuery,
+        products: TopProductsQuery,
+      ) => Promise<{ readonly queries: TopQuery[]; readonly products: TopProduct[] }>)
+    | undefined;
   /** Today, for a range that does not say. */
   readonly now?: (() => Date) | undefined;
 }
@@ -43,10 +73,19 @@ export class AnalyticsPortNotConfiguredError extends Error {
 
 export const unconfiguredAnalytics: AnalyticsPort = {
   funnel: () => Promise.reject(new AnalyticsPortNotConfiguredError()),
+  top: () => Promise.reject(new AnalyticsPortNotConfiguredError()),
 };
+
+/** Both reads in one transaction, so the two lists describe the same moment. */
+const readTopInScope: NonNullable<AnalyticsPortDeps['readTop']> = (tenantId, queries, products) =>
+  withTenant(tenantId, async (tx) => ({
+    queries: await readTopQueries(tx, queries),
+    products: await readTopProducts(tx, products),
+  }));
 
 export const createAnalyticsPort = ({
   readFunnel: read = (tenantId, query) => withTenant(tenantId, (tx) => readFunnel(tx, query)),
+  readTop = readTopInScope,
   now = () => new Date(),
 }: AnalyticsPortDeps = {}): AnalyticsPort => ({
   funnel: async (tenantId, asked) => {
@@ -61,5 +100,38 @@ export const createAnalyticsPort = ({
     ) as Record<FunnelStage, number>;
 
     return { from: range.from, to: range.to, stages: funnelOf(reached) };
+  },
+
+  top: async (tenantId, asked) => {
+    const range = analyticsRange(asked, now());
+    const { queries, products } = await readTop(
+      tenantId,
+      {
+        start: range.start,
+        end: range.end,
+        minConversations: MIN_QUERY_CONVERSATIONS,
+        limit: TOP_LIMIT,
+      },
+      { start: range.start, end: range.end, limit: TOP_LIMIT },
+    );
+
+    return {
+      from: range.from,
+      to: range.to,
+      queries: queries.map((query) => ({
+        query: query.query,
+        conversations: query.conversations,
+        lastAskedAt: query.lastAskedAt.toISOString(),
+      })),
+      /* Every row was shown at least once, so `recommended` is never zero. */
+      products: products.map((product) => ({
+        productId: product.productId,
+        name: product.name,
+        archived: product.archived,
+        recommended: product.recommended,
+        addedToCart: product.added,
+        rate: product.added / product.recommended,
+      })),
+    };
   },
 });

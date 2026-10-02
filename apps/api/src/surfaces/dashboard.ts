@@ -9,6 +9,7 @@ import {
   billingPortalResponse,
   billingTopUpResponse,
   funnelResponse,
+  topResponse,
   usageResponse,
   catalogueReindexedResponse,
   claimWithdrawnResponse,
@@ -1403,6 +1404,18 @@ export const createDashboardApp = ({
     return c.json(await analytics.funnel(c.get('tenantId'), parsed.data));
   });
 
+  /**
+   * The questions most asked and the wines most recommended (P6-03, §2.4),
+   * over the funnel's range. **Every member**, through `analytics:read`.
+   */
+  app.get('/analytics/top', requireCapability('analytics:read'), async (c) => {
+    const parsed = rangeQuery.safeParse(c.req.query());
+
+    if (!parsed.success) throw new InvalidRequestError(RANGE_EXPECTED);
+
+    return c.json(await analytics.top(c.get('tenantId'), parsed.data));
+  });
+
   app.post('/keys', requireCapability('keys:manage'), stepUp, async (c) =>
     c.json(await keys.create(c.get('tenantId')), 201),
   );
@@ -2505,6 +2518,44 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         ],
       },
       response: funnelResponse,
+    },
+  ],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/analytics/top`),
+    {
+      access: requires('analytics:read'),
+      summary: 'The questions most asked and the wines most recommended',
+      description:
+        'Over `from` and `to`, as for the funnel. `queries`: what visitors asked, lowercased ' +
+        'and with whitespace collapsed, listed once at least three conversations asked it — one ' +
+        "visitor's phrasing is noise, and the threshold keeps a name or an address typed into " +
+        'the chat off this list — ten at most, most asked first. `products`: the wines shown ' +
+        'as cards in the most conversations, with the conversations that went on to add each ' +
+        'to the cart and that share; `name` is null for a wine no longer in the catalogue, ' +
+        'whose recommendations still count. A range that is not one is refused with a 422. ' +
+        'Readable by every member.',
+      example: {
+        from: '2026-09-02',
+        to: '2026-10-01',
+        queries: [
+          {
+            query: 'un rosso per la bistecca',
+            conversations: 14,
+            lastAskedAt: '2026-09-30T19:12:00.000Z',
+          },
+        ],
+        products: [
+          {
+            productId: '9b2f4c1e-6a3d-4e8b-9f10-2c7d5e8a1b34',
+            name: 'Barolo DOCG 2019',
+            archived: false,
+            recommended: 40,
+            addedToCart: 6,
+            rate: 0.15,
+          },
+        ],
+      },
+      response: topResponse,
     },
   ],
   [

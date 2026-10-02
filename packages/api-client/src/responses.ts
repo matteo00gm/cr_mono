@@ -500,6 +500,40 @@ export const funnelResponse = z.strictObject({
 export type FunnelResponse = z.infer<typeof funnelResponse>;
 
 /**
+ * What visitors ask and which wines are recommended (P6-03, §2.4), over the
+ * same range as the funnel.
+ *
+ * A question is listed once at least three conversations asked it,
+ * lowercased and with its whitespace collapsed. A wine is listed by the
+ * conversations it was shown in as a card, with the ones that went on to add
+ * it to the cart; `name` is `null` for a wine no longer in the catalogue.
+ */
+export const topResponse = z.strictObject({
+  from: z.iso.date(),
+  to: z.iso.date(),
+  queries: z.array(
+    z.strictObject({
+      query: z.string(),
+      conversations: tally,
+      lastAskedAt: z.iso.datetime(),
+    }),
+  ),
+  products: z.array(
+    z.strictObject({
+      productId: z.uuid(),
+      name: z.string().nullable(),
+      archived: z.boolean(),
+      recommended: tally,
+      addedToCart: tally,
+      /** `addedToCart / recommended`: never over one. */
+      rate: z.number().min(0).max(1),
+    }),
+  ),
+});
+
+export type TopResponse = z.infer<typeof topResponse>;
+
+/**
  * A plan change, asked for (P5-09). `now` is an upgrade — prorated, with the
  * new limits as soon as Stripe confirms the payment; `period_end` is a
  * downgrade, which takes effect at `effectiveAt` and not before.
@@ -938,6 +972,7 @@ export const DASHBOARD_RESPONSES = {
   'POST /v1/dashboard/billing/top-up': billingTopUpResponse,
   'GET /v1/dashboard/usage': usageResponse,
   'GET /v1/dashboard/analytics/funnel': funnelResponse,
+  'GET /v1/dashboard/analytics/top': topResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

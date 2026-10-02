@@ -222,6 +222,7 @@ describe('recordTurn', () => {
     question: 'qualcosa per una bistecca',
     reply: 'Le consiglio un Barolo.',
     retrievedProductIds: [],
+    recommendedProductIds: [],
     model: 'amazon.nova-lite-v1:0',
     inputTokens: 1200,
     outputTokens: 180,
@@ -337,6 +338,45 @@ describe('recordTurn', () => {
     expect(rows[1]?.retrieved_product_ids).toEqual(shown);
   });
 
+  it('records the cards on the answer, beside the candidates (P6-03)', async () => {
+    const session = `sess-${randomUUID()}`;
+    const candidates = [randomUUID(), randomUUID(), randomUUID()];
+    const cards = [candidates[2] ?? '', candidates[0] ?? ''];
+
+    const recorded = await withTenant(
+      tenantId,
+      (tx) =>
+        recordTurn(
+          tx,
+          turn({
+            sessionId: session,
+            retrievedProductIds: candidates,
+            recommendedProductIds: cards,
+          }),
+        ),
+      db,
+    );
+
+    const rows = [
+      ...(await db.execute(sql`
+        select role, retrieved_product_ids, recommended_product_ids from messages
+        where conversation_id = ${recorded.conversationId}::uuid
+        order by seq
+      `)),
+    ] as {
+      role: string;
+      retrieved_product_ids: string[] | null;
+      recommended_product_ids: string[] | null;
+    }[];
+
+    /* The question showed nothing; the answer showed the cards, in the order they were sent. */
+    expect(rows.map((row) => [row.role, row.recommended_product_ids])).toEqual([
+      ['USER', null],
+      ['ASSISTANT', cards],
+    ]);
+    expect(rows[1]?.retrieved_product_ids).toEqual(candidates);
+  });
+
   it('keeps a candidate id after the wine is gone', async () => {
     /*
      * `retrieved_product_ids` is deliberately not a foreign key array: it is a
@@ -394,6 +434,7 @@ describe('readConversation', () => {
     question,
     reply,
     retrievedProductIds: [],
+    recommendedProductIds: [],
     model: null,
     inputTokens: null,
     outputTokens: null,

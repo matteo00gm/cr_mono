@@ -28,6 +28,7 @@ export * from './domain-claims.js';
 export * from './dev-mode.js';
 export * from './analytics/funnel.js';
 export * from './analytics/range.js';
+export * from './analytics/top.js';
 
 /**
  * What a turn cost (P2-31).
