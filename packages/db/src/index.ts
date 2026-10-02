@@ -640,3 +640,10 @@ export {
 
 /** The questions the catalogue could not answer (P6-04), read in the scope's tenant. */
 export { readZeroResults, type UnansweredQuestion, type ZeroResultsQuery } from './zero-results.js';
+
+/** The sites refused for a winery's key (P6-05), read in the scope's tenant. */
+export {
+  readRefusedOrigins,
+  type RefusedOrigin,
+  type RefusedOriginsQuery,
+} from './refused-origins.js';

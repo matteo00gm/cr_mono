@@ -522,3 +522,8 @@ body {
 .cr-zero__note {
   color: var(--cr-ink-soft);
 }
+
+.cr-origins td {
+  padding-inline-start: var(--cr-gap);
+  font-variant-numeric: tabular-nums;
+}

@@ -571,6 +571,30 @@ export const zeroResultsResponse = z.strictObject({
 export type ZeroResultsResponse = z.infer<typeof zeroResultsResponse>;
 
 /**
+ * The sites that tried to use this winery's widget and were refused (P6-05,
+ * §3.2), over the funnel's range: each Origin as the browser sent it, how
+ * many times, from how many distinct visitor buckets, and when last. `domain`
+ * is what the winery has done about it since — `PENDING` once added and
+ * awaiting verification, `null` when it is not one of the winery's domains.
+ * Fifty at most, most attempts first.
+ */
+export const refusedOriginsResponse = z.strictObject({
+  from: z.iso.date(),
+  to: z.iso.date(),
+  origins: z.array(
+    z.strictObject({
+      origin: z.string(),
+      attempts: tally,
+      sources: tally,
+      lastSeenAt: z.iso.datetime(),
+      domain: z.enum(['PENDING', 'VERIFIED']).nullable(),
+    }),
+  ),
+});
+
+export type RefusedOriginsResponse = z.infer<typeof refusedOriginsResponse>;
+
+/**
  * A plan change, asked for (P5-09). `now` is an upgrade — prorated, with the
  * new limits as soon as Stripe confirms the payment; `period_end` is a
  * downgrade, which takes effect at `effectiveAt` and not before.
@@ -1011,6 +1035,9 @@ export const DASHBOARD_RESPONSES = {
   'GET /v1/dashboard/analytics/funnel': funnelResponse,
   'GET /v1/dashboard/analytics/top': topResponse,
   'GET /v1/dashboard/analytics/zero-results': zeroResultsResponse,
+  'GET /v1/dashboard/analytics/origins': refusedOriginsResponse,
+  /* The one-click add from the refused-origins panel (P6-05): the ordinary route, nothing new. */
+  'POST /v1/dashboard/domains': domainAddedResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

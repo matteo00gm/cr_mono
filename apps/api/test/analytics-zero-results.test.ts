@@ -141,6 +141,7 @@ describe('the route', () => {
     const analytics: AnalyticsPort = {
       funnel: () => Promise.reject(new Error('not this route')),
       top: () => Promise.reject(new Error('not this route')),
+      refusedOrigins: () => Promise.reject(new Error('not this route')),
       zeroResults: (tenantId, range) => {
         asked.push([tenantId, range]);
         return reading([question('avete un passito?', ['c1'])]).port.zeroResults(tenantId, range);

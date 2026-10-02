@@ -9,8 +9,9 @@ complete only because raw `fetch` to our own API is forbidden outside
 
 | Endpoint | Called from |
 |---|---|
-| `GET /v1/dashboard/analytics/funnel` | apps/dashboard/src/features/analytics/AnalyticsScreen.tsx:50 |
-| `GET /v1/dashboard/analytics/top` | apps/dashboard/src/features/analytics/AnalyticsScreen.tsx:162 |
+| `GET /v1/dashboard/analytics/funnel` | apps/dashboard/src/features/analytics/AnalyticsScreen.tsx:51 |
+| `GET /v1/dashboard/analytics/origins` | apps/dashboard/src/features/analytics/RefusedOriginsPanel.tsx:91 |
+| `GET /v1/dashboard/analytics/top` | apps/dashboard/src/features/analytics/AnalyticsScreen.tsx:163 |
 | `GET /v1/dashboard/analytics/zero-results` | apps/dashboard/src/features/analytics/ZeroResultsPanel.tsx:83 |
 | `GET /v1/dashboard/domains/claims/served` | apps/dashboard/src/features/domains/ClaimNotice.tsx:38 |
 | `GET /v1/dashboard/me` | apps/dashboard/src/session.ts:152 |
@@ -21,6 +22,7 @@ complete only because raw `fetch` to our own API is forbidden outside
 | `POST /v1/dashboard/billing/plan` | apps/dashboard/src/features/billing/BillingScreen.tsx:150 |
 | `POST /v1/dashboard/billing/portal` | apps/dashboard/src/features/billing/BillingScreen.tsx:166 |
 | `POST /v1/dashboard/billing/top-up` | apps/dashboard/src/features/billing/BillingScreen.tsx:162 |
+| `POST /v1/dashboard/domains` | apps/dashboard/src/features/analytics/RefusedOriginsPanel.tsx:110 |
 | `POST /v1/dashboard/domains/claims/:id/withdraw` | apps/dashboard/src/features/domains/ClaimNotice.tsx:56 |
 | `POST /v1/dashboard/products/:id/reindex` | apps/dashboard/src/features/catalog/IndexStatus.tsx:197 |
 | `POST /v1/dashboard/products/import` | apps/dashboard/src/features/catalog/ImportSummary.tsx:236 |

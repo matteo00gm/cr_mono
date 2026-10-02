@@ -1,5 +1,6 @@
 import type { JSX } from 'preact';
 import { useMemo } from 'preact/hooks';
+import { can, type Role } from '@catalogorosso/security';
 import { Link, Route, Switch, useLocation } from 'wouter-preact';
 
 import { AnalyticsScreen } from './features/analytics/AnalyticsScreen.js';
@@ -152,13 +153,16 @@ const BillingRoute = ({
 /** Analisi (P6-02), with a client built once per winery for `CatalogRoute`'s reason. */
 const AnalyticsRoute = ({
   tenantId,
+  role,
   clientFor,
 }: {
   readonly tenantId: string;
+  readonly role: Role;
   readonly clientFor: (tenantId: string) => ApiClient;
 }): JSX.Element => {
   const client = useMemo(() => clientFor(tenantId), [tenantId, clientFor]);
-  return <AnalyticsScreen client={client} />;
+  /* The button's visibility only: `POST /domains` checks the capability itself (P0-49). */
+  return <AnalyticsScreen client={client} canAddDomains={can(role, 'domains:manage')} />;
 };
 
 /**
@@ -256,7 +260,7 @@ export const Layout = ({
             <CatalogRoute tenantId={active.tenantId} clientFor={clientFor} />
           </Route>
           <Route path="/analisi">
-            <AnalyticsRoute tenantId={active.tenantId} clientFor={clientFor} />
+            <AnalyticsRoute tenantId={active.tenantId} role={active.role} clientFor={clientFor} />
           </Route>
           <Route path="/membri">
             <Placeholder title="Membri" />

@@ -86,6 +86,8 @@ const answering = (answer: FunnelResponse | Error, topAnswer: TopResponse | Erro
         themes: [],
         questions: [],
       }),
+    'GET /v1/dashboard/analytics/origins': () =>
+      Promise.resolve({ from: '2026-09-02', to: '2026-10-01', origins: [] }),
   });
 
 const RANGE = { from: '2026-09-02', to: '2026-10-01' };
@@ -261,6 +263,7 @@ describe('the screen', () => {
       'GET /v1/dashboard/analytics/funnel',
       'GET /v1/dashboard/analytics/top',
       'GET /v1/dashboard/analytics/zero-results',
+      'GET /v1/dashboard/analytics/origins',
     ]) {
       expect(request).toHaveBeenCalledWith(endpoint, {
         query: { from: '2026-09-02', to: '2026-10-01' },
@@ -283,6 +286,7 @@ describe('the screen', () => {
         'GET /v1/dashboard/analytics/funnel',
         'GET /v1/dashboard/analytics/top',
         'GET /v1/dashboard/analytics/zero-results',
+        'GET /v1/dashboard/analytics/origins',
       ]) {
         expect(request).toHaveBeenCalledWith(endpoint, {
           query: { from: '2026-09-25', to: '2026-10-01' },
@@ -328,4 +332,62 @@ describe('the /analisi route', () => {
     expect(clientFor).toHaveBeenCalledWith(TENANT);
     expect(screen.getByRole('link', { name: 'Analisi' }).getAttribute('href')).toBe('/analisi');
   });
+
+  it.each([
+    ['OWNER', 1],
+    ['EDITOR', 0],
+  ] as const)(
+    'offers %s the one-click add as the capability table says (P6-05)',
+    async (role, buttons) => {
+      const TENANT = '11111111-1111-4111-8111-111111111111';
+
+      globalThis.history.pushState({}, '', '/analisi');
+      const { client } = fakeClient({
+        'GET /v1/dashboard/analytics/funnel': () => Promise.resolve(funnel()),
+        'GET /v1/dashboard/analytics/top': () => Promise.resolve(top()),
+        'GET /v1/dashboard/analytics/zero-results': () =>
+          Promise.resolve({
+            from: '2026-09-02',
+            to: '2026-10-01',
+            conversations: 0,
+            themes: [],
+            questions: [],
+          }),
+        'GET /v1/dashboard/analytics/origins': () =>
+          Promise.resolve({
+            from: '2026-09-02',
+            to: '2026-10-01',
+            origins: [
+              {
+                origin: 'https://shop.cantina.example',
+                attempts: 4,
+                sources: 2,
+                lastSeenAt: '2026-09-30T19:12:00.000Z',
+                domain: null,
+              },
+            ],
+          }),
+      });
+
+      render(
+        <Layout
+          session={{
+            status: 'signed-in',
+            userId: 'user_matteo',
+            twoFactorEnabled: true,
+            memberships: [{ tenantId: TENANT, role }],
+            active: { tenantId: TENANT, role },
+          }}
+          clientFor={() => client}
+        />,
+      );
+
+      const panel = await screen.findByRole('region', { name: 'Siti non autorizzati' });
+
+      await within(panel).findByRole('table');
+      expect(within(panel).queryAllByRole('button', { name: 'È mio, aggiungilo' })).toHaveLength(
+        buttons,
+      );
+    },
+  );
 });

@@ -1424,7 +1424,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P6-02 | Funnel query + dashboard panel | open → message → recommendation → add-to-cart | P6-01 |
 | ✅ P6-03 | Top queries / top products panels | | P6-01 |
 | ✅ P6-04 | **ZERO_RESULTS panel** | the highest-value commercial insight | P6-01 |
-| P6-05 | Unauthorized-origin attempts panel | from `security_events` | P2-16 |
+| ✅ P6-05 | Unauthorized-origin attempts panel | from `security_events` | P2-16 |
 | P6-06 | Shopify OAuth app + install | also becomes a domain-verification method | P4-01 |
 | P6-07 | `orders/create` webhook + matching | on the `_somm_session` line-item property | P6-06,P3-11 |
 | P6-08 | Attribution correctness test | click → order → attributed exactly once | P6-07 |
@@ -7588,6 +7588,27 @@ Assert **zero provider calls** across every blocked case, since that is what the
 **Tests.** Grouping and counts; the one-click add creates a `PENDING` domain rather than a verified one (asserting that verification is not bypassed).
 
 **Files.** panel, tests. **~90 lines.**
+
+**As built (2026-10-02).** `GET /v1/dashboard/analytics/origins?from&to` on P6-02's port and range, `analytics:read` — every member, because an editor is often the one who notices the widget missing from a new page; `readRefusedOrigins` in `packages/db/src/refused-origins.ts`; **Siti non autorizzati** on Analisi.
+
+- **Grouped by the Origin as the browser sent it**, with the attempts, the distinct visitor buckets they came from (P2-04: one busy page, or many places) and when last; fifty at most, most attempts first. Only `UNAUTHORIZED_ORIGIN` — a rate limit or a bad token from the same site is a different problem — and only this winery's: a key that matched nobody is `INVALID_KEY`, has no tenant, and the policy leaves it to `app_admin`.
+- **What became of each since** is joined from `tenant_domains` under the same scope, so an origin the winery has added reads *"in attesa di verifica"* with the way to finish, instead of being offered again; another winery's domain is invisible to the join.
+- **Led by the fix.** *"Hai cambiato dominio o aperto un nuovo sito? Se uno di questi è tuo, aggiungilo…"* — and, for a site the seller does not recognise, that nothing needs doing: the widget does not answer there.
+- **The one click is the ordinary `POST /domains`** *(nothing new)*: its capability, its audit, its verification. It is shown to members who hold `domains:manage` (the server decides either way), not offered for what is not a web address (a sandboxed frame sends `null`), and a refusal — a domain another winery holds, a plan's limit, a missing second factor — is shown in the API's own words. `POST /v1/dashboard/domains` joins the client's typed endpoints for it.
+- **"Not bypassed", proven end to end** (`refused-origins.integration.test.ts`): a real CORS guard refuses and records a site, the panel reads it, the domains port adds it — `PENDING`, with a record to publish — the widget **still refuses it**, and the panel says it is waiting. An origin under a zone this winery already proved by DNS does land `VERIFIED` (P4-19a): that is the ordinary verification, not this panel's.
+- **⚠ Open: the internal alert above a threshold is P7-02's.** `countSecurityEvents` (P2-16) already counts per key and origin in a tenant scope; the alert needs the unattributed rows too, which is `app_admin`'s reach.
+
+**Verified.** Unit, integration (`refused-origins.integration.test.ts` in `packages/db`: one site many times from three places, one once, one since added, a sandboxed frame, refusals of other kinds, a key that matched nobody, both range edges, and another winery refused from the same sites; and the end-to-end file above), coverage gates, every `:check`. 16 mutants, 16 killed.
+
+| Mutation | Caught by |
+|---|---|
+| Every refusal kind counted | `refused-origins.test.ts` and `refused-origins.integration.test.ts` (db) |
+| Attempts counted as places; the end of the range included; fewest attempts first | `refused-origins.integration.test.ts` (db) |
+| The domain not joined | `refused-origins.integration.test.ts`, db and end to end |
+| An unknown domain status passed through | `refused-origins.test.ts` (db) |
+| No cap; the range not passed on; the domain status dropped | `analytics-origins.test.ts` |
+| The add sent as a staging domain; shown verified straight away; a refusal swallowed; an added site offered again; `null` offered as a site; everyone offered the add | `refused-origins-panel.test.tsx` |
+| The capability ignored in the route | `analytics-screen.test.tsx` |
 
 ---
 
