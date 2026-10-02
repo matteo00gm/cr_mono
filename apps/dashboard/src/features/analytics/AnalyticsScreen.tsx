@@ -14,6 +14,7 @@ import {
   STAGE_LABELS,
   type RangeChoice,
 } from './analytics-copy.js';
+import { RefusedOriginsPanel } from './RefusedOriginsPanel.js';
 import { ZeroResultsPanel } from './ZeroResultsPanel.js';
 
 /**
@@ -248,9 +249,12 @@ export const TopPanels = ({
 
 export const AnalyticsScreen = ({
   client,
+  canAddDomains = false,
   now = () => new Date(),
 }: {
   readonly client: ApiClient;
+  /** Whether this member may add a domain from the refused-sites panel (P6-05). UX only. */
+  readonly canAddDomains?: boolean | undefined;
   /** Today, injected so a test can say which days a choice means. */
   readonly now?: (() => Date) | undefined;
 }): JSX.Element => {
@@ -281,6 +285,7 @@ export const AnalyticsScreen = ({
       <FunnelPanel client={client} range={range} />
       <TopPanels client={client} range={range} />
       <ZeroResultsPanel client={client} range={range} />
+      <RefusedOriginsPanel client={client} range={range} canAdd={canAddDomains} />
     </section>
   );
 };

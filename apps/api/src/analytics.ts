@@ -1,9 +1,15 @@
-import type { FunnelResponse, TopResponse, ZeroResultsResponse } from '@catalogorosso/api-client';
+import type {
+  FunnelResponse,
+  RefusedOriginsResponse,
+  TopResponse,
+  ZeroResultsResponse,
+} from '@catalogorosso/api-client';
 import {
   analyticsRange,
   FUNNEL_STAGES,
   funnelOf,
   MIN_QUERY_CONVERSATIONS,
+  REFUSED_ORIGINS_LIMIT,
   THEMES,
   themesOf,
   TOP_LIMIT,
@@ -12,11 +18,14 @@ import {
 } from '@catalogorosso/core';
 import {
   readFunnel,
+  readRefusedOrigins,
   readTopProducts,
   readTopQueries,
   readZeroResults,
   withTenant,
   type FunnelQuery,
+  type RefusedOrigin,
+  type RefusedOriginsQuery,
   type TopProduct,
   type TopProductsQuery,
   type TopQueriesQuery,
@@ -48,6 +57,8 @@ export interface AnalyticsPort {
   readonly top: (tenantId: string, asked: RangeAsked) => Promise<TopResponse>;
   /** The questions the catalogue could not answer, and their patterns (P6-04). */
   readonly zeroResults: (tenantId: string, asked: RangeAsked) => Promise<ZeroResultsResponse>;
+  /** The sites refused for this winery's key, and what became of each (P6-05). */
+  readonly refusedOrigins: (tenantId: string, asked: RangeAsked) => Promise<RefusedOriginsResponse>;
 }
 
 export interface AnalyticsPortDeps {
@@ -67,6 +78,9 @@ export interface AnalyticsPortDeps {
   /** Every unanswered question for a tenant. Defaults to `readZeroResults` in its scope. */
   readonly readZeroResults?:
     ((tenantId: string, query: ZeroResultsQuery) => Promise<UnansweredQuestion[]>) | undefined;
+  /** The refused sites for a tenant. Defaults to `readRefusedOrigins` in its scope. */
+  readonly readRefusedOrigins?:
+    ((tenantId: string, query: RefusedOriginsQuery) => Promise<RefusedOrigin[]>) | undefined;
   /** Today, for a range that does not say. */
   readonly now?: (() => Date) | undefined;
 }
@@ -86,6 +100,7 @@ export const unconfiguredAnalytics: AnalyticsPort = {
   funnel: () => Promise.reject(new AnalyticsPortNotConfiguredError()),
   top: () => Promise.reject(new AnalyticsPortNotConfiguredError()),
   zeroResults: () => Promise.reject(new AnalyticsPortNotConfiguredError()),
+  refusedOrigins: () => Promise.reject(new AnalyticsPortNotConfiguredError()),
 };
 
 /**
@@ -118,6 +133,8 @@ export const createAnalyticsPort = ({
   readTop = readTopInScope,
   readZeroResults: readUnanswered = (tenantId, query) =>
     withTenant(tenantId, (tx) => readZeroResults(tx, query)),
+  readRefusedOrigins: readRefused = (tenantId, query) =>
+    withTenant(tenantId, (tx) => readRefusedOrigins(tx, query)),
   now = () => new Date(),
 }: AnalyticsPortDeps = {}): AnalyticsPort => ({
   funnel: async (tenantId, asked) => {
@@ -182,6 +199,27 @@ export const createAnalyticsPort = ({
         noMatch: question.noMatch,
         notRecommended: question.notRecommended,
         lastAskedAt: question.lastAskedAt.toISOString(),
+      })),
+    };
+  },
+
+  refusedOrigins: async (tenantId, asked) => {
+    const range = analyticsRange(asked, now());
+    const origins = await readRefused(tenantId, {
+      start: range.start,
+      end: range.end,
+      limit: REFUSED_ORIGINS_LIMIT,
+    });
+
+    return {
+      from: range.from,
+      to: range.to,
+      origins: origins.map((refused) => ({
+        origin: refused.origin,
+        attempts: refused.attempts,
+        sources: refused.sources,
+        lastSeenAt: refused.lastSeenAt.toISOString(),
+        domain: refused.domainStatus,
       })),
     };
   },

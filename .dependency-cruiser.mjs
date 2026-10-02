@@ -179,6 +179,10 @@ export default {
           // src/zero-results.ts is exempt from P6-04 on the same terms: one
           // read in the caller's withTenant transaction, over messages' policy.
           '|^packages/db/src/zero-results[.]ts$' +
+          // src/refused-origins.ts is exempt from P6-05 on the same terms: one
+          // read in the caller's withTenant transaction, over security_events'
+          // strict USING and tenant_domains' boilerplate.
+          '|^packages/db/src/refused-origins[.]ts$' +
           // src/webhooks.ts is exempt from P0-64b, and unlike the two files
           // above it really does open a connection. A webhook arrives outside
           // any request — no session, no membership row, no tenant to set — and

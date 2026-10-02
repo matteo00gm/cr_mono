@@ -11,6 +11,7 @@ import {
   funnelResponse,
   topResponse,
   zeroResultsResponse,
+  refusedOriginsResponse,
   usageResponse,
   catalogueReindexedResponse,
   claimWithdrawnResponse,
@@ -1430,6 +1431,21 @@ export const createDashboardApp = ({
     return c.json(await analytics.zeroResults(c.get('tenantId'), parsed.data));
   });
 
+  /**
+   * The sites refused for this winery's key (P6-05, §3.2). **Every member**,
+   * through `analytics:read`: an editor is often the one who notices the
+   * widget missing from a new page, and is told to ask an owner. Adding one is
+   * the ordinary `POST /domains`, with its own capability and its own
+   * verification — this route only reads.
+   */
+  app.get('/analytics/origins', requireCapability('analytics:read'), async (c) => {
+    const parsed = rangeQuery.safeParse(c.req.query());
+
+    if (!parsed.success) throw new InvalidRequestError(RANGE_EXPECTED);
+
+    return c.json(await analytics.refusedOrigins(c.get('tenantId'), parsed.data));
+  });
+
   app.post('/keys', requireCapability('keys:manage'), stepUp, async (c) =>
     c.json(await keys.create(c.get('tenantId')), 201),
   );
@@ -2604,6 +2620,36 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         ],
       },
       response: zeroResultsResponse,
+    },
+  ],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/analytics/origins`),
+    {
+      access: requires('analytics:read'),
+      summary: 'The sites refused for this winery’s key',
+      description:
+        "Over `from` and `to`, as for the funnel: every Origin that presented this winery's " +
+        'public key and was refused because it is not one of its verified domains, as the ' +
+        'browser sent it, with the attempts, the distinct visitor buckets they came from and ' +
+        'when last. A misconfiguration — a new domain, a `www` that was never added — is far ' +
+        'more likely than theft. `domain` is `PENDING` when the winery has since added it and ' +
+        'not yet verified it, `null` when it is not one of its domains; adding one is the ' +
+        'ordinary `POST /domains`, which verifies as it always does. Fifty at most, most ' +
+        'attempts first. A range that is not one is refused with a 422. Readable by every member.',
+      example: {
+        from: '2026-09-02',
+        to: '2026-10-01',
+        origins: [
+          {
+            origin: 'https://shop.cantina.example',
+            attempts: 212,
+            sources: 37,
+            lastSeenAt: '2026-09-30T19:12:00.000Z',
+            domain: null,
+          },
+        ],
+      },
+      response: refusedOriginsResponse,
     },
   ],
   [

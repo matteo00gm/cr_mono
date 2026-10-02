@@ -21,3 +21,6 @@ export const MIN_QUERY_CONVERSATIONS = 3;
 
 /** How many questions and how many wines a panel lists. */
 export const TOP_LIMIT = 10;
+
+/** How many refused sites the panel lists (P6-05). */
+export const REFUSED_ORIGINS_LIMIT = 50;

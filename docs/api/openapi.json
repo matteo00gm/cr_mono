@@ -173,6 +173,134 @@
           }
         }
       },
+      "/v1/dashboard/analytics/origins": {
+        "get": {
+          "summary": "The sites refused for this winery’s key",
+          "description": "Over `from` and `to`, as for the funnel: every Origin that presented this winery's public key and was refused because it is not one of its verified domains, as the browser sent it, with the attempts, the distinct visitor buckets they came from and when last. A misconfiguration — a new domain, a `www` that was never added — is far more likely than theft. `domain` is `PENDING` when the winery has since added it and not yet verified it, `null` when it is not one of its domains; adding one is the ordinary `POST /domains`, which verifies as it always does. Fifty at most, most attempts first. A range that is not one is refused with a 422. Readable by every member.\n\nRequires the `analytics:read` capability.",
+          "operationId": "getV1DashboardAnalyticsOrigins",
+          "x-required-capability": "analytics:read",
+          "responses": {
+            "200": {
+              "description": "The sites refused for this winery’s key",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "from": {
+                        "type": "string",
+                        "format": "date",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                      },
+                      "to": {
+                        "type": "string",
+                        "format": "date",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                      },
+                      "origins": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "origin": {
+                              "type": "string"
+                            },
+                            "attempts": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "sources": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "lastSeenAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                            },
+                            "domain": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "PENDING",
+                                    "VERIFIED"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "origin",
+                            "attempts",
+                            "sources",
+                            "lastSeenAt",
+                            "domain"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "to",
+                      "origins"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "from": "2026-09-02",
+                    "to": "2026-10-01",
+                    "origins": [
+                      {
+                        "origin": "https://shop.cantina.example",
+                        "attempts": 212,
+                        "sources": 37,
+                        "lastSeenAt": "2026-09-30T19:12:00.000Z",
+                        "domain": null
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/analytics/top": {
         "get": {
           "summary": "The questions most asked and the wines most recommended",

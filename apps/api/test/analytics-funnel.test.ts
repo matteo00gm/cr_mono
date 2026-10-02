@@ -99,6 +99,7 @@ describe('the route', () => {
       },
       top: () => Promise.reject(new Error('not this route')),
       zeroResults: () => Promise.reject(new Error('not this route')),
+      refusedOrigins: () => Promise.reject(new Error('not this route')),
     };
     const response = createApp({
       auth: signedIn(),
