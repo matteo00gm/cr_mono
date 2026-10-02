@@ -176,6 +176,7 @@ conversations    id, tenant_id, session_id, origin, visitor_hash, locale,
                  started_at, last_message_at
 messages         id, tenant_id, conversation_id, role, content,
                  retrieved_product_ids[], recommended_product_ids[] (P6-03),
+                 zero_result_kind (P6-04),
                  model, input_tokens, output_tokens, latency_ms, created_at
 
 widget_events    id, tenant_id, conversation_id, session_id, type, product_id,
@@ -1422,7 +1423,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P6-01 | Event ingestion endpoint | batched, rate-limited | P3-20 |
 | ✅ P6-02 | Funnel query + dashboard panel | open → message → recommendation → add-to-cart | P6-01 |
 | ✅ P6-03 | Top queries / top products panels | | P6-01 |
-| P6-04 | **ZERO_RESULTS panel** | the highest-value commercial insight | P6-01 |
+| ✅ P6-04 | **ZERO_RESULTS panel** | the highest-value commercial insight | P6-01 |
 | P6-05 | Unauthorized-origin attempts panel | from `security_events` | P2-16 |
 | P6-06 | Shopify OAuth app + install | also becomes a domain-verification method | P4-01 |
 | P6-07 | `orders/create` webhook + matching | on the `_somm_session` line-item property | P6-06,P3-11 |
@@ -5376,7 +5377,7 @@ One round trip, one connection, one transaction, and the `FULL OUTER JOIN` handl
 
 ### P2-22 · Candidate cap
 
-**How.** Take the top 8 after filtering. This is simultaneously a cost control (prompt size), a latency control, and a **prompt-injection surface control** — each candidate is untrusted tenant text, so fewer candidates is less attack surface. Make the number config-driven so P1-46's eval can sweep it, and log the pre-cap count so §2.4's `ZERO_RESULTS` can distinguish "nothing matched" from "matched but weakly".
+**How.** Take the top 8 after filtering. This is simultaneously a cost control (prompt size), a latency control, and a **prompt-injection surface control** — each candidate is untrusted tenant text, so fewer candidates is less attack surface. Make the number config-driven so P1-46's eval can sweep it, and log the pre-cap count so §2.4's `ZERO_RESULTS` can distinguish "nothing matched" from "matched but weakly". *(P6-04 found that count is zero in the chat only for an empty catalogue — the vector branch always returns neighbours, and no price ceiling applies — and tells the two apart by whether any candidate was found by the question's words.)*
 
 **Tests.** Returns at most 8; preserves fused order; records the pre-cap count.
 
@@ -7525,7 +7526,7 @@ Assert **zero provider calls** across every blocked case, since that is what the
 **As built (2026-10-02).** `GET /v1/dashboard/analytics/top?from&to` on P6-02's port and range, `analytics:read`; `readTopQueries` and `readTopProducts` in `packages/db/src/top.ts`, read in one scope; two panels under the funnel on **Analisi**.
 
 - **⚠ Top wines count the cards, not the candidates** *(deviation, with a migration)*. The row reads `messages.retrieved_product_ids`, which holds the up-to-eight candidates the model was *given*; the visitor saw the model's choice among them. Counted, the candidates credit a wine with every answer it was passed over in, and its conversion is divided by answers that never showed it. Migration 0070 adds `messages.recommended_product_ids`, written by `recordTurn` from the cards actually sent — after the allowlist, so an id the model invented is never recorded as shown — beside the candidates, which stay for audit. Not a foreign key array, for the candidates' reason. Answers written before it carry `null`, read as no cards.
-- **The threshold is three conversations, and it is a privacy control as much as a noise one.** One visitor's phrasing is noise; it is also the only way a visitor's own words reach the seller, and a name or an address typed into the chat is asked once, by one person. Counted in conversations, so one visitor asking five times is one. `MIN_QUERY_CONVERSATIONS` is core's, reached by the dashboard through a new browser-safe subpath (`@catalogorosso/core/analytics-top`) so the panel's note cannot disagree with the query.
+- **The threshold is three conversations.** One visitor's phrasing is noise in a list of what visitors *tend* to ask. Counted in conversations, so one visitor asking five times is one. *(As first written this also called the threshold the only way a visitor's own words reach the seller; P6-04's unanswered questions list every question, and the privacy line is held where it always was — contact details are removed before a question is stored, P2-33.)* `MIN_QUERY_CONVERSATIONS` is core's, reached by the dashboard through a new browser-safe subpath (`@catalogorosso/core/analytics-top`) so the panel's note cannot disagree with the query.
 - **Normalised lowercased, trimmed and with whitespace collapsed** — the row's two, plus the third that makes *"un rosso  per"* and *"un rosso per"* one question. Nothing cleverer: a seller reads these as what people typed. `[[:space:]]`, because `\s` in a template literal reaches Postgres as a plain `s`.
 - **Conversion per wine is per conversation: an add counts only in a conversation that was shown the wine**, joined on both, so the share reads as a conversion and is at most one by construction. Adds come from `widget_events` (P6-01), linked to the conversation by the token's session.
 - **"Deleted products" are archived ones, and both kinds keep their row.** The dashboard archives (`status = 'ARCHIVED'`) and the panel says *"(archiviato)"*; a hard delete happens only with the tenant, and a left join keeps a recommendation whose wine is gone as *"Vino non più in catalogo"*.
@@ -7555,6 +7556,28 @@ Assert **zero provider calls** across every blocked case, since that is what the
 **Tests.** Events grouped and counted; the two zero-result kinds are distinguished; export matches the view.
 
 **Files.** `analytics/zero-results.ts`, panel, tests. **~130 lines.**
+
+**As built (2026-10-02).** `GET /v1/dashboard/analytics/zero-results?from&to` on P6-02's port and range, `analytics:read`; `zeroResultOf` and the themes in `packages/core/src/analytics/zero-results.ts`, `readZeroResults` in `packages/db/src/zero-results.ts`; **Domande senza risposta** on Analisi, with its export.
+
+- **⚠ Not the `ZERO_RESULTS` events** *(deviation, with a migration)*. The widget's event (P3-20) carries no question — it records that an answer had no cards, not what was asked — and it is sent by the page, so anyone holding a session could add to a seller's list. The answer itself is the record: migration 0071 adds `messages.zero_result_kind`, set by `recordTurn` when the turn is written, and the panel pairs each such answer with the question just before it (by `seq`). An answer that failed — provider error, schema failure, refusal — is not counted: none of those is a gap in the catalogue. A CHECK holds the kind to the two values and to answers.
+- **⚠ The two kinds are told apart by the question's words, not by P2-22's pre-cap count** *(deviation)*. The vector branch returns nearest neighbours whatever was asked and the chat applies no price ceiling, so the pre-cap count is zero only for an empty catalogue — every unanswered question would land in the second kind. Instead: **`no_match`** when no candidate that reached the model was found by the lexical branch (P2-19: every word of the question, or a close spelling) — the catalogue does not name what was asked; **`not_recommended`** when some were and the model chose none — the catalogue has the word but not the wine. Decided at the turn, from `lexicalRank`, because the candidates' ranks are not kept.
+- **The patterns are a word list** (`THEMES`: sweet, sparkling, rosé, organic, sulphite-free, vegan, alcohol-free, budget, gift, large formats, red, white), Italian and English, matched as whole words — *bio* is not *biondo* — so a seller can see why a question landed in a theme. *"14 visitatori hanno chiesto vini dolci"* counts conversations, each once however many of its questions use the theme's words, and across **every** question, not only the hundred listed: a theme counted from a truncated list would undercount the long tail this panel exists for.
+- **Every unanswered question is listed, not only those several conversations asked** — the opposite of P6-03's threshold, on purpose: here the single question is the signal (*"avete il Sassicaia 2015?"*). What keeps it safe is where it always was: contact details are removed before a question is stored (P2-33). P6-03's note, which had called its threshold the only way a visitor's words reach the seller, is corrected.
+- **The export is the view.** One list of rows feeds the table and the CSV, so they cannot drift; and every cell is made inert for a spreadsheet — these are words a visitor typed, and a question beginning `=` is a formula in Excel, on the seller's machine. The catalogue export (P1-30) does not need this: its cells are the seller's own and must round-trip through the importer.
+- **Questions are grouped with P6-03's normalisation**, now one shared SQL fragment (`normalisedQuestion`).
+- **⚠ Open: small talk lands in the list.** *"Grazie!"* is an answer with no wine, found by no words, so it is a `no_match`. The themes are unaffected, and a seller reads past it; a classifier for "was this a request for a wine" is P1-46 eval territory, not a regex.
+
+**Verified.** Unit, integration (`zero-results.integration.test.ts`: one question three ways in three conversations of both kinds, a conversation with two unanswered questions, one answered then unanswered, answers that showed a wine or failed, both edges of the range, a second winery, and the CHECK refusing an unknown kind and a kind on a question; `chat-port.integration.test.ts`: a real turn records `no_match`, `not_recommended`, nothing for a card, nothing for a failure), coverage gates, every `:check`. 26 mutants, 26 killed.
+
+| Mutation | Caught by |
+|---|---|
+| A shown wine counted as unanswered; a failed answer counted; a repaired answer not counted; the kinds swapped; a word inside a word; capitals kept | `zero-results.test.ts` (core) |
+| Every candidate counted as a word match | `chat-port.integration.test.ts` |
+| The kind never recorded | `conversations.test.ts` and `conversations.integration.test.ts` |
+| A conversation counted per question in a theme; a theme nobody asked about; themes in list order; themes from the shown hundred only; the total counted per question; no cap on the list | `analytics-zero-results.test.ts` |
+| Paired with the first question rather than the one before; answered questions read | `zero-results.test.ts` (db) and `zero-results.integration.test.ts` |
+| The kinds not told apart; the end of the range included; least asked first; a kind allowed on a question (the CHECK) | `zero-results.integration.test.ts` |
+| A formula left live; a minus sign not neutralised; the export not the view; no byte-order mark; one visitor in the plural; the kinds in each other's columns | `zero-results-panel.test.tsx` |
 
 ---
 

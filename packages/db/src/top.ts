@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 
 import type { DbTransaction } from './with-tenant.js';
 
@@ -26,18 +26,23 @@ export interface TopQuery {
 }
 
 /**
- * The questions most conversations asked, normalised and grouped.
+ * A visitor's question as the panels group it: lowercased, trimmed, its
+ * whitespace collapsed. One definition, for P6-03's list and P6-04's.
  *
  * `[[:space:]]` rather than `\s`, which a template literal would turn into a
  * plain `s` before Postgres ever saw it.
  */
+export const normalisedQuestion = (column: SQL): SQL =>
+  sql`lower(btrim(regexp_replace(${column}, '[[:space:]]+', ' ', 'g')))`;
+
+/** The questions most conversations asked, normalised and grouped. */
 export const readTopQueries = async (
   tx: DbTransaction,
   { start, end, minConversations, limit }: TopQueriesQuery,
 ): Promise<TopQuery[]> => {
   const rows = await tx.execute(sql`
     select
-      lower(btrim(regexp_replace(m.content, '[[:space:]]+', ' ', 'g'))) as query,
+      ${normalisedQuestion(sql`m.content`)} as query,
       count(distinct m.conversation_id)::int as conversations,
       max(m.created_at) as last_asked_at
     from messages m

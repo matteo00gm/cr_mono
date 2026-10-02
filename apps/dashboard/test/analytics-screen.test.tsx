@@ -78,6 +78,14 @@ const answering = (answer: FunnelResponse | Error, topAnswer: TopResponse | Erro
       answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer),
     'GET /v1/dashboard/analytics/top': () =>
       topAnswer instanceof Error ? Promise.reject(topAnswer) : Promise.resolve(topAnswer),
+    'GET /v1/dashboard/analytics/zero-results': () =>
+      Promise.resolve({
+        from: '2026-09-02',
+        to: '2026-10-01',
+        conversations: 0,
+        themes: [],
+        questions: [],
+      }),
   });
 
 const RANGE = { from: '2026-09-02', to: '2026-10-01' };
@@ -252,6 +260,7 @@ describe('the screen', () => {
     for (const endpoint of [
       'GET /v1/dashboard/analytics/funnel',
       'GET /v1/dashboard/analytics/top',
+      'GET /v1/dashboard/analytics/zero-results',
     ]) {
       expect(request).toHaveBeenCalledWith(endpoint, {
         query: { from: '2026-09-02', to: '2026-10-01' },
@@ -273,6 +282,7 @@ describe('the screen', () => {
       for (const endpoint of [
         'GET /v1/dashboard/analytics/funnel',
         'GET /v1/dashboard/analytics/top',
+        'GET /v1/dashboard/analytics/zero-results',
       ]) {
         expect(request).toHaveBeenCalledWith(endpoint, {
           query: { from: '2026-09-25', to: '2026-10-01' },

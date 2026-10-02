@@ -39,6 +39,7 @@ const TURN: TurnToRecord = {
   reply: 'Le consiglio un Barolo.',
   retrievedProductIds: [],
   recommendedProductIds: [],
+  zeroResultKind: null,
   model: 'amazon.nova-lite-v1:0',
   inputTokens: 1200,
   outputTokens: 180,
@@ -78,6 +79,17 @@ describe('recording a turn', () => {
     expect(text(statements[1])).toContain('recommended_product_ids');
     expect(params).toContain('{c-1,c-2}');
     expect(params).toContain('{c-2}');
+  });
+
+  it('binds why an answer showed no wine (P6-04)', async () => {
+    const { statements, tx } = capturing(opened);
+
+    await recordTurn(tx, { ...TURN, zeroResultKind: 'not_recommended' });
+
+    const { params } = new PgDialect().sqlToQuery(statements[1] as SQL);
+
+    expect(text(statements[1])).toContain('zero_result_kind');
+    expect(params).toContain('not_recommended');
   });
 
   it('upserts on the pair a session is unique by', async () => {

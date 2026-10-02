@@ -223,6 +223,7 @@ describe('recordTurn', () => {
     reply: 'Le consiglio un Barolo.',
     retrievedProductIds: [],
     recommendedProductIds: [],
+    zeroResultKind: null,
     model: 'amazon.nova-lite-v1:0',
     inputTokens: 1200,
     outputTokens: 180,
@@ -377,6 +378,29 @@ describe('recordTurn', () => {
     expect(rows[1]?.retrieved_product_ids).toEqual(candidates);
   });
 
+  it('records why an answer showed no wine on the answer, never on the question (P6-04)', async () => {
+    const session = `sess-${randomUUID()}`;
+
+    const recorded = await withTenant(
+      tenantId,
+      (tx) => recordTurn(tx, turn({ sessionId: session, zeroResultKind: 'no_match' })),
+      db,
+    );
+
+    const rows = [
+      ...(await db.execute(sql`
+        select role, zero_result_kind from messages
+        where conversation_id = ${recorded.conversationId}::uuid
+        order by seq
+      `)),
+    ] as { role: string; zero_result_kind: string | null }[];
+
+    expect(rows.map((row) => [row.role, row.zero_result_kind])).toEqual([
+      ['USER', null],
+      ['ASSISTANT', 'no_match'],
+    ]);
+  });
+
   it('keeps a candidate id after the wine is gone', async () => {
     /*
      * `retrieved_product_ids` is deliberately not a foreign key array: it is a
@@ -435,6 +459,7 @@ describe('readConversation', () => {
     reply,
     retrievedProductIds: [],
     recommendedProductIds: [],
+    zeroResultKind: null,
     model: null,
     inputTokens: null,
     outputTokens: null,

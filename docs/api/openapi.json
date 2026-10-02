@@ -176,7 +176,7 @@
       "/v1/dashboard/analytics/top": {
         "get": {
           "summary": "The questions most asked and the wines most recommended",
-          "description": "Over `from` and `to`, as for the funnel. `queries`: what visitors asked, lowercased and with whitespace collapsed, listed once at least three conversations asked it — one visitor's phrasing is noise, and the threshold keeps a name or an address typed into the chat off this list — ten at most, most asked first. `products`: the wines shown as cards in the most conversations, with the conversations that went on to add each to the cart and that share; `name` is null for a wine no longer in the catalogue, whose recommendations still count. A range that is not one is refused with a 422. Readable by every member.\n\nRequires the `analytics:read` capability.",
+          "description": "Over `from` and `to`, as for the funnel. `queries`: what visitors asked, lowercased and with whitespace collapsed, listed once at least three conversations asked it — one visitor's phrasing is noise in a list of what visitors tend to ask — ten at most, most asked first. `products`: the wines shown as cards in the most conversations, with the conversations that went on to add each to the cart and that share; `name` is null for a wine no longer in the catalogue, whose recommendations still count. A range that is not one is refused with a 422. Readable by every member.\n\nRequires the `analytics:read` capability.",
           "operationId": "getV1DashboardAnalyticsTop",
           "x-required-capability": "analytics:read",
           "responses": {
@@ -298,6 +298,165 @@
                         "recommended": 40,
                         "addedToCart": 6,
                         "rate": 0.15
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/dashboard/analytics/zero-results": {
+        "get": {
+          "summary": "The questions the catalogue could not answer",
+          "description": "Over `from` and `to`, as for the funnel: every question whose answer showed no wine, normalised as the top questions are, with the conversations that asked it and when it was last asked. `noMatch` counts the conversations where no wine in the catalogue matched the words of the question — all of them, or a close spelling, as catalogue search reads them; `notRecommended` those where some did and the sommelier chose none. An answer that failed rather than answered is not counted. `themes` are the patterns across every question — sweet wines, sparkling, organic — with the conversations that asked about each. A hundred questions at most, most asked first; the themes count all of them. Contact details were removed from every question before it was stored. A range that is not one is refused with a 422. Readable by every member.\n\nRequires the `analytics:read` capability.",
+          "operationId": "getV1DashboardAnalyticsZero-results",
+          "x-required-capability": "analytics:read",
+          "responses": {
+            "200": {
+              "description": "The questions the catalogue could not answer",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "from": {
+                        "type": "string",
+                        "format": "date",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                      },
+                      "to": {
+                        "type": "string",
+                        "format": "date",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                      },
+                      "conversations": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "themes": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            },
+                            "conversations": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "label",
+                            "conversations"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "questions": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "question": {
+                              "type": "string"
+                            },
+                            "conversations": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "noMatch": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "notRecommended": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "lastAskedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                            }
+                          },
+                          "required": [
+                            "question",
+                            "conversations",
+                            "noMatch",
+                            "notRecommended",
+                            "lastAskedAt"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "to",
+                      "conversations",
+                      "themes",
+                      "questions"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "from": "2026-09-02",
+                    "to": "2026-10-01",
+                    "conversations": 31,
+                    "themes": [
+                      {
+                        "id": "sweet",
+                        "label": "vini dolci",
+                        "conversations": 14
+                      }
+                    ],
+                    "questions": [
+                      {
+                        "question": "avete un passito?",
+                        "conversations": 6,
+                        "noMatch": 6,
+                        "notRecommended": 0,
+                        "lastAskedAt": "2026-09-30T19:12:00.000Z"
                       }
                     ]
                   }

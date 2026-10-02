@@ -14,6 +14,7 @@ import {
   STAGE_LABELS,
   type RangeChoice,
 } from './analytics-copy.js';
+import { ZeroResultsPanel } from './ZeroResultsPanel.js';
 
 /**
  * Analisi (P6-02, §2.4): what visitors did with the sommelier, over a range
@@ -211,8 +212,7 @@ export const TopPanels = ({
         )}
         <p class="cr-top__note">
           Mostriamo una domanda solo quando l&apos;hanno fatta almeno{' '}
-          {count(MIN_QUERY_CONVERSATIONS)} conversazioni: così non compare mai ciò che un singolo
-          visitatore ha scritto di sé.
+          {count(MIN_QUERY_CONVERSATIONS)} conversazioni: una sola persona non fa una tendenza.
         </p>
       </section>
       <section aria-label="Vini più consigliati">
@@ -280,6 +280,7 @@ export const AnalyticsScreen = ({
       </label>
       <FunnelPanel client={client} range={range} />
       <TopPanels client={client} range={range} />
+      <ZeroResultsPanel client={client} range={range} />
     </section>
   );
 };

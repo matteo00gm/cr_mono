@@ -534,6 +534,43 @@ export const topResponse = z.strictObject({
 export type TopResponse = z.infer<typeof topResponse>;
 
 /**
+ * The questions the catalogue could not answer (P6-04, §2.4): every answer
+ * that showed no wine, by the question it answered, over the funnel's range.
+ *
+ * `conversations` counts each conversation once however many such questions
+ * it asked. `themes` are the patterns — *"vini dolci"*, *"bollicine"* — with
+ * the conversations that asked about each, most first, and none that nobody
+ * asked about. Each question says how many of its conversations had no wine
+ * matching its words (`noMatch`) and how many had some that were not
+ * recommended (`notRecommended`). A hundred questions at most, most asked
+ * first.
+ */
+export const zeroResultsResponse = z.strictObject({
+  from: z.iso.date(),
+  to: z.iso.date(),
+  conversations: tally,
+  themes: z.array(
+    z.strictObject({
+      id: z.string(),
+      /** As it reads after *"N visitatori hanno chiesto"*. */
+      label: z.string(),
+      conversations: tally,
+    }),
+  ),
+  questions: z.array(
+    z.strictObject({
+      question: z.string(),
+      conversations: tally,
+      noMatch: tally,
+      notRecommended: tally,
+      lastAskedAt: z.iso.datetime(),
+    }),
+  ),
+});
+
+export type ZeroResultsResponse = z.infer<typeof zeroResultsResponse>;
+
+/**
  * A plan change, asked for (P5-09). `now` is an upgrade — prorated, with the
  * new limits as soon as Stripe confirms the payment; `period_end` is a
  * downgrade, which takes effect at `effectiveAt` and not before.
@@ -973,6 +1010,7 @@ export const DASHBOARD_RESPONSES = {
   'GET /v1/dashboard/usage': usageResponse,
   'GET /v1/dashboard/analytics/funnel': funnelResponse,
   'GET /v1/dashboard/analytics/top': topResponse,
+  'GET /v1/dashboard/analytics/zero-results': zeroResultsResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

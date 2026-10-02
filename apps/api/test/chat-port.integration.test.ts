@@ -112,6 +112,7 @@ const ask = async (
   port: ChatPort,
   id: string,
   sessionId = `sess-${randomUUID()}`,
+  message = 'qualcosa per una bistecca',
 ): Promise<{ chunks: WidgetChatEvent[]; report: TurnReport | undefined }> => {
   const chunks: WidgetChatEvent[] = [];
   let report: TurnReport | undefined;
@@ -122,7 +123,7 @@ const ask = async (
       sessionId,
       origin: 'https://cantina-rossi.example',
       visitorHash: null,
-      message: 'qualcosa per una bistecca',
+      message,
       signal: new AbortController().signal,
     },
     (reported) => {
@@ -410,6 +411,89 @@ describe('what a turn leaves behind', () => {
     ][0] as { content: string } | undefined;
 
     expect(kept?.content).toBe('Un ');
+  });
+
+  describe('why an answer showed no wine (P6-04)', () => {
+    const kindOf = async (tenant: string, session: string): Promise<string | null | undefined> => {
+      await useTenant(tenant);
+
+      const [answer] = [
+        ...(await db.execute(sql`
+          select m.zero_result_kind from messages m
+          join conversations c on c.id = m.conversation_id
+          where c.session_id = ${session} and m.role = 'ASSISTANT'
+        `)),
+      ] as { zero_result_kind: string | null }[];
+
+      return answer?.zero_result_kind;
+    };
+
+    it('is no match when no wine in the catalogue uses the question’s words', async () => {
+      const unmatched = await createTenant('chat-zero-unmatched');
+
+      await addWine(unmatched);
+
+      const session = `sess-${randomUUID()}`;
+      const provider = counting({ type: 'text', delta: 'Non ho un passito.' });
+
+      await ask(portWith(provider), unmatched, session, 'avete un passito?');
+
+      expect(await kindOf(unmatched, session)).toBe('no_match');
+    });
+
+    it('is not recommended when wines with those words reached the model and none was chosen', async () => {
+      const passedOver = await createTenant('chat-zero-passed-over');
+
+      await addWine(passedOver);
+
+      const session = `sess-${randomUUID()}`;
+      const provider = counting({ type: 'text', delta: 'Il Barolo non è adatto al pesce.' });
+
+      /* The lexical branch wants every word of the question (P2-19): this one has one. */
+      await ask(portWith(provider), passedOver, session, 'un barolo?');
+
+      expect(await kindOf(passedOver, session)).toBe('not_recommended');
+    });
+
+    it('is nothing when the answer showed a wine', async () => {
+      const shown = await createTenant('chat-zero-shown');
+      const productId = await addWine(shown);
+      const session = `sess-${randomUUID()}`;
+      const provider = counting({
+        type: 'recommendations',
+        items: [{ productId, reason: 'perfetto', confidence: 0.9 }],
+      });
+
+      await ask(portWith(provider), shown, session, 'avete un passito?');
+
+      expect(await kindOf(shown, session)).toBeNull();
+    });
+
+    it('is nothing when the answer failed, which is not a gap in the catalogue', async () => {
+      const failed = await createTenant('chat-zero-failed');
+
+      await addWine(failed);
+
+      const session = `sess-${randomUUID()}`;
+      const failing: LlmProvider = {
+        id: 'failing',
+        streamPairing: () =>
+          (async function* () {
+            yield await Promise.resolve<PairingChunk>({ type: 'text', delta: 'Un ' });
+            throw new Error('the provider fell over');
+          })(),
+      };
+      const port = createChatPort({
+        embeddings,
+        providers: { base: () => failing, strong: () => failing },
+        models: { base: 'amazon.nova-lite-v1:0', strong: 'amazon.nova-2-lite-v1:0' },
+        quota: createQuotaPort(),
+      });
+
+      await expect(ask(port, failed, session, 'avete un passito?')).rejects.toThrow('fell over');
+
+      expect(await kindOf(failed, session)).toBeNull();
+    });
   });
 
   it('remembers the conversation for the next question', async () => {
