@@ -583,6 +583,9 @@ export {
   type TurnToRecord,
 } from './conversations.js';
 
+/** Why an answer showed no wine (P6-04): the column's own list. */
+export { ZERO_RESULT_KINDS, type ZeroResultKind } from './schema/conversations.js';
+
 /**
  * Retrieval against the catalogue (P2-18, §4.4).
  *
@@ -634,3 +637,6 @@ export {
   type TopQueriesQuery,
   type TopQuery,
 } from './top.js';
+
+/** The questions the catalogue could not answer (P6-04), read in the scope's tenant. */
+export { readZeroResults, type UnansweredQuestion, type ZeroResultsQuery } from './zero-results.js';

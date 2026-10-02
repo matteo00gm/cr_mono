@@ -29,6 +29,7 @@ export * from './dev-mode.js';
 export * from './analytics/funnel.js';
 export * from './analytics/range.js';
 export * from './analytics/top.js';
+export * from './analytics/zero-results.js';
 
 /**
  * What a turn cost (P2-31).

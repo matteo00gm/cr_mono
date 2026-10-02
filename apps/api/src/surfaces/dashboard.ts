@@ -10,6 +10,7 @@ import {
   billingTopUpResponse,
   funnelResponse,
   topResponse,
+  zeroResultsResponse,
   usageResponse,
   catalogueReindexedResponse,
   claimWithdrawnResponse,
@@ -1416,6 +1417,19 @@ export const createDashboardApp = ({
     return c.json(await analytics.top(c.get('tenantId'), parsed.data));
   });
 
+  /**
+   * The questions the catalogue could not answer (P6-04, §2.4), over the
+   * funnel's range: the panel that tells a seller what to stock. **Every
+   * member**, through `analytics:read`.
+   */
+  app.get('/analytics/zero-results', requireCapability('analytics:read'), async (c) => {
+    const parsed = rangeQuery.safeParse(c.req.query());
+
+    if (!parsed.success) throw new InvalidRequestError(RANGE_EXPECTED);
+
+    return c.json(await analytics.zeroResults(c.get('tenantId'), parsed.data));
+  });
+
   app.post('/keys', requireCapability('keys:manage'), stepUp, async (c) =>
     c.json(await keys.create(c.get('tenantId')), 201),
   );
@@ -2528,8 +2542,8 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
       description:
         'Over `from` and `to`, as for the funnel. `queries`: what visitors asked, lowercased ' +
         'and with whitespace collapsed, listed once at least three conversations asked it — one ' +
-        "visitor's phrasing is noise, and the threshold keeps a name or an address typed into " +
-        'the chat off this list — ten at most, most asked first. `products`: the wines shown ' +
+        "visitor's phrasing is noise in a list of what visitors tend to ask — ten at most, " +
+        'most asked first. `products`: the wines shown ' +
         'as cards in the most conversations, with the conversations that went on to add each ' +
         'to the cart and that share; `name` is null for a wine no longer in the catalogue, ' +
         'whose recommendations still count. A range that is not one is refused with a 422. ' +
@@ -2556,6 +2570,40 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         ],
       },
       response: topResponse,
+    },
+  ],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/analytics/zero-results`),
+    {
+      access: requires('analytics:read'),
+      summary: 'The questions the catalogue could not answer',
+      description:
+        'Over `from` and `to`, as for the funnel: every question whose answer showed no wine, ' +
+        'normalised as the top questions are, with the conversations that asked it and when it ' +
+        'was last asked. `noMatch` counts the conversations where no wine in the catalogue ' +
+        'matched the words of the question — all of them, or a close spelling, as catalogue ' +
+        'search reads them; `notRecommended` those where some did and the sommelier chose ' +
+        'none. An answer that failed rather than answered is not counted. `themes` are ' +
+        'the patterns across every question — sweet wines, sparkling, organic — with the ' +
+        'conversations that asked about each. A hundred questions at most, most asked first; ' +
+        'the themes count all of them. Contact details were removed from every question before ' +
+        'it was stored. A range that is not one is refused with a 422. Readable by every member.',
+      example: {
+        from: '2026-09-02',
+        to: '2026-10-01',
+        conversations: 31,
+        themes: [{ id: 'sweet', label: 'vini dolci', conversations: 14 }],
+        questions: [
+          {
+            question: 'avete un passito?',
+            conversations: 6,
+            noMatch: 6,
+            notRecommended: 0,
+            lastAskedAt: '2026-09-30T19:12:00.000Z',
+          },
+        ],
+      },
+      response: zeroResultsResponse,
     },
   ],
   [

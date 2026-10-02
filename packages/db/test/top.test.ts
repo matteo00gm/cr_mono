@@ -1,8 +1,8 @@
 import { PgDialect } from 'drizzle-orm/pg-core';
-import type { SQL } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 
-import { readTopProducts, readTopQueries } from '../src/top.js';
+import { normalisedQuestion, readTopProducts, readTopQueries } from '../src/top.js';
 import type { DbTransaction } from '../src/with-tenant.js';
 import { text } from './support/sql-text.js';
 
@@ -56,14 +56,18 @@ describe('readTopQueries', () => {
     );
   });
 
-  it('collapses whitespace with a class a template literal cannot eat', async () => {
+  it('collapses whitespace with a class a template literal cannot eat', () => {
+    expect(text(normalisedQuestion(sql`m.content`))).toMatch(
+      /^lower\(btrim\(regexp_replace\( *m\.content *, '\[\[:space:\]\]\+', ' ', 'g'\)\)\)$/u,
+    );
+  });
+
+  it('groups by that normalisation, which P6-04 shares', async () => {
     const fake = fakeTx();
 
     await readTopQueries(fake.tx, { ...RANGE, minConversations: 3, limit: 10 });
 
-    expect(text(statementOf(fake))).toContain(
-      "lower(btrim(regexp_replace(m.content, '[[:space:]]+', ' ', 'g')))",
-    );
+    expect(text(statementOf(fake))).toContain(text(normalisedQuestion(sql`m.content`)));
   });
 
   it('binds the threshold and the limit it is given', async () => {

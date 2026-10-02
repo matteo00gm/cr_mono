@@ -12,6 +12,7 @@ import {
   tierFor,
   withoutLeakedInstructions,
   withSchemaRepair,
+  zeroResultOf,
   type CandidateProduct,
   type EmbeddingProvider,
   type EscalationReason,
@@ -386,6 +387,16 @@ export const createChatPort = ({
               reply,
               retrievedProductIds: candidates.map((candidate) => candidate.id),
               recommendedProductIds: shown,
+              /*
+               * Decided now, from what reached the model, because that is not
+               * kept: §2.4's ZERO_RESULTS panel reads it (P6-04).
+               */
+              zeroResultKind: zeroResultOf({
+                outcome,
+                cards: shown.length,
+                wordMatches: capped.candidates.filter((candidate) => candidate.lexicalRank !== null)
+                  .length,
+              }),
               model,
               inputTokens: usage?.inputTokens ?? null,
               outputTokens: usage?.outputTokens ?? null,

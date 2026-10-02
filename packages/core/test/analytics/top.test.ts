@@ -8,11 +8,7 @@ import { MIN_QUERY_CONVERSATIONS, TOP_LIMIT } from '../../src/analytics/top.js';
  */
 
 describe('the threshold', () => {
-  it('is three conversations: enough that one visitor’s own words never reach the list', () => {
-    /*
-     * Lowering it is a privacy decision, not a tuning one: at one, a name or
-     * an address typed into the chat is a row on a seller's screen.
-     */
+  it('is three conversations: a trend, not one visitor’s phrasing', () => {
     expect(MIN_QUERY_CONVERSATIONS).toBe(3);
   });
 });

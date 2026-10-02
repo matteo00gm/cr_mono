@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 
+import type { ZeroResultKind } from './schema/conversations.js';
 import type { DbTransaction } from './with-tenant.js';
 
 /**
@@ -51,6 +52,8 @@ export interface TurnToRecord {
    * candidates, after the allowlist. What "top recommended wines" counts.
    */
   readonly recommendedProductIds: readonly string[];
+  /** Why the answer showed no wine (P6-04), or `null` when it showed one or failed. */
+  readonly zeroResultKind: ZeroResultKind | null;
   readonly model: string | null;
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
@@ -108,12 +111,13 @@ export const recordTurn = async (tx: DbTransaction, turn: TurnToRecord): Promise
   await tx.execute(sql`
     insert into messages
       (tenant_id, conversation_id, role, content, retrieved_product_ids,
-       recommended_product_ids, model, input_tokens, output_tokens, latency_ms)
+       recommended_product_ids, zero_result_kind, model, input_tokens, output_tokens, latency_ms)
     values
-      (${tenant}, ${row.id}::uuid, 'USER', ${turn.question}, null, null, null, null, null, null),
+      (${tenant}, ${row.id}::uuid, 'USER', ${turn.question}, null, null, null, null, null, null, null),
       (${tenant}, ${row.id}::uuid, 'ASSISTANT', ${turn.reply},
        ${`{${turn.retrievedProductIds.join(',')}}`}::uuid[],
        ${`{${turn.recommendedProductIds.join(',')}}`}::uuid[],
+       ${turn.zeroResultKind},
        ${turn.model}, ${turn.inputTokens}, ${turn.outputTokens}, ${turn.latencyMs})
   `);
 

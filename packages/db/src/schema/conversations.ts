@@ -15,6 +15,14 @@ import {
 import { tenants } from './tenants.js';
 
 /**
+ * Why an answer showed no wine (P6-04). The list the column is checked
+ * against, and the one `packages/core` classifies into.
+ */
+export const ZERO_RESULT_KINDS = ['no_match', 'not_recommended'] as const;
+
+export type ZeroResultKind = (typeof ZERO_RESULT_KINDS)[number];
+
+/**
  * `conversations` and `messages` — chat history (P0-28).
  *
  * Needed for conversational context, for the analytics in §2.4, and for the
@@ -128,6 +136,16 @@ export const messages = pgTable(
      */
     recommendedProductIds: uuid('recommended_product_ids').array(),
 
+    /**
+     * Why an answer showed no wine (P6-04), or `null` when it showed one — or
+     * when it failed rather than answered, which is not a gap in the
+     * catalogue. Decided when the turn is recorded, from what reached the
+     * model, because that is gone afterwards: `no_match` when no candidate
+     * was found by the question's own words, `not_recommended` when some were
+     * and the model chose none. Only ever on an answer.
+     */
+    zeroResultKind: text('zero_result_kind', { enum: ZERO_RESULT_KINDS }),
+
     model: text('model'),
     inputTokens: integer('input_tokens'),
     outputTokens: integer('output_tokens'),
@@ -153,5 +171,9 @@ export const messages = pgTable(
     index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
     /** Loading it in the order it was written, which is what the history reads. */
     index('messages_conversation_seq_idx').on(table.conversationId, table.seq),
+    check(
+      'messages_zero_result_kind_known',
+      sql`zero_result_kind is null or (role = 'ASSISTANT' and zero_result_kind in ('no_match', 'not_recommended'))`,
+    ),
   ],
 );

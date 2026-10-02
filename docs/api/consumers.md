@@ -9,8 +9,9 @@ complete only because raw `fetch` to our own API is forbidden outside
 
 | Endpoint | Called from |
 |---|---|
-| `GET /v1/dashboard/analytics/funnel` | apps/dashboard/src/features/analytics/AnalyticsScreen.tsx:49 |
-| `GET /v1/dashboard/analytics/top` | apps/dashboard/src/features/analytics/AnalyticsScreen.tsx:161 |
+| `GET /v1/dashboard/analytics/funnel` | apps/dashboard/src/features/analytics/AnalyticsScreen.tsx:50 |
+| `GET /v1/dashboard/analytics/top` | apps/dashboard/src/features/analytics/AnalyticsScreen.tsx:162 |
+| `GET /v1/dashboard/analytics/zero-results` | apps/dashboard/src/features/analytics/ZeroResultsPanel.tsx:83 |
 | `GET /v1/dashboard/domains/claims/served` | apps/dashboard/src/features/domains/ClaimNotice.tsx:38 |
 | `GET /v1/dashboard/me` | apps/dashboard/src/session.ts:152 |
 | `GET /v1/dashboard/products` | apps/dashboard/src/features/catalog/CatalogScreen.tsx:134<br>apps/dashboard/src/features/catalog/catalogue-export.ts:70 |

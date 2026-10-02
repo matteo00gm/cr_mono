@@ -1,22 +1,28 @@
-import type { FunnelResponse, TopResponse } from '@catalogorosso/api-client';
+import type { FunnelResponse, TopResponse, ZeroResultsResponse } from '@catalogorosso/api-client';
 import {
   analyticsRange,
   FUNNEL_STAGES,
   funnelOf,
   MIN_QUERY_CONVERSATIONS,
+  THEMES,
+  themesOf,
   TOP_LIMIT,
+  ZERO_RESULTS_LIMIT,
   type FunnelStage,
 } from '@catalogorosso/core';
 import {
   readFunnel,
   readTopProducts,
   readTopQueries,
+  readZeroResults,
   withTenant,
   type FunnelQuery,
   type TopProduct,
   type TopProductsQuery,
   type TopQueriesQuery,
   type TopQuery,
+  type UnansweredQuestion,
+  type ZeroResultsQuery,
 } from '@catalogorosso/db';
 
 /**
@@ -40,6 +46,8 @@ export interface AnalyticsPort {
   readonly funnel: (tenantId: string, asked: RangeAsked) => Promise<FunnelResponse>;
   /** The questions most asked and the wines most recommended (P6-03). */
   readonly top: (tenantId: string, asked: RangeAsked) => Promise<TopResponse>;
+  /** The questions the catalogue could not answer, and their patterns (P6-04). */
+  readonly zeroResults: (tenantId: string, asked: RangeAsked) => Promise<ZeroResultsResponse>;
 }
 
 export interface AnalyticsPortDeps {
@@ -56,6 +64,9 @@ export interface AnalyticsPortDeps {
         products: TopProductsQuery,
       ) => Promise<{ readonly queries: TopQuery[]; readonly products: TopProduct[] }>)
     | undefined;
+  /** Every unanswered question for a tenant. Defaults to `readZeroResults` in its scope. */
+  readonly readZeroResults?:
+    ((tenantId: string, query: ZeroResultsQuery) => Promise<UnansweredQuestion[]>) | undefined;
   /** Today, for a range that does not say. */
   readonly now?: (() => Date) | undefined;
 }
@@ -74,7 +85,26 @@ export class AnalyticsPortNotConfiguredError extends Error {
 export const unconfiguredAnalytics: AnalyticsPort = {
   funnel: () => Promise.reject(new AnalyticsPortNotConfiguredError()),
   top: () => Promise.reject(new AnalyticsPortNotConfiguredError()),
+  zeroResults: () => Promise.reject(new AnalyticsPortNotConfiguredError()),
 };
+
+/**
+ * The patterns above the list: for each theme, the conversations whose
+ * unanswered questions use its words — each counted once, however many of
+ * its questions do — most asked first, and none that nobody asked about.
+ */
+const themesAcross = (questions: readonly UnansweredQuestion[]) =>
+  THEMES.map((theme) => ({
+    id: theme.id,
+    label: theme.label,
+    conversations: new Set(
+      questions
+        .filter((question) => themesOf(question.question).includes(theme))
+        .flatMap((question) => question.conversationIds),
+    ).size,
+  }))
+    .filter((theme) => theme.conversations > 0)
+    .sort((a, b) => b.conversations - a.conversations);
 
 /** Both reads in one transaction, so the two lists describe the same moment. */
 const readTopInScope: NonNullable<AnalyticsPortDeps['readTop']> = (tenantId, queries, products) =>
@@ -86,6 +116,8 @@ const readTopInScope: NonNullable<AnalyticsPortDeps['readTop']> = (tenantId, que
 export const createAnalyticsPort = ({
   readFunnel: read = (tenantId, query) => withTenant(tenantId, (tx) => readFunnel(tx, query)),
   readTop = readTopInScope,
+  readZeroResults: readUnanswered = (tenantId, query) =>
+    withTenant(tenantId, (tx) => readZeroResults(tx, query)),
   now = () => new Date(),
 }: AnalyticsPortDeps = {}): AnalyticsPort => ({
   funnel: async (tenantId, asked) => {
@@ -131,6 +163,25 @@ export const createAnalyticsPort = ({
         recommended: product.recommended,
         addedToCart: product.added,
         rate: product.added / product.recommended,
+      })),
+    };
+  },
+
+  zeroResults: async (tenantId, asked) => {
+    const range = analyticsRange(asked, now());
+    const questions = await readUnanswered(tenantId, { start: range.start, end: range.end });
+
+    return {
+      from: range.from,
+      to: range.to,
+      conversations: new Set(questions.flatMap((question) => question.conversationIds)).size,
+      themes: themesAcross(questions),
+      questions: questions.slice(0, ZERO_RESULTS_LIMIT).map((question) => ({
+        question: question.question,
+        conversations: question.conversationIds.length,
+        noMatch: question.noMatch,
+        notRecommended: question.notRecommended,
+        lastAskedAt: question.lastAskedAt.toISOString(),
       })),
     };
   },
