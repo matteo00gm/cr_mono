@@ -38,8 +38,9 @@ describe('tenant_domains schema', () => {
     expect(domainStatus.enumValues).toEqual(['PENDING', 'VERIFIED']);
   });
 
-  it('offers both proofs of control from §3.3', () => {
-    expect(domainVerificationMethod.enumValues).toEqual(['DNS_TXT', 'WELL_KNOWN']);
+  it('offers the three proofs of control from §3.3', () => {
+    /* The third is the Shopify install (P6-06): Shopify asked the shop's owner. */
+    expect(domainVerificationMethod.enumValues).toEqual(['DNS_TXT', 'WELL_KNOWN', 'SHOPIFY']);
   });
 
   it('leaves verified_at null until verification actually happens', () => {

@@ -8,7 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app.js';
 import { BILLING_UNAVAILABLE } from '../src/billing.js';
-import { buildDependencies, QUERY_EMBEDDING } from '../src/composition.js';
+import {
+  buildDependencies,
+  QUERY_EMBEDDING,
+  ShopifyTokenStoreMissingError,
+} from '../src/composition.js';
 import { unconfiguredMembers } from '../src/members.js';
 import { logger } from '../src/middleware/logger.js';
 import { ORIGIN_SECRET_HEADER } from '../src/middleware/origin-secret.js';
@@ -423,6 +427,35 @@ describe('billing (P5-02)', () => {
 
     await expect(deps.billing.checkout(randomUUID(), 'CANTINA')).rejects.toThrow(
       BILLING_UNAVAILABLE,
+    );
+  });
+});
+
+describe('the Shopify token store (P6-06, ADR 0031)', () => {
+  const shopify = { clientId: 'client-1', clientSecret: ['shpss', 'c', 'd'.repeat(20)].join('_') };
+
+  it('refuses to start a deployed stage that would keep tokens in memory', () => {
+    expect(() => buildDependencies({ ...config, shopify })).toThrow(ShopifyTokenStoreMissingError);
+  });
+
+  it('starts a deployed stage with an SSM prefix', () => {
+    expect(() =>
+      buildDependencies({ ...config, shopify, shopifyTokenPrefix: '/sommelier/dev/shopify' }),
+    ).not.toThrow();
+  });
+
+  it('starts a local run without one, where memory is all there is', () => {
+    expect(() => buildDependencies({ ...config, stage: 'unknown', shopify })).not.toThrow();
+  });
+
+  it('starts any stage with Shopify not set up, which needs no store at all', () => {
+    expect(() => buildDependencies(config)).not.toThrow();
+  });
+
+  it('wires the webhook secret only when Shopify is set up', () => {
+    expect(buildDependencies(config).shopifySecret).toBeUndefined();
+    expect(buildDependencies({ ...config, shopify, shopifyTokenPrefix: '/p' }).shopifySecret).toBe(
+      shopify.clientSecret,
     );
   });
 });

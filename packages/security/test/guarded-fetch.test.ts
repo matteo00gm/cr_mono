@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   guardedFetch,
   guardedLookup,
+  GuardedFetchMisused,
   GuardedFetchRefused,
   GUARDED_TIMEOUT_MS,
   MAX_BODY_BYTES,
@@ -246,11 +247,17 @@ const fakeRequest = (
     destroy: () => {
       outgoing.destroyed = true;
     },
-    end: () => undefined,
+    /* Replaced per request below; typed here so the replacement may take a body. */
+    end: (body?: string): void => {
+      void body;
+    },
   });
+  /* What the request was ended with: the body a POST wrote, or nothing. */
+  const written: (string | undefined)[] = [];
 
   const send = (_options: unknown, handler?: (response: FakeResponse) => void) => {
-    outgoing.end = () => {
+    outgoing.end = (body?: string) => {
+      written.push(body);
       queueMicrotask(() => {
         if (fail !== undefined) {
           outgoing.emit(fail.event, fail.error);
@@ -275,7 +282,7 @@ const fakeRequest = (
   };
 
   /* The request is exposed so a test can see whether it was torn down. */
-  return Object.assign(send, { outgoing });
+  return Object.assign(send, { outgoing, written });
 };
 
 const fetchWith = async (
@@ -593,6 +600,105 @@ describe('the options the client is handed', () => {
       accept: 'text/plain',
       'user-agent': 'catalogorosso-verifier',
     });
+  });
+});
+
+describe('a post (P6-06)', () => {
+  const posting = async (json: string) => {
+    let seen: Record<string, unknown> = {};
+    const request = fakeRequest((response) => {
+      response.emit('data', Buffer.from('{"access_token":"t"}'));
+      response.emit('end');
+    });
+
+    const answer = await guardedFetch('https://cantina.myshopify.com/admin/oauth/access_token', {
+      method: 'POST',
+      json,
+      resolveAll: answering(PUBLIC),
+      request: ((options: Record<string, unknown>, handler?: (response: FakeResponse) => void) => {
+        seen = options;
+
+        return request(options, handler);
+      }) as never,
+    });
+
+    return { answer, seen, written: request.written };
+  };
+
+  it('writes the JSON it was given, and reads the answer', async () => {
+    const json = JSON.stringify({ code: 'abc' });
+    const { answer, seen, written } = await posting(json);
+
+    expect(seen.method).toBe('POST');
+    expect(written).toEqual([json]);
+    expect(answer).toMatchObject({ status: 200, body: '{"access_token":"t"}' });
+  });
+
+  it('says it is JSON, how long it is in bytes, and asks for JSON back', async () => {
+    /* Bytes, not characters: an accented letter is two of them. */
+    const json = JSON.stringify({ name: 'Cantina Città' });
+    const { seen } = await posting(json);
+
+    expect(seen.headers).toStrictEqual({
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'content-length': String(Buffer.byteLength(json)),
+      'user-agent': 'catalogorosso-verifier',
+    });
+    expect(Buffer.byteLength(json)).toBeGreaterThan(json.length);
+  });
+
+  it('keeps every other defence: a post is looked up through the guarded lookup', async () => {
+    const { seen } = await posting('{}');
+
+    const refused = await new Promise<Error | null>((done) => {
+      (seen.lookup as LookupFn)('cantina.myshopify.com', {}, (error) => {
+        done(error);
+      });
+    });
+
+    /* The fixture resolves publicly, so the guarded lookup lets it through... */
+    expect(refused).toBeNull();
+    /* ...and it is the guarded one, still pinned to 443. */
+    expect(seen.port).toBe(443);
+  });
+
+  it('refuses a post with no body, which is a caller’s mistake', async () => {
+    await expect(
+      guardedFetch('https://cantina.myshopify.com/x', {
+        method: 'POST',
+        resolveAll: answering(PUBLIC),
+        request: fakeRequest(() => undefined) as never,
+      }),
+    ).rejects.toBeInstanceOf(GuardedFetchMisused);
+  });
+
+  it.each(['GET', 'HEAD'] as const)('refuses a body on a %s', async (method) => {
+    await expect(
+      guardedFetch('https://cantina.myshopify.com/x', {
+        method,
+        json: '{}',
+        resolveAll: answering(PUBLIC),
+        request: fakeRequest(() => undefined) as never,
+      }),
+    ).rejects.toBeInstanceOf(GuardedFetchMisused);
+  });
+
+  it('writes nothing on a get', async () => {
+    const request = fakeRequest((response) => {
+      response.emit('end');
+    });
+
+    await fetchWith(request);
+
+    expect(request.written).toEqual([undefined]);
+  });
+
+  it('says what went wrong without naming anything of the caller’s', () => {
+    expect(new GuardedFetchMisused().message).toBe(
+      'guardedFetch: a POST carries a JSON body, and only a POST does.',
+    );
+    expect(new GuardedFetchMisused().name).toBe('GuardedFetchMisused');
   });
 });
 

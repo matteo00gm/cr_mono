@@ -74,6 +74,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@aws-sdk/client-ssm':
+        specifier: ^3.883.0
+        version: 3.1127.0
       '@catalogorosso/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client

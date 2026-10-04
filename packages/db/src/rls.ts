@@ -170,6 +170,12 @@ const TENANTS_WIDGET_USING_0059 = `id = ${TENANT}
  */
 const TENANT_DIRECTORY = "nullif(current_setting('app.tenant_directory', true), '') = 'on'";
 
+/**
+ * The shop a Shopify webhook names (P6-06, ADR 0031): one installation row,
+ * for a read-only transaction that learns which winery holds it.
+ */
+const SHOPIFY_SHOP = "nullif(current_setting('app.shopify_shop', true), '')";
+
 export interface RlsPolicy {
   /** Table the policy is attached to. */
   readonly table: string;
@@ -238,6 +244,7 @@ const HEADERS: Readonly<Record<string, string>> = {
   '0063_usage_top_ups_rls': 'Row-level security for message top-ups (P5-11a).',
   '0065_notification_events_rls': 'Row-level security for quota notices sent (P5-12).',
   '0069_tenant_directory_rls': 'The nightly rollup lists every tenant, read only (P5-13).',
+  '0073_shopify_rls': 'A Shopify webhook finds its winery by shop, read only (P6-06).',
   '0068_e_invoices_rls': 'Row-level security for charges awaiting an e-invoice (P5-03a).',
 };
 
@@ -536,6 +543,31 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
       'set: only listTenantDirectory sets it, inside a READ ONLY transaction, for one statement ' +
       'that selects the id and the creation time. WITH CHECK stays tenant-only, so even a writable ' +
       'transaction holding the flag could not move a row.',
+  },
+  {
+    table: 'shopify_installations',
+    migration: '0073_shopify_rls',
+    using: `tenant_id = ${TENANT}
+    OR shop = ${SHOPIFY_SHOP}`,
+    withCheck: `tenant_id = ${TENANT}`,
+    note:
+      'A Shopify webhook names its shop and nothing else (P6-06, ADR 0031), so the winery that ' +
+      'holds the shop is learned from this table before any tenant is known. The branch admits ' +
+      'the one row for the shop the flag names, on this table only, and only resolveTenantByShop ' +
+      'sets it, inside a READ ONLY transaction, before handing over to withTenant. WITH CHECK ' +
+      'stays tenant-only.',
+  },
+  {
+    table: 'shopify_oauth_states',
+    migration: '0073_shopify_rls',
+    using: `tenant_id = ${TENANT}
+    OR user_id = ${USER}`,
+    withCheck: `tenant_id = ${TENANT}`,
+    note:
+      'The install callback is a redirect from Shopify and carries no tenant, so it finds the ' +
+      'state in the scope of the member who started the install — the memberships argument, on ' +
+      'one more table. It spends the state by deleting it, which only USING governs; WITH CHECK ' +
+      'stays tenant-only, so the user scope cannot write a state naming any winery.',
   },
 ];
 

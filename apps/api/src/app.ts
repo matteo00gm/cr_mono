@@ -6,6 +6,7 @@ import type { MembershipReader } from '@catalogorosso/core';
 import type { AppEnv } from './env.js';
 import type { AuthPort } from './middleware/auth.js';
 import type { AnalyticsPort } from './analytics.js';
+import type { ShopifyPort } from './shopify.js';
 import type { BillingPort } from './billing.js';
 import type { DomainsPort } from './domains.js';
 import type { KeysPort } from './keys.js';
@@ -154,6 +155,11 @@ export interface AppOptions {
   /** Told of every webhook refused for its signature (P5-03). */
   readonly onSignatureRejected?: ((rejection: SignatureRejection) => Promise<void>) | undefined;
 
+  /** The Shopify install and its webhooks (P6-06). Optional on the `members` terms. */
+  readonly shopify?: ShopifyPort | undefined;
+  /** The Shopify app's secret, which signs its webhooks (P6-06). Absent: a 404. */
+  readonly shopifySecret?: string | undefined;
+
   /**
    * The widget surface's resolution, limits and usage read (P2-04 to P2-10).
    * Optional on the `members` terms: absent, the widget's routes exist and
@@ -182,6 +188,8 @@ export const createApp = ({
   turnstileSettings,
   billing,
   analytics,
+  shopify,
+  shopifySecret,
   products,
   rag,
   originSecret,
@@ -272,6 +280,7 @@ export const createApp = ({
       turnstileSettings,
       billing,
       analytics,
+      shopify,
       products,
       rag,
       dashboardOrigin,
@@ -292,6 +301,8 @@ export const createApp = ({
       stripeWebhookSecret,
       stripeEvents,
       onSignatureRejected,
+      shopify,
+      shopifySecret,
     }),
   );
 

@@ -20,6 +20,7 @@ export * from './processed-webhooks.js';
 export * from './products.js';
 export * from './rate-limit-buckets.js';
 export * from './security-events.js';
+export * from './shopify.js';
 export * from './tenant-domains.js';
 export * from './widget-session-cutoffs.js';
 export * from './tenants.js';

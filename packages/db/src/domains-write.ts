@@ -57,7 +57,7 @@ export interface NewDomain {
    * zone is already proved, so the new origin lands `VERIFIED` with that
    * method and no nonce — the reasoning P4-05 applies to `www`.
    */
-  readonly coveredBy?: 'DNS_TXT' | 'WELL_KNOWN' | undefined;
+  readonly coveredBy?: 'DNS_TXT' | 'WELL_KNOWN' | 'SHOPIFY' | undefined;
 }
 
 interface DomainSqlRow {
@@ -322,7 +322,7 @@ export const readDomainById = async (
 export const markDomainVerified = async (
   tx: DbTransaction,
   id: string,
-  method: 'DNS_TXT' | 'WELL_KNOWN',
+  method: 'DNS_TXT' | 'WELL_KNOWN' | 'SHOPIFY',
 ): Promise<DomainRow | undefined> => {
   const rows = await tx.execute(sql`
     UPDATE tenant_domains

@@ -8,6 +8,7 @@ import { BillingBanner } from './features/billing/BillingBanner.js';
 import { BillingScreen } from './features/billing/BillingScreen.js';
 import { CatalogScreen } from './features/catalog/CatalogScreen.js';
 import { ClaimNotice } from './features/domains/ClaimNotice.js';
+import { IntegrationsScreen } from './features/integrations/IntegrationsScreen.js';
 import { EnrolmentScreen } from './features/security/EnrolmentScreen.js';
 import { navFor } from './nav.js';
 import { apiFor, rememberTenant, useSession, type SessionState } from './session.js';
@@ -165,6 +166,21 @@ const AnalyticsRoute = ({
   return <AnalyticsScreen client={client} canAddDomains={can(role, 'domains:manage')} />;
 };
 
+/** Integrazioni (P6-06), with a client built once per winery for `CatalogRoute`'s reason. */
+const IntegrationsRoute = ({
+  tenantId,
+  role,
+  clientFor,
+}: {
+  readonly tenantId: string;
+  readonly role: Role;
+  readonly clientFor: (tenantId: string) => ApiClient;
+}): JSX.Element => {
+  const client = useMemo(() => clientFor(tenantId), [tenantId, clientFor]);
+  /* The form's visibility only: the install route checks the capability itself (P0-49). */
+  return <IntegrationsScreen client={client} canConnect={can(role, 'domains:manage')} />;
+};
+
 /**
  * The signed-in layout.
  *
@@ -261,6 +277,13 @@ export const Layout = ({
           </Route>
           <Route path="/analisi">
             <AnalyticsRoute tenantId={active.tenantId} role={active.role} clientFor={clientFor} />
+          </Route>
+          <Route path="/integrazioni">
+            <IntegrationsRoute
+              tenantId={active.tenantId}
+              role={active.role}
+              clientFor={clientFor}
+            />
           </Route>
           <Route path="/membri">
             <Placeholder title="Membri" />

@@ -34,7 +34,7 @@ const die = (msg) => reportDie('OpenAPI generation failed: ' + msg);
  * requirement the integration suite has, and for the same reason.
  */
 const { createApp } = await import('../apps/api/dist/app.js');
-const { DASHBOARD_ROUTES, responseJsonSchema } =
+const { DASHBOARD_REDIRECT_ROUTES, DASHBOARD_ROUTES, responseJsonSchema } =
   await import('../apps/api/dist/surfaces/dashboard.js');
 const { DASHBOARD_PREFIX, WIDGET_PREFIX } = await import('../apps/api/dist/routes.js');
 const { WIDGET_ROUTES } = await import('../apps/api/dist/surfaces/widget.js');
@@ -89,9 +89,11 @@ const problems = [];
  *
  * The widget's CORS preflights are declared for access (P0-49) and deliberately
  * not documented: an `OPTIONS` answer has no body to describe, and a reference
- * listing one would be describing the browser rather than the API.
+ * listing one would be describing the browser rather than the API. The
+ * dashboard's redirect targets (P6-06) are left out on the same terms, by name.
  */
 const tableFor = (endpoint) => {
+  if (DASHBOARD_REDIRECT_ROUTES.has(endpoint.key)) return undefined;
   if (endpoint.path.startsWith(DASHBOARD_PREFIX)) return DASHBOARD_ROUTES;
   if (endpoint.path.startsWith(WIDGET_PREFIX) && endpoint.method !== 'OPTIONS') {
     return WIDGET_ROUTES;

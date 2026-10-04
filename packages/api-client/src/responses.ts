@@ -595,6 +595,29 @@ export const refusedOriginsResponse = z.strictObject({
 export type RefusedOriginsResponse = z.infer<typeof refusedOriginsResponse>;
 
 /**
+ * The winery's Shopify store (P6-06). `configured` is false where the service
+ * has no Shopify app set up, and nothing can be connected; `shop` is the
+ * latest store connected, with when — and when it was uninstalled, if it was.
+ */
+export const shopifyStatusResponse = z.strictObject({
+  configured: z.boolean(),
+  shop: z
+    .strictObject({
+      shop: z.string(),
+      installedAt: z.iso.datetime(),
+      uninstalledAt: z.iso.datetime().nullable(),
+    })
+    .nullable(),
+});
+
+export type ShopifyStatusResponse = z.infer<typeof shopifyStatusResponse>;
+
+/** Where to send the owner to approve the install: the shop's own consent screen. */
+export const shopifyInstallResponse = z.strictObject({ url: z.url() });
+
+export type ShopifyInstallResponse = z.infer<typeof shopifyInstallResponse>;
+
+/**
  * A plan change, asked for (P5-09). `now` is an upgrade — prorated, with the
  * new limits as soon as Stripe confirms the payment; `period_end` is a
  * downgrade, which takes effect at `effectiveAt` and not before.
@@ -1038,6 +1061,8 @@ export const DASHBOARD_RESPONSES = {
   'GET /v1/dashboard/analytics/origins': refusedOriginsResponse,
   /* The one-click add from the refused-origins panel (P6-05): the ordinary route, nothing new. */
   'POST /v1/dashboard/domains': domainAddedResponse,
+  'GET /v1/dashboard/shopify': shopifyStatusResponse,
+  'POST /v1/dashboard/shopify/install': shopifyInstallResponse,
 } as const;
 
 export type DashboardEndpoint = keyof typeof DASHBOARD_RESPONSES;

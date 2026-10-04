@@ -336,6 +336,7 @@ describe('a Shopify store’s own address (P4-19)', () => {
 
   it('points the seller somewhere that will work', () => {
     expect(SHOPIFY_UNVERIFIABLE).toMatch(/Shopify controls it/u);
-    expect(SHOPIFY_UNVERIFIABLE).toMatch(/contact support/u);
+    /* The install proves it now (P6-06), so the seller is sent there, not to support. */
+    expect(SHOPIFY_UNVERIFIABLE).toMatch(/Integrazioni/u);
   });
 });

@@ -4,6 +4,7 @@ import {
   isUnreadableWebhookPayload,
   verifyStripeSignature,
   verifySvixSignature,
+  verifyWebhookHmac,
   type SignatureFailure,
 } from '@catalogorosso/core';
 import { publicRoute, type RouteAccess } from '@catalogorosso/security';
@@ -14,6 +15,7 @@ import type { AppEnv } from '../env.js';
 import { routeKey } from '../middleware/capability.js';
 import { logger } from '../middleware/logger.js';
 import { WEBHOOK_PREFIX } from '../routes.js';
+import { unconfiguredShopify, type ShopifyPort } from '../shopify.js';
 import { unconfiguredStripeEvents, type StripeEventsPort } from '../stripe-events.js';
 import { unconfiguredWebhooks, type WebhooksPort } from '../webhooks.js';
 
@@ -75,15 +77,27 @@ export interface WebhookOptions {
    * change the answer, or to slow it — the refusal is the same 401 either way.
    */
   readonly onSignatureRejected?: ((rejection: SignatureRejection) => Promise<void>) | undefined;
+
+  /**
+   * The Shopify app's secret, which signs its webhooks as it signs the
+   * install callback (P6-06). Absent: the route answers 404, as Stripe's does.
+   */
+  readonly shopifySecret?: string | undefined;
+  readonly shopify?: ShopifyPort | undefined;
 }
 
 export interface SignatureRejection {
-  readonly provider: 'resend' | 'stripe';
+  readonly provider: 'resend' | 'stripe' | 'shopify';
   readonly reason: SignatureFailure;
 }
 
 /** Stripe's one header. Lowercase: Hono normalises on lookup. */
 export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';
+
+/** Shopify's webhook headers (P6-06): the body's signature, what happened, and to which shop. */
+export const SHOPIFY_HMAC_HEADER = 'x-shopify-hmac-sha256';
+export const SHOPIFY_TOPIC_HEADER = 'x-shopify-topic';
+export const SHOPIFY_SHOP_HEADER = 'x-shopify-shop-domain';
 
 /**
  * All the route reads of an event before handing it on: its id, which is the
@@ -145,6 +159,8 @@ export const createWebhookApp = ({
   stripeWebhookSecret,
   stripeEvents = unconfiguredStripeEvents,
   onSignatureRejected,
+  shopifySecret,
+  shopify = unconfiguredShopify,
 }: WebhookOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
@@ -282,6 +298,45 @@ export const createWebhookApp = ({
    * this file). Which winery an event is about is the event's to say, inside
    * the signed body, and the port checks it against the customer on file.
    */
+  /**
+   * Shopify app events (P6-06; P6-07 and P6-11 add theirs).
+   *
+   * **The raw body, verified, before anything is read from it** — the Stripe
+   * route's order and reason. The shop is in a header, not the signed body,
+   * and that is safe for one reason only: it is used to *find* an installation
+   * that must already exist for that shop, never to create or name anything,
+   * and Shopify sets it on a delivery only we can sign for. A topic this route
+   * does not handle is acknowledged, so Shopify does not redeliver it.
+   */
+  app.post('/shopify', async (c) => {
+    if (shopifySecret === undefined || shopifySecret.trim() === '') {
+      logger.warn(
+        { kind: 'webhook_unconfigured' },
+        'a Shopify event arrived with no app secret configured (P6-06)',
+      );
+
+      throw new NotFoundError('Not found.');
+    }
+
+    const body = await c.req.text();
+
+    if (!verifyWebhookHmac(body, c.req.header(SHOPIFY_HMAC_HEADER), shopifySecret)) {
+      rejected({
+        provider: 'shopify',
+        reason: c.req.header(SHOPIFY_HMAC_HEADER) === undefined ? 'missing-headers' : 'no-match',
+      });
+    }
+
+    const topic = c.req.header(SHOPIFY_TOPIC_HEADER) ?? '';
+    const shop = c.req.header(SHOPIFY_SHOP_HEADER) ?? '';
+
+    if (topic === 'app/uninstalled') {
+      return c.json({ received: true as const, topic, result: await shopify.uninstalled(shop) });
+    }
+
+    return c.json({ received: true as const, topic, result: 'ignored' as const });
+  });
+
   app.post('/stripe', async (c) => {
     if (stripeWebhookSecret === undefined || stripeWebhookSecret.trim() === '') {
       logger.warn(
@@ -379,6 +434,16 @@ export const WEBHOOK_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map<st
         'refused before the body is parsed and recorded as a security event. The winery an ' +
         'event is about is read from inside the signed body and checked against the ' +
         'customer on file; nothing a caller could choose decides it.',
+    ),
+  ],
+  [
+    routeKey('POST', `${WEBHOOK_PREFIX}/shopify`),
+    publicRoute(
+      'Public in the sense that it carries no session and no tenant, and authenticated ' +
+        "in the sense that matters: Shopify's HMAC-SHA256 over the raw body under our app " +
+        'secret, refused before anything is read and recorded as a security event. The winery ' +
+        'is found from an installation that already exists for the shop Shopify names, in a ' +
+        'read-only scope that sees that one row (ADR 0031); nothing is created from it.',
     ),
   ],
 ]);

@@ -34,6 +34,11 @@ import { isPublicUnicast } from './addresses.js';
  *   connection for as long as we let it.
  * - **No request headers carrying anything tenant-supplied**, so this cannot be
  *   turned into a way to send data somewhere of the attacker's choosing.
+ * - **A body only with `POST`, and only JSON the caller wrote** (P6-06): the
+ *   Shopify install exchanges a one-time code for a token by posting our own
+ *   credentials to the shop. A body is a channel exactly as a header is, so
+ *   the host it goes to is the caller's to have proved first — for Shopify, a
+ *   `*.myshopify.com` name inside a callback whose HMAC we checked.
  */
 
 /** Long enough for a slow origin, short enough that a hanging host is not free. */
@@ -52,6 +57,14 @@ export type GuardedFailure =
   | 'timeout'
   | 'too_large'
   | 'network';
+
+/** A `POST` with no body, or a body on anything else: a caller's mistake, not a host's. */
+export class GuardedFetchMisused extends Error {
+  constructor() {
+    super('guardedFetch: a POST carries a JSON body, and only a POST does.');
+    this.name = 'GuardedFetchMisused';
+  }
+}
 
 export class GuardedFetchRefused extends Error {
   constructor(readonly reason: GuardedFailure) {
@@ -129,13 +142,20 @@ export const guardedLookup =
 
 export interface GuardedFetchOptions {
   /**
-   * `HEAD` for a liveness probe (P4-05), `GET` to read a body.
+   * `HEAD` for a liveness probe (P4-05), `GET` to read a body, `POST` to send
+   * one (P6-06).
    *
    * A probe is an equally attacker-chosen host and gets no exemption from any
    * of the defences above — which is the whole reason it is a method on this
    * function rather than a second, simpler one somebody would write beside it.
+   * The same goes for a post.
    */
-  readonly method?: 'GET' | 'HEAD' | undefined;
+  readonly method?: 'GET' | 'HEAD' | 'POST' | undefined;
+  /**
+   * The JSON a `POST` sends, already serialised — and required by one, refused
+   * on anything else. Sent as `application/json`, answered as JSON.
+   */
+  readonly json?: string | undefined;
   /** Injected so a test can simulate a rebinding resolver without a nameserver. */
   readonly resolveAll?: ResolveAll | undefined;
   readonly timeoutMs?: number | undefined;
@@ -161,6 +181,7 @@ export const guardedFetch = async (
   url: string,
   {
     method = 'GET',
+    json,
     resolveAll,
     timeoutMs = GUARDED_TIMEOUT_MS,
     maxBytes = MAX_BODY_BYTES,
@@ -184,6 +205,8 @@ export const guardedFetch = async (
    */
   if (parsed.port !== '') throw new GuardedFetchRefused('blocked_port');
 
+  if ((method === 'POST') !== (json !== undefined)) throw new GuardedFetchMisused();
+
   const options: RequestOptions = {
     method,
     host: parsed.hostname,
@@ -195,7 +218,15 @@ export const guardedFetch = async (
      */
     lookup: guardedLookup(resolveAll) as RequestOptions['lookup'],
     /* Nothing tenant-supplied, so this cannot carry data somewhere chosen. */
-    headers: { accept: 'text/plain', 'user-agent': 'catalogorosso-verifier' },
+    headers:
+      json === undefined
+        ? { accept: 'text/plain', 'user-agent': 'catalogorosso-verifier' }
+        : {
+            accept: 'application/json',
+            'content-type': 'application/json',
+            'content-length': String(Buffer.byteLength(json)),
+            'user-agent': 'catalogorosso-verifier',
+          },
     timeout: timeoutMs,
   };
 
@@ -274,6 +305,6 @@ export const guardedFetch = async (
       fail(error instanceof GuardedFetchRefused ? error.reason : 'network');
     });
 
-    outgoing.end();
+    outgoing.end(json);
   });
 };

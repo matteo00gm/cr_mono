@@ -210,6 +210,40 @@ export const parameterReadPermissions = (names: readonly string[]) => {
 };
 
 /**
+ * Where a winery's Shopify token lives (P6-06, ADR 0031): one `SecureString`
+ * per winery and shop under this path, written by the API when an install
+ * completes and deleted when Shopify says it was uninstalled.
+ */
+export const SHOPIFY_TOKEN_PARAMETERS = 'shopify';
+
+/**
+ * Write and delete access under the Shopify token path, and nowhere else.
+ *
+ * Not a read: nothing on the request path reads a token back yet, and the
+ * functions that will (P6-07, P6-11) are granted exactly that when they do.
+ * `kms:Encrypt` through SSM only, for `parameterReadPermissions`' reason.
+ */
+export const shopifyTokenPermissions = () => [
+  {
+    actions: ['ssm:PutParameter', 'ssm:DeleteParameter'],
+    resources: [
+      $interpolate`arn:aws:ssm:${aws.getRegionOutput().name}:${aws.getCallerIdentityOutput().accountId}:parameter${parameterPath(SHOPIFY_TOKEN_PARAMETERS)}/*`,
+    ],
+  },
+  {
+    actions: ['kms:Encrypt'],
+    resources: ['*'],
+    conditions: [
+      {
+        test: 'StringEquals',
+        variable: 'kms:ViaService',
+        values: [$interpolate`ssm.${aws.getRegionOutput().name}.amazonaws.com`],
+      },
+    ],
+  },
+];
+
+/**
  * Read access to the deploy-time parameters, for the migration runner only
  * (P0-21b).
  *

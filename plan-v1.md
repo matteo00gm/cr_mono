@@ -528,7 +528,7 @@ A domain typed at signup is a **claim**, not a fact. Nothing enters the allowlis
 
 - **DNS TXT** — `_somm-verify.winery.com` = one-time nonce. Proof of **zone control**, the strongest available, and it covers every host in the zone at once.
 - **Well-known file** — `https://winery.com/.well-known/somm-verify-<nonce>.txt`, for sellers who cannot edit DNS.
-- **Shopify OAuth install** — the install itself proves shop ownership (P6).
+- **Shopify OAuth install** — the install itself proves shop ownership (P6). *(As built in P6-06: it proves the shop's own `*.myshopify.com` origin, and only that. A storefront on its own domain still proves that domain by DNS or file.)*
 
 Once `winery.com` is verified, the seller may add **exact origins** beneath it — `https://winery.com`, `https://www.winery.com`, `https://shop.winery.com` — without a new DNS record each time. Each allowlist entry remains a full, exact, individually-removable serialized origin. This is **not** a wildcard: `blog.winery.com` is trusted only if the seller explicitly adds it, so the subdomain-takeover problem that disqualifies wildcards (§below) never arises — a hijacked subdomain the seller never added is still rejected.
 
@@ -1425,7 +1425,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P6-03 | Top queries / top products panels | | P6-01 |
 | ✅ P6-04 | **ZERO_RESULTS panel** | the highest-value commercial insight | P6-01 |
 | ✅ P6-05 | Unauthorized-origin attempts panel | from `security_events` | P2-16 |
-| P6-06 | Shopify OAuth app + install | also becomes a domain-verification method | P4-01 |
+| ✅ P6-06 | Shopify OAuth app + install | also becomes a domain-verification method | P4-01 |
 | P6-07 | `orders/create` webhook + matching | on the `_somm_session` line-item property | P6-06,P3-11 |
 | P6-08 | Attribution correctness test | click → order → attributed exactly once | P6-07 |
 | P6-11 | Shopify inventory sync | `products/update` (not `inventory_levels`) — carries variant ids; sum across locations; **zero re-embedding** | P6-06 |
@@ -7619,6 +7619,34 @@ Assert **zero provider calls** across every blocked case, since that is what the
 **Tests.** Callback with a valid HMAC completes; a tampered HMAC is refused; a replayed `state` is refused; uninstall revokes.
 
 **Files.** `shopify/oauth.ts`, tests. **~150 lines.**
+
+**As built (2026-10-04).** `POST /v1/dashboard/shopify/install` (`domains:manage`, so an owner with a second factor) answers with the shop's consent URL, asking for `read_products` and `read_orders` and nothing that writes; Shopify returns the owner to `GET /v1/dashboard/shopify/callback`; `GET /v1/dashboard/shopify` gives every member the status; `POST /v1/webhooks/shopify` handles `app/uninstalled`. The rules are `packages/core/src/shopify/oauth.ts`; the statements and the new scope `packages/db/src/shopify.ts`; the flow `apps/api/src/shopify.ts`; **Integrazioni** in the dashboard starts it and explains how it ended. ADR 0031 records the decisions below.
+
+- **Both checks, neither standing in for the other.** The callback's HMAC is checked first — every parameter but `hmac`, sorted, under the app secret, constant time, and a name given twice refused rather than guessed at. Then the `state`: a 256-bit nonce whose hash only is stored, bound to the member who started the install, ten minutes, **spent by being deleted** in one statement, so a replay or a race finds nothing.
+- **⚠ The callback finds its winery from the state, not from the request** *(design, ADR 0031)*. Shopify's redirect carries no tenant header, and reading one from the `state` would be a second sanctioned read of a tenant id from request input (P0-48). So the state is found in the **member's own scope** (`withUser`), which `shopify_oauth_states` admits as `memberships` does; the winery comes from the row the member's own install wrote, and the membership is re-checked for `domains:manage` and the second factor before anything is installed.
+- **⚠ A tenth RLS scope for webhooks** *(design, ADR 0031)*. A webhook names only a shop. `resolveTenantByShop` sets `app.shopify_shop` in a `READ ONLY` transaction; the branch admits that one `shopify_installations` row and nothing on any other table; the handler then works in `withTenant`. CLAUDE.md and AGENTS.md list it with the others.
+- **The token is in SSM, never the database**, as the row asks — one `SecureString` per **winery and shop** (`/sommelier/<stage>/shopify/<tenant>/<shop>`), put last inside the install's transaction and deleted on uninstall; the API role may put and delete under that path and nowhere else. Locally an in-memory store stands in, and a deployed stage with Shopify set up and no path refuses to start.
+- **The exchange goes through `guardedFetch`** (P4-03a), which now takes a `POST` with a JSON body — only a `POST`, only with one — because it posts our client secret to the shop. The shop is held to `*.myshopify.com` twice before that: by the signed callback and by the exchange itself.
+- **The third proof of a domain** (§3.3): the shop's `https://<shop>.myshopify.com` is verified with method `SHOPIFY` — a pending row the winery added is promoted, a new one is added within the plan's domain allowance like any other, and one another winery holds is left alone. The install completes either way, and the owner is told which (*"verificato"*, *"limite"*, *"occupato"*). The domains screen's message for a `myshopify.com` address now sends the seller to Integrazioni instead of support.
+- **One shop, one winery**: `shop` is unique, so an install naming a shop another winery holds is refused and no token is kept — the orders it reports (P6-07) must have one owner. A winery may hold more than one shop.
+- **⚠ "Flagging the tenant" is the installation, not the tenant** *(deviation)*. `app/uninstalled` marks that shop's row `uninstalled_at`, deletes its token, and audits it; the winery's status does not change, because it may sell elsewhere, and a second shop may still be installed. The domain the install proved stays verified: the proof held when it was made, and the seller's storefront may still carry the widget.
+- **The callback is a redirect, not an API**: declared for access like every route (P0-49) in `DASHBOARD_REDIRECT_ROUTES`, and left out of the OpenAPI reference by name, as the widget's preflights are.
+- **⚠ Open: Shopify's compliance webhooks.** `customers/data_request`, `customers/redact` and `shop/redact` are mandatory for an app in the Shopify App Store. They are acknowledged and ignored today — nothing here holds a Shopify customer's data — and must be handled, with `shop/redact` deleting what P6-07 records, before the app is listed (P6-09).
+- **⚠ Operator: the app itself.** Create it in the Shopify Partner dashboard, register `https://<dashboard>/v1/dashboard/shopify/callback` as its redirect URL and `https://<api>/v1/webhooks/shopify` for `app/uninstalled`, and set `ShopifyApiKey` and `ShopifyApiSecret` per stage. Until then the screen says Shopify is not available, and the webhook route is a 404.
+
+**Verified.** Unit, the full Postgres suite (89 files, 1155 tests), coverage gates (`packages/security` still at 100%), every `:check`. `shopify.integration.test.ts` in `packages/db`: a state spent once and only by its member, a lapsed one spent and refused, one shop per winery, a reinstall that brings the row back, an uninstall that touches only the shop named, and the shop scope seeing one installation, no tenant, no state, and writing nothing. The one in `apps/api`, end to end: started, signed, spent, exchanged, recorded — the token in the store and no token column anywhere, the domain proved by `SHOPIFY`, the install audited — and refused for a tampered signature (spending nothing), a replay, another owner of the same winery, a shop another winery holds, with a pending domain promoted and a full plan left at its allowance. The RLS isolation suite now seeds both new tables, which it caught missing. 35 mutants, 34 killed; the one that lived showed a guard to be dead code — a parameter given twice is refused by the signature itself, since it appears twice in the message Shopify never signs — and the guard is gone.
+
+| Mutation | Caught by |
+|---|---|
+| The `hmac` signed into its own message; a narrower grant accepted; a shop under somebody else's zone; the scopes not asked for | `shopify-oauth.test.ts` |
+| A body on a get; a length in characters, not bytes; the body never written | `guarded-fetch.test.ts` |
+| A lapsed state taken as live; a reinstall refused as taken; every shop uninstalled; an uninstalled shop still resolved; the scope opened inside a tenant | `shopify.integration.test.ts` (db) |
+| No shop branch in the policy; no member branch for the state | `shopify.integration.test.ts` (db) |
+| An unsigned callback believed; a lapsed state used; a state for another shop used; any member installs; no second factor needed; a narrower grant installed; our secret sent to something that is not a shop; any answer taken as a token | `shopify-port.test.ts` |
+| The token never kept; a pending domain left pending; no plan allowance; the token kept after an uninstall | `shopify.integration.test.ts` (api) |
+| The callback's parameters dropped; an install open to every member; an unsigned webhook believed; any topic an uninstall | `shopify-routes.test.ts` |
+| Tokens in a deployed Lambda's memory | `composition.test.ts` |
+| The owner never sent to Shopify; the form offered to everyone; a refusal shown as a success | `integrations-screen.test.tsx` |
 
 ---
 

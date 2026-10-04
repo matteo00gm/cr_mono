@@ -9,6 +9,7 @@
 export {
   guardedFetch,
   guardedLookup,
+  GuardedFetchMisused,
   GuardedFetchRefused,
   GUARDED_TIMEOUT_MS,
   MAX_BODY_BYTES,

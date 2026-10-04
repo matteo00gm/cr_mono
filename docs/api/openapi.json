@@ -5129,6 +5129,173 @@
           }
         }
       },
+      "/v1/dashboard/shopify": {
+        "get": {
+          "summary": "The winery’s Shopify store",
+          "description": "`configured` is false where this service has no Shopify app, and nothing can be connected. `shop` is the store connected most recently — its myshopify.com name, when it was installed, and when it was uninstalled if it was — or null. Readable by every member.\n\nRequires the `catalog:read` capability.",
+          "operationId": "getV1DashboardShopify",
+          "x-required-capability": "catalog:read",
+          "responses": {
+            "200": {
+              "description": "The winery’s Shopify store",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "configured": {
+                        "type": "boolean"
+                      },
+                      "shop": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "shop": {
+                                "type": "string"
+                              },
+                              "installedAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                              },
+                              "uninstalledAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "shop",
+                              "installedAt",
+                              "uninstalledAt"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "configured",
+                      "shop"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "configured": true,
+                    "shop": {
+                      "shop": "cantina-rossi.myshopify.com",
+                      "installedAt": "2026-10-02T09:00:00.000Z",
+                      "uninstalledAt": null
+                    }
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/v1/dashboard/shopify/install": {
+        "post": {
+          "summary": "Start connecting a Shopify store",
+          "description": "Body `{ shop }`: the store as the owner knows it — `cantina-rossi`, its myshopify.com address or its admin URL. Answers with the URL of that store’s consent screen, asking to read products and orders and nothing else; send the owner there. Shopify sends them back to this service, which checks Shopify’s signature and a single-use state bound to this owner, keeps the access token where only this service can read it, and proves the store’s myshopify.com address as one of the winery’s domains. A shop name that is not one is refused with a 422 saying what is wanted; a 409 means Shopify is not set up on this service.\n\nRequires the `domains:manage` capability. An owner without two-factor authentication is refused with code `mfa_required`.",
+          "operationId": "postV1DashboardShopifyInstall",
+          "x-required-capability": "domains:manage",
+          "responses": {
+            "200": {
+              "description": "Start connecting a Shopify store",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "url": {
+                        "type": "string",
+                        "format": "uri"
+                      }
+                    },
+                    "required": [
+                      "url"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "url": "https://cantina-rossi.myshopify.com/admin/oauth/authorize?client_id=…&scope=read_products,read_orders"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/usage": {
         "get": {
           "summary": "The month's messages, against what the winery may send",

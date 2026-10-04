@@ -183,6 +183,24 @@ if ((turnstileSiteKey === undefined) !== (turnstileSecretKey === undefined)) {
 }
 
 /**
+ * The Shopify app (P6-06), both halves or neither — Turnstile's rule and its
+ * reason: half-set is a misconfiguration, said once and treated as absent.
+ */
+const shopifyApiKey = optionalEnvironment('SHOPIFY_API_KEY');
+const shopifyApiSecret = optionalEnvironment('SHOPIFY_API_SECRET');
+const shopify =
+  shopifyApiKey !== undefined && shopifyApiSecret !== undefined
+    ? { clientId: shopifyApiKey, clientSecret: shopifyApiSecret }
+    : undefined;
+
+if ((shopifyApiKey === undefined) !== (shopifyApiSecret === undefined)) {
+  logger.warn(
+    { kind: 'shopify_half_configured' },
+    'Only one of SHOPIFY_API_KEY and SHOPIFY_API_SECRET is set, so Shopify is off (P6-06)',
+  );
+}
+
+/**
  * Exported for `streaming.ts`, which is a second *function* over the same app
  * (P2-29). Building them twice would be two composition roots, and the second
  * would be the one that drifts.
@@ -204,6 +222,8 @@ export const dependencies = buildDependencies({
   ...(widgetTokenKeys === undefined ? {} : { widgetTokenKeys }),
   ...(turnstile === undefined ? {} : { turnstile }),
   stripeSecretKey: optionalEnvironment('STRIPE_SECRET_KEY'),
+  ...(shopify === undefined ? {} : { shopify }),
+  shopifyTokenPrefix: optionalEnvironment('SHOPIFY_TOKEN_PREFIX'),
 
   emailFrom: optionalEnvironment('EMAIL_FROM') ?? 'AI Sommelier <noreply@localhost>',
   resendApiKey: optionalEnvironment('RESEND_API_KEY'),

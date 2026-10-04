@@ -28,7 +28,11 @@ import {
   withUser,
 } from '@catalogorosso/db';
 
+import { SSMClient } from '@aws-sdk/client-ssm';
+
 import { createAnalyticsPort, type AnalyticsPort } from './analytics.js';
+import { createShopifyPort, type ShopifyConfig, type ShopifyPort } from './shopify.js';
+import { memoryShopifyTokens, ssmShopifyTokens } from './shopify-tokens.js';
 import { createBillingPort, createPlanRestorer, type BillingPort } from './billing.js';
 import { createBillingEffect } from './billing-events.js';
 import { createBillingNotifier } from './billing-notices.js';
@@ -182,6 +186,29 @@ export interface RuntimeConfig {
    * start on a stage nobody has set up payments for yet.
    */
   readonly stripeSecretKey?: string | undefined;
+  /**
+   * The Shopify app's credentials (P6-06), both or neither. Absent: nothing can
+   * be connected, the dashboard says so, and Shopify's webhooks are a 404.
+   */
+  readonly shopify?: ShopifyConfig | undefined;
+  /**
+   * Where Shopify tokens live in SSM: `/sommelier/<stage>/shopify` (ADR
+   * 0031). Absent on a local run, where an in-memory store stands in; a
+   * deployed stage with Shopify set up and no prefix refuses to start, because
+   * a token held in a Lambda's memory is a connection lost at the next cold start.
+   */
+  readonly shopifyTokenPrefix?: string | undefined;
+}
+
+/** A deployed stage that would keep Shopify tokens in a Lambda's memory (ADR 0031). */
+export class ShopifyTokenStoreMissingError extends Error {
+  constructor(stage: string) {
+    super(
+      `Stage "${stage}" has Shopify set up and no SHOPIFY_TOKEN_PREFIX, so its tokens would ` +
+        'live in memory and be lost at the next cold start. Set the SSM prefix (ADR 0031).',
+    );
+    this.name = 'ShopifyTokenStoreMissingError';
+  }
 }
 
 /**
@@ -226,6 +253,9 @@ export interface Dependencies {
   readonly billing: BillingPort;
   /** The analytics panels (P6). */
   readonly analytics: AnalyticsPort;
+  /** The Shopify install and its webhooks (P6-06). */
+  readonly shopify: ShopifyPort;
+  readonly shopifySecret?: string | undefined;
   /** The catalogue (P1-02). */
   readonly products: ProductsPort;
   /** The retrieval sandbox (P2-37). */
@@ -302,6 +332,26 @@ const CHAT_MODELS = {
 export const buildDependencies = (config: RuntimeConfig): Dependencies => {
   const log = logTransport(config.log);
   const quota = createQuotaPort();
+
+  if (
+    config.shopify !== undefined &&
+    config.stage !== 'unknown' &&
+    config.shopifyTokenPrefix === undefined
+  ) {
+    throw new ShopifyTokenStoreMissingError(config.stage);
+  }
+
+  const dashboardOriginForShopify = new URL(config.authBaseUrl).origin;
+  const shopify = createShopifyPort({
+    config: config.shopify,
+    redirectUri: `${dashboardOriginForShopify}/v1/dashboard/shopify/callback`,
+    returnTo: `${dashboardOriginForShopify}/integrazioni`,
+    tokens:
+      config.shopifyTokenPrefix === undefined
+        ? memoryShopifyTokens()
+        : ssmShopifyTokens({ client: new SSMClient({}), prefix: config.shopifyTokenPrefix }),
+    readMemberships: readMembershipsForUser,
+  });
 
   /*
    * The provider is built only when there is a key. Without one the log
@@ -515,6 +565,10 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
 
     /* The analytics panels (P6-02): our own events, read in the tenant's scope. */
     analytics: createAnalyticsPort(),
+
+    /* The Shopify install (P6-06): its tokens in SSM when deployed, in memory locally. */
+    shopify,
+    ...(config.shopify === undefined ? {} : { shopifySecret: config.shopify.clientSecret }),
 
     domains: createDomainsPort({
       environment: config.stage === 'unknown' ? 'development' : 'production',

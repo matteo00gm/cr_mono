@@ -505,6 +505,20 @@
       "when": 1788654188606,
       "tag": "0071_message_zero_results",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1788654188607,
+      "tag": "0072_shopify",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1788654188608,
+      "tag": "0073_shopify_rls",
+      "breakpoints": true
     }
   ]
 }
