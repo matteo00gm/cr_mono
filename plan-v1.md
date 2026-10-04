@@ -1426,11 +1426,15 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P6-04 | **ZERO_RESULTS panel** | the highest-value commercial insight | P6-01 |
 | ✅ P6-05 | Unauthorized-origin attempts panel | from `security_events` | P2-16 |
 | ✅ P6-06 | Shopify OAuth app + install | also becomes a domain-verification method | P4-01 |
+| P6-06b | Shopify proof lifecycle | uninstall withdraws the proof (Decision 9); a first domain proved by claim or by Shopify starts the trial (Decision 10) | P6-06 |
+| P3-23 | Widget privacy notice | the shopper is told, before the first question, that the shop reads questions and what not to write (Decision 7) | P6-04 |
 | P6-07 | `orders/create` webhook + matching | on the `_somm_session` line-item property | P6-06,P3-11 |
 | P6-08 | Attribution correctness test | click → order → attributed exactly once | P6-07 |
 | P6-11 | Shopify inventory sync | `products/update` (not `inventory_levels`) — carries variant ids; sum across locations; **zero re-embedding** | P6-06 |
 | P6-09 | Theme app extension | removes the `theme.liquid` edit | P6-06 |
 | P6-10 | Metric labelling guard | "Aggiunte al carrello" until P6-07 ships; never fake "Vendite" | P6-02 |
+| P6-12 | Italian on the user side | every refusal the dashboard shows written in Italian at the source (Decision 6) | — |
+| P2-37b | Sandbox generation on request | off by default; each run billed as one of the winery's messages, rate-limited (Decision 8) | P2-37 |
 
 ### P7 — GA readiness
 
@@ -5591,7 +5595,7 @@ X-Accel-Buffering: no
 
 **⚠ Found here and fixed in P2-27:** `withSchemaRepair` collected each attempt and yielded it when the attempt ended — **not a stream at all**. Time-to-first-token became total-generation-time, and a reply the model had already written was lost if the provider then failed. Every case in P2-27's suite passed either way, because a buffered stream and a streamed one produce the same chunks in the same order; the difference is only *when*, and only a caller reading them live can see it. Two cases were added that can.
 
-**⚠ Open: generation is retrieval-only in P2-37's sandbox.** P2-31 now exists, so the opt-in flag that row deferred is unblocked — it needs a rate limit of its own and a decision about who pays.
+**⚠ Open: generation is retrieval-only in P2-37's sandbox.** P2-31 now exists, so the opt-in flag that row deferred is unblocked — it needs a rate limit of its own and a decision about who pays. *(Decided 2026-10-04, Open Decision 8: on request, billed as one of the winery's messages, ten a minute — row P2-37b.)*
 
 **Carried in from P2-36:** the cap is checked here, before retrieval and before generation, and a refusal answers `QUOTA_EXCEEDED` having made **zero** provider calls — the row's own test, which needs a provider to assert. This route is also where the double count above is closed: once it gates, `planCapCheck` comes out of `widgetLimitChecks` so the month is counted once.
 
@@ -7087,7 +7091,7 @@ Also send the P0-64 payment-failed email on entry to `PAST_DUE`, since the tenan
 - **Operator:** the Stripe endpoint must be created on the pinned API version (`2026-08-26.dahlia`) and sent the eight types in `BILLING_EVENT_TYPES`. A type we act on in a shape we cannot read is logged as `stripe_event_unreadable`, which is the alarm that says the endpoint's version is wrong.
 - **⚠ Found here: Drizzle wraps a driver error** ("Failed query") and puts Postgres's own in `cause`. The savepoint's first version read the code only on the wrapper, so every bound-customer refusal would have thrown — and been retried by Stripe for three days. The integration test that tried it found it.
 - **Deferred to P5-05a** *(split)*: the payment-failed email to the owners, and **trial expiry**, which is not enforced yet: a `TRIALING` winery past `trial_ends_at` is still served until P5-05a puts the date in the service gate. *(Both closed by P5-05a; the email is sent after the claim commits, not through the outbox — see there.)*
-- **⚠ Open:** a winery whose first domain arrives through a claim (P4-18) does not start a trial — `settleDomainClaim` inserts the claimant's row verified, outside the verify path.
+- **⚠ Open:** a winery whose first domain arrives through a claim (P4-18) does not start a trial — `settleDomainClaim` inserts the claimant's row verified, outside the verify path. *(Decided 2026-10-04, Open Decision 10: it starts there too — row P6-06b, which also closes the same gap in the Shopify install.)*
 - **16 fixture inserts and one update** now satisfy the CHECK: an `ACTIVE` winery has a subscription, a `TRIALING` one a trial end.
 
 **Verified.** 4,857 unit tests; against real Postgres, the CHECK refuses both orphans to every role, the trial starts once and never for a payer, the writer reaches its own winery only and survives a bound customer, and the production port with the production effect activates on a paid Checkout, blocks at once on a failure, restores on the retry, keeps a winery blocked through a late success, frees a winery whose subscription ended, and changes nothing — while still claiming — for the wrong mode, a stranger's customer, a bound customer and a second Checkout. The browser suite passes against the harness's now-coherent winery. 29 mutants, 29 killed, one only after a test fix: the helper that built a subscription event swapped an explicit `undefined` plan for its default, so "a price that is not ours" had been sending Cantina's.
@@ -7562,7 +7566,7 @@ Assert **zero provider calls** across every blocked case, since that is what the
 - **⚠ Not the `ZERO_RESULTS` events** *(deviation, with a migration)*. The widget's event (P3-20) carries no question — it records that an answer had no cards, not what was asked — and it is sent by the page, so anyone holding a session could add to a seller's list. The answer itself is the record: migration 0071 adds `messages.zero_result_kind`, set by `recordTurn` when the turn is written, and the panel pairs each such answer with the question just before it (by `seq`). An answer that failed — provider error, schema failure, refusal — is not counted: none of those is a gap in the catalogue. A CHECK holds the kind to the two values and to answers.
 - **⚠ The two kinds are told apart by the question's words, not by P2-22's pre-cap count** *(deviation)*. The vector branch returns nearest neighbours whatever was asked and the chat applies no price ceiling, so the pre-cap count is zero only for an empty catalogue — every unanswered question would land in the second kind. Instead: **`no_match`** when no candidate that reached the model was found by the lexical branch (P2-19: every word of the question, or a close spelling) — the catalogue does not name what was asked; **`not_recommended`** when some were and the model chose none — the catalogue has the word but not the wine. Decided at the turn, from `lexicalRank`, because the candidates' ranks are not kept.
 - **The patterns are a word list** (`THEMES`: sweet, sparkling, rosé, organic, sulphite-free, vegan, alcohol-free, budget, gift, large formats, red, white), Italian and English, matched as whole words — *bio* is not *biondo* — so a seller can see why a question landed in a theme. *"14 visitatori hanno chiesto vini dolci"* counts conversations, each once however many of its questions use the theme's words, and across **every** question, not only the hundred listed: a theme counted from a truncated list would undercount the long tail this panel exists for.
-- **Every unanswered question is listed, not only those several conversations asked** — the opposite of P6-03's threshold, on purpose: here the single question is the signal (*"avete il Sassicaia 2015?"*). What keeps it safe is where it always was: contact details are removed before a question is stored (P2-33). P6-03's note, which had called its threshold the only way a visitor's words reach the seller, is corrected.
+- **Every unanswered question is listed, not only those several conversations asked** — the opposite of P6-03's threshold, on purpose: here the single question is the signal (*"avete il Sassicaia 2015?"*). What keeps it safe is where it always was: contact details are removed before a question is stored (P2-33). P6-03's note, which had called its threshold the only way a visitor's words reach the seller, is corrected. *(Open Decision 7 records the safeguards this rests on; the shopper is told by the widget, row P3-23.)*
 - **The export is the view.** One list of rows feeds the table and the CSV, so they cannot drift; and every cell is made inert for a spreadsheet — these are words a visitor typed, and a question beginning `=` is a formula in Excel, on the seller's machine. The catalogue export (P1-30) does not need this: its cells are the seller's own and must round-trip through the importer.
 - **Questions are grouped with P6-03's normalisation**, now one shared SQL fragment (`normalisedQuestion`).
 - **⚠ Open: small talk lands in the list.** *"Grazie!"* is an answer with no wine, found by no words, so it is a `no_match`. The themes are unaffected, and a seller reads past it; a classifier for "was this a request for a wine" is P1-46 eval territory, not a regex.
@@ -7629,7 +7633,7 @@ Assert **zero provider calls** across every blocked case, since that is what the
 - **The exchange goes through `guardedFetch`** (P4-03a), which now takes a `POST` with a JSON body — only a `POST`, only with one — because it posts our client secret to the shop. The shop is held to `*.myshopify.com` twice before that: by the signed callback and by the exchange itself.
 - **The third proof of a domain** (§3.3): the shop's `https://<shop>.myshopify.com` is verified with method `SHOPIFY` — a pending row the winery added is promoted, a new one is added within the plan's domain allowance like any other, and one another winery holds is left alone. The install completes either way, and the owner is told which (*"verificato"*, *"limite"*, *"occupato"*). The domains screen's message for a `myshopify.com` address now sends the seller to Integrazioni instead of support.
 - **One shop, one winery**: `shop` is unique, so an install naming a shop another winery holds is refused and no token is kept — the orders it reports (P6-07) must have one owner. A winery may hold more than one shop.
-- **⚠ "Flagging the tenant" is the installation, not the tenant** *(deviation)*. `app/uninstalled` marks that shop's row `uninstalled_at`, deletes its token, and audits it; the winery's status does not change, because it may sell elsewhere, and a second shop may still be installed. The domain the install proved stays verified: the proof held when it was made, and the seller's storefront may still carry the widget.
+- **⚠ "Flagging the tenant" is the installation, not the tenant** *(deviation)*. `app/uninstalled` marks that shop's row `uninstalled_at`, deletes its token, and audits it; the winery's status does not change, because it may sell elsewhere, and a second shop may still be installed. The domain the install proved stays verified: the proof held when it was made, and the seller's storefront may still carry the widget. *(Superseded 2026-10-04 by Open Decision 9: the uninstall withdraws the proof — row P6-06b.)*
 - **The callback is a redirect, not an API**: declared for access like every route (P0-49) in `DASHBOARD_REDIRECT_ROUTES`, and left out of the OpenAPI reference by name, as the widget's preflights are.
 - **⚠ Open: Shopify's compliance webhooks.** `customers/data_request`, `customers/redact` and `shop/redact` are mandatory for an app in the Shopify App Store. They are acknowledged and ignored today — nothing here holds a Shopify customer's data — and must be handled, with `shop/redact` deleting what P6-07 records, before the app is listed (P6-09).
 - **⚠ Operator: the app itself.** Create it in the Shopify Partner dashboard, register `https://<dashboard>/v1/dashboard/shopify/callback` as its redirect URL and `https://<api>/v1/webhooks/shopify` for `app/uninstalled`, and set `ShopifyApiKey` and `ShopifyApiSecret` per stage. Until then the screen says Shopify is not available, and the webhook route is a 404.
@@ -7647,6 +7651,30 @@ Assert **zero provider calls** across every blocked case, since that is what the
 | The callback's parameters dropped; an install open to every member; an unsigned webhook believed; any topic an uninstall | `shopify-routes.test.ts` |
 | Tokens in a deployed Lambda's memory | `composition.test.ts` |
 | The owner never sent to Shopify; the form offered to everyone; a refusal shown as a success | `integrations-screen.test.tsx` |
+
+---
+
+### P6-06b · Shopify proof lifecycle
+
+**Why.** Open Decisions 9 and 10. The proof the install gave should end with the install, and a winery whose first domain was proved some other way than the domains screen should still get its trial.
+
+**How.** On `app/uninstalled`, remove the shop's `myshopify.com` origin when — and only when — it was proved by `SHOPIFY`, through the ordinary removal: the session cutoff (P4-06) ends its live widget sessions, and the audit row says why. A domain the seller proved by DNS or file is untouched. Call `startTrial` wherever a first domain becomes verified outside the verify path: the Shopify install (P6-06) and a settled claim (P4-18). The statement already refuses anything but `PENDING_VERIFICATION`, so a second domain changes nothing.
+
+**Tests.** An uninstall removes the Shopify-proved origin and records a cutoff; leaves a DNS-proved one; a first domain proved by the install starts the trial; one proved by a claim starts it; a later one does not.
+
+**Files.** `apps/api/src/shopify.ts`, `domain-claims.ts`, tests. **~60 lines.**
+
+---
+
+### P3-23 · Widget privacy notice
+
+**Why.** Open Decision 7. The unanswered-questions panel shows a winery's staff what its shoppers typed; a shopper should know that before typing it.
+
+**How.** One line under the composer until the first question is sent — *"La cantina legge le domande per migliorare il catalogo. Non scrivere dati personali."* — in the visitor's language, text nodes only (§3.7), and gone once they have asked something. No consent gate: the notice informs, and the purpose is the shop's own service to the person asking.
+
+**Tests.** Shown before the first question and not after; in English for an English browser; no markup.
+
+**Files.** composer, i18n, tests. **~40 lines.**
 
 ---
 
@@ -7717,6 +7745,30 @@ Reuse P5-03's HMAC verification and P5-04's `processed_webhooks` idempotency. Hi
 **Tests.** With the flag false, no rendered text contains "Vendite" (assert across all panels); with it true, revenue labels appear.
 
 **Files.** `analytics/labels.ts`, panel updates, tests. **~80 lines.**
+
+---
+
+### P6-12 · Italian on the user side
+
+**Why.** Open Decision 6: everything a seller or a shopper reads is Italian. The dashboard shows a refusal's message verbatim (P0-55), and those messages are English.
+
+**How.** Write the dashboard surface's `DomainError` messages in Italian at the source — they are the user-facing contract — and the dashboard's own fallbacks with them. The widget keeps mapping codes to its own copy, in the visitor's language. What is developer-facing stays English: the OpenAPI reference's prose, the server-session API a seller's developers call (P4-10), logs, audit actions. A test walks the dashboard routes' refusals and fails on an English one.
+
+**Tests.** Every dashboard-surface refusal reaches the caller in Italian; the widget and server-session surfaces are unchanged.
+
+**Files.** the dashboard surface's ports and routes, tests. **~200 lines, mostly strings.**
+
+---
+
+### P2-37b · Sandbox generation on request
+
+**Why.** Open Decision 8. P2-37's sandbox explains retrieval and stops short of an answer; a seller tuning a catalogue wants to see the answer too.
+
+**How.** Off by default. A member who may write the catalogue asks for one answer at a time; each is a real turn through the chat port, billed as one of the winery's messages against the same monthly gate (P2-36) — no free model calls — and limited to ten a minute per winery. A winery at its cap is told so, as the widget would be.
+
+**Tests.** A generated answer is billed once; refused at the cap with no model call; the limit holds; off unless asked.
+
+**Files.** `rag.ts`, the sandbox route and screen, tests. **~120 lines.**
 
 ---
 
@@ -7909,6 +7961,26 @@ The constraint turned out **not** to be Nova. Nova Lite and Micro are available 
 Latency is not a real counter-argument, and less so than it first appears: **CloudFront terminates TLS at its Milan edge regardless of origin region**, so an Italian shopper's connection is local either way. Only the origin fetch crosses to Ireland — single-digit milliseconds against a 3–8 second generation stream. Ireland is EU/EEA, so GDPR residency is satisfied.
 
 **Still verify at P0-11** that both `amazon.nova-lite-v1:0` and `amazon.titan-embed-text-v2:0` are enabled in the account's chosen region before anything else deploys — model access must also be explicitly granted per account, which is a separate step from regional availability and a common first-day blocker.
+
+**6. ~~User-facing language~~ — decided (2026-10-04): Italian on the user side.**
+
+Everything a seller or a shopper reads is Italian: the dashboard, and the widget's own words in the visitor's language. The gap is the refusals: the dashboard shows a `DomainError`'s message verbatim (P0-55), and those are English. They are written in Italian **at the source**, on the dashboard surface — they are the user-facing contract, and a code-to-copy map in the dashboard would be a second contract to keep in step. What is developer-facing stays English: the OpenAPI reference's prose, the server-session API a seller's developers call (P4-10), logs and audit actions. Row **P6-12**.
+
+**7. ~~Shoppers' questions shown verbatim~~ — decided (2026-10-04): yes, under the usual safeguards.**
+
+The unanswered-questions panel (P6-04) lists what shoppers typed, verbatim, to the winery's members. The shop is the controller of its visitors' conversations and reading them is the purpose, so the list stays, held to the practices that make it safe: **minimisation** at write (P2-33 removes contact details before a question is stored); **retention** (P7-07's 90-day purge bounds the list — nothing older can appear); **access** to the winery's own members only, never aggregated across wineries; and **transparency** — the widget tells a shopper, before the first question, that the shop reads questions and not to write personal details (row **P3-23**).
+
+**8. ~~Generation in the retrieval sandbox~~ — decided (2026-10-04): on request, billed as a message.**
+
+Off by default. A member who may write the catalogue asks for one answer at a time; each is a real turn, billed as one of the winery's own messages against the monthly gate (P2-36), and limited to ten a minute per winery. No model call is free, so the sandbox costs us nothing a winery has not already paid for. Row **P2-37b**.
+
+**9. ~~What a Shopify uninstall does to the proved domain~~ — decided (2026-10-04): it withdraws the proof.**
+
+The `myshopify.com` origin the install proved (P6-06) is removed on `app/uninstalled`, through the ordinary removal, so its live widget sessions end (P4-06). The proof came from the install; a store we can no longer read is not one we vouch for, a widget left on it would go on spending model calls nobody is watching, and the seller gets the domain slot back. A domain proved by DNS or file is untouched. Row **P6-06b**.
+
+**10. ~~A first domain proved outside the domains screen~~ — decided (2026-10-04): the trial starts there too.**
+
+`PENDING_VERIFICATION → TRIALING` happens at the first verified domain however it was proved — the domains screen, a settled claim (P4-18) or the Shopify install (P6-06). One rule, in the statement that already refuses anything but `PENDING_VERIFICATION`. Row **P6-06b**.
 
 ---
 
@@ -8227,7 +8299,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Item | Owner | Note |
 |---|---|---|
 | The SdI bridge has nothing to send through | **operator decision** | P5-03a records every paid charge in `e_invoices`, and nothing drains it yet. Choose the provider (Fatture in Cloud, Fatturapertutti or Striptu), open its account and sandbox, agree the spend (P1-47's rule), and decide `tax_behavior` — VAT-inclusive or exclusive — which the invoice must state. Then the queue, worker job and adapter, verified against the sandbox, close the row. |
-| API refusals are English in an Italian dashboard | before launch | A `DomainError`'s message reaches the caller verbatim (P0-55), and the messages are English — P5-10's downgrade refusal, P5-11a's top-up refusals — while the dashboard is Italian. P5-12's Fatturazione screen shows them as they are. Localising means a code-to-copy map in the dashboard or a locale on the contract; either touches every route. |
+| API refusals are English in an Italian dashboard | **decided (Open Decision 6) — row P6-12** | A `DomainError`'s message reaches the caller verbatim (P0-55), and the messages are English — P5-10's downgrade refusal, P5-11a's top-up refusals — while the dashboard is Italian. P5-12's Fatturazione screen shows them as they are. Localising means a code-to-copy map in the dashboard or a locale on the contract; either touches every route. |
 | P0-17a unblocked | ~~needs the API origin~~ | **Resolved by P0-54**, which creates the `Api` Function URL. The cache behaviour now has an origin to target: `CachingDisabled` managed policy, compression off, >=30s origin read timeout. Note the *streaming* function itself is still P2-29 — P0-17a can add the behaviour against the buffered origin and repoint it, or wait. |
 | CloudFront error mapping vs P4-15 | before the API joins the CDN | `customErrorResponses` is distribution-wide, so SPA 404->200 would turn API 404s into 200 HTML. Split the distribution or move SPA routing into a CloudFront Function. |
 | Integration suite in CI | **closed** | An `integration` job in `ci.yml` runs all 304 tests on every pull request, in parallel with `verify` and `test`. Not yet a *required* check — see **E4**. Detail and the follow-up optimisation in **E1**. |
