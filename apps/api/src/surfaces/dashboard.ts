@@ -12,6 +12,8 @@ import {
   topResponse,
   zeroResultsResponse,
   refusedOriginsResponse,
+  shopifyInstallResponse,
+  shopifyStatusResponse,
   usageResponse,
   catalogueReindexedResponse,
   claimWithdrawnResponse,
@@ -59,6 +61,7 @@ import {
   PLAN_IDS,
   RANGE_EXPECTED,
   rangeOfBand,
+  SHOP_EXPECTED,
   readVariantId,
   VARIANT_ID_EXPECTED,
   VERIFY_METHODS,
@@ -75,6 +78,7 @@ import {
 } from '@catalogorosso/db';
 
 import { unconfiguredAnalytics, type AnalyticsPort } from '../analytics.js';
+import { unconfiguredShopify, type ShopifyPort } from '../shopify.js';
 import { unconfiguredBilling, type BillingPort } from '../billing.js';
 import type { AppEnv } from '../env.js';
 import { mountAuthRoutes, requireUser, type AuthPort } from '../middleware/auth.js';
@@ -169,6 +173,8 @@ export interface DashboardOptions {
    * as a quiet month.
    */
   readonly analytics?: AnalyticsPort | undefined;
+  /** The Shopify install (P6-06). Optional on the same terms as the rest. */
+  readonly shopify?: ShopifyPort | undefined;
   /** Where state-changing requests must come from (review, R5). */
   readonly dashboardOrigin?: string | undefined;
 }
@@ -521,6 +527,9 @@ const checkoutBody = z.object({ plan: z.enum(PLAN_IDS) }).strict();
  * they make a range is core's `analyticsRange`, which takes nothing that is not
  * exactly `YYYY-MM-DD`.
  */
+/** The shop to connect, as the owner typed it; `normaliseShop` decides whether it is one. */
+const shopifyInstallBody = z.object({ shop: z.string().max(200) }).strict();
+
 const rangeQuery = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
@@ -538,6 +547,7 @@ export const createDashboardApp = ({
   turnstileSettings = unconfiguredTurnstileSettings,
   billing = unconfiguredBilling,
   analytics = unconfiguredAnalytics,
+  shopify = unconfiguredShopify,
 }: DashboardOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
@@ -662,6 +672,26 @@ export const createDashboardApp = ({
    * a `c.get('tenantId')` in it is undefined at runtime while typechecking
    * perfectly — which is why the routes that need one live below.
    */
+  /**
+   * Shopify's redirect back after an owner approves the install (P6-06, ADR
+   * 0031). **Authenticated, pre-tenant**, like `/me`: it is a top-level
+   * navigation from Shopify, so it carries the session cookie and no active
+   * winery. The port checks Shopify's signature, spends the state in this
+   * user's own scope — which is what names the winery — and checks the
+   * membership's capability itself, second factor included; then it answers
+   * with where the browser goes next, which is the dashboard either way.
+   */
+  app.get('/shopify/callback', async (c) =>
+    c.redirect(
+      await shopify.callback({
+        userId: c.get('userId'),
+        mfaEnabled: c.get('mfaEnabled'),
+        params: new URL(c.req.url).searchParams,
+      }),
+      302,
+    ),
+  );
+
   app.use('*', resolveTenant(readMemberships));
 
   /**
@@ -1444,6 +1474,29 @@ export const createDashboardApp = ({
     if (!parsed.success) throw new InvalidRequestError(RANGE_EXPECTED);
 
     return c.json(await analytics.refusedOrigins(c.get('tenantId'), parsed.data));
+  });
+
+  /** The winery's Shopify store (P6-06). Every member: the catalogue sync (P6-11) reads it. */
+  app.get('/shopify', requireCapability('catalog:read'), async (c) =>
+    c.json(await shopify.status(c.get('tenantId'))),
+  );
+
+  /**
+   * Start connecting a Shopify store (P6-06): the shop's consent URL, to send
+   * the owner to. `domains:manage`, because finishing it proves a domain.
+   */
+  app.post('/shopify/install', requireCapability('domains:manage'), async (c) => {
+    const parsed = shopifyInstallBody.safeParse(await readJson(c));
+
+    if (!parsed.success) throw new InvalidRequestError(SHOP_EXPECTED);
+
+    return c.json(
+      await shopify.install({
+        tenantId: c.get('tenantId'),
+        userId: c.get('userId'),
+        input: parsed.data.shop,
+      }),
+    );
   });
 
   app.post('/keys', requireCapability('keys:manage'), stepUp, async (c) =>
@@ -2653,6 +2706,46 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
     },
   ],
   [
+    routeKey('GET', `${DASHBOARD_PREFIX}/shopify`),
+    {
+      access: requires('catalog:read'),
+      summary: 'The winery’s Shopify store',
+      description:
+        '`configured` is false where this service has no Shopify app, and nothing can be ' +
+        'connected. `shop` is the store connected most recently — its myshopify.com name, when ' +
+        'it was installed, and when it was uninstalled if it was — or null. Readable by every member.',
+      example: {
+        configured: true,
+        shop: {
+          shop: 'cantina-rossi.myshopify.com',
+          installedAt: '2026-10-02T09:00:00.000Z',
+          uninstalledAt: null,
+        },
+      },
+      response: shopifyStatusResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/shopify/install`),
+    {
+      access: requires('domains:manage'),
+      summary: 'Start connecting a Shopify store',
+      description:
+        'Body `{ shop }`: the store as the owner knows it — `cantina-rossi`, its myshopify.com ' +
+        'address or its admin URL. Answers with the URL of that store’s consent screen, asking ' +
+        'to read products and orders and nothing else; send the owner there. Shopify sends them ' +
+        'back to this service, which checks Shopify’s signature and a single-use state bound to ' +
+        'this owner, keeps the access token where only this service can read it, and proves the ' +
+        'store’s myshopify.com address as one of the winery’s domains. A shop name that is not ' +
+        'one is refused with a 422 saying what is wanted; a 409 means Shopify is not set up on ' +
+        'this service.',
+      example: {
+        url: 'https://cantina-rossi.myshopify.com/admin/oauth/authorize?client_id=…&scope=read_products,read_orders',
+      },
+      response: shopifyInstallResponse,
+    },
+  ],
+  [
     routeKey('GET', `${DASHBOARD_PREFIX}/widget/turnstile`),
     {
       access: requires('widget:configure'),
@@ -2949,9 +3042,28 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
  * Derived rather than maintained separately - two tables that must agree are
  * two tables that will not.
  */
-export const DASHBOARD_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map(
-  [...DASHBOARD_ROUTES].map(([key, doc]) => [key, doc.access]),
-);
+/**
+ * Routes a browser is *sent to* rather than one a client calls (P6-06):
+ * declared for access like every route (P0-49), and left out of the reference,
+ * because a redirect has no JSON to describe — the widget's CORS preflights
+ * are left out for the same reason. `scripts/gen-openapi.mjs` reads this.
+ */
+export const DASHBOARD_REDIRECT_ROUTES: ReadonlyMap<string, RouteAccess> = new Map([
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/shopify/callback`),
+    publicRoute(
+      'Authenticated but pre-tenant, like /me: Shopify redirects the owner back here after the ' +
+        'install consent, with the session cookie and no active winery. The handler checks ' +
+        "Shopify's HMAC, spends a single-use state in the user's own scope (which names the " +
+        'winery), and re-checks domains:manage and the second factor itself (P6-06, ADR 0031).',
+    ),
+  ],
+]);
+
+export const DASHBOARD_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map([
+  ...[...DASHBOARD_ROUTES].map(([key, doc]): [string, RouteAccess] => [key, doc.access]),
+  ...DASHBOARD_REDIRECT_ROUTES,
+]);
 
 /**
  * A route's response as JSON Schema, for the OpenAPI document (P0-62, P0-63).

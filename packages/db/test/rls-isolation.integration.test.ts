@@ -140,6 +140,17 @@ const INSERTS: Record<string, (tenantId: string, ctx: SeedContext) => SQL> = {
     return sql`insert into notification_events (tenant_id, period, threshold)
         values (${tenantId}::uuid, ${String(noticePeriod)}, 80)`;
   },
+  /*
+   * P6-06. A fresh shop and a fresh nonce each call, for `invitations`' reason:
+   * both are unique across tenants, so a fixed value would make B's attempted
+   * write fail on the key rather than on the policy.
+   */
+  shopify_installations: (tenantId) =>
+    sql`insert into shopify_installations (tenant_id, shop, scopes)
+        values (${tenantId}::uuid, ${`s${randomUUID().slice(0, 8)}.myshopify.com`}, 'read_orders')`,
+  shopify_oauth_states: (tenantId, ctx) =>
+    sql`insert into shopify_oauth_states (tenant_id, user_id, shop, nonce_hash, expires_at)
+        values (${tenantId}::uuid, ${ctx.userId}, 'x.myshopify.com', ${randomUUID()}, now())`,
   audit_log: (tenantId) =>
     sql`insert into audit_log (tenant_id, action) values (${tenantId}::uuid, 'x')`,
   security_events: (tenantId) =>

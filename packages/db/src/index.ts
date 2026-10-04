@@ -647,3 +647,18 @@ export {
   type RefusedOrigin,
   type RefusedOriginsQuery,
 } from './refused-origins.js';
+
+/** The Shopify install (P6-06, ADR 0031): its state, its row, and a shop's winery. */
+export {
+  markShopifyUninstalled,
+  NestedShopifyScopeError,
+  readShopifyInstallation,
+  recordShopifyInstall,
+  resolveTenantByShop,
+  SHOPIFY_SHOP_GUC,
+  spendShopifyState,
+  startShopifyInstall,
+  type ShopifyInstallation,
+  type SpentState,
+  type StartedInstall,
+} from './shopify.js';

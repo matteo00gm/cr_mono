@@ -130,8 +130,8 @@ export const isShopifyStoreDomain = (registrableDomain: string): boolean =>
 
 export const SHOPIFY_UNVERIFIABLE =
   'A myshopify.com address cannot be verified with DNS or a file, because Shopify controls it. ' +
-  'Connecting your Shopify store will add it for you once that is available; until then, ' +
-  'contact support and we will add it by hand.';
+  'Connect your Shopify store under Integrazioni instead: the install proves it and adds it ' +
+  'for you.';
 
 /**
  * How often one domain may be re-checked (P4-02, P2-04).

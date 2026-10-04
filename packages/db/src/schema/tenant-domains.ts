@@ -25,6 +25,8 @@ export const domainKind = pgEnum('domain_kind', ['production', 'staging']);
 export const domainVerificationMethod = pgEnum('domain_verification_method', [
   'DNS_TXT',
   'WELL_KNOWN',
+  /** The Shopify install proved the shop (P6-06, §3.3): Shopify asked its owner. */
+  'SHOPIFY',
 ]);
 
 /**

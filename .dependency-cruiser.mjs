@@ -183,6 +183,10 @@ export default {
           // read in the caller's withTenant transaction, over security_events'
           // strict USING and tenant_domains' boilerplate.
           '|^packages/db/src/refused-origins[.]ts$' +
+          // src/shopify.ts is exempt from P6-06 (ADR 0031): its statements run in
+          // the caller's withTenant, in withUser for the state, and in the one
+          // read-only transaction that resolves a shop to its winery.
+          '|^packages/db/src/shopify[.]ts$' +
           // src/webhooks.ts is exempt from P0-64b, and unlike the two files
           // above it really does open a connection. A webhook arrives outside
           // any request — no session, no membership row, no tenant to set — and

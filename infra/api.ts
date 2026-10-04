@@ -10,7 +10,15 @@ import {
   ESCALATION_PERIOD_SECONDS,
   ESCALATION_RATE_THRESHOLD,
 } from './chat-metrics';
-import { authSecret, databaseUrl, originSecret, parameterReadPermissions } from './config';
+import {
+  authSecret,
+  databaseUrl,
+  originSecret,
+  parameterPath,
+  parameterReadPermissions,
+  SHOPIFY_TOKEN_PARAMETERS,
+  shopifyTokenPermissions,
+} from './config';
 
 /**
  * The public origin Better Auth builds absolute URLs against.
@@ -103,6 +111,17 @@ const resendWebhookSecret = new sst.Secret('ResendWebhookSecret', '');
  *   `sst secret set StripeWebhookSecret --stage <stage>`
  */
 const stripeWebhookSecret = new sst.Secret('StripeWebhookSecret', '');
+
+/**
+ * The Shopify app's credentials (P6-06): its client id and secret, both or
+ * neither. Empty reads as absent: no store can be connected, and Shopify's
+ * webhooks are a 404.
+ *
+ *   `sst secret set ShopifyApiKey --stage <stage>`
+ *   `sst secret set ShopifyApiSecret --stage <stage>`
+ */
+const shopifyApiKey = new sst.Secret('ShopifyApiKey', '');
+const shopifyApiSecret = new sst.Secret('ShopifyApiSecret', '');
 
 /**
  * The widget session token keyset (P2-11): one or two Ed25519 private JWKs, the
@@ -236,6 +255,11 @@ const environment = {
   /* Empty is absent: no plan can be bought (P5-02). */
   STRIPE_SECRET_KEY: stripeSecretKey.value,
 
+  /* Both or neither (P6-06); the tokens go under the stage's own path (ADR 0031). */
+  SHOPIFY_API_KEY: shopifyApiKey.value,
+  SHOPIFY_API_SECRET: shopifyApiSecret.value,
+  SHOPIFY_TOKEN_PREFIX: parameterPath(SHOPIFY_TOKEN_PARAMETERS),
+
   /**
    * The widget token keyset (P2-11), read once per container when P2-12's
    * session route loads its keys — injected like `AUTH_SECRET`, for the same
@@ -357,6 +381,8 @@ export const api = new sst.aws.Function('Api', {
    */
   permissions: [
     ...parameterReadPermissions(['database/url', 'auth/secret']),
+    /* The Shopify install puts a token, and the uninstall webhook deletes it (P6-06). */
+    ...shopifyTokenPermissions(),
     {
       /*
        * Titan, and only Titan (P2-37). This function embeds a query for the

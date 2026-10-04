@@ -8,6 +8,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@aws-sdk/client-ssm": "^3.883.0",
     "@catalogorosso/api-client": "workspace:*",
     "@catalogorosso/core": "workspace:*",
     "@catalogorosso/llm": "workspace:*",

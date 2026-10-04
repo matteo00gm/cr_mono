@@ -58,7 +58,10 @@ patch will not, because the ORM's own documentation shows the forbidden form.
   that was sent, and the read-only `readClaimWork()` (P4-18b), which sees only
   claims with a notice or an outcome still to deal with, and the read-only
   `listTenantDirectory()` (P5-13), which returns every tenant's id from one
-  statement and hands each over to a tenant scope (ADR 0030), each set a
+  statement and hands each over to a tenant scope (ADR 0030), and the
+  read-only `resolveTenantByShop()` (P6-06), which sees one Shopify
+  installation by the shop a signed webhook names and hands over to a tenant
+  scope (ADR 0031), each set a
   different GUC and read under a policy that admits it. A new one of those is a design change with its own ADR
   — every GUC is another way a row becomes visible.
 - Three tables carry **no `tenant_id` and no policy on purpose**, and are
