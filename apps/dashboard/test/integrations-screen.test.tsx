@@ -79,6 +79,40 @@ describe('the status', () => {
     expect(screen.getByRole('button', { name: 'Collega Shopify' })).toBeTruthy();
   });
 
+  it('says what the uninstall took with it: the shop’s address, and the widget on it', async () => {
+    /* The proof ended with the install (P6-06b), and a seller should not find that out from a silent widget. */
+    mount({
+      configured: true,
+      shop: {
+        shop: SHOP,
+        installedAt: '2026-10-02T09:00:00.000Z',
+        uninstalledAt: '2026-10-03T09:00:00.000Z',
+      },
+    });
+
+    const section = await screen.findByRole('region', { name: 'Shopify' });
+
+    await waitFor(() => {
+      expect(section.textContent).toContain(
+        'non è più tra i tuoi domini verificati, e lì il widget non risponde più',
+      );
+    });
+  });
+
+  it('says nothing of the kind while the shop is connected', async () => {
+    mount({
+      configured: true,
+      shop: { shop: SHOP, installedAt: '2026-10-02T09:00:00.000Z', uninstalledAt: null },
+    });
+
+    const section = await screen.findByRole('region', { name: 'Shopify' });
+
+    await waitFor(() => {
+      expect(section.textContent).toContain('Collegato a');
+    });
+    expect(section.textContent).not.toContain('non risponde più');
+  });
+
   it('says it could not read the status', async () => {
     mount(new Error('down'));
 

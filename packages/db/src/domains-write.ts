@@ -481,6 +481,33 @@ export const deleteDomain = async (
   return row === undefined ? undefined : toDomain(row);
 };
 
+/**
+ * Removes this winery's row for an origin if — and only if — it stands on the
+ * proof named (P6-06b, Open Decision 9).
+ *
+ * **One statement, so the check and the delete cannot disagree.** A proof that
+ * ends with the thing that gave it — a Shopify install — takes the row it
+ * made. A row the seller proved some other way is not found, and stays; so
+ * does a pending one, which stands on no proof at all — its method is null,
+ * and no row goes back to pending once it has one.
+ */
+export const deleteDomainProvedBy = async (
+  tx: DbTransaction,
+  origin: string,
+  method: 'SHOPIFY',
+): Promise<DomainRow | undefined> => {
+  const rows = await tx.execute(sql`
+    DELETE FROM tenant_domains
+    WHERE origin = ${origin}
+      AND verification_method = ${method}::domain_verification_method
+    RETURNING ${COLUMNS}
+  `);
+
+  const row = [...rows][0] as DomainSqlRow | undefined;
+
+  return row === undefined ? undefined : toDomain(row);
+};
+
 /** How many origins this winery has actually verified. */
 export const countVerifiedDomains = async (tx: DbTransaction): Promise<number> => {
   const rows = await tx.execute(sql`

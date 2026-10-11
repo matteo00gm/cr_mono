@@ -56,6 +56,7 @@ const suffix = (): string => randomBytes(4).toString('hex');
 
 /** What `core` hands the settlement; this package writes whatever it is given. */
 const CLAIM_NOTICE_HOURS = 72;
+const TRIAL_DAYS = 14;
 
 const winery = async (status: TenantStatus = 'ACTIVE'): Promise<string> => {
   const id = randomUUID();
@@ -141,6 +142,16 @@ const holderOf = async (origin: string) => {
     { tenant_id: string; status: string; verification_method: string | null } | undefined;
 };
 
+/** A winery's billing state, and how many days its trial has left. */
+const billingOf = async (tenantId: string) => {
+  const rows = await adminDb.execute(sql`
+    SELECT status, round(extract(epoch FROM trial_ends_at - now()) / 86400)::int AS trial_days
+    FROM tenants WHERE id = ${tenantId}::uuid
+  `);
+
+  return [...rows][0] as { status: TenantStatus; trial_days: number | null };
+};
+
 const claimRow = async (id: string) => {
   const rows = await adminDb.execute(sql`
     SELECT status, incumbent_tenant_id, transfer_at, settled_at,
@@ -213,6 +224,7 @@ const settle = (claimId: string, claimantTenantId: string, cap = 2, userId?: str
       claimantTenantId,
       cap,
       noticeHours: CLAIM_NOTICE_HOURS,
+      trialDays: TRIAL_DAYS,
       actor: { userId, ip: '203.0.113.9', userAgent: 'test' },
     },
     db,
@@ -408,6 +420,74 @@ describe('settling a claim', () => {
         metadata: { kind: 'unheld' },
       },
     ]);
+  });
+
+  it('starts the trial of a winery whose first domain this is (P6-06b)', async () => {
+    const claimant = await winery('PENDING_VERIFICATION');
+    const userId = await member();
+    const { registrable, apex } = zone();
+    const id = await claim(claimant, apex, registrable);
+
+    await expect(settle(id, claimant, 2, userId)).resolves.toMatchObject({ kind: 'transferred' });
+
+    expect(await billingOf(claimant)).toEqual({ status: 'TRIALING', trial_days: TRIAL_DAYS });
+    expect(
+      (await auditOf(claimant)).map(({ action, target, actor_user_id }) => ({
+        action,
+        target,
+        actor_user_id,
+      })),
+    ).toEqual(
+      expect.arrayContaining([
+        { action: 'billing.trial_started', target: `tenant:${claimant}`, actor_user_id: userId },
+        { action: 'domain.claimed_by_challenge', target: apex, actor_user_id: userId },
+      ]),
+    );
+  });
+
+  it('starts it for the claimant when the origin came from a holder, never for the holder', async () => {
+    const [holder, claimant] = [
+      await winery('PENDING_VERIFICATION'),
+      await winery('PENDING_VERIFICATION'),
+    ];
+    const { registrable, apex } = zone();
+    await hold(holder, apex, registrable);
+    const id = await claim(claimant, apex, registrable);
+
+    await expect(settle(id, claimant)).resolves.toMatchObject({ basis: 'lapsed' });
+
+    expect((await billingOf(claimant)).status).toBe('TRIALING');
+    expect(await billingOf(holder)).toEqual({ status: 'PENDING_VERIFICATION', trial_days: null });
+    expect((await auditOf(holder)).map(({ action }) => action)).toEqual([
+      'domain.claimed_by_challenge',
+    ]);
+  });
+
+  it.each<TenantStatus>(['ACTIVE', 'CANCELED'])(
+    'leaves a winery that is %s as it was: a trial is had once',
+    async (status) => {
+      const claimant = await winery(status);
+      const { registrable, apex } = zone();
+      const id = await claim(claimant, apex, registrable);
+
+      await expect(settle(id, claimant)).resolves.toMatchObject({ kind: 'transferred' });
+
+      expect(await billingOf(claimant)).toEqual({ status, trial_days: null });
+      expect((await auditOf(claimant)).map(({ action }) => action)).toEqual([
+        'domain.claimed_by_challenge',
+      ]);
+    },
+  );
+
+  it('starts no trial for a claim that only served notice', async () => {
+    const [holder, claimant] = [await winery('ACTIVE'), await winery('PENDING_VERIFICATION')];
+    const { registrable, apex } = zone();
+    await hold(holder, apex, registrable);
+    const id = await claim(claimant, apex, registrable);
+
+    await expect(settle(id, claimant)).resolves.toMatchObject({ kind: 'noticed' });
+
+    expect((await billingOf(claimant)).status).toBe('PENDING_VERIFICATION');
   });
 
   it.each<[TenantStatus, 'lapsed']>([

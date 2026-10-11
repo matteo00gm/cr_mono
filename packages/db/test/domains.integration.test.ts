@@ -6,6 +6,7 @@ import {
   countDomains,
   countVerifiedDomains,
   deleteDomain,
+  deleteDomainProvedBy,
   insertDomain,
   markDomainVerified,
   readDomainById,
@@ -691,6 +692,63 @@ describe('removing a domain (P4-06)', () => {
     await expect(
       sessionCutoffAt(TENANT_A, 'https://removable.winery.com', db),
     ).resolves.toBeInstanceOf(Date);
+  });
+
+  it('removes by proof only the origin that stands on that proof (P6-06b)', async () => {
+    const proofs = [
+      ['https://bottega.myshopify.com', 'SHOPIFY'],
+      ['https://dns-proved.winery.com', 'DNS_TXT'],
+      ['https://file-proved.winery.com', 'WELL_KNOWN'],
+    ] as const;
+
+    for (const [origin, method] of proofs) {
+      const created = await add(TENANT_A, origin);
+
+      await withTenant(TENANT_A, (tx) => markDomainVerified(tx, created?.id ?? '', method), db);
+    }
+
+    await add(TENANT_A, 'https://pending.myshopify.com');
+
+    const removed = async (origin: string) =>
+      withTenant(TENANT_A, (tx) => deleteDomainProvedBy(tx, origin, 'SHOPIFY'), db);
+
+    await expect(removed('https://dns-proved.winery.com')).resolves.toBeUndefined();
+    await expect(removed('https://file-proved.winery.com')).resolves.toBeUndefined();
+    /* Pending: it stands on no proof at all. */
+    await expect(removed('https://pending.myshopify.com')).resolves.toBeUndefined();
+    await expect(removed('https://bottega.myshopify.com')).resolves.toMatchObject({
+      origin: 'https://bottega.myshopify.com',
+      status: 'VERIFIED',
+    });
+
+    const left = await withTenant(TENANT_A, (tx) => readDomains(tx), db);
+    const origins = left.map(({ origin }) => origin);
+
+    expect(origins).toEqual(
+      expect.arrayContaining([
+        'https://dns-proved.winery.com',
+        'https://file-proved.winery.com',
+        'https://pending.myshopify.com',
+      ]),
+    );
+    expect(origins).not.toContain('https://bottega.myshopify.com');
+  });
+
+  it('removes nothing of another winery’s by proof, whatever it stands on', async () => {
+    const created = await add(TENANT_A, 'https://altrui.myshopify.com');
+
+    await withTenant(TENANT_A, (tx) => markDomainVerified(tx, created?.id ?? '', 'SHOPIFY'), db);
+
+    await expect(
+      withTenant(
+        TENANT_B,
+        (tx) => deleteDomainProvedBy(tx, 'https://altrui.myshopify.com', 'SHOPIFY'),
+        db,
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      withTenant(TENANT_A, (tx) => readDomainByOrigin(tx, 'https://altrui.myshopify.com'), db),
+    ).resolves.toMatchObject({ status: 'VERIFIED' });
   });
 
   it('frees the origin for somebody else, which a tombstone would not', async () => {

@@ -7,6 +7,7 @@ import {
   countStagingDomains,
   countVerifiedDomains,
   deleteDomain,
+  deleteDomainProvedBy,
   insertDomain,
   insertVerifiedSibling,
   markDomainVerified,
@@ -716,6 +717,30 @@ describe('removing a domain (P4-06)', () => {
     const { tx } = capturing([]);
 
     await expect(deleteDomain(tx, 'd1')).resolves.toBeUndefined();
+  });
+
+  it('removes an origin by the proof it stands on, in the one statement that checks it', async () => {
+    /* A read and then a delete could disagree; one statement cannot (P6-06b). */
+    const { statements, tx } = capturing([{ ...raw, status: 'VERIFIED' }]);
+
+    await expect(
+      deleteDomainProvedBy(tx, 'https://www.winery.com', 'SHOPIFY'),
+    ).resolves.toMatchObject({ origin: 'https://www.winery.com', status: 'VERIFIED' });
+
+    const sql = text(statements[0]);
+
+    expect(statements).toHaveLength(1);
+    expect(sql).toMatch(/DELETE FROM tenant_domains/u);
+    expect(sql).toMatch(/verification_method =/u);
+    expect(sql).not.toMatch(/tenant_id/u);
+  });
+
+  it('gives back nothing for an origin that stands on another proof', async () => {
+    const { tx } = capturing([]);
+
+    await expect(
+      deleteDomainProvedBy(tx, 'https://www.winery.com', 'SHOPIFY'),
+    ).resolves.toBeUndefined();
   });
 
   it('counts only what is verified when deciding if this was the last one', async () => {

@@ -167,9 +167,11 @@ export const writeBillingChange = async (
 /**
  * Starts the card-free trial, if this winery has not had one (P5-05).
  *
- * Called on the transaction that verifies a domain: `PENDING_VERIFICATION`
- * becomes `TRIALING` with the trial's days on the clock (`TRIAL.days`, P5-01's
- * `plans.ts`, passed in rather than restated here). **Only from
+ * Called on the transaction that gives a winery a verified domain, however it
+ * was proved — the verify path, a claim that lands (P4-18), a Shopify install
+ * (P6-06b, Open Decision 10): `PENDING_VERIFICATION` becomes `TRIALING` with
+ * the trial's days on the clock (`TRIAL.days`, P5-01's `plans.ts`, passed in
+ * rather than restated here). **Only from
  * `PENDING_VERIFICATION`**, in the statement rather than beside it, so a second
  * domain verified later — or one verified by a winery that has already paid —
  * changes nothing, and neither do two verifications arriving together.

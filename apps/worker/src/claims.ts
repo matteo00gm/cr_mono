@@ -8,6 +8,7 @@ import {
   LOCALES,
   logTransport,
   resendTransport,
+  TRIAL,
   type Locale,
   type SendEmail,
   type TemplateName,
@@ -164,6 +165,7 @@ export const sweepClaims = async ({
           claimantTenantId: claim.claimantTenantId,
           cap: await capOf(claim.claimantTenantId),
           noticeHours: CLAIM_NOTICE_HOURS,
+          trialDays: TRIAL.days,
           actor: {},
         });
 

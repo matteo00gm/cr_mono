@@ -131,8 +131,18 @@ describe('markShopifyUninstalled', () => {
     const marked = fakeTx([{ id: 'i-1' }]);
 
     expect(await markShopifyUninstalled(marked.tx, SHOP)).toBe(true);
-    expect(bound(marked)).toEqual([SHOP]);
+    expect(bound(marked)).toEqual([SHOP, null, null]);
     expect(await markShopifyUninstalled(fakeTx([]).tx, SHOP)).toBe(false);
+  });
+
+  it('holds the uninstall to installs that are older than it, when told when it happened', async () => {
+    const marked = fakeTx([{ id: 'i-1' }]);
+    const happened = new Date('2026-10-04T09:00:00.000Z');
+
+    await markShopifyUninstalled(marked.tx, SHOP, happened);
+
+    expect(said(marked)).toContain('installed_at <=');
+    expect(bound(marked)).toEqual([SHOP, happened.toISOString(), happened.toISOString()]);
   });
 });
 

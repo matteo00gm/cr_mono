@@ -19,6 +19,7 @@ import {
   RateLimitedError,
   refusalMessage,
   SHOPIFY_UNVERIFIABLE,
+  TRIAL,
   verificationToken,
   VERIFY_ATTEMPTS,
   VERIFY_WINDOW_SEC,
@@ -207,6 +208,7 @@ export const createDomainClaims = ({
         claimantTenantId: tenantId,
         cap,
         noticeHours: CLAIM_NOTICE_HOURS,
+        trialDays: TRIAL.days,
         actor: { userId, ip, userAgent },
       });
 

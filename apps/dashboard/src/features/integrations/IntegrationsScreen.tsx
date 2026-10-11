@@ -156,8 +156,9 @@ export const IntegrationsScreen = ({
             ) : (
               <p>
                 L’app è stata disinstallata da <strong>{status.shop.shop}</strong> il{' '}
-                {day(status.shop.uninstalledAt ?? status.shop.installedAt)}. Puoi collegarlo di
-                nuovo.
+                {day(status.shop.uninstalledAt ?? status.shop.installedAt)}. Il suo indirizzo
+                myshopify.com non è più tra i tuoi domini verificati, e lì il widget non risponde
+                più. Puoi collegarlo di nuovo.
               </p>
             )}
             {!canConnect || connected ? null : (

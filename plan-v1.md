@@ -528,7 +528,7 @@ A domain typed at signup is a **claim**, not a fact. Nothing enters the allowlis
 
 - **DNS TXT** — `_somm-verify.winery.com` = one-time nonce. Proof of **zone control**, the strongest available, and it covers every host in the zone at once.
 - **Well-known file** — `https://winery.com/.well-known/somm-verify-<nonce>.txt`, for sellers who cannot edit DNS.
-- **Shopify OAuth install** — the install itself proves shop ownership (P6). *(As built in P6-06: it proves the shop's own `*.myshopify.com` origin, and only that. A storefront on its own domain still proves that domain by DNS or file.)*
+- **Shopify OAuth install** — the install itself proves shop ownership (P6). *(As built in P6-06: it proves the shop's own `*.myshopify.com` origin, and only that. A storefront on its own domain still proves that domain by DNS or file. As built in P6-06b: the proof lasts as long as the install — an uninstall removes that origin and ends its sessions.)*
 
 Once `winery.com` is verified, the seller may add **exact origins** beneath it — `https://winery.com`, `https://www.winery.com`, `https://shop.winery.com` — without a new DNS record each time. Each allowlist entry remains a full, exact, individually-removable serialized origin. This is **not** a wildcard: `blog.winery.com` is trusted only if the seller explicitly adds it, so the subdomain-takeover problem that disqualifies wildcards (§below) never arises — a hijacked subdomain the seller never added is still rejected.
 
@@ -1426,7 +1426,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P6-04 | **ZERO_RESULTS panel** | the highest-value commercial insight | P6-01 |
 | ✅ P6-05 | Unauthorized-origin attempts panel | from `security_events` | P2-16 |
 | ✅ P6-06 | Shopify OAuth app + install | also becomes a domain-verification method | P4-01 |
-| P6-06b | Shopify proof lifecycle | uninstall withdraws the proof (Decision 9); a first domain proved by claim or by Shopify starts the trial (Decision 10) | P6-06 |
+| ✅ P6-06b | Shopify proof lifecycle | uninstall withdraws the proof (Decision 9); a first domain proved by claim or by Shopify starts the trial (Decision 10) | P6-06 |
 | P3-23 | Widget privacy notice | the shopper is told, before the first question, that the shop reads questions and what not to write (Decision 7) | P6-04 |
 | P6-07 | `orders/create` webhook + matching | on the `_somm_session` line-item property | P6-06,P3-11 |
 | P6-08 | Attribution correctness test | click → order → attributed exactly once | P6-07 |
@@ -7091,7 +7091,7 @@ Also send the P0-64 payment-failed email on entry to `PAST_DUE`, since the tenan
 - **Operator:** the Stripe endpoint must be created on the pinned API version (`2026-08-26.dahlia`) and sent the eight types in `BILLING_EVENT_TYPES`. A type we act on in a shape we cannot read is logged as `stripe_event_unreadable`, which is the alarm that says the endpoint's version is wrong.
 - **⚠ Found here: Drizzle wraps a driver error** ("Failed query") and puts Postgres's own in `cause`. The savepoint's first version read the code only on the wrapper, so every bound-customer refusal would have thrown — and been retried by Stripe for three days. The integration test that tried it found it.
 - **Deferred to P5-05a** *(split)*: the payment-failed email to the owners, and **trial expiry**, which is not enforced yet: a `TRIALING` winery past `trial_ends_at` is still served until P5-05a puts the date in the service gate. *(Both closed by P5-05a; the email is sent after the claim commits, not through the outbox — see there.)*
-- **⚠ Open:** a winery whose first domain arrives through a claim (P4-18) does not start a trial — `settleDomainClaim` inserts the claimant's row verified, outside the verify path. *(Decided 2026-10-04, Open Decision 10: it starts there too — row P6-06b, which also closes the same gap in the Shopify install.)*
+- **⚠ Open:** a winery whose first domain arrives through a claim (P4-18) does not start a trial — `settleDomainClaim` inserts the claimant's row verified, outside the verify path. *(Decided 2026-10-04, Open Decision 10: it starts there too — row P6-06b, which also closes the same gap in the Shopify install. ✅ Closed in P6-06b.)*
 - **16 fixture inserts and one update** now satisfy the CHECK: an `ACTIVE` winery has a subscription, a `TRIALING` one a trial end.
 
 **Verified.** 4,857 unit tests; against real Postgres, the CHECK refuses both orphans to every role, the trial starts once and never for a payer, the writer reaches its own winery only and survives a bound customer, and the production port with the production effect activates on a paid Checkout, blocks at once on a failure, restores on the retry, keeps a winery blocked through a late success, frees a winery whose subscription ended, and changes nothing — while still claiming — for the wrong mode, a stranger's customer, a bound customer and a second Checkout. The browser suite passes against the harness's now-coherent winery. 29 mutants, 29 killed, one only after a test fix: the helper that built a subscription event swapped an explicit `undefined` plan for its default, so "a price that is not ours" had been sending Cantina's.
@@ -7633,7 +7633,7 @@ Assert **zero provider calls** across every blocked case, since that is what the
 - **The exchange goes through `guardedFetch`** (P4-03a), which now takes a `POST` with a JSON body — only a `POST`, only with one — because it posts our client secret to the shop. The shop is held to `*.myshopify.com` twice before that: by the signed callback and by the exchange itself.
 - **The third proof of a domain** (§3.3): the shop's `https://<shop>.myshopify.com` is verified with method `SHOPIFY` — a pending row the winery added is promoted, a new one is added within the plan's domain allowance like any other, and one another winery holds is left alone. The install completes either way, and the owner is told which (*"verificato"*, *"limite"*, *"occupato"*). The domains screen's message for a `myshopify.com` address now sends the seller to Integrazioni instead of support.
 - **One shop, one winery**: `shop` is unique, so an install naming a shop another winery holds is refused and no token is kept — the orders it reports (P6-07) must have one owner. A winery may hold more than one shop.
-- **⚠ "Flagging the tenant" is the installation, not the tenant** *(deviation)*. `app/uninstalled` marks that shop's row `uninstalled_at`, deletes its token, and audits it; the winery's status does not change, because it may sell elsewhere, and a second shop may still be installed. The domain the install proved stays verified: the proof held when it was made, and the seller's storefront may still carry the widget. *(Superseded 2026-10-04 by Open Decision 9: the uninstall withdraws the proof — row P6-06b.)*
+- **⚠ "Flagging the tenant" is the installation, not the tenant** *(deviation)*. `app/uninstalled` marks that shop's row `uninstalled_at`, deletes its token, and audits it; the winery's status does not change, because it may sell elsewhere, and a second shop may still be installed. The domain the install proved stays verified: the proof held when it was made, and the seller's storefront may still carry the widget. *(Superseded 2026-10-04 by Open Decision 9: the uninstall withdraws the proof — ✅ built in P6-06b, which also corrects this row's audit metadata.)*
 - **The callback is a redirect, not an API**: declared for access like every route (P0-49) in `DASHBOARD_REDIRECT_ROUTES`, and left out of the OpenAPI reference by name, as the widget's preflights are.
 - **⚠ Open: Shopify's compliance webhooks.** `customers/data_request`, `customers/redact` and `shop/redact` are mandatory for an app in the Shopify App Store. They are acknowledged and ignored today — nothing here holds a Shopify customer's data — and must be handled, with `shop/redact` deleting what P6-07 records, before the app is listed (P6-09).
 - **⚠ Operator: the app itself.** Create it in the Shopify Partner dashboard, register `https://<dashboard>/v1/dashboard/shopify/callback` as its redirect URL and `https://<api>/v1/webhooks/shopify` for `app/uninstalled`, and set `ShopifyApiKey` and `ShopifyApiSecret` per stage. Until then the screen says Shopify is not available, and the webhook route is a 404.
@@ -7663,6 +7663,29 @@ Assert **zero provider calls** across every blocked case, since that is what the
 **Tests.** An uninstall removes the Shopify-proved origin and records a cutoff; leaves a DNS-proved one; a first domain proved by the install starts the trial; one proved by a claim starts it; a later one does not.
 
 **Files.** `apps/api/src/shopify.ts`, `domain-claims.ts`, tests. **~60 lines.**
+
+**As built (2026-10-11).** Three places changed, and one statement was added for each half of the row.
+
+- **The uninstall withdraws the proof, in one transaction.** In the handler's tenant scope: the installation is marked, the origin goes by `deleteDomainProvedBy(origin, 'SHOPIFY')`, `endSessionsFor` records the cutoff (P4-06), `domain.removed` is audited with `kind: 'shopify-uninstalled'` beside `shopify.uninstalled`, and the token is removed. **The delete is the check**: one statement that names the proof, so an origin the seller verified by DNS or file is not found and stays, and so does a pending one, whose method is null. There is no "last verified domain" confirmation as the domains screen has — there is nobody to ask — so **Integrazioni says what happened**: the address is no longer among the verified domains and the widget no longer answers there.
+- **⚠ News of an uninstall older than the install ends nothing** *(addition)*. Shopify redelivers for hours, and a seller who removed the app and put it back meanwhile would have had the fresh install — its token, and now its domain — ended by a redelivery about the old one. The route reads `X-Shopify-Triggered-At`, and `markShopifyUninstalled` matches only an install no newer than it; the answer is `stale` and nothing is touched. Like the shop, that header is not in the signed body, and like the shop it can only narrow what a signed delivery does. Absent or unreadable, the delivery is taken as current.
+- **The trial starts in the two places it did not.** The install, when the shop's domain came out `verificato`; and `settleDomainClaim`'s landing, which now takes `trialDays` from both its callers — the claim screen and the sweep (P4-18b), each passing `TRIAL.days`. Each is on the transaction that verified the domain and each writes `billing.trial_started`. `startTrial` is still the only statement that moves a winery out of `PENDING_VERIFICATION` and still lives in `billing.ts`, so T6's single-writer rule holds unchanged.
+- **⚠ P6-06's install audit row had been recording `[redacted]`** *(fix)*. Audit metadata goes through the log allowlist (P0-56), and `{ scopes, domain }` were names of our own choosing, so both values were blanked. It is `{ status: <what became of the domain> }` now; the scopes are on the installation row. The Postgres test reads the stored row, which is what would have caught it.
+- **⚠ Note: the install is now the cheapest proof that starts a trial.** A Shopify development store costs nothing, where a domain costs a few euros. The trial is still had once per winery, a winery still needs a verified address, and the trial's own allowance (`TRIAL.messagesPerMonth`) bounds what one costs us. Many wineries from one person is what abuse here would look like, and that is P7-02's to watch.
+
+**Verified.** Unit (5521 tests), the full Postgres suite (89 files, 1173 tests), coverage gates (`packages/security` still at 100%), every `:check` — the dependency audit once a new advisory against `source-map-js`, which failed it on `main` too, had its own `Deps:` change. Against Postgres, in `apps/api`: an uninstall removes the origin the install proved, records its cutoff and audits why; leaves a DNS-proved domain, and leaves the shop's own origin when it stands on a file proof; ends nothing on news older than the install, then ends it on news that is not; and a reinstall brings the origin back. A winery that has only signed up is `TRIALING` for `TRIAL.days` after an install that proved its domain, or that verified one it had pending; is not after one that proved nothing; and a second install after a cancellation starts nothing. In `packages/db`: a claim that lands starts the claimant's trial and never the holder's, leaves an active or cancelled claimant as it was, and starts nothing for a claim that only served notice; the delete-by-proof removes only the row standing on that proof, and nothing of another winery's. 22 mutants, 22 killed. One condition written and then removed before the run: `status = 'VERIFIED'` in the delete could not fail, since a pending row has no method and none goes back to pending.
+
+| Mutation | Caught by |
+|---|---|
+| An origin removed whatever proof it stands on | `domains.integration.test.ts` |
+| Old news ends a fresh install; an uninstall with no time refused; only news older than the install believed | `shopify.integration.test.ts` (db) |
+| A landed claim starts no trial; the trial's length ignored; the trial recorded against the wrong target | `with-domain-claim.integration.test.ts` |
+| A trial recorded that did not start; the trial recorded as nobody's doing | `with-domain-claim.test.ts` |
+| No trial from an install; a trial for an install that proved nothing; the install audited under a name the redactor blanks | `shopify.integration.test.ts` (api) |
+| The proof kept after an uninstall; sessions left running on a withdrawn origin; the withdrawal's reason not recorded; old news ends the install; a stale delivery acted on anyway | `shopify.integration.test.ts` (api) |
+| The time of the uninstall dropped; an unreadable time taken as a time | `shopify-routes.test.ts` |
+| The claim screen settles with no trial | `domain-claims-port.test.ts` |
+| The sweep settles with no trial | `claims.test.ts` (worker) |
+| The seller not told the address went | `integrations-screen.test.tsx` |
 
 ---
 
@@ -7976,11 +7999,11 @@ Off by default. A member who may write the catalogue asks for one answer at a ti
 
 **9. ~~What a Shopify uninstall does to the proved domain~~ — decided (2026-10-04): it withdraws the proof.**
 
-The `myshopify.com` origin the install proved (P6-06) is removed on `app/uninstalled`, through the ordinary removal, so its live widget sessions end (P4-06). The proof came from the install; a store we can no longer read is not one we vouch for, a widget left on it would go on spending model calls nobody is watching, and the seller gets the domain slot back. A domain proved by DNS or file is untouched. Row **P6-06b**.
+The `myshopify.com` origin the install proved (P6-06) is removed on `app/uninstalled`, through the ordinary removal, so its live widget sessions end (P4-06). The proof came from the install; a store we can no longer read is not one we vouch for, a widget left on it would go on spending model calls nobody is watching, and the seller gets the domain slot back. A domain proved by DNS or file is untouched. Row **P6-06b** *(✅ built)*.
 
 **10. ~~A first domain proved outside the domains screen~~ — decided (2026-10-04): the trial starts there too.**
 
-`PENDING_VERIFICATION → TRIALING` happens at the first verified domain however it was proved — the domains screen, a settled claim (P4-18) or the Shopify install (P6-06). One rule, in the statement that already refuses anything but `PENDING_VERIFICATION`. Row **P6-06b**.
+`PENDING_VERIFICATION → TRIALING` happens at the first verified domain however it was proved — the domains screen, a settled claim (P4-18) or the Shopify install (P6-06). One rule, in the statement that already refuses anything but `PENDING_VERIFICATION`. Row **P6-06b** *(✅ built)*.
 
 ---
 
