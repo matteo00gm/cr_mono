@@ -269,6 +269,23 @@ test.describe('the full axe rule set, where layout exists', () => {
     await page.addScriptTag({ path: AXE });
 
     return page.evaluate(async () => {
+      /*
+       * **At rest.** The panel fades in over 140ms, and text scanned halfway
+       * through a fade has half its contrast: the rule would be measuring the
+       * animation, not the design. It went unnoticed while everything on the
+       * panel was near-black, with contrast to spare at any opacity; the small
+       * grey notice under the composer (P3-23) is 6.4:1 at rest and below the
+       * line mid-fade, so the scan passed or failed by how fast the runner
+       * was. A shopper reads the panel once it has opened, and so does this.
+       */
+      const widgetRoot = document.querySelector('sommelier-widget')?.shadowRoot;
+
+      await Promise.all(
+        [...document.getAnimations(), ...(widgetRoot?.getAnimations() ?? [])].map(
+          (animation) => animation.finished,
+        ),
+      );
+
       const results = await (
         globalThis as unknown as {
           axe: {
