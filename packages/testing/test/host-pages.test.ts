@@ -111,6 +111,17 @@ describe('the storefront', () => {
     expect(response.headers.get('content-type')).toContain('text/javascript');
   });
 
+  it('serves the same storefront with a theme’s choices on the tag (P6-09)', async () => {
+    const plain = await (await fetch(`${verified.origin}/`)).text();
+    const chosen = await (await fetch(`${verified.origin}/themed`)).text();
+
+    expect(chosen).toContain('data-position="bottom-left"');
+    expect(chosen).toContain('data-color="#1f6f4a"');
+    /* And nothing else: the attributes are the only difference a test can then be about. */
+    expect(chosen.replace(' data-position="bottom-left" data-color="#1f6f4a"', '')).toBe(plain);
+    expect(plain).not.toContain('data-position');
+  });
+
   it('answers 404 for a path nobody defined', async () => {
     expect((await get(verified.origin, '/nonesiste')).status).toBe(404);
   });

@@ -88,6 +88,8 @@ export const run = (deps: Deps = {}): void => {
       api: sommelier.api,
       key: sommelier.key,
       cart: sommelier.cart,
+      position: sommelier.position,
+      color: sommelier.color,
     });
 
     attach_(mounted.launcher, {

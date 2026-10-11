@@ -19,6 +19,7 @@ export * from './rate-limit-suite.js';
 export {
   bundleDirectory,
   startHostPages,
+  THEMED,
   UNVERIFIED_PORT,
   VERIFIED_PORT,
   type CartCall,

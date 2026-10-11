@@ -58,7 +58,10 @@ beforeEach(() => {
   document.body.append(host);
 });
 
-const mount = (overrides: Partial<WidgetConfigResponse> = {}): Panel =>
+const mount = (
+  overrides: Partial<WidgetConfigResponse> = {},
+  storefront: { readonly position?: string; readonly color?: string } = {},
+): Panel =>
   mountPanel({
     shadow,
     launcher,
@@ -68,6 +71,7 @@ const mount = (overrides: Partial<WidgetConfigResponse> = {}): Panel =>
     key: KEY,
     ask: silent,
     navigate: () => undefined,
+    ...storefront,
   });
 
 /**
@@ -294,6 +298,64 @@ describe('the tenant own colour', () => {
     for (const primary of ['#7b1e3c', '#e8c66a', '#123456', '#ffffff', '#000000']) {
       expect(contrastRatio(readableOn(primary), primary) ?? 0, primary).toBeGreaterThanOrEqual(4.5);
     }
+  });
+});
+
+describe('the storefront’s own choices (P6-09)', () => {
+  it('uses the storefront’s colour over the winery’s', () => {
+    mount({ theme: { ...config.theme, primaryColor: '#123456' } }, { color: '#1f6f4a' });
+
+    expect(cssIn(shadow)).toContain('--accent: #1f6f4a');
+    expect(cssIn(shadow)).not.toContain('--accent: #123456');
+  });
+
+  it('still picks a foreground that can be read on it', () => {
+    mount({}, { color: '#e8c66a' });
+
+    expect(cssIn(shadow)).toContain('--on-accent: #000000');
+  });
+
+  it.each(['red', 'rgb(31, 111, 74)', '#1f6f4a; } * { display: none', ''])(
+    'falls back to the winery’s colour for %j, rather than to none',
+    (color) => {
+      /* Checked here too: this is where it becomes stylesheet text, whatever the loader did. */
+      mount({ theme: { ...config.theme, primaryColor: '#123456' } }, { color });
+
+      expect(cssIn(shadow)).toContain('--accent: #123456');
+      /* The panel hides itself with `display: none`; what must not appear is a rule of the value's. */
+      expect(cssIn(shadow)).not.toMatch(/\*\s*\{\s*display: none/u);
+    },
+  );
+
+  it('opens on the left over a launcher on the left', () => {
+    mount({}, { position: 'bottom-left' });
+
+    expect(cssIn(shadow)).toMatch(/\.panel \{[^}]*left: 20px/u);
+    expect(cssIn(shadow)).toMatch(/\.panel \{[^}]*right: auto/u);
+  });
+
+  it.each(['bottom-right', 'top-left', ''])('stays on the right for %j', (position) => {
+    mount({}, { position });
+
+    expect(cssIn(shadow)).not.toContain('left: 20px');
+  });
+
+  it('is the panel it always was when the storefront chose nothing', () => {
+    mount();
+
+    const plain = cssIn(shadow);
+
+    document.body.replaceChildren();
+
+    const host = document.createElement('sommelier-widget');
+
+    shadow = host.attachShadow({ mode: 'open' });
+    launcher = document.createElement('button');
+    shadow.append(launcher);
+    document.body.append(host);
+    mount({}, { position: 'bottom-right' });
+
+    expect(cssIn(shadow)).toBe(plain);
   });
 });
 

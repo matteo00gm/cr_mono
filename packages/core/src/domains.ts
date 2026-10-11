@@ -277,5 +277,16 @@ const attribute = (value: string): string =>
  * somebody to paste into their own site, and it is correct regardless of what
  * is put in it.
  */
+/**
+ * Where the loader is served in production (P6-09): the distribution that
+ * answers the API, at the path it keeps for the bundle (§5.1).
+ *
+ * Named once because two things write it into a storefront — the snippet a
+ * seller pastes, and the Shopify theme extension, which is a Liquid file and
+ * cannot import anything. `theme-extension.test.ts` reads that file and holds
+ * it to this value.
+ */
+export const LOADER_SRC = 'https://api.catalogorosso.com/v1/w.js';
+
 export const installSnippet = (publicKey: string, loaderSrc: string): string =>
   `<script type="module" src="${attribute(loaderSrc)}" data-key="${attribute(publicKey)}" async></script>`;

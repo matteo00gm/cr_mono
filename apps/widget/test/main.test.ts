@@ -47,6 +47,39 @@ beforeEach(() => {
 
 const lazy = () => ({ toggle: vi.fn(() => Promise.resolve()), preload: vi.fn(), loads: () => 0 });
 
+describe('what the storefront chose (P6-09)', () => {
+  it('goes from the tag to the panel, with the key and the API beside it', async () => {
+    globalThis.__sommelier = {
+      key: 'pk_test_abc',
+      api: 'https://api.example',
+      position: 'bottom-left',
+      color: '#1f6f4a',
+      mounted: true,
+    };
+
+    const lazyPanel = vi.fn(() => lazy());
+
+    run({
+      start: () => mounted,
+      readConfig: () => Promise.resolve({ kind: 'active' as const, config }),
+      lazyPanel,
+      attach: vi.fn(),
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(lazyPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: 'pk_test_abc',
+        api: 'https://api.example',
+        position: 'bottom-left',
+        color: '#1f6f4a',
+      }),
+    );
+  });
+});
+
 describe('a tenant who is serving', () => {
   it('mounts, reads, then wires — in that order', async () => {
     const order: string[] = [];

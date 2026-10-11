@@ -1,0 +1,59 @@
+{% comment %}
+  Sommelier AI — the widget's script tag, as an app embed (P6-09).
+
+  This is the tag `installSnippet` writes for a seller who pastes it by hand
+  (packages/core/src/domains.ts): the same loader, the same key attribute, so
+  a storefront gets the same widget either way.
+  packages/core/test/theme-extension.test.ts holds the two together.
+
+  Position and colour are the theme editor's, written as attributes the loader
+  reads before it draws anything (apps/widget/src/loader.ts). Every value is
+  escaped: this is markup rendered into somebody's storefront.
+
+  Nothing is rendered without a key. An embed switched on and never filled in
+  is a storefront without a widget, not a broken one.
+{% endcomment %}
+{%- assign public_key = block.settings.public_key | strip -%}
+{%- if public_key != blank -%}
+  <script
+    type="module"
+    src="https://api.catalogorosso.com/v1/w.js"
+    data-key="{{ public_key | escape }}"
+    data-position="{{ block.settings.position | escape }}"
+    {%- if block.settings.color != blank %}
+    data-color="{{ block.settings.color | escape }}"
+    {%- endif %}
+    async
+  ></script>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Sommelier AI",
+  "target": "body",
+  "settings": [
+    {
+      "type": "text",
+      "id": "public_key",
+      "label": "Chiave pubblica",
+      "info": "La chiave pubblica della tua cantina su Catalogo Rosso. Inizia con pk_."
+    },
+    {
+      "type": "select",
+      "id": "position",
+      "label": "Posizione",
+      "options": [
+        { "value": "bottom-right", "label": "In basso a destra" },
+        { "value": "bottom-left", "label": "In basso a sinistra" }
+      ],
+      "default": "bottom-right"
+    },
+    {
+      "type": "color",
+      "id": "color",
+      "label": "Colore",
+      "info": "Lascia vuoto per usare il colore impostato su Catalogo Rosso."
+    }
+  ]
+}
+{% endschema %}
