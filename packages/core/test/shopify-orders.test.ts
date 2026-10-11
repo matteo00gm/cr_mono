@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ATTRIBUTION_PROPERTY, hundredths, readOrder } from '../src/shopify/orders.js';
+import { ATTRIBUTION_PROPERTY, hundredths, readOrder, readRefund } from '../src/shopify/orders.js';
 
 /**
  * Reading a Shopify order for what the sommelier sold (P6-07).
@@ -262,5 +262,101 @@ describe('an order', () => {
       'orderId',
       'orderedAt',
     ]);
+  });
+});
+
+describe('a refund', () => {
+  const refunded = (lines: readonly Line[], overrides: Line = {}): string =>
+    JSON.stringify({
+      id: 890123456789,
+      order_id: 5678901234567,
+      created_at: '2026-10-06T09:00:00+02:00',
+      note: 'Bottiglia rotta — Giulia Bianchi, Via Roma 1',
+      transactions: [{ amount: '42.00', receipt: { card: '4242' } }],
+      refund_line_items: lines,
+      ...overrides,
+    });
+
+  const refundLine = (overrides: Line = {}): Line => ({
+    id: 209341123,
+    line_item_id: 14234727219537,
+    quantity: 1,
+    subtotal: '42.00',
+    ...overrides,
+  });
+
+  it('names the order and the line in every spelling a sale may have been written under', () => {
+    /* A sale is keyed by the GraphQL id when the order had one, the number when it did not. */
+    expect(readRefund(refunded([refundLine()]))).toEqual({
+      orderIds: ['gid://shopify/Order/5678901234567', '5678901234567'],
+      lines: [
+        {
+          refundLineId: '209341123',
+          lineItemIds: ['gid://shopify/LineItem/14234727219537', '14234727219537'],
+          quantity: 1,
+        },
+      ],
+    });
+  });
+
+  it('takes the line’s own GraphQL id too, when Shopify sends the line along', () => {
+    const read = readRefund(
+      refunded([
+        refundLine({ line_item: { admin_graphql_api_id: 'gid://shopify/LineItem/altro-1' } }),
+      ]),
+    );
+
+    expect(read?.lines[0]?.lineItemIds).toEqual([
+      'gid://shopify/LineItem/altro-1',
+      'gid://shopify/LineItem/14234727219537',
+      '14234727219537',
+    ]);
+  });
+
+  it('is units, not money: Shopify’s amounts are not what an attribution loses', () => {
+    const read = JSON.stringify(readRefund(refunded([refundLine({ quantity: 3 })])));
+
+    expect(read).toContain('"quantity":3');
+    expect(read).not.toContain('42.00');
+  });
+
+  it('reduces no line when money went back without a bottle', () => {
+    expect(readRefund(refunded([]))?.lines).toEqual([]);
+  });
+
+  it.each([0, -1, 1.5])('leaves out a line refunding %d units', (quantity) => {
+    expect(readRefund(refunded([refundLine({ quantity })]))?.lines).toEqual([]);
+  });
+
+  it('leaves out a line it cannot name, and keeps the rest', () => {
+    const read = readRefund(
+      refunded([
+        refundLine({ id: undefined }),
+        refundLine({ id: 2, line_item_id: undefined }),
+        refundLine({ id: 3 }),
+      ]),
+    );
+
+    expect(read?.lines.map(({ refundLineId }) => refundLineId)).toEqual(['3']);
+  });
+
+  it.each([
+    ['not JSON', '{"order_id": 1, '],
+    ['without an order', JSON.stringify({ refund_line_items: [] })],
+    [
+      'for an order whose number JSON could not carry',
+      '{"order_id":820982911946154508,"refund_line_items":[]}',
+    ],
+    ['without line items', JSON.stringify({ order_id: 1 })],
+  ])('that is %s is not read', (_, body) => {
+    expect(readRefund(body)).toBeUndefined();
+  });
+
+  it('gives back nothing of the note, the card or the buyer', () => {
+    const read = JSON.stringify(readRefund(refunded([refundLine()])));
+
+    for (const personal of ['Giulia', 'Bianchi', 'Via Roma', '4242', 'rotta']) {
+      expect(read).not.toContain(personal);
+    }
   });
 });

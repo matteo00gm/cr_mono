@@ -33,6 +33,11 @@ import { tenants } from './tenants.js';
  * **Written once.** `app_rw` may insert and delete — a shop's data goes when
  * Shopify says it must (`shop/redact`) — and may not update: an amount a seller
  * was shown should not be one a later bug can quietly rewrite.
+ *
+ * **A ledger of two kinds of entry** (P6-08). A sale, and a refund of one: the
+ * same line, the refund line's id, and a negative quantity and amount. What a
+ * line is worth is the sum of its entries, which is how a refund reduces a
+ * number nobody is allowed to rewrite.
  */
 export const attributions = pgTable(
   'attributions',
@@ -68,27 +73,46 @@ export const attributions = pgTable(
     /** Which of the winery's wines the line was, when its variant is one we know. */
     productId: uuid('product_id').references(() => products.id, { onDelete: 'set null' }),
 
+    /** Units sold; negative on a refund, for the units it took back. */
     quantity: integer('quantity').notNull(),
 
-    /** What the shopper paid for the line after its discounts, in hundredths of `currency`. */
+    /**
+     * What the shopper paid for the line after its discounts, in hundredths of
+     * `currency`; negative on a refund, for what it took back.
+     */
     amountCents: integer('amount_cents').notNull(),
     currency: text('currency').notNull(),
 
-    /** When the order was placed, as Shopify says — not when we heard of it. */
+    /**
+     * Shopify's id for the refund's line, on a refund; null on a sale. It is
+     * what makes a redelivered `refunds/create` take the amount off once.
+     */
+    refundLineId: text('refund_line_id'),
+
+    /**
+     * When the order was placed, as Shopify says — not when we heard of it. A
+     * refund carries its sale's, so it reduces the day the sale was counted on.
+     */
     orderedAt: timestamp('ordered_at', { withTimezone: true, mode: 'date' }).notNull(),
 
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex('attributions_tenant_order_line_key').on(
-      table.tenantId,
-      table.orderId,
-      table.lineItemId,
-    ),
+    /** A sale, once per order line. */
+    uniqueIndex('attributions_tenant_order_line_key')
+      .on(table.tenantId, table.orderId, table.lineItemId)
+      .where(sql`${table.refundLineId} IS NULL`),
+    /** A refund line, once ever. */
+    uniqueIndex('attributions_tenant_refund_line_key')
+      .on(table.tenantId, table.refundLineId)
+      .where(sql`${table.refundLineId} IS NOT NULL`),
     /** "What did the sommelier sell, for this winery, over this window" (§2.4). */
     index('attributions_tenant_ordered_idx').on(table.tenantId, table.orderedAt.desc()),
-    check('attributions_quantity_positive', sql`quantity > 0`),
-    check('attributions_amount_not_negative', sql`amount_cents >= 0`),
+    /** The sign of an entry is its kind: a sale cannot be negative, nor a refund positive. */
+    check(
+      'attributions_sign_matches_kind',
+      sql`(refund_line_id IS NULL AND quantity > 0 AND amount_cents >= 0) OR (refund_line_id IS NOT NULL AND quantity < 0 AND amount_cents <= 0)`,
+    ),
     check('attributions_currency_format', sql`currency ~ '^[A-Z]{3}$'`),
   ],
 );

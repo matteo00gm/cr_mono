@@ -31,6 +31,7 @@ const fakePort = () => {
     status: vi.fn<ShopifyPort['status']>(() => Promise.resolve({ configured: true, shop: null })),
     uninstalled: vi.fn<ShopifyPort['uninstalled']>(() => Promise.resolve('uninstalled' as const)),
     orderCreated: vi.fn<ShopifyPort['orderCreated']>(() => Promise.resolve('attributed' as const)),
+    refundCreated: vi.fn<ShopifyPort['refundCreated']>(() => Promise.resolve('reduced' as const)),
   };
 
   return port;
@@ -338,8 +339,74 @@ describe('a Shopify webhook', () => {
 
       await deliver(app, { topic: 'orders/updated', body: ORDER });
       await deliver(app, { topic: 'app/uninstalled', body: ORDER });
+      await deliver(app, { topic: 'refunds/create', body: ORDER });
 
       expect(shopify.orderCreated).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('for a refund (P6-08)', () => {
+    const REFUND = JSON.stringify({
+      id: 890123456789,
+      order_id: 5678901234567,
+      note: 'Bottiglia rotta — Giulia Bianchi',
+      refund_line_items: [{ id: 1, line_item_id: 2, quantity: 1 }],
+    });
+
+    it('hands the port the shop and the body exactly as it was signed', async () => {
+      const { app, shopify } = webhooks();
+      const response = await deliver(app, { topic: 'refunds/create', body: REFUND });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        received: true,
+        topic: 'refunds/create',
+        result: 'reduced',
+      });
+      expect(shopify.refundCreated).toHaveBeenCalledWith(SHOP, REFUND);
+      expect(shopify.orderCreated).not.toHaveBeenCalled();
+    });
+
+    it('refuses a refund changed after it was signed, and reads none of it', async () => {
+      const { app, shopify, refused } = webhooks();
+      const signature = createHmac('sha256', SECRET).update(REFUND).digest('base64');
+      const tampered = REFUND.replace('"quantity":1', '"quantity":9');
+
+      expect(
+        (await deliver(app, { topic: 'refunds/create', body: tampered, signature })).status,
+      ).toBe(401);
+      expect(refused).toEqual([{ provider: 'shopify', reason: 'no-match' }]);
+      expect(shopify.refundCreated).not.toHaveBeenCalled();
+    });
+
+    it.each(['nothing', 'unknown', 'unreadable'] as const)(
+      'acknowledges a refund that came to %s',
+      async (outcome) => {
+        const { app, shopify } = webhooks();
+
+        shopify.refundCreated.mockResolvedValueOnce(outcome);
+
+        const response = await deliver(app, { topic: 'refunds/create', body: REFUND });
+
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ result: outcome });
+      },
+    );
+
+    it('answers with nothing of the refund in it', async () => {
+      const { app } = webhooks();
+      const answer = await (await deliver(app, { topic: 'refunds/create', body: REFUND })).text();
+
+      expect(answer).not.toContain('Giulia');
+      expect(answer).not.toContain('5678901234567');
+    });
+
+    it('is not what an order does', async () => {
+      const { app, shopify } = webhooks();
+
+      await deliver(app, { topic: 'orders/create', body: REFUND });
+
+      expect(shopify.refundCreated).not.toHaveBeenCalled();
     });
   });
 });

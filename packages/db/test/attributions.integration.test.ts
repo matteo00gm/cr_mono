@@ -4,8 +4,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   recordAttributions,
+  recordRefunds,
   type LineToAttribute,
   type OrderToAttribute,
+  type RefundToRecord,
 } from '../src/attributions.js';
 import { createDbClient, type Database, type DbClient } from '../src/client.js';
 import { recordWidgetEvents } from '../src/widget-events.js';
@@ -124,6 +126,38 @@ const rowsOf = async (orderId: string): Promise<Row[]> =>
       order by line_item_id
     `)),
   ] as unknown as Row[];
+
+const refund = (order: RefundToRecord, scope = tenantId) =>
+  withTenant(scope, (tx) => recordRefunds(tx, order), db);
+
+/** One line of a refund, for the sale's own line, under a fresh refund-line id. */
+const back = (lineItemId: string, quantity: number, refundLineId = `rl-${randomUUID()}`) => ({
+  refundLineId,
+  lineItemIds: [lineItemId],
+  quantity,
+});
+
+/** Every entry for an order: the sale first, then its refunds as they were written. */
+const ledgerOf = async (orderId: string) =>
+  [
+    ...(await db.execute(sql`
+      select refund_line_id, quantity, amount_cents
+      from attributions where order_id = ${orderId}
+      order by (refund_line_id is not null), created_at, amount_cents desc
+    `)),
+  ] as unknown as { refund_line_id: string | null; quantity: number; amount_cents: number }[];
+
+/** What an order's lines are worth now: the sum of their entries. */
+const worthOf = async (orderId: string) => {
+  const [row] = [
+    ...(await db.execute(sql`
+      select coalesce(sum(amount_cents), 0)::int as cents, coalesce(sum(quantity), 0)::int as units
+      from attributions where order_id = ${orderId}
+    `)),
+  ];
+
+  return { cents: Number(row?.cents), units: Number(row?.units) };
+};
 
 beforeAll(async () => {
   const started = await startPostgres();
@@ -377,5 +411,182 @@ describe('the table', () => {
     expect(await rowsOf(order.orderId)).toMatchObject([
       { conversation_id: null, session_id: visitorId, amount_cents: 4200 },
     ]);
+  });
+});
+
+describe('a refund (P6-08)', () => {
+  /** A sale of ours: `quantity` bottles for `amountCents`, and the ids a refund will name. */
+  const sale = async (quantity: number, amountCents: number) => {
+    const { visitorId } = await visit();
+    const order = orderOf([lineOf(visitorId, { quantity, amountCents })]);
+
+    await record(order);
+
+    return { orderId: order.orderId, lineItemId: order.lines[0]?.lineItemId ?? '' };
+  };
+
+  it('takes back the share of what was paid that the returned units were', async () => {
+    const { orderId, lineItemId } = await sale(4, 10000);
+
+    expect(await refund({ orderIds: [orderId], lines: [back(lineItemId, 1)] })).toBe(1);
+
+    expect(await ledgerOf(orderId)).toMatchObject([
+      { refund_line_id: null, quantity: 4, amount_cents: 10000 },
+      { quantity: -1, amount_cents: -2500 },
+    ]);
+    expect(await worthOf(orderId)).toEqual({ cents: 7500, units: 3 });
+  });
+
+  it('leaves the sale’s own row exactly as it was written', async () => {
+    const { orderId, lineItemId } = await sale(2, 8400);
+
+    await refund({ orderIds: [orderId], lines: [back(lineItemId, 2)] });
+
+    expect((await ledgerOf(orderId))[0]).toEqual({
+      refund_line_id: null,
+      quantity: 2,
+      amount_cents: 8400,
+    });
+  });
+
+  it('takes back everything when every unit comes back, to the cent', async () => {
+    /* Three bottles for ten euros: a third each is 333, and the last takes what is left. */
+    const { orderId, lineItemId } = await sale(3, 1000);
+
+    for (let unit = 0; unit < 3; unit += 1) {
+      await refund({ orderIds: [orderId], lines: [back(lineItemId, 1)] });
+    }
+
+    expect((await ledgerOf(orderId)).map(({ amount_cents }) => amount_cents)).toEqual([
+      1000, -333, -333, -334,
+    ]);
+    expect(await worthOf(orderId)).toEqual({ cents: 0, units: 0 });
+  });
+
+  it('never takes back more than was sold, however much the refund claims', async () => {
+    const { orderId, lineItemId } = await sale(2, 8400);
+
+    expect(await refund({ orderIds: [orderId], lines: [back(lineItemId, 50)] })).toBe(1);
+    expect(await worthOf(orderId)).toEqual({ cents: 0, units: 0 });
+
+    /* And nothing is left for a second one to take. */
+    expect(await refund({ orderIds: [orderId], lines: [back(lineItemId, 1)] })).toBe(0);
+    expect(await worthOf(orderId)).toEqual({ cents: 0, units: 0 });
+  });
+
+  it('is counted once: a redelivered refund takes nothing more', async () => {
+    const { orderId, lineItemId } = await sale(4, 10000);
+    const line = back(lineItemId, 1, 'rl-una-volta');
+
+    expect(await refund({ orderIds: [orderId], lines: [line] })).toBe(1);
+    expect(await refund({ orderIds: [orderId], lines: [line] })).toBe(0);
+    expect(await worthOf(orderId)).toEqual({ cents: 7500, units: 3 });
+  });
+
+  it('finds the sale under either spelling of its ids', async () => {
+    const { visitorId } = await visit();
+    const byGid = orderOf([lineOf(visitorId, { lineItemId: 'gid://shopify/LineItem/7001' })], {
+      orderId: `gid://shopify/Order/${String(Date.now())}`,
+    });
+    const byNumber = orderOf([lineOf(visitorId, { lineItemId: '7002' })], {
+      orderId: String(Date.now() + 1),
+    });
+
+    await record(byGid);
+    await record(byNumber);
+
+    const number = byGid.orderId.replace('gid://shopify/Order/', '');
+
+    expect(
+      await refund({
+        orderIds: [`gid://shopify/Order/${number}`, number],
+        lines: [
+          {
+            refundLineId: 'rl-gid',
+            lineItemIds: ['gid://shopify/LineItem/7001', '7001'],
+            quantity: 1,
+          },
+        ],
+      }),
+    ).toBe(1);
+    expect(
+      await refund({
+        orderIds: [`gid://shopify/Order/${byNumber.orderId}`, byNumber.orderId],
+        lines: [
+          {
+            refundLineId: 'rl-num',
+            lineItemIds: ['gid://shopify/LineItem/7002', '7002'],
+            quantity: 1,
+          },
+        ],
+      }),
+    ).toBe(1);
+    expect(await worthOf(byGid.orderId)).toEqual({ cents: 0, units: 0 });
+    expect(await worthOf(byNumber.orderId)).toEqual({ cents: 0, units: 0 });
+  });
+
+  it('reduces nothing for a line that was never ours', async () => {
+    const { orderId } = await sale(1, 4200);
+
+    expect(
+      await refund({ orderIds: [orderId], lines: [back('gid://shopify/LineItem/altrui', 1)] }),
+    ).toBe(0);
+    expect(
+      await refund({ orderIds: ['gid://shopify/Order/altro'], lines: [back('qualunque', 1)] }),
+    ).toBe(0);
+    expect(await worthOf(orderId)).toEqual({ cents: 4200, units: 1 });
+  });
+
+  it('is for the order it names: the same line under another order is not touched', async () => {
+    /* Shopify's line ids do not repeat across orders, so this is belt and braces — and it is what
+     * lets the lookup use the sale's own key. */
+    const { orderId, lineItemId } = await sale(1, 4200);
+
+    expect(
+      await refund({ orderIds: ['gid://shopify/Order/un-altro'], lines: [back(lineItemId, 1)] }),
+    ).toBe(0);
+    expect(await worthOf(orderId)).toEqual({ cents: 4200, units: 1 });
+  });
+
+  it('reduces only the line it names, in an order with two of ours', async () => {
+    const { visitorId } = await visit();
+    const order = orderOf([
+      lineOf(visitorId, { lineItemId: 'gid://shopify/LineItem/a', amountCents: 1000 }),
+      lineOf(visitorId, { lineItemId: 'gid://shopify/LineItem/b', amountCents: 2000 }),
+    ]);
+
+    await record(order);
+    await refund({ orderIds: [order.orderId], lines: [back('gid://shopify/LineItem/b', 1)] });
+
+    expect(await worthOf(order.orderId)).toEqual({ cents: 1000, units: 1 });
+  });
+
+  it('cannot reach another winery’s sale', async () => {
+    const { orderId, lineItemId } = await sale(1, 4200);
+
+    expect(await refund({ orderIds: [orderId], lines: [back(lineItemId, 1)] }, otherTenantId)).toBe(
+      0,
+    );
+    expect(await worthOf(orderId)).toEqual({ cents: 4200, units: 1 });
+  });
+
+  it('keeps a sale positive and a refund negative, whoever writes the row', async () => {
+    const { orderId, lineItemId } = await sale(1, 4200);
+    const row = (refundLineId: string | null, quantity: number, amountCents: number) =>
+      db
+        .execute(
+          sql`insert into attributions (
+                tenant_id, shop, order_id, line_item_id, session_id, quantity, amount_cents,
+                currency, ordered_at, refund_line_id
+              )
+              values (${tenantId}::uuid, ${SHOP}, ${`${orderId}-x`}, ${lineItemId}, 'visit-0001',
+                      ${quantity}, ${amountCents}, 'EUR', now(), ${refundLineId})`,
+        )
+        .catch((caught: unknown) => caught);
+
+    expect(pgErrorCode(await row('rl-positivo', 1, 100))).toBe(CHECK_VIOLATION);
+    expect(pgErrorCode(await row(null, -1, -100))).toBe(CHECK_VIOLATION);
+    expect(pgErrorCode(await row(null, 1, -100))).toBe(CHECK_VIOLATION);
+    expect(pgErrorCode(await row('rl-mezzo', -1, 100))).toBe(CHECK_VIOLATION);
   });
 });

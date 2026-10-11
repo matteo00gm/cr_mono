@@ -310,7 +310,7 @@ export const createWebhookApp = ({
    * the signed body, and the port checks it against the customer on file.
    */
   /**
-   * Shopify app events (P6-06, P6-07; P6-11 adds its own).
+   * Shopify app events (P6-06, P6-07, P6-08; P6-11 adds its own).
    *
    * **The raw body, verified, before anything is read from it** — the Stripe
    * route's order and reason. The shop is in a header, not the signed body,
@@ -373,6 +373,20 @@ export const createWebhookApp = ({
         logger.warn(
           { kind: 'shopify_order_unreadable' },
           'a signed Shopify order could not be read (P6-07)',
+        );
+      }
+
+      return c.json({ received: true as const, topic, result });
+    }
+
+    if (topic === 'refunds/create') {
+      /* An order's terms (P6-07): handed on as it arrived, never logged, said out loud when unread. */
+      const result = await shopify.refundCreated(shop, body);
+
+      if (result === 'unreadable') {
+        logger.warn(
+          { kind: 'shopify_refund_unreadable' },
+          'a signed Shopify refund could not be read (P6-08)',
         );
       }
 
@@ -489,7 +503,8 @@ export const WEBHOOK_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map<st
         'secret, refused before anything is read and recorded as a security event. The winery ' +
         'is found from an installation that already exists for the shop Shopify names, in a ' +
         'read-only scope that sees that one row (ADR 0031); nothing is created from it. An ' +
-        'order (P6-07) is read for the lines the widget added and nothing about its buyer.',
+        'order (P6-07) is read for the lines the widget added and nothing about its buyer, ' +
+        'and a refund (P6-08) for the units that came back.',
     ),
   ],
 ]);

@@ -117,11 +117,11 @@ patch will not, because the ORM's own documentation shows the forbidden form.
 - `audit()` takes the caller's transaction, never its own. An audit row for an
   action that rolled back is worse than none, because it is a record people
   will believe (P0-53).
-- Never log or store a Shopify order's body, and never read it anywhere but
-  `readOrder`. It carries a buyer's name, address and email; `readOrder` takes
-  the ids, quantities and amounts of the lines the widget added, so nothing
-  downstream can hold what it was never handed. A second reader is how a
-  customer's address ends up in a table (P6-07).
+- Never log or store the body of a Shopify order or refund, and never read
+  one anywhere but `readOrder` and `readRefund`. An order carries a buyer's
+  name, address and email; the two readers take ids, quantities and amounts,
+  so nothing downstream can hold what it was never handed. A third reader is
+  how a customer's address ends up in a table (P6-07, P6-08).
 
 **Widget and model output**
 

@@ -303,6 +303,54 @@ describe('the status and the uninstall, with nothing set up', () => {
     });
   });
 
+  describe('a refund (P6-08)', () => {
+    const REFUND = JSON.stringify({
+      order_id: 5678901234567,
+      refund_line_items: [{ id: 1, line_item_id: 2, quantity: 1 }],
+    });
+
+    it('is ignored for something that is not a shop, before it is even read', async () => {
+      const resolveShop = vi.fn(() => Promise.resolve(TENANT));
+      const { port } = portWith({ resolveShop });
+
+      expect(await port.refundCreated('evil.example', REFUND)).toBe('unknown');
+      expect(resolveShop).not.toHaveBeenCalled();
+    });
+
+    it('says so when the body is not a refund it can read', async () => {
+      const resolveShop = vi.fn(() => Promise.resolve(TENANT));
+      const { port } = portWith({ resolveShop });
+
+      expect(await port.refundCreated(SHOP, '{"order_id": 1')).toBe('unreadable');
+      expect(await port.refundCreated(SHOP, JSON.stringify({ refund_line_items: [] }))).toBe(
+        'unreadable',
+      );
+      expect(resolveShop).not.toHaveBeenCalled();
+    });
+
+    it('asks nothing of the database when money went back without a bottle', async () => {
+      const resolveShop = vi.fn(() => Promise.resolve(TENANT));
+      const { port } = portWith({ resolveShop });
+
+      expect(
+        await port.refundCreated(SHOP, JSON.stringify({ order_id: 1, refund_line_items: [] })),
+      ).toBe('nothing');
+      expect(resolveShop).not.toHaveBeenCalled();
+    });
+
+    it('is ignored for a shop with no install to its name', async () => {
+      const resolveShop = vi.fn(() => Promise.resolve(undefined));
+      const { port } = portWith({ resolveShop });
+
+      expect(await port.refundCreated(SHOP, REFUND)).toBe('unknown');
+      expect(resolveShop).toHaveBeenCalledWith(SHOP);
+    });
+
+    it('is ignored where no port was wired', async () => {
+      expect(await unconfiguredShopify.refundCreated(SHOP, REFUND)).toBe('unknown');
+    });
+  });
+
   it('refuses everything else loudly when no port was wired', async () => {
     await expect(
       unconfiguredShopify.install({ tenantId: TENANT, userId: USER, input: SHOP }),

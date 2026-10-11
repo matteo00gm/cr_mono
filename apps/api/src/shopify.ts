@@ -9,6 +9,7 @@ import {
   newStateNonce,
   normaliseShop,
   readOrder,
+  readRefund,
   scopesCovered,
   setRequestTenant,
   SHOP_EXPECTED,
@@ -29,6 +30,7 @@ import {
   readShopifyInstallation,
   readTenantPlan,
   recordAttributions,
+  recordRefunds,
   recordShopifyInstall,
   resolveTenantByShop,
   spendShopifyState,
@@ -82,6 +84,15 @@ export type OrderOutcome =
   /** Not a shop, or a shop with no install to its name. */
   | 'unknown'
   /** Signed, and not an order we can read. */
+  | 'unreadable';
+
+/** What became of a `refunds/create` delivery. */
+export type RefundOutcome =
+  /** At least one of our lines was reduced. */
+  | 'reduced'
+  /** Nothing to reduce: no line of ours in it, nothing left to take back, or a redelivery. */
+  | 'nothing'
+  | 'unknown'
   | 'unreadable';
 
 /** Why an install did not complete, as the dashboard reads it. */
@@ -141,6 +152,8 @@ export interface ShopifyPort {
   ) => Promise<'uninstalled' | 'stale' | 'unknown'>;
   /** `orders/create`: the lines the sommelier sold, recorded once each (P6-07). */
   readonly orderCreated: (shop: string, body: string) => Promise<OrderOutcome>;
+  /** `refunds/create`: what came back is taken off what was sold, once (P6-08). */
+  readonly refundCreated: (shop: string, body: string) => Promise<RefundOutcome>;
 }
 
 export interface ShopifyDeps {
@@ -197,6 +210,7 @@ export const unconfiguredShopify: ShopifyPort = {
   status: () => Promise.resolve({ configured: false, shop: null }),
   uninstalled: () => Promise.resolve('unknown'),
   orderCreated: () => Promise.resolve('unknown'),
+  refundCreated: () => Promise.resolve('unknown'),
 };
 
 export const createShopifyPort = ({
@@ -447,6 +461,32 @@ export const createShopifyPort = ({
       );
 
       return recorded > 0 ? 'attributed' : 'nothing';
+    },
+
+    refundCreated: async (shop, body) => {
+      if (!isShopDomain(shop)) return 'unknown';
+
+      const refund = readRefund(body);
+
+      if (refund === undefined) return 'unreadable';
+
+      /* Money handed back with no bottle returned names no line, and reduces none. */
+      if (refund.lines.length === 0) return 'nothing';
+
+      const tenantId = await resolveShop(shop);
+
+      if (tenantId === undefined) return 'unknown';
+
+      setRequestTenant(tenantId);
+
+      /*
+       * Whether a line was ours is the record's to say: the refund is joined to
+       * the sales this winery has, and one for a wine the shopper found
+       * themselves joins nothing.
+       */
+      const recorded = await withTenant(tenantId, (tx) => recordRefunds(tx, refund));
+
+      return recorded > 0 ? 'reduced' : 'nothing';
     },
   };
 };
