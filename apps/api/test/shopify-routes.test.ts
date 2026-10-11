@@ -178,7 +178,8 @@ describe('a Shopify webhook', () => {
       topic = 'app/uninstalled',
       body = BODY,
       signature,
-    }: { topic?: string; body?: string; signature?: string } = {},
+      triggeredAt,
+    }: { topic?: string; body?: string; signature?: string; triggeredAt?: string } = {},
   ) =>
     app.request(PATH, {
       method: 'POST',
@@ -186,6 +187,7 @@ describe('a Shopify webhook', () => {
         'content-type': 'application/json',
         'x-shopify-topic': topic,
         'x-shopify-shop-domain': SHOP,
+        ...(triggeredAt === undefined ? {} : { 'x-shopify-triggered-at': triggeredAt }),
         ...(signature === undefined
           ? { 'x-shopify-hmac-sha256': createHmac('sha256', SECRET).update(body).digest('base64') }
           : signature === ''
@@ -205,7 +207,31 @@ describe('a Shopify webhook', () => {
       topic: 'app/uninstalled',
       result: 'uninstalled',
     });
-    expect(shopify.uninstalled).toHaveBeenCalledWith(SHOP);
+    expect(shopify.uninstalled).toHaveBeenCalledWith(SHOP, undefined);
+  });
+
+  it('hands over when Shopify says the uninstall happened, not when it arrived (P6-06b)', async () => {
+    const { app, shopify } = webhooks();
+
+    await deliver(app, { triggeredAt: '2026-10-04T09:00:27.877041743Z' });
+
+    expect(shopify.uninstalled).toHaveBeenCalledWith(SHOP, new Date('2026-10-04T09:00:27.877Z'));
+  });
+
+  it('takes a time it cannot read as no time at all', async () => {
+    const { app, shopify } = webhooks();
+
+    await deliver(app, { triggeredAt: 'yesterday, more or less' });
+
+    expect(shopify.uninstalled).toHaveBeenCalledWith(SHOP, undefined);
+  });
+
+  it('says so when the news was about an install since replaced', async () => {
+    const { app, shopify } = webhooks();
+
+    shopify.uninstalled.mockResolvedValueOnce('stale');
+
+    expect(await (await deliver(app)).json()).toMatchObject({ result: 'stale' });
   });
 
   it('acknowledges a topic it does not handle, and does nothing with it', async () => {

@@ -291,6 +291,7 @@ export {
   countStagingDomains,
   countVerifiedDomains,
   deleteDomain,
+  deleteDomainProvedBy,
   insertDomain,
   insertVerifiedSibling,
   markDomainVerified,

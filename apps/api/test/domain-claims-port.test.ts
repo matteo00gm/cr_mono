@@ -320,7 +320,13 @@ describe('checking a claim', () => {
       'readClaimById(c1)',
     ]);
     expect(settled).toEqual([
-      expect.objectContaining({ claimId: 'c1', claimantTenantId: 't1', noticeHours: 72 }),
+      expect.objectContaining({
+        claimId: 'c1',
+        claimantTenantId: 't1',
+        noticeHours: 72,
+        /* A claim may land a winery's first domain, and its trial starts there (P6-06b). */
+        trialDays: 14,
+      }),
     ]);
     expect(written).toEqual([{ action: 'domain.claim_proven', target: 'https://www.winery.com' }]);
   });

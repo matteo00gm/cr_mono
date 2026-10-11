@@ -66,6 +66,10 @@ point before an uninstall finds an installation row whose token is gone; the nex
 finds the row, the next API call finds no token, and the seller reconnects. The reverse — a token
 deleted from the database but not from SSM — cannot happen, because the database never held it.
 
+**An uninstall ends what the install gave** (P6-06b, Open Decision 9): the token, and the
+`myshopify.com` origin the install proved, withdrawn in the handler's tenant scope like any removed
+domain. None of it is reached through the shop branch, which still only names the winery.
+
 **Every webhook pays one extra read-only transaction** before its real work. At the volumes §5.0
 allows, that is nothing.
 

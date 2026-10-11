@@ -58,6 +58,7 @@ const settle = (db: Database, cap = 2) =>
       claimantTenantId: CLAIMANT,
       cap,
       noticeHours: 72,
+      trialDays: 14,
       actor: { userId: 'user_anna' },
     },
     db,
@@ -83,8 +84,23 @@ const holderRead = (holder?: Record<string, unknown>): unknown[][] => [
   [],
 ];
 
-/** The claimant's side landing: tenant set, row inserted, claim closed, audit written. */
-const landing = (inserted: unknown[] = [domainRow()]): unknown[][] => [[], inserted, [], []];
+/**
+ * The claimant's side landing: tenant set, row inserted, the trial asked for,
+ * claim closed, audit written. A trial that starts writes an audit row of its
+ * own, between the asking and the closing.
+ */
+const landing = (inserted: unknown[] = [domainRow()], trial: unknown[] = []): unknown[][] => [
+  [],
+  inserted,
+  trial,
+  ...(trial.length > 0 ? [[]] : []),
+  [],
+  [],
+];
+
+const TRIAL_STARTED = [{ trial_ends_at: new Date('2026-10-18T09:00:00.000Z') }];
+
+const startsTrial = (statement: unknown): boolean => text(statement).includes('UPDATE tenants');
 
 const setsTenant = (statement: unknown, tenantId: string): boolean =>
   text(statement).includes("set_config('app.tenant_id'") && params(statement).includes(tenantId);
@@ -190,6 +206,88 @@ describe('an origin nobody holds', () => {
     const { db } = createMockDb([...opening(), ...holderRead(), ...landing([])]);
 
     await expect(settle(db)).rejects.toBeInstanceOf(ClaimRacedError);
+  });
+});
+
+describe('the trial a landing may start (P6-06b)', () => {
+  it('asks for it once the origin has landed, as the claimant, for the days it was given', async () => {
+    const { db, statements } = createMockDb([
+      ...opening(),
+      ...holderRead(),
+      ...landing(undefined, TRIAL_STARTED),
+    ]);
+
+    await settle(db);
+
+    const asked = statements.findIndex(startsTrial);
+    const inserted = statements.findIndex((statement) =>
+      text(statement).includes('INSERT INTO tenant_domains'),
+    );
+
+    expect(inserted).toBeGreaterThan(-1);
+    expect(asked).toBeGreaterThan(inserted);
+    expect(params(statements[asked])).toEqual([14]);
+    /* The last tenant set before it is the claimant: the trial is never the holder's. */
+    expect(
+      statements
+        .slice(0, asked)
+        .filter((statement) => text(statement).includes("set_config('app.tenant_id'"))
+        .map((statement) => params(statement)[0])
+        .at(-1),
+    ).toBe(CLAIMANT);
+  });
+
+  it('records a trial that started, in the claimant’s log, by whoever settled the claim', async () => {
+    const { db, statements } = createMockDb([
+      ...opening(),
+      ...holderRead(),
+      ...landing(undefined, TRIAL_STARTED),
+    ]);
+
+    await settle(db);
+
+    const audits = statements.filter((statement) => text(statement).includes('audit_log'));
+
+    expect(audits.map((statement) => params(statement)[2])).toEqual([
+      'billing.trial_started',
+      'domain.claimed_by_challenge',
+    ]);
+    expect(params(audits[0])).toEqual([
+      CLAIMANT,
+      'user_anna',
+      'billing.trial_started',
+      `tenant:${CLAIMANT}`,
+      null,
+      null,
+      null,
+    ]);
+  });
+
+  it('records nothing for a winery whose trial did not start', async () => {
+    /* It has had one, or it pays: the statement moved nothing, and said so. */
+    const { db, statements } = createMockDb([...opening(), ...holderRead(), ...landing()]);
+
+    await settle(db);
+
+    expect(
+      statements
+        .filter((statement) => text(statement).includes('audit_log'))
+        .map((statement) => params(statement)[2]),
+    ).toEqual(['domain.claimed_by_challenge']);
+  });
+
+  it('is not asked for when nothing landed', async () => {
+    const already = createMockDb([...opening(undefined, undefined, [domainRow()]), [], []]);
+    const capped = createMockDb(opening(undefined, { held: 1, covered: false }));
+    const raced = createMockDb([...opening(), ...holderRead(), ...landing([])]);
+
+    await settle(already.db);
+    await settle(capped.db, 1);
+    await settle(raced.db).catch(() => undefined);
+
+    for (const { statements } of [already, capped, raced]) {
+      expect(statements.some(startsTrial)).toBe(false);
+    }
   });
 });
 

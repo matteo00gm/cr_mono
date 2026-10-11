@@ -77,7 +77,8 @@ const harness = (
     },
     settle: (input) => {
       events.push(
-        `settle:${input.claimId}:cap=${String(input.cap)}:hours=${String(input.noticeHours)}`,
+        `settle:${input.claimId}:cap=${String(input.cap)}:hours=${String(input.noticeHours)}` +
+          `:trial=${String(input.trialDays)}`,
       );
 
       return Promise.resolve({
@@ -147,7 +148,8 @@ describe('a notice that was sent and has run out', () => {
 
     await expect(run()).resolves.toMatchObject({ settled: 1, outcomesTold: 1 });
     expect(events).toEqual([
-      'settle:c1:cap=2:hours=72',
+      /* The trial's length goes with it: the origin may be the claimant's first (P6-06b). */
+      'settle:c1:cap=2:hours=72:trial=14',
       'send:domain-claim-lost:anna@example.com',
       'send:domain-claim-lost:bruno@example.com',
       'send:domain-claim-won:nuova@example.com',

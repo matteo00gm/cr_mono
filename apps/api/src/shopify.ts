@@ -13,11 +13,14 @@ import {
   SHOP_EXPECTED,
   SHOPIFY_STATE_TTL_MS,
   stateHash,
+  TRIAL,
   verificationToken,
   verifyCallbackHmac,
   type MembershipReader,
 } from '@catalogorosso/core';
 import {
+  deleteDomainProvedBy,
+  endSessionsFor,
   insertDomain,
   markDomainVerified,
   markShopifyUninstalled,
@@ -28,6 +31,7 @@ import {
   resolveTenantByShop,
   spendShopifyState,
   startShopifyInstall,
+  startTrial,
   withTenant,
   type SpentState,
 } from '@catalogorosso/db';
@@ -54,6 +58,11 @@ import type { ShopifyTokenStore } from './shopify-tokens.js';
  * **A failure says which, to the seller, and nothing more.** The redirect
  * goes back to the dashboard with a reason the screen can explain; none of
  * them names another winery, a secret, or anything the caller did not send.
+ *
+ * **The proof lasts as long as the install** (P6-06b, Open Decision 9). The
+ * shop's origin was verified because Shopify asked its owner; when the owner
+ * removes the app, that origin goes the way a removed domain goes — deleted,
+ * its live sessions ended — unless the seller has proved it some other way.
  */
 
 /** Why an install did not complete, as the dashboard reads it. */
@@ -102,8 +111,15 @@ export interface ShopifyPort {
   }) => Promise<string>;
   /** The winery's shop, if it connected one. */
   readonly status: (tenantId: string) => Promise<ShopifyStatusResponse>;
-  /** `app/uninstalled`: the token goes, and the shop is marked. */
-  readonly uninstalled: (shop: string) => Promise<'uninstalled' | 'unknown'>;
+  /**
+   * `app/uninstalled`: the shop is marked, its token goes, and so does the
+   * origin the install proved. `stale` is news of an install that has since
+   * been replaced, which changes nothing.
+   */
+  readonly uninstalled: (
+    shop: string,
+    triggeredAt?: Date,
+  ) => Promise<'uninstalled' | 'stale' | 'unknown'>;
 }
 
 export interface ShopifyDeps {
@@ -296,11 +312,30 @@ export const createShopifyPort = ({
 
         const domain = await proveShopDomain(tx, shop);
 
+        /*
+         * What became of the shop's domain, under a name the redactor lets
+         * through (P0-56): audit metadata goes by the log allowlist, and a key
+         * of our own choosing is recorded as `[redacted]`. The scopes are on
+         * the installation row.
+         */
         await audit(tx, {
           action: 'shopify.installed',
           target: shop,
-          metadata: { scopes: token.scope, domain },
+          metadata: { status: domain },
         });
+
+        /*
+         * **The trial starts at the first verified domain, however it was
+         * proved** (P6-06b, Open Decision 10) — the verify path's own rule
+         * (P5-05), and its own statement: only from `PENDING_VERIFICATION`,
+         * on this transaction.
+         */
+        if (domain === 'verificato' && (await startTrial(tx, TRIAL.days)) !== undefined) {
+          await audit(tx, {
+            action: 'billing.trial_started',
+            target: `tenant:${spent.tenantId}`,
+          });
+        }
 
         /* Last, inside the transaction: a token is only kept for an install that was recorded. */
         await tokens.put(spent.tenantId, shop, token.accessToken);
@@ -331,7 +366,7 @@ export const createShopifyPort = ({
       };
     },
 
-    uninstalled: async (shop) => {
+    uninstalled: async (shop, triggeredAt) => {
       if (!isShopDomain(shop)) return 'unknown';
 
       const tenantId = await resolveShop(shop);
@@ -340,13 +375,33 @@ export const createShopifyPort = ({
 
       setRequestTenant(tenantId);
 
-      await withTenant(tenantId, async (tx) => {
-        await markShopifyUninstalled(tx, shop);
+      return withTenant(tenantId, async (tx) => {
+        /* News of an install that was since replaced ends nothing of the new one. */
+        if (!(await markShopifyUninstalled(tx, shop, triggeredAt))) return 'stale';
+
+        /*
+         * **One transaction: the mark, the delete, the cutoff and both audit
+         * rows** — P4-06's shape, for its reason. Only the origin this install
+         * proved: one the seller verified by DNS or by file stands on a proof
+         * that an uninstall does not touch.
+         */
+        const origin = `https://${shop}`;
+        const withdrawn = await deleteDomainProvedBy(tx, origin, 'SHOPIFY');
+
+        if (withdrawn !== undefined) {
+          await endSessionsFor(tx, origin);
+          await audit(tx, {
+            action: 'domain.removed',
+            target: origin,
+            metadata: { status: withdrawn.status, kind: 'shopify-uninstalled' },
+          });
+        }
+
         await audit(tx, { action: 'shopify.uninstalled', target: shop });
         await tokens.remove(tenantId, shop);
-      });
 
-      return 'uninstalled';
+        return 'uninstalled';
+      });
     },
   };
 };

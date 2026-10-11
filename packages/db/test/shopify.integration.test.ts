@@ -193,6 +193,33 @@ describe('the installation', () => {
     });
   });
 
+  it('is not ended by news of an uninstall older than the install (P6-06b)', async () => {
+    /*
+     * Shopify redelivers for hours. A seller who removed the app and put it
+     * back meanwhile has a fresh install, and the old news is not about it.
+     */
+    const shop = `rimesso-${randomUUID().slice(0, 8)}.myshopify.com`;
+
+    await withTenant(
+      tenantId,
+      (tx) => recordShopifyInstall(tx, { shop, scopes: 'read_orders' }),
+      db,
+    );
+
+    const before = new Date(Date.now() - 60 * 60 * 1000);
+    const after = new Date(Date.now() + 60 * 1000);
+
+    expect(await withTenant(tenantId, (tx) => markShopifyUninstalled(tx, shop, before), db)).toBe(
+      false,
+    );
+    expect(await resolveTenantByShop(shop, db)).toBe(tenantId);
+
+    expect(await withTenant(tenantId, (tx) => markShopifyUninstalled(tx, shop, after), db)).toBe(
+      true,
+    );
+    expect(await resolveTenantByShop(shop, db)).toBeUndefined();
+  });
+
   it('holds only a myshopify.com name', async () => {
     const error = await withTenant(
       tenantId,

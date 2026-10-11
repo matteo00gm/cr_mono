@@ -26,7 +26,9 @@ describeThreat('T6');
  * `packages/db/src/billing.ts`, since P5-05: `writeBillingChange`, which only
  * the state machine's effect calls, on a claimed and verified event's
  * transaction; and `startTrial`, which moves `PENDING_VERIFICATION` to
- * `TRIALING` and nothing else, on the transaction that verifies a domain.
+ * `TRIALING` and nothing else, on the transaction that gives a winery a
+ * verified domain — the verify path, a claim that lands, a Shopify install
+ * (P6-06b). More callers, still one writer.
  */
 const ALLOWED_WRITERS: readonly string[] = ['packages/db/src/billing.ts'];
 

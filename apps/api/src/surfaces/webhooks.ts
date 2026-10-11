@@ -98,6 +98,17 @@ export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';
 export const SHOPIFY_HMAC_HEADER = 'x-shopify-hmac-sha256';
 export const SHOPIFY_TOPIC_HEADER = 'x-shopify-topic';
 export const SHOPIFY_SHOP_HEADER = 'x-shopify-shop-domain';
+/** When the thing the delivery reports happened — not when it was delivered (P6-06b). */
+export const SHOPIFY_TRIGGERED_AT_HEADER = 'x-shopify-triggered-at';
+
+/** A header's instant, or nothing for one that is absent or is not a date. */
+export const triggeredAt = (header: string | undefined): Date | undefined => {
+  if (header === undefined) return undefined;
+
+  const at = new Date(header);
+
+  return Number.isNaN(at.getTime()) ? undefined : at;
+};
 
 /**
  * All the route reads of an event before handing it on: its id, which is the
@@ -331,7 +342,18 @@ export const createWebhookApp = ({
     const shop = c.req.header(SHOPIFY_SHOP_HEADER) ?? '';
 
     if (topic === 'app/uninstalled') {
-      return c.json({ received: true as const, topic, result: await shopify.uninstalled(shop) });
+      /*
+       * Shopify redelivers for hours, so an uninstall can arrive after the
+       * seller has installed again; when it happened is what tells the two
+       * apart (P6-06b). Like the shop, it is a header and not signed — and
+       * like the shop it can only narrow what a signed delivery does.
+       */
+      const result = await shopify.uninstalled(
+        shop,
+        triggeredAt(c.req.header(SHOPIFY_TRIGGERED_AT_HEADER)),
+      );
+
+      return c.json({ received: true as const, topic, result });
     }
 
     return c.json({ received: true as const, topic, result: 'ignored' as const });

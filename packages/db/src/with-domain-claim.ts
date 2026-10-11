@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 
 import { insertAuditRow } from './audit.js';
+import { startTrial } from './billing.js';
 import { getDb, type Database } from './client.js';
 import {
   deleteDomain,
@@ -71,6 +72,12 @@ export interface SettleClaim {
    * (`CLAIM_NOTICE_HOURS`); this file only writes the deadline it is given.
    */
   readonly noticeHours: number;
+  /**
+   * How long the card-free trial runs (`TRIAL.days`, `core`'s). An origin that
+   * lands here may be the claimant's first verified domain, and the trial
+   * starts at that however it was proved (P6-06b, Open Decision 10).
+   */
+  readonly trialDays: number;
   readonly actor: ClaimActor;
 }
 
@@ -135,7 +142,7 @@ interface HolderSqlRow {
 }
 
 export const settleDomainClaim = async (
-  { claimId, claimantTenantId, cap, noticeHours, actor }: SettleClaim,
+  { claimId, claimantTenantId, cap, noticeHours, trialDays, actor }: SettleClaim,
   db: Database = getDb(),
 ): Promise<ClaimSettlement> => {
   const activeTenant = getCurrentTenantId();
@@ -256,6 +263,27 @@ export const settleDomainClaim = async (
       );
 
       if (landed === undefined) throw new ClaimRacedError();
+
+      /*
+       * **The trial starts here too** (P6-06b): this may be the claimant's
+       * first verified domain, and a winery that could only onboard by a claim
+       * would otherwise have a widget with somewhere to run and nothing
+       * switched on. The statement moves `PENDING_VERIFICATION` and nothing
+       * else, so a winery that has had its trial, or pays, is untouched — and
+       * it is this transaction's, so no trial starts for an origin that did
+       * not land.
+       */
+      if ((await startTrial(tx, trialDays)) !== undefined) {
+        await insertAuditRow(tx, {
+          tenantId: claimantTenantId,
+          actorUserId: actor.userId,
+          action: 'billing.trial_started',
+          target: `tenant:${claimantTenantId}`,
+          metadata: undefined,
+          ip: actor.ip,
+          userAgent: actor.userAgent,
+        });
+      }
 
       return finish(landed, basis, holderTenantId);
     };

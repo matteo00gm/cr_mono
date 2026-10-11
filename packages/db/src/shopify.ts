@@ -114,12 +114,26 @@ export const recordShopifyInstall = async (
 /**
  * Marks one of the winery's shops uninstalled — the one the webhook named, never
  * every shop it holds. `false` when that shop was not installed for it.
+ *
+ * **An uninstall older than the install is not about this install** (P6-06b).
+ * Shopify redelivers for hours, and a seller who removed the app and put it
+ * back meanwhile would otherwise have the fresh install — its token, and the
+ * domain it proved — ended by news of the old one. `triggeredAt` is when
+ * Shopify says the uninstall happened; without one, the delivery is taken as
+ * current.
  */
-export const markShopifyUninstalled = async (tx: DbTransaction, shop: string): Promise<boolean> => {
+export const markShopifyUninstalled = async (
+  tx: DbTransaction,
+  shop: string,
+  triggeredAt?: Date,
+): Promise<boolean> => {
+  const happened = triggeredAt?.toISOString() ?? null;
   const rows = await tx.execute(sql`
     update shopify_installations
     set uninstalled_at = now()
-    where shop = ${shop} and uninstalled_at is null
+    where shop = ${shop}
+      and uninstalled_at is null
+      and (${happened}::timestamptz is null or installed_at <= ${happened}::timestamptz)
     returning id
   `);
 
