@@ -1,8 +1,14 @@
 import type { JSX } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 
-import type { ApiClient, FunnelResponse, TopResponse } from '@catalogorosso/api-client';
+import type {
+  ApiClient,
+  FunnelResponse,
+  SalesResponse,
+  TopResponse,
+} from '@catalogorosso/api-client';
 import { MIN_QUERY_CONVERSATIONS } from '@catalogorosso/core/analytics-top';
+import { Link } from 'wouter-preact';
 
 import {
   count,
@@ -14,6 +20,7 @@ import {
   STAGE_LABELS,
   type RangeChoice,
 } from './analytics-copy.js';
+import { attributionOf, money, revenueLabels, type RevenueLabels } from './labels.js';
 import { RefusedOriginsPanel } from './RefusedOriginsPanel.js';
 import { ZeroResultsPanel } from './ZeroResultsPanel.js';
 
@@ -32,13 +39,19 @@ interface Range {
   readonly to: string;
 }
 
+/** The words for a screen that has not been told whether a sale can be seen: the careful ones. */
+const UNKNOWN = revenueLabels(undefined);
+
 /** The funnel (P6-02): visits reaching each stage, and the share of each step. */
 export const FunnelPanel = ({
   client,
   range,
+  labels = UNKNOWN,
 }: {
   readonly client: ApiClient;
   readonly range: Range;
+  /** What is said under it about its last stage, and whether Shopify is offered (P6-10). */
+  readonly labels?: RevenueLabels | undefined;
 }): JSX.Element => {
   const [funnel, setFunnel] = useState<FunnelResponse | undefined>();
   const [failed, setFailed] = useState(false);
@@ -118,8 +131,56 @@ export const FunnelPanel = ({
         </table>
       )}
       <p class="cr-funnel__note">
-        Le vendite si vedranno qui quando il negozio Shopify sarà collegato: fino ad allora contiamo
-        le aggiunte al carrello, non gli ordini.
+        {labels.note}
+        {labels.offerShopify ? (
+          <>
+            {' '}
+            <Link href="/integrazioni">Collega il tuo negozio Shopify</Link> per vedere anche gli
+            ordini.
+          </>
+        ) : null}
+      </p>
+    </section>
+  );
+};
+
+/**
+ * What the sommelier sold (P6-10, §2.4) — or nothing at all.
+ *
+ * **There is no panel unless a sale can be seen.** `labels.sales` is the only
+ * place its title comes from, and it is `undefined` until the API has said a
+ * shop is connected: not a panel of noughts, which would read as "none sold"
+ * about orders nobody reported to us.
+ */
+export const SalesPanel = ({
+  sales,
+  labels,
+}: {
+  readonly sales: SalesResponse | undefined;
+  readonly labels: RevenueLabels;
+}): JSX.Element | null => {
+  if (labels.sales === undefined || sales === undefined) return null;
+
+  return (
+    <section class="cr-sales" aria-label={labels.sales}>
+      <h2>{labels.sales}</h2>
+      {sales.orders === 0 ? (
+        <p>Nessun ordine con un vino consigliato dal sommelier in questo periodo.</p>
+      ) : (
+        <dl>
+          <dt>Ordini</dt>
+          <dd>{count(sales.orders)}</dd>
+          <dt>Visite che hanno comprato</dt>
+          <dd>{count(sales.visits)}</dd>
+          <dt>Bottiglie</dt>
+          <dd>{count(sales.units)}</dd>
+          <dt>Valore</dt>
+          <dd>{sales.amounts.map(money).join(' + ')}</dd>
+        </dl>
+      )}
+      <p class="cr-sales__note">
+        Contiamo solo i vini che il sommelier ha fatto aggiungere al carrello, non il resto
+        dell&apos;ordine, e togliamo i resi. I prezzi sono quelli del tuo negozio.
       </p>
     </section>
   );
@@ -148,9 +209,12 @@ const wineName = (product: TopResponse['products'][number]): string => {
 export const TopPanels = ({
   client,
   range,
+  labels = UNKNOWN,
 }: {
   readonly client: ApiClient;
   readonly range: Range;
+  /** What the cart column is called (P6-10). */
+  readonly labels?: RevenueLabels | undefined;
 }): JSX.Element => {
   const [top, setTop] = useState<TopResponse | undefined>();
   const [failed, setFailed] = useState(false);
@@ -226,7 +290,7 @@ export const TopPanels = ({
               <tr>
                 <th scope="col">Vino</th>
                 <th scope="col">Consigliato in</th>
-                <th scope="col">Aggiunte al carrello</th>
+                <th scope="col">{labels.cart}</th>
                 <th scope="col">Conversione</th>
               </tr>
             </thead>
@@ -260,6 +324,31 @@ export const AnalyticsScreen = ({
 }): JSX.Element => {
   const [choice, setChoice] = useState<RangeChoice>(DEFAULT_CHOICE);
   const [range, setRange] = useState(() => rangeOf(DEFAULT_CHOICE, now()));
+  const [sales, setSales] = useState<SalesResponse | undefined>();
+
+  /*
+   * Read once here, for every panel below (P6-10): whether a sale can be seen
+   * is one fact about the winery, and panels that each asked could disagree.
+   * A failure leaves it unknown, which is the careful words and no panel — a
+   * screen that cannot tell must not guess "yes".
+   */
+  useEffect(() => {
+    let live = true;
+
+    setSales(undefined);
+    client
+      .request('GET /v1/dashboard/analytics/sales', { query: { from: range.from, to: range.to } })
+      .then((answer) => {
+        if (live) setSales(answer);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      live = false;
+    };
+  }, [client, range.from, range.to]);
+
+  const labels = revenueLabels(attributionOf(sales));
 
   return (
     <section class="cr-analytics">
@@ -282,8 +371,9 @@ export const AnalyticsScreen = ({
           ))}
         </select>
       </label>
-      <FunnelPanel client={client} range={range} />
-      <TopPanels client={client} range={range} />
+      <FunnelPanel client={client} range={range} labels={labels} />
+      <SalesPanel sales={sales} labels={labels} />
+      <TopPanels client={client} range={range} labels={labels} />
       <ZeroResultsPanel client={client} range={range} />
       <RefusedOriginsPanel client={client} range={range} canAdd={canAddDomains} />
     </section>

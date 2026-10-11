@@ -650,6 +650,9 @@ export {
   type RefundToRecord,
 } from './attributions.js';
 
+/** What the sommelier sold over a range (P6-10), net of refunds, read in the scope's tenant. */
+export { readAttributedSales, type AttributedSales, type SalesQuery } from './sales.js';
+
 /** The funnel's counts (P6-02): visits reaching each stage, read in the scope's tenant. */
 export { readFunnel, type FunnelQuery } from './funnel.js';
 
@@ -676,6 +679,7 @@ export {
 /** The Shopify install (P6-06, ADR 0031): its state, its row, and a shop's winery. */
 export {
   markShopifyUninstalled,
+  hasInstalledShop,
   NestedShopifyScopeError,
   readShopifyInstallation,
   recordShopifyInstall,

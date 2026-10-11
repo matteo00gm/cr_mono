@@ -1,6 +1,7 @@
 import type {
   FunnelResponse,
   RefusedOriginsResponse,
+  SalesResponse,
   TopResponse,
   ZeroResultsResponse,
 } from '@catalogorosso/api-client';
@@ -17,15 +18,19 @@ import {
   type FunnelStage,
 } from '@catalogorosso/core';
 import {
+  hasInstalledShop,
+  readAttributedSales,
   readFunnel,
   readRefusedOrigins,
   readTopProducts,
   readTopQueries,
   readZeroResults,
   withTenant,
+  type AttributedSales,
   type FunnelQuery,
   type RefusedOrigin,
   type RefusedOriginsQuery,
+  type SalesQuery,
   type TopProduct,
   type TopProductsQuery,
   type TopQueriesQuery,
@@ -59,6 +64,8 @@ export interface AnalyticsPort {
   readonly zeroResults: (tenantId: string, asked: RangeAsked) => Promise<ZeroResultsResponse>;
   /** The sites refused for this winery's key, and what became of each (P6-05). */
   readonly refusedOrigins: (tenantId: string, asked: RangeAsked) => Promise<RefusedOriginsResponse>;
+  /** What the sommelier sold, and whether a sale can be seen at all (P6-10). */
+  readonly sales: (tenantId: string, asked: RangeAsked) => Promise<SalesResponse>;
 }
 
 export interface AnalyticsPortDeps {
@@ -81,6 +88,13 @@ export interface AnalyticsPortDeps {
   /** The refused sites for a tenant. Defaults to `readRefusedOrigins` in its scope. */
   readonly readRefusedOrigins?:
     ((tenantId: string, query: RefusedOriginsQuery) => Promise<RefusedOrigin[]>) | undefined;
+  /**
+   * What was sold for a tenant, or `undefined` when no shop is connected and a
+   * sale could not have been seen. Defaults to `hasInstalledShop` and, only if
+   * so, `readAttributedSales`, in one scope.
+   */
+  readonly readSales?:
+    ((tenantId: string, query: SalesQuery) => Promise<AttributedSales | undefined>) | undefined;
   /** Today, for a range that does not say. */
   readonly now?: (() => Date) | undefined;
 }
@@ -101,6 +115,7 @@ export const unconfiguredAnalytics: AnalyticsPort = {
   top: () => Promise.reject(new AnalyticsPortNotConfiguredError()),
   zeroResults: () => Promise.reject(new AnalyticsPortNotConfiguredError()),
   refusedOrigins: () => Promise.reject(new AnalyticsPortNotConfiguredError()),
+  sales: () => Promise.reject(new AnalyticsPortNotConfiguredError()),
 };
 
 /**
@@ -128,6 +143,17 @@ const readTopInScope: NonNullable<AnalyticsPortDeps['readTop']> = (tenantId, que
     products: await readTopProducts(tx, products),
   }));
 
+/**
+ * Whether a sale can be seen, and then what was sold — in that order, in one
+ * transaction. The second read is not made for a winery with no shop: its
+ * answer would be noughts that mean "unmeasured", and reading them is how they
+ * end up on a screen as sales.
+ */
+const readSalesInScope: NonNullable<AnalyticsPortDeps['readSales']> = (tenantId, query) =>
+  withTenant(tenantId, async (tx) =>
+    (await hasInstalledShop(tx)) ? readAttributedSales(tx, query) : undefined,
+  );
+
 export const createAnalyticsPort = ({
   readFunnel: read = (tenantId, query) => withTenant(tenantId, (tx) => readFunnel(tx, query)),
   readTop = readTopInScope,
@@ -135,6 +161,7 @@ export const createAnalyticsPort = ({
     withTenant(tenantId, (tx) => readZeroResults(tx, query)),
   readRefusedOrigins: readRefused = (tenantId, query) =>
     withTenant(tenantId, (tx) => readRefusedOrigins(tx, query)),
+  readSales = readSalesInScope,
   now = () => new Date(),
 }: AnalyticsPortDeps = {}): AnalyticsPort => ({
   funnel: async (tenantId, asked) => {
@@ -221,6 +248,22 @@ export const createAnalyticsPort = ({
         lastSeenAt: refused.lastSeenAt.toISOString(),
         domain: refused.domainStatus,
       })),
+    };
+  },
+
+  sales: async (tenantId, asked) => {
+    const range = analyticsRange(asked, now());
+    const sold = await readSales(tenantId, { start: range.start, end: range.end });
+
+    return {
+      from: range.from,
+      to: range.to,
+      /* The flag every revenue label hangs on (P6-10): a shop is connected, so an order reaches us. */
+      hasOrderAttribution: sold !== undefined,
+      orders: sold?.orders ?? 0,
+      visits: sold?.visits ?? 0,
+      units: sold?.units ?? 0,
+      amounts: [...(sold?.amounts ?? [])],
     };
   },
 });

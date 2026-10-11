@@ -114,6 +114,7 @@ describe('the route', () => {
         asked.push([tenantId, range]);
         return reading().port.refusedOrigins(tenantId, range);
       },
+      sales: () => Promise.reject(new Error('not this route')),
     };
     const response = createApp({
       auth: signedIn(),

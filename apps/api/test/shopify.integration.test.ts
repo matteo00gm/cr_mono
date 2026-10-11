@@ -7,6 +7,7 @@ import { startTestDatabase, type TestDatabase } from '@catalogorosso/testing';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { createAnalyticsPort } from '../src/analytics.js';
 import { createShopifyPort, type ShopifyPort } from '../src/shopify.js';
 import { memoryShopifyTokens } from '../src/shopify-tokens.js';
 
@@ -1242,6 +1243,157 @@ describe('Shopify’s privacy requests (P6-09b)', () => {
       expect(String(row.everything)).not.toContain('191167');
       expect(String(row.everything)).not.toContain('333');
     }
+  });
+});
+
+describe('whether the dashboard may say "sales" (P6-10)', () => {
+  /* The real port over the real reads: the flag, and the numbers, as the route would answer. */
+  const analytics = createAnalyticsPort();
+  const RANGE = { from: '2026-10-01', to: '2026-10-31' };
+  let numbered = 6_000_000;
+
+  /** One order with one line of ours, for a visit of this winery's, placed inside the range. */
+  const sell = async (who: Winery, shop: string, price: string, quantity = 1) => {
+    const visitorId = randomUUID();
+
+    await db.execute(sql`
+      insert into widget_events (tenant_id, session_id, type)
+      values (${who.tenantId}::uuid, ${visitorId}, 'ADD_TO_CART')
+    `);
+
+    const order = (numbered += 1);
+    const line = (numbered += 1);
+
+    await runWithRequestContext({ requestId: randomUUID() }, () =>
+      port.orderCreated(
+        shop,
+        JSON.stringify({
+          id: order,
+          admin_graphql_api_id: `gid://shopify/Order/${String(order)}`,
+          currency: 'EUR',
+          created_at: '2026-10-05T10:15:30+02:00',
+          line_items: [
+            {
+              id: line,
+              admin_graphql_api_id: `gid://shopify/LineItem/${String(line)}`,
+              quantity,
+              price,
+              properties: [{ name: '_somm_session', value: visitorId }],
+            },
+          ],
+        }),
+      ),
+    );
+
+    return { order, line };
+  };
+
+  it('says no for a winery with no shop: nothing was measured, and nothing is claimed', async () => {
+    const senza = await winery('senza-negozio');
+
+    expect(await analytics.sales(senza.tenantId, RANGE)).toEqual({
+      ...RANGE,
+      hasOrderAttribution: false,
+      orders: 0,
+      visits: 0,
+      units: 0,
+      amounts: [],
+    });
+  });
+
+  it('says yes, with noughts that are true, for a connected winery that has sold nothing', async () => {
+    const nuova = await winery('appena-collegata');
+
+    await callback(nuova.owner, await started(nuova, 'cantina-appena.myshopify.com'));
+
+    expect(await analytics.sales(nuova.tenantId, RANGE)).toEqual({
+      ...RANGE,
+      hasOrderAttribution: true,
+      orders: 0,
+      visits: 0,
+      units: 0,
+      amounts: [],
+    });
+  });
+
+  it('says yes, and what was sold, net of what came back', async () => {
+    const vende = await winery('che-vende');
+    const SHOP = 'cantina-che-vende.myshopify.com';
+
+    await callback(vende.owner, await started(vende, SHOP));
+    await sell(vende, SHOP, '42.00', 2);
+
+    const refunded = await sell(vende, SHOP, '18.50', 4);
+
+    await runWithRequestContext({ requestId: randomUUID() }, () =>
+      port.refundCreated(
+        SHOP,
+        JSON.stringify({
+          order_id: refunded.order,
+          refund_line_items: [{ id: (numbered += 1), line_item_id: refunded.line, quantity: 1 }],
+        }),
+      ),
+    );
+
+    /* 2 × 42.00, and 3 of the 4 at 18.50. */
+    expect(await analytics.sales(vende.tenantId, RANGE)).toEqual({
+      ...RANGE,
+      hasOrderAttribution: true,
+      orders: 2,
+      visits: 2,
+      units: 5,
+      amounts: [{ currency: 'EUR', cents: 8400 + 5550 }],
+    });
+  });
+
+  it('counts only the range asked', async () => {
+    const ieri = await winery('fuori-periodo');
+    const SHOP = 'cantina-fuori-periodo.myshopify.com';
+
+    await callback(ieri.owner, await started(ieri, SHOP));
+    await sell(ieri, SHOP, '42.00');
+
+    expect(
+      await analytics.sales(ieri.tenantId, { from: '2026-09-01', to: '2026-09-30' }),
+    ).toMatchObject({ hasOrderAttribution: true, orders: 0, amounts: [] });
+  });
+
+  it('says no again once the shop has removed the app, whatever was sold before', async () => {
+    /* Sales are no longer reported, so a nought from here on would be a claim nobody can back. */
+    const smette = await winery('che-smette');
+    const SHOP = 'cantina-che-smette.myshopify.com';
+
+    await callback(smette.owner, await started(smette, SHOP));
+    await sell(smette, SHOP, '42.00');
+    expect(await analytics.sales(smette.tenantId, RANGE)).toMatchObject({
+      hasOrderAttribution: true,
+      orders: 1,
+    });
+
+    await uninstall(SHOP);
+
+    expect(await analytics.sales(smette.tenantId, RANGE)).toEqual({
+      ...RANGE,
+      hasOrderAttribution: false,
+      orders: 0,
+      visits: 0,
+      units: 0,
+      amounts: [],
+    });
+  });
+
+  it('never counts another winery’s sales', async () => {
+    const una = await winery('una-cantina');
+    const altra = await winery('un-altra-cantina');
+
+    await callback(una.owner, await started(una, 'cantina-una.myshopify.com'));
+    await callback(altra.owner, await started(altra, 'cantina-un-altra.myshopify.com'));
+    await sell(altra, 'cantina-un-altra.myshopify.com', '42.00');
+
+    expect(await analytics.sales(una.tenantId, RANGE)).toMatchObject({
+      hasOrderAttribution: true,
+      orders: 0,
+    });
   });
 });
 
