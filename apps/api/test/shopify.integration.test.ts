@@ -499,7 +499,8 @@ describe('what the sommelier sold (P6-07)', () => {
     return { visitorId, conversationId };
   };
 
-  let lineNumber = 0;
+  /* Past any id another describe's rows could have used; small enough for JSON to carry whole. */
+  let lineNumber = 7_000_000;
 
   const line = (visitorId: string | undefined, overrides: Record<string, unknown> = {}) => {
     lineNumber += 1;
@@ -538,6 +539,46 @@ describe('what the sommelier sold (P6-07)', () => {
 
   const created = (shop: string, body: string) =>
     runWithRequestContext({ requestId: randomUUID() }, () => port.orderCreated(shop, body));
+
+  let refundNumber = 9_000_000;
+
+  /** A refund as Shopify sends one: the order by number, each line by number, and a note. */
+  const refunded = (
+    shop: string,
+    orderNumber: number,
+    lines: readonly { readonly lineNumber: number; readonly quantity: number }[],
+  ) => {
+    const body = JSON.stringify({
+      id: (refundNumber += 1),
+      order_id: orderNumber,
+      note: 'Bottiglia rotta — Giulia Bianchi',
+      transactions: [{ amount: '42.00' }],
+      refund_line_items: lines.map((one) => ({
+        id: (refundNumber += 1),
+        line_item_id: one.lineNumber,
+        quantity: one.quantity,
+        subtotal: '42.00',
+      })),
+    });
+
+    return {
+      body,
+      deliver: () =>
+        runWithRequestContext({ requestId: randomUUID() }, () => port.refundCreated(shop, body)),
+    };
+  };
+
+  /** What an order is worth now: every entry for it, sales and refunds, summed. */
+  const worth = async (orderId: string) => {
+    const [row] = [
+      ...(await db.execute(sql`
+        select coalesce(sum(amount_cents), 0)::int as cents, coalesce(sum(quantity), 0)::int as units
+        from attributions where order_id = ${orderId}
+      `)),
+    ];
+
+    return { cents: Number(row?.cents), units: Number(row?.units) };
+  };
 
   const sold = async (orderId: string) => [
     ...(await db.execute(sql`
@@ -669,6 +710,7 @@ describe('what the sommelier sold (P6-07)', () => {
       'ordered_at',
       'product_id',
       'quantity',
+      'refund_line_id',
       'session_id',
       'shop',
       'tenant_id',
@@ -677,6 +719,112 @@ describe('what the sommelier sold (P6-07)', () => {
 
   it('says so for a body it cannot read, and records nothing', async () => {
     expect(await created(SHOP, '{"id": 1')).toBe('unreadable');
+  });
+
+  describe('and a refund takes back (P6-08)', () => {
+    /** An order of ours as Shopify numbers one, so a refund can name it the way Shopify does. */
+    const soldOrder = async (lines: readonly Record<string, unknown>[]) => {
+      const orderNumber = (lineNumber += 1);
+      const orderId = `gid://shopify/Order/${String(orderNumber)}`;
+
+      await created(
+        SHOP,
+        JSON.stringify({
+          id: orderNumber,
+          admin_graphql_api_id: orderId,
+          currency: 'EUR',
+          created_at: '2026-10-05T10:15:30+02:00',
+          line_items: lines,
+        }),
+      );
+
+      return { orderNumber, orderId };
+    };
+
+    /** A line of ours whose GraphQL id is the one Shopify would give its number. */
+    const ours = (visitorId: string, overrides: Record<string, unknown> = {}) => {
+      const numbered = line(visitorId, overrides);
+
+      return { ...numbered, admin_graphql_api_id: `gid://shopify/LineItem/${String(numbered.id)}` };
+    };
+
+    it('reduces what was sold by the units that came back', async () => {
+      const { visitorId } = await visit(rame);
+      const sold_ = ours(visitorId, { quantity: 4, price: '25.00' });
+      const { orderNumber, orderId } = await soldOrder([sold_]);
+
+      expect(await worth(orderId)).toEqual({ cents: 10000, units: 4 });
+
+      const refund = refunded(SHOP, orderNumber, [{ lineNumber: sold_.id, quantity: 1 }]);
+
+      expect(await refund.deliver()).toBe('reduced');
+      expect(await worth(orderId)).toEqual({ cents: 7500, units: 3 });
+    });
+
+    it('takes a redelivered refund off once', async () => {
+      const { visitorId } = await visit(rame);
+      const sold_ = ours(visitorId, { quantity: 2 });
+      const { orderNumber, orderId } = await soldOrder([sold_]);
+      const refund = refunded(SHOP, orderNumber, [{ lineNumber: sold_.id, quantity: 1 }]);
+
+      expect(await refund.deliver()).toBe('reduced');
+      expect(await refund.deliver()).toBe('nothing');
+      expect(await worth(orderId)).toEqual({ cents: 4200, units: 1 });
+    });
+
+    it('reduces only ours, when the refund also returns what the shopper found themselves', async () => {
+      const { visitorId } = await visit(rame);
+      const found = line(undefined, { price: '65.00' });
+      const sold_ = ours(visitorId);
+      const { orderNumber, orderId } = await soldOrder([found, sold_]);
+
+      const refund = refunded(SHOP, orderNumber, [
+        { lineNumber: found.id, quantity: 1 },
+        { lineNumber: sold_.id, quantity: 1 },
+      ]);
+
+      expect(await refund.deliver()).toBe('reduced');
+      expect(await worth(orderId)).toEqual({ cents: 0, units: 0 });
+      expect(await sold(orderId)).toHaveLength(2);
+    });
+
+    it('reduces nothing for an order the sommelier had no part in', async () => {
+      const found = line(undefined);
+      const { orderNumber, orderId } = await soldOrder([found]);
+
+      expect(
+        await refunded(SHOP, orderNumber, [{ lineNumber: found.id, quantity: 1 }]).deliver(),
+      ).toBe('nothing');
+      expect(await sold(orderId)).toEqual([]);
+    });
+
+    it('keeps nothing of the refund’s note', async () => {
+      const { visitorId } = await visit(rame);
+      const sold_ = ours(visitorId);
+      const { orderNumber, orderId } = await soldOrder([sold_]);
+
+      await refunded(SHOP, orderNumber, [{ lineNumber: sold_.id, quantity: 1 }]).deliver();
+
+      const rows = [
+        ...(await db.execute(sql`
+          select to_jsonb(a)::text as everything from attributions a where order_id = ${orderId}
+        `)),
+      ];
+
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect(String(row.everything)).not.toContain('Giulia');
+        expect(String(row.everything)).not.toContain('rotta');
+      }
+    });
+
+    it('says so for a body it cannot read', async () => {
+      expect(
+        await runWithRequestContext({ requestId: randomUUID() }, () =>
+          port.refundCreated(SHOP, '{"order_id": 1'),
+        ),
+      ).toBe('unreadable');
+    });
   });
 
   it('records nothing for a shop that removed the app', async () => {

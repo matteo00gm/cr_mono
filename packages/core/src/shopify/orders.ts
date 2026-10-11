@@ -201,3 +201,105 @@ export const readOrder = (body: string): AttributableOrder | undefined => {
           }),
   };
 };
+
+/* ------------------------------------------------------------- refunds */
+
+const refundLine = z.object({
+  id: z.unknown().optional(),
+  admin_graphql_api_id: z.unknown().optional(),
+  line_item_id: z.unknown().optional(),
+  quantity: z.number().int().min(1).max(100_000),
+  line_item: z.object({ admin_graphql_api_id: z.unknown().optional() }).optional(),
+});
+
+const refundBody = z.object({
+  order_id: z.unknown().optional(),
+  refund_line_items: z.array(z.unknown()).max(1000),
+});
+
+/** Units of one order line that came back. */
+export interface RefundedLine {
+  /** Shopify's id for this line of the refund. */
+  readonly refundLineId: string;
+  /** The order line it refunds, in every spelling a sale may have been written under. */
+  readonly lineItemIds: readonly string[];
+  readonly quantity: number;
+}
+
+export interface OrderRefund {
+  /** The order, in every spelling a sale may have been written under. */
+  readonly orderIds: readonly string[];
+  readonly lines: readonly RefundedLine[];
+}
+
+/**
+ * Every spelling of an id that a sale may have been recorded under.
+ *
+ * A sale is keyed by the GraphQL id when its order carried one, and by the
+ * number when it did not (`idOf`). A refund names the order by number alone,
+ * so the GraphQL spelling is made from it rather than read.
+ */
+const spellings = (kind: 'Order' | 'LineItem', numeric: unknown, gid?: unknown): string[] => {
+  const ids = new Set<string>();
+
+  if (typeof gid === 'string' && gid !== '' && gid.length <= 128) ids.add(gid);
+
+  if (typeof numeric === 'number' && Number.isSafeInteger(numeric) && numeric > 0) {
+    ids.add(`gid://shopify/${kind}/${String(numeric)}`);
+    ids.add(String(numeric));
+  }
+
+  return [...ids];
+};
+
+/**
+ * Which units of which lines a refund took back (P6-08) — or `undefined` when
+ * the body is not a refund we can read.
+ *
+ * **Units, not money.** Shopify's refund carries amounts too, and they are not
+ * read: what a refund takes off an attribution is worked out from what the
+ * sale itself recorded, so it can never be more than was put in. A refund with
+ * no line items — money handed back without a bottle — names no line, and so
+ * reduces none.
+ *
+ * Whether a line was ours is not this function's to know; the record decides,
+ * by whether a sale is there to refund. Called, like `readOrder`, only after
+ * the body's signature has been checked.
+ */
+export const readRefund = (body: string): OrderRefund | undefined => {
+  let json: unknown;
+
+  try {
+    json = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+
+  const parsed = refundBody.safeParse(json);
+
+  if (!parsed.success) return undefined;
+
+  const orderIds = spellings('Order', parsed.data.order_id);
+
+  if (orderIds.length === 0) return undefined;
+
+  return {
+    orderIds,
+    lines: parsed.data.refund_line_items.flatMap((raw) => {
+      const line = refundLine.safeParse(raw);
+
+      if (!line.success) return [];
+
+      const refundLineId = idOf(line.data.admin_graphql_api_id, line.data.id);
+      const lineItemIds = spellings(
+        'LineItem',
+        line.data.line_item_id,
+        line.data.line_item?.admin_graphql_api_id,
+      );
+
+      return refundLineId === undefined || lineItemIds.length === 0
+        ? []
+        : [{ refundLineId, lineItemIds, quantity: line.data.quantity }];
+    }),
+  };
+};

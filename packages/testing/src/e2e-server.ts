@@ -69,7 +69,36 @@ export interface E2eApi {
   readonly unverifySecondOrigin: () => Promise<void>;
   /** Every `security_events` row of a kind, for the assertions P3-18 makes server-side. */
   readonly securityEvents: () => Promise<{ type: string; origin: string | null }[]>;
+  /** Connects a Shopify store to the winery, as a finished install leaves it (P6-08). */
+  readonly connectShop: (shop: string) => Promise<void>;
+  /** What the widget recorded for one visit: each event, and the conversation it found. */
+  readonly visitEvents: (visitorId: string) => Promise<readonly VisitEvent[]>;
+  /** The questions asked in a conversation, so a test can tell which one it is. */
+  readonly questionsIn: (conversationId: string) => Promise<readonly string[]>;
+  /** Every attribution entry for an order or a visit — sales and refunds, as they were written. */
+  readonly attributions: (where: {
+    readonly orderId?: string;
+    readonly sessionId?: string;
+  }) => Promise<readonly AttributionEntry[]>;
   readonly close: () => Promise<void>;
+}
+
+export interface VisitEvent {
+  readonly type: string;
+  readonly conversationId: string | null;
+}
+
+/** One row of what the sommelier sold (P6-07), or of what a refund took back (P6-08). */
+export interface AttributionEntry {
+  readonly orderId: string;
+  readonly sessionId: string;
+  readonly conversationId: string | null;
+  readonly productId: string | null;
+  readonly quantity: number;
+  readonly amountCents: number;
+  readonly currency: string;
+  /** True for a refund's entry: negative, and for the same line as its sale. */
+  readonly refund: boolean;
 }
 
 /** The two origins the suite loads pages from. Only the first is verified. */
@@ -310,6 +339,70 @@ export const startE2eApi = async ({
       `);
 
       return [...rows] as { type: string; origin: string | null }[];
+    },
+
+    connectShop: async (shop) => {
+      await admin.execute(sql`
+        INSERT INTO shopify_installations (tenant_id, shop, scopes)
+        VALUES (${tenantId}, ${shop}, 'read_products,read_orders')
+      `);
+    },
+
+    visitEvents: async (visitorId) => {
+      const rows = await admin.execute(sql`
+        SELECT type, conversation_id FROM widget_events
+        WHERE tenant_id = ${tenantId} AND session_id = ${visitorId}
+        ORDER BY created_at
+      `);
+
+      return ([...rows] as { type: string; conversation_id: string | null }[]).map((row) => ({
+        type: row.type,
+        conversationId: row.conversation_id,
+      }));
+    },
+
+    questionsIn: async (conversationId) => {
+      const rows = await admin.execute(sql`
+        SELECT content FROM messages
+        WHERE conversation_id = ${conversationId} AND role = 'USER'
+        ORDER BY created_at
+      `);
+
+      return ([...rows] as { content: string }[]).map((row) => row.content);
+    },
+
+    attributions: async ({ orderId, sessionId }) => {
+      const rows = await admin.execute(sql`
+        SELECT order_id, session_id, conversation_id, product_id, quantity, amount_cents,
+               currency, refund_line_id
+        FROM attributions
+        WHERE tenant_id = ${tenantId}
+          AND (${orderId ?? null}::text IS NULL OR order_id = ${orderId ?? null})
+          AND (${sessionId ?? null}::text IS NULL OR session_id = ${sessionId ?? null})
+        ORDER BY (refund_line_id IS NOT NULL), amount_cents, session_id
+      `);
+
+      return (
+        [...rows] as {
+          order_id: string;
+          session_id: string;
+          conversation_id: string | null;
+          product_id: string | null;
+          quantity: number;
+          amount_cents: number;
+          currency: string;
+          refund_line_id: string | null;
+        }[]
+      ).map((row) => ({
+        orderId: row.order_id,
+        sessionId: row.session_id,
+        conversationId: row.conversation_id,
+        productId: row.product_id,
+        quantity: row.quantity,
+        amountCents: row.amount_cents,
+        currency: row.currency,
+        refund: row.refund_line_id !== null,
+      }));
     },
 
     close: async () => {

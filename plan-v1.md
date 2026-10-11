@@ -1429,7 +1429,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P6-06b | Shopify proof lifecycle | uninstall withdraws the proof (Decision 9); a first domain proved by claim or by Shopify starts the trial (Decision 10) | P6-06 |
 | ✅ P3-23 | Widget privacy notice | the shopper is told, before the first question, that the shop reads questions and what not to write (Decision 7) | P6-04 |
 | ✅ P6-07 | `orders/create` webhook + matching | on the `_somm_session` line-item property | P6-06,P3-11 |
-| P6-08 | Attribution correctness test | click → order → attributed exactly once | P6-07 |
+| ✅ P6-08 | Attribution correctness test | click → order → attributed exactly once | P6-07 |
 | P6-11 | Shopify inventory sync | `products/update` (not `inventory_levels`) — carries variant ids; sum across locations; **zero re-embedding** | P6-06 |
 | P6-09 | Theme app extension | removes the `theme.liquid` edit | P6-06 |
 | P6-10 | Metric labelling guard | "Aggiunte al carrello" until P6-07 ships; never fake "Vendite" | P6-02 |
@@ -7740,8 +7740,8 @@ Assert **zero provider calls** across every blocked case, since that is what the
 - **A test order is nobody's revenue**, and is read as an order with no lines of ours.
 - **Most orders never reach the database.** An order with no line of ours is decided by the parser, before the shop is even resolved.
 - **⚠ Not the idempotency ledger** *(deviation from P6-11's note, which expects it)*. `processed_webhooks` is keyed by the provider's delivery id, and Shopify's travels in a header its signature does not cover. The line's own key comes from the signed body and does the same job without believing a header.
-- **⚠ Written once** *(addition)*. `app_rw` may insert and delete and may not update: an amount a seller was shown should not be one a later bug can rewrite. Delete stays, because a shop's data goes when Shopify says it must (`shop/redact`, P6-09).
-- **⚠ Open: an order placed is counted, whatever became of it.** `orders/create` fires before payment settles, and nothing here hears of a cancellation or a refund. P6-08 names the refund; a cancelled or never-paid order wants the same treatment.
+- **⚠ Written once** *(addition)*. `app_rw` may insert and delete and may not update: an amount a seller was shown should not be one a later bug can rewrite. Delete stays, because a shop's data goes when Shopify says it must (`shop/redact`, P6-09). *(Held through P6-08: a refund is a second row, not a change to the first.)*
+- **⚠ Open: an order placed is counted, whatever became of it.** `orders/create` fires before payment settles, and nothing here hears of a cancellation or a refund. P6-08 names the refund; a cancelled or never-paid order wants the same treatment. *(✅ The refund is built in P6-08, as a negative entry beside the sale. The cancellation is still open.)*
 - **⚠ Open: nothing reads the table yet.** The analytics screen still says *"Aggiunte al carrello"*, which is still the truth of what it shows. P6-10 is where attributed sales get a panel and a label.
 - **⚠ Operator.** Add `orders/create` to the app's webhook subscriptions, beside `app/uninstalled`, at the same URL. A public app must also be approved for **protected customer data** before Shopify delivers order webhooks at all: request the orders level only — no name, address, email or phone, none of which is read.
 
@@ -7794,6 +7794,35 @@ Reuse P5-03's HMAC verification and P5-04's `processed_webhooks` idempotency. Hi
 **How.** End-to-end: widget conversation → recommendation → add-to-cart with the session property → simulated `orders/create` → assert exactly one attribution with the right amount, session and conversation. Then the edge cases that decide whether a seller trusts the number: a partial order (one recommended wine plus two they found themselves) attributes only ours; a refund event reduces it; two sessions in one order attribute separately; a session with no order attributes nothing.
 
 **Files.** `e2e/attribution.spec.ts`. **~120 test lines.**
+
+**As built (2026-10-11).** `apps/e2e/test/attribution.spec.ts`, seven cases in a real browser — and the refund the row names, which did not exist and is built here.
+
+- **What only a browser can show is that three places agree.** The value the widget plants on a cart line (P3-11), the id its own events are grouped by (P6-01) and the property an order is matched on (P6-07) were written months apart and have to be the same thing. The spec asks a question, presses *Aggiungi al carrello*, reads the line the real widget really sent the storefront, waits for the widget's own events to land, and builds the order from that line. **Shopify is the only thing simulated, and only its voice**: bodies of the shape it sends, signed with the app secret, posted to the real route.
+- **The conversation is real** *(harness change)*. The suite scripts the model and nothing beneath it, and until now nothing beneath it wrote a conversation. Started with a store, the harness's scripted answer records its turn through `recordTurn`, the statement the chat port uses; the spec then checks the attribution names the conversation in which *that* question was asked.
+- **The cases**: one question, one cart line, one order — exactly one attribution, with the visit, the conversation, the wine and the amount; a partial order attributes only ours, at what was paid after its discount; a refund reduces it, once; two shoppers in two browsers attribute separately, each to their own conversation; a visit with no order attributes nothing; an unsigned order attributes nothing; a visit typed onto a cart from nowhere is not believed.
+- **⚠ The refund is an entry, not an edit** *(design)*. `refunds/create` is read by `readRefund` for the units of each line that came back, and `recordRefunds` writes a second row for the same line — the refund line's id, a negative quantity and amount. What a line is worth is the sum of its entries. So `attributions` stays written-once (P6-07) and a refund still reduces it; migration 0076 adds the column, gives sales and refunds a key each, and holds the sign of an entry to its kind.
+- **⚠ In proportion to the units returned, of what we recorded — not Shopify's refund amount** *(design)*. A refund can then never take back more than the sale put in, and both are on the same footing: the price as the shop charged it. The last units take what is left, so three bottles for ten euros refund to exactly ten. A refund claiming more units than were sold takes what there is; one after that takes nothing.
+- **Only lines that were ours**: the refund is joined to a sale already recorded under the winery's policy. A refund for a wine the shopper found themselves joins nothing, and the same refund reduces ours and leaves theirs.
+- **Ids in both spellings.** A sale is keyed by the GraphQL id when its order carried one and by the number when it did not; a refund names order and line by number. Each is offered both ways and found by whichever the sale was written under.
+- **A refund carries its sale's date**, so it reduces the day the sale was counted on rather than appearing as a loss on a later one.
+- **⚠ Open: money handed back without a bottle reduces nothing.** A refund with no line items — a goodwill adjustment, a shipping refund — names no line, so there is no attribution to take it from. Small, and in the seller's favour rather than ours; worth saying on the panel when there is one (P6-10).
+- **⚠ Open: a cancelled or never-paid order still counts** (carried from P6-07). `orders/cancelled` wants the refund's treatment: the same ledger, an entry that takes the rest back.
+- **⚠ Operator.** Add `refunds/create` to the app's webhook subscriptions, beside `orders/create`.
+
+**Verified.** Unit (5628 tests), the full Postgres suite (90 files, 1221 tests), coverage gates (`packages/security` still at 100%), every `:check`, and the whole browser suite (65 cases, seven of them new). The migration round trip (P0-40) runs through 0076 and back. `attributions.integration.test.ts`: a refund takes the returned units' share and leaves the sale's row as written; three bottles for ten euros refund to exactly ten; a refund claiming more than was sold takes what there is, and the next takes nothing; a redelivery takes nothing; a sale is found under either spelling of its ids; a line that was never ours, the same line under another order, and another winery's sale are not touched; and the table refuses a positive refund or a negative sale. 26 mutants: 24 killed on the first run. One survivor was a real gap — a refund naming the wrong order still reduced the line, since Shopify's line ids do not repeat and no test had one that did — and has a test now. The other is equivalent and stays, with a comment saying so: `refund_line_id IS NULL` on the join cannot change the result, because a refund row's negative units never pass the `WHERE`; it is there to name the sales' partial unique index. Four of the mutants are in a browser: the property renamed, the cart line and the events carrying different ids, and no conversation recorded — each fails the spec.
+
+| Mutation | Caught by |
+|---|---|
+| A refund found only under the order's number, or only under the GraphQL spelling; the line's own id not offered; a refund for no order read; a refund line nobody can name kept | `shopify-orders.test.ts` |
+| The whole sale taken back for one bottle; more taken back than was sold; the last units leaving a cent behind; a spent sale refunded again | `attributions.integration.test.ts` |
+| A refund taken off twice; every line of the order reduced; any order's line reduced *(survived, then caught by a new test)* | `attributions.integration.test.ts` |
+| A sale that may be negative; a refund that may add | `attributions.integration.test.ts` |
+| An empty refund still asking the database | `attributions.test.ts` |
+| A refund for something that is not a shop read; an unreadable refund called nothing; the shop looked up for money handed back | `shopify-port.test.ts` |
+| A redelivered refund reported as a reduction | `shopify.integration.test.ts` (api) |
+| A refund never handed to the port; a body other than the signed one handed on | `shopify-routes.test.ts` |
+| The property read under another name; the cart line carrying an id the events do not; the events grouped by an id the cart does not carry; no conversation for an order to be traced to | `attribution.spec.ts` (browser) |
+| A refund of a refund *(equivalent: the `WHERE` already excludes it)* | — |
 
 ---
 

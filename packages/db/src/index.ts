@@ -631,7 +631,14 @@ export { recordWidgetEvents, type EventBatch, type EventToRecord } from './widge
  * one of the winery's own visits, written once each on the caller's
  * transaction.
  */
-export { recordAttributions, type LineToAttribute, type OrderToAttribute } from './attributions.js';
+export {
+  recordAttributions,
+  recordRefunds,
+  type LineToAttribute,
+  type OrderToAttribute,
+  type RefundLine,
+  type RefundToRecord,
+} from './attributions.js';
 
 /** The funnel's counts (P6-02): visits reaching each stage, read in the scope's tenant. */
 export { readFunnel, type FunnelQuery } from './funnel.js';
