@@ -79,6 +79,12 @@ const PRODUCT_SERVER_OWNED = {
    */
   embeddingError: true,
   embeddingAttempts: true,
+  /*
+   * P6-11's clock: when the shop last reported this wine's stock. A client
+   * that could set it could pin a wine's stock against every later report, by
+   * claiming to have heard from the future.
+   */
+  stockSourceAt: true,
 } as const;
 
 /**

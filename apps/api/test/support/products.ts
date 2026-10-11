@@ -62,6 +62,7 @@ export const storedProduct = (overrides: Partial<ProductRow> = {}): ProductRow =
   currency: 'EUR',
   stockStatus: 'IN_STOCK',
   stockQty: null,
+  stockSourceAt: null,
   productUrl: null,
   imageUrl: null,
   status: 'ACTIVE',

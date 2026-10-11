@@ -351,6 +351,8 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
         ? memoryShopifyTokens()
         : ssmShopifyTokens({ client: new SSMClient({}), prefix: config.shopifyTokenPrefix }),
     readMemberships: readMembershipsForUser,
+    /* The limiter every counted path shares (P2-02): a shop's stock reports are counted too (P6-11). */
+    ...(config.rateLimiter === undefined ? {} : { limiter: config.rateLimiter }),
   });
 
   /*

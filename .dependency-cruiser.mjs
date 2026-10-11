@@ -192,6 +192,10 @@ export default {
           // opens nothing, over attributions' boilerplate policy and the
           // policies of the three tables it reads.
           '|^packages/db/src/attributions[.]ts$' +
+          // src/stock-sync.ts is exempt from P6-11 on the same terms: one
+          // UPDATE in the caller's withTenant transaction, over products'
+          // boilerplate policy.
+          '|^packages/db/src/stock-sync[.]ts$' +
           // src/webhooks.ts is exempt from P0-64b, and unlike the two files
           // above it really does open a connection. A webhook arrives outside
           // any request — no session, no membership row, no tenant to set — and

@@ -627,6 +627,13 @@ export {
 export { recordWidgetEvents, type EventBatch, type EventToRecord } from './widget-events.js';
 
 /**
+ * Stock as a seller's shop reports it (P6-11): one `UPDATE` of the stock
+ * columns on the caller's transaction, which writes no outbox row and so
+ * costs no embedding.
+ */
+export { syncStock, type StockReport, type StockToSync } from './stock-sync.js';
+
+/**
  * What the sommelier sold (P6-07): the lines of a Shopify order that carried
  * one of the winery's own visits, written once each on the caller's
  * transaction.
