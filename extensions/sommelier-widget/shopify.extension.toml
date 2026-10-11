@@ -1,0 +1,8 @@
+# Sommelier AI — the theme app extension (P6-09).
+#
+# One app embed block, which renders the widget's script tag so a seller on
+# Shopify never edits theme.liquid. It ships with the app P6-06 registers and
+# is deployed with the Shopify CLI (`shopify app deploy`), which adds the
+# `uid` Shopify assigns on the first deploy to this file.
+name = "Sommelier AI"
+type = "theme"

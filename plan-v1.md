@@ -1431,7 +1431,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P6-07 | `orders/create` webhook + matching | on the `_somm_session` line-item property | P6-06,P3-11 |
 | ✅ P6-08 | Attribution correctness test | click → order → attributed exactly once | P6-07 |
 | ✅ P6-11 | Shopify inventory sync | `products/update` (not `inventory_levels`) — carries variant ids; sum across locations; **zero re-embedding** | P6-06 |
-| P6-09 | Theme app extension | removes the `theme.liquid` edit | P6-06 |
+| ✅ P6-09 | Theme app extension | removes the `theme.liquid` edit | P6-06 |
 | ✅ P6-09b | Shopify privacy webhooks | the three every listed app must answer: a customer's data request, a customer's erasure, a shop's erasure | P6-07 |
 | P6-10 | Metric labelling guard | "Aggiunte al carrello" until P6-07 ships; never fake "Vendite" | P6-02 |
 | P6-12 | Italian on the user side | every refusal the dashboard shows written in Italian at the source (Decision 6) | — |
@@ -7868,6 +7868,34 @@ Reuse P5-03's HMAC verification and P5-04's `processed_webhooks` idempotency. Hi
 **Tests.** Manual verification on a development store, plus an assertion that the extension renders the same loader URL as the snippet path.
 
 **Files.** `extensions/sommelier-widget/*`. **~120 lines.**
+
+**As built (2026-10-12).** `extensions/sommelier-widget/`: a `shopify.extension.toml` and one block, `blocks/sommelier.liquid`. The widget learned the two things the block lets a seller choose.
+
+- **The tag is the snippet's, and a test holds it there.** A Liquid file cannot import anything, so the loader's address, `type="module"`, `async` and the key's attribute are written out by hand. `LOADER_SRC` now names the address once in `packages/core`, and `theme-extension.test.ts` reads the Liquid and compares it with `installSnippet`'s tag attribute for attribute — the row's assertion, and the only thing between the two install paths and a drift nobody would see until one of them stopped working.
+- **⚠ An app embed, not an app block** *(deviation in wording)*. The row says "app block", which in Shopify's terms is a section a seller places on a page. The widget is a launcher fixed to a corner of every page, and the kind Shopify has for that is an *app embed* (`"target": "body"`): switched on once in the theme editor, with nothing to place.
+- **⚠ Corner and colour are attributes on the tag, not our config** *(deviation)*. The row asks for settings "mapped to our config", and there is nothing to map to: the API answers the same theme for every winery, and nothing stores one. So the block writes `data-position` and `data-color`, the loader reads them where it reads the key, and they belong to the storefront rather than the winery — which is what a theme editor's setting is. Known when the tag is read, before any request, so a launcher on the left is drawn there from the first frame rather than jumping across the page.
+- **The widget could not be on the left at all until now.** `position` was in the config contract and nothing read it. The launcher and the panel now both take `bottom-left`; only that one value is a choice, and anything else — a typo included — is the right corner.
+- **A colour is six hex digits or it is nothing.** It is concatenated into a stylesheet, and `red; } * { display: none` is a colour to a concatenation. The loader holds it to `#rrggbb`; the panel checks again with `channelsOf` where it becomes stylesheet text, and falls back to the winery's colour rather than to none. The panel's foreground is still picked for contrast (P3-15), whatever the storefront chose.
+- **Everything the block writes is escaped, and nothing is written without a key.** An embed switched on and never filled in is a shop without a widget, not a broken one.
+- **The script-tag path is unchanged, and gains the same two attributes** for a seller who is not on Shopify and wants the left corner.
+- **In a browser**: the test storefront is served a second way, `/themed`, with a theme's choices on the tag, and three cases check where the launcher and the panel actually are, what colour they actually have, and that a question asked from the left corner is still answered. The loader is 2.43 KB of its 5.
+- **⚠ Open: not yet seen on a development store.** The row asks for a manual check there, and there is no Shopify app to install until an operator creates one (P6-06). What a store's Liquid does with the block is the one thing here no test of ours runs.
+- **⚠ Open: a seller cannot see their public key.** The block's first setting asks for it, and so does the snippet; the keys screen P4-08 and P4-09 left unbuilt is where it would be shown. Until it exists, onboarding by either path needs somebody to read the key out of the database.
+- **⚠ Open: the server's `theme.position` is still unread.** When a winery can set its own theme, the widget should fall back to it where the storefront said nothing — and the launcher cannot know it before the config arrives, which is the jump the attribute avoids.
+- **⚠ Operator.** `shopify app deploy` from the app P6-06 registers; Shopify writes the extension's `uid` into the TOML on the first deploy. The loader's address in the block is production's — a development store pointed at a staging stack needs it changed by hand, as `data-api` is for the snippet.
+
+**Verified.** Unit (5767 tests), the full Postgres suite (91 files, 1267 tests), coverage gates, every `:check`, the bundle budget, and the whole browser suite (68 cases, three of them new). `theme-extension.test.ts`: the block loads the snippet's loader and carries the snippet's attributes exactly, with the two choices beside them; every value written is escaped; nothing is rendered without a key; the editor offers a key, the two corners under the names the widget reads, and no colour by default. `loader.test.ts`: the left corner taken only for `bottom-left`, a colour only for six hex digits, a rule-closing value and a URL writing nothing into the sheet, and a tag that says nothing giving the stylesheet it always gave. `a11y.test.ts`: the storefront's colour over the winery's, a readable foreground on it, the winery's colour kept for a value that is not one, the panel on the left over a launcher on the left. In Chromium: the launcher and the panel really are in the left half, really are that colour, and a question from there is answered. 27 mutants, 27 killed — eleven of them in the Liquid file itself, and two that only the browser run can see.
+
+| Mutation | Caught by |
+|---|---|
+| Any position taken for the left corner; a colour taken unchecked, checked only for containing one, or only at its start; the launcher left on the right, or in our colour | `loader.test.ts` |
+| The corner, or the colour, not passed to the panel; both dropped at the lazy boundary | `main.test.ts`, `lazy.test.ts` |
+| The storefront's colour ignored; an unchecked colour written into the sheet; the panel left on the right; the panel moved for any position | `a11y.test.ts` |
+| The storefront's choices never drawn; the panel opening away from its launcher | `cross-origin.spec.ts` (browser) |
+| The extension loading another loader; the snippet's address moved without the extension; a classic script; not async | `theme-extension.test.ts` |
+| The key, the colour or the position written unescaped; a tag rendered with no key | `theme-extension.test.ts` |
+| A corner offered under a name the widget does not read; a colour chosen for everyone by default; a section block instead of an embed | `theme-extension.test.ts` |
+| The themed storefront served plain | `host-pages.test.ts` |
 
 ---
 

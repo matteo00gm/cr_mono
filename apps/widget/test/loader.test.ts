@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { attach, DEFAULT_API, GLOBAL, HOST_TAG, mount, start } from '../src/loader.js';
+import { attach, DEFAULT_API, GLOBAL, HOST_TAG, LEFT, mount, start } from '../src/loader.js';
 
 /**
  * The script a seller pastes into their storefront (P3-01).
@@ -143,6 +143,110 @@ describe('what it reads from the tag', () => {
     withScript({ 'data-key': '' }, () => {
       expect(start()).toBeUndefined();
     });
+  });
+});
+
+describe('what a storefront may choose (P6-09)', () => {
+  /*
+   * A theme's own settings, written as attributes on the tag: which corner, and
+   * which colour. Both arrive from somebody else's page and one of them is
+   * written into a stylesheet, so what is *not* accepted is most of this.
+   */
+  const globalFor = (attributes: Record<string, string>) => {
+    let read: typeof globalThis.__sommelier;
+
+    withScript({ 'data-key': 'pk_test_abc', ...attributes }, () => {
+      start();
+      read = globalThis.__sommelier;
+    });
+    forget();
+    document.body.replaceChildren();
+
+    return read;
+  };
+
+  /** Every rule the launcher was given, for a tag with these attributes. */
+  const sheetFor = (attributes: Record<string, string>): string => {
+    let text = '';
+
+    withScript({ 'data-key': 'pk_test_abc', ...attributes }, () => {
+      const adopted = start()?.shadow.adoptedStyleSheets as readonly CSSStyleSheet[] | undefined;
+
+      text = [...(adopted ?? [])]
+        .flatMap((one) => [...one.cssRules].map((rule) => rule.cssText))
+        .join(String.fromCharCode(10));
+    });
+    forget();
+    document.body.replaceChildren();
+
+    return text;
+  };
+
+  it('is the name the theme extension writes for the other corner', () => {
+    /* `packages/core`'s `theme-extension.test.ts` pins the same word on the Liquid side. */
+    expect(LEFT).toBe('bottom-left');
+  });
+
+  it('takes the left corner when asked, and draws the launcher there from the start', () => {
+    expect(globalFor({ 'data-position': 'bottom-left' })?.position).toBe('bottom-left');
+
+    const sheet = sheetFor({ 'data-position': 'bottom-left' });
+
+    expect(sheet).toMatch(/button\[part=.launcher.\] \{[^}]*left: 20px/u);
+    expect(sheet).toMatch(/button\[part=.launcher.\] \{[^}]*right: auto/u);
+  });
+
+  it.each(['bottom-right', 'top-left', 'left', 'BOTTOM-LEFT', ''])(
+    'stays in the right corner for %j: only the one alternative is a choice',
+    (position) => {
+      expect(globalFor({ 'data-position': position })?.position).toBeUndefined();
+      expect(sheetFor({ 'data-position': position })).not.toContain('left: 20px');
+    },
+  );
+
+  it('stays in the right corner when nothing is said, exactly as before', () => {
+    expect(globalFor({})?.position).toBeUndefined();
+    expect(globalFor({})?.color).toBeUndefined();
+    expect(sheetFor({})).toBe(sheetFor({ 'data-position': 'bottom-right' }));
+  });
+
+  it('takes a colour a theme’s picker would write, and puts it on the launcher', () => {
+    expect(globalFor({ 'data-color': '#1f6f4a' })?.color).toBe('#1f6f4a');
+    expect(globalFor({ 'data-color': '#1F6F4A' })?.color).toBe('#1F6F4A');
+    expect(sheetFor({ 'data-color': '#1f6f4a' })).toMatch(
+      /button\[part=.launcher.\] \{[^}]*background: (#1f6f4a|rgb\(31, 111, 74\))/u,
+    );
+  });
+
+  it.each([
+    ['a name', 'red'],
+    ['three digits', '#fff'],
+    ['eight digits', '#1f6f4aff'],
+    ['a function', 'rgb(31, 111, 74)'],
+    ['a rule closed and another opened', '#1f6f4a; } * { display: none'],
+    ['a url', 'url(https://evil.example/x)'],
+    ['nothing', ''],
+  ])('takes no colour from %s, and writes nothing of it into the sheet', (_, color) => {
+    /* The value is concatenated into stylesheet text: six hex digits cannot close a rule. */
+    expect(globalFor({ 'data-color': color })?.color).toBeUndefined();
+
+    const sheet = sheetFor({ 'data-color': color });
+
+    expect(sheet).toBe(sheetFor({}));
+    expect(sheet).not.toContain('display: none');
+    expect(sheet).not.toContain('evil.example');
+  });
+
+  it('keeps the first tag’s choices when the snippet is pasted twice', () => {
+    withScript({ 'data-key': 'pk_test_abc', 'data-position': 'bottom-left' }, () => {
+      start();
+    });
+    withScript({ 'data-key': 'pk_test_abc', 'data-color': '#1f6f4a' }, () => {
+      start();
+    });
+
+    expect(globalThis.__sommelier?.position).toBe('bottom-left');
+    expect(globalThis.__sommelier?.color).toBeUndefined();
   });
 });
 

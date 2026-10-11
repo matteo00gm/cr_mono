@@ -44,6 +44,9 @@ export interface LazyPanelOptions {
   readonly key: string;
   /** `data-cart`, when the seller wrote one. Forwarded, never interpreted here. */
   readonly cart?: string | undefined;
+  /** `data-position` and `data-color` (P6-09), on the same terms. */
+  readonly position?: string | undefined;
+  readonly color?: string | undefined;
   readonly load?: LoadWidget | undefined;
   readonly document?: Document | undefined;
   /** Injected so a test can run the idle callback rather than wait for one. */
@@ -97,6 +100,8 @@ export const lazyPanel = ({
   api,
   key,
   cart,
+  position,
+  color,
   load = importWidget,
   document: document_ = document,
   whenIdle = idle,
@@ -155,6 +160,8 @@ export const lazyPanel = ({
           api,
           key,
           cart,
+          position,
+          color,
           /* The loader's own copy, so the widget bundle imports no module the
            * loader also imports (P3-05, P3-18). */
           adoptStyles,

@@ -70,6 +70,45 @@ beforeEach(() => {
   document.body.append(host);
 });
 
+describe('what the storefront chose (P6-09)', () => {
+  it('reaches the panel as the loader read it, uninterpreted', async () => {
+    const mountPanel_ = vi.fn<WidgetModule['mountPanel']>((options) => mountPanel(options));
+    const lazy = lazyPanel({
+      shadow,
+      launcher,
+      config,
+      api: API,
+      key: KEY,
+      position: 'bottom-left',
+      color: '#1f6f4a',
+      load: () => Promise.resolve({ mountPanel: mountPanel_ }),
+    });
+
+    await lazy.toggle();
+
+    expect(mountPanel_).toHaveBeenCalledWith(
+      expect.objectContaining({ position: 'bottom-left', color: '#1f6f4a' }),
+    );
+  });
+
+  it('is nothing when the storefront chose nothing', async () => {
+    const mountPanel_ = vi.fn<WidgetModule['mountPanel']>((options) => mountPanel(options));
+    const lazy = lazyPanel({
+      shadow,
+      launcher,
+      config,
+      api: API,
+      key: KEY,
+      load: () => Promise.resolve({ mountPanel: mountPanel_ }),
+    });
+
+    await lazy.toggle();
+
+    expect(mountPanel_.mock.calls[0]?.[0].position).toBeUndefined();
+    expect(mountPanel_.mock.calls[0]?.[0].color).toBeUndefined();
+  });
+});
+
 describe('before anybody clicks', () => {
   it('requests nothing', () => {
     /*

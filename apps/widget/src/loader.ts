@@ -28,6 +28,18 @@ export const HOST_TAG = 'sommelier-widget';
 /** The one global. Named so a second copy of the script can see the first. */
 export const GLOBAL = '__sommelier';
 
+/** The corner a storefront may ask for instead of the default (P6-09). */
+export const LEFT = 'bottom-left';
+
+/**
+ * A colour as a theme's colour picker writes one, and nothing else.
+ *
+ * **Checked before it goes near a stylesheet.** The value is an attribute on
+ * somebody's page, and a stylesheet is text: `red; } * { display: none` is a
+ * colour to a concatenation. Six hex digits cannot close a rule.
+ */
+const HEX = /^#[0-9a-f]{6}$/iu;
+
 export interface SommelierGlobal {
   /** The public key the seller pasted, as `data-key`. */
   readonly key: string;
@@ -41,6 +53,17 @@ export interface SommelierGlobal {
    * this event" — and a headless Shopify storefront sets no `window.Shopify`.
    */
   readonly cart?: string | undefined;
+  /**
+   * `data-position`, when the storefront put the widget in the left corner
+   * (P6-09). Only the one alternative is a value: the right corner is what
+   * the absence of it means.
+   */
+  readonly position?: typeof LEFT | undefined;
+  /**
+   * `data-color`, when the storefront chose its own accent (P6-09) — already
+   * held to `#rrggbb`, because it is written into a stylesheet.
+   */
+  readonly color?: string | undefined;
   /** Set once mounted, so a double inclusion is a no-op rather than a second launcher. */
   mounted: boolean;
 }
@@ -146,6 +169,18 @@ const LAUNCHER_STYLE = [
 ].join('\n');
 
 /**
+ * What the storefront asked for, as rules laid over the launcher's own
+ * (P6-09) — or nothing, which is the launcher as it always was.
+ *
+ * Known when the tag is read, before any request is made, so a launcher in
+ * the left corner is drawn there from the first frame rather than jumping
+ * across the page when a config arrives.
+ */
+const lookOf = ({ position, color }: SommelierGlobal): string =>
+  (position === LEFT ? "\nbutton[part='launcher'] { right: auto; left: 20px; }" : '') +
+  (color === undefined ? '' : `\nbutton[part='launcher'] { background: ${color}; }`);
+
+/**
  * What a switched-off winery says on the launcher (P3-07, §1.3).
  *
  * **Written out here rather than read from the catalogue**, and that is a
@@ -237,7 +272,7 @@ export const mount = ({
    * form asks every seller on a strict CSP for `'unsafe-inline'` — and a seller
    * with a payment form on the same page is the one least willing to give it.
    */
-  adoptStyles(shadow, LAUNCHER_STYLE, document_);
+  adoptStyles(shadow, LAUNCHER_STYLE + lookOf(existing), document_);
 
   const launcher = buildLauncher(document_, label);
 
@@ -261,10 +296,15 @@ export const start = (options: MountOptions = {}): Mounted | undefined => {
 
     if (key === undefined || key === '') return undefined;
 
+    const color = scriptAttribute('color');
+
     globalThis.__sommelier ??= {
       key,
       api: scriptAttribute('api') ?? DEFAULT_API,
       cart: scriptAttribute('cart'),
+      /* Anything but the one alternative is the default, including a typo. */
+      position: scriptAttribute('position') === LEFT ? LEFT : undefined,
+      color: color !== undefined && HEX.test(color) ? color : undefined,
       mounted: false,
     };
 

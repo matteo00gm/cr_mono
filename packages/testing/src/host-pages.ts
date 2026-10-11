@@ -53,9 +53,11 @@ export interface HostPages {
 
 const PAGES = new URL('../host-pages/', import.meta.url);
 
-/** The four routes, and which file answers each. */
+/** The routes, and which file answers each. */
 const ROUTES: Readonly<Record<string, string>> = {
   '/': 'storefront.html',
+  /* The same storefront, with a theme's own choices on the tag (P6-09). */
+  '/themed': 'storefront.html',
   '/generic': 'generic.html',
   '/hostile': 'hostile.html',
   '/hostile.css': 'hostile.css',
@@ -71,6 +73,24 @@ const ROUTES: Readonly<Record<string, string>> = {
  * and the two pages cannot be compared pixel for pixel.
  */
 const SHOPIFY_GLOBALS = `window.Shopify = { shop: 'cantina-rossi.myshopify.com', locale: 'it' };`;
+
+/**
+ * What a Shopify theme's settings add to the tag (P6-09): the storefront's own
+ * corner and colour, as the theme extension writes them.
+ *
+ * **Added to the one storefront page rather than kept in a second file**, for
+ * the reason both ports serve one file: two pages would drift, and a
+ * difference between them would read as a difference the attributes made.
+ */
+export const THEMED = { position: 'bottom-left', color: '#1f6f4a' } as const;
+
+const SNIPPET_API = 'data-api="__API__"';
+
+const themed = (page: string): string =>
+  page.replace(
+    SNIPPET_API,
+    `${SNIPPET_API} data-position="${THEMED.position}" data-color="${THEMED.color}"`,
+  );
 
 const TYPES: Readonly<Record<string, string>> = {
   html: 'text/html; charset=utf-8',
@@ -187,7 +207,8 @@ export const startHostPages = async ({
       return;
     }
 
-    const text = await readFile(new URL(page, PAGES), 'utf8');
+    const file = await readFile(new URL(page, PAGES), 'utf8');
+    const text = url.pathname === '/themed' ? themed(file) : file;
 
     response.writeHead(200, { 'content-type': typeOf(page) });
     /* The snippet a seller pastes, filled in with this run's key and API. */

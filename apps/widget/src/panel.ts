@@ -134,6 +134,16 @@ export interface PanelOptions {
   readonly key: string;
   /** `data-cart` from the script tag, when the seller settled it themselves (P3-10). */
   readonly cart?: string | undefined;
+  /**
+   * `data-position` from the script tag (P6-09): `bottom-left` puts the panel
+   * over a launcher the loader already drew on the left.
+   */
+  readonly position?: string | undefined;
+  /**
+   * `data-color` from the script tag (P6-09): the storefront's own accent,
+   * which wins over the winery's when it is a colour.
+   */
+  readonly color?: string | undefined;
   /** Injected by tests; the default resolves the host page's own cart. */
   readonly cartPort?: CartPort | undefined;
   /** Injected by tests; the default batches to P6-01's ingest (P3-20). */
@@ -151,6 +161,13 @@ export interface PanelOptions {
   readonly adoptStyles: AdoptStyles;
   readonly document?: Document | undefined;
 }
+
+/** The corner the storefront may ask for instead (P6-09). The loader's `LEFT`, not imported: see `adoptStyles`. */
+const LEFT = 'bottom-left';
+
+/** The panel over a launcher on the left, or nothing. */
+const sideRule = (position: string | undefined): string =>
+  position === LEFT ? '\n.panel { right: auto; left: 20px; }' : '';
 
 export interface Panel {
   readonly element: HTMLElement;
@@ -248,6 +265,8 @@ export const mountPanel = ({
   api,
   key,
   cart,
+  position,
+  color,
   cartPort,
   analytics: analytics_,
   navigate,
@@ -310,7 +329,16 @@ export const mountPanel = ({
    * the sheet rather than onto a style attribute — which is the same CSP rule
    * from the other end: an inline `style=` is `'unsafe-inline'` too.
    */
-  adoptStyles(shadow, PANEL_STYLE + accentRule(config.theme.primaryColor), document_);
+  /*
+   * The storefront's own accent, when it gave one that is a colour (P6-09),
+   * and the winery's otherwise. Checked here as well as in the loader: this
+   * is where it becomes stylesheet text, and the check belongs where the risk
+   * is.
+   */
+  const accent =
+    color !== undefined && channelsOf(color) !== undefined ? color : config.theme.primaryColor;
+
+  adoptStyles(shadow, PANEL_STYLE + accentRule(accent) + sideRule(position), document_);
   shadow.append(element);
 
   /*

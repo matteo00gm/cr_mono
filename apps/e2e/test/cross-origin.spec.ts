@@ -189,6 +189,64 @@ test.describe('from a verified domain', () => {
   });
 });
 
+test.describe('on a storefront whose theme chose a corner and a colour (P6-09)', () => {
+  /*
+   * What the Shopify theme extension writes on the tag, which only a browser
+   * can check the effect of: JSDOM lays nothing out, so "on the left" is a
+   * string there and a place here.
+   */
+  const colour = async (target: ReturnType<typeof launcher>): Promise<string> =>
+    target.evaluate((element) => getComputedStyle(element).backgroundColor);
+
+  test('draws the launcher and the panel on the left, in the storefront’s colour', async ({
+    page,
+  }) => {
+    await page.goto(`${harness.verified.origin}/themed`);
+    await expect(launcher(page)).toBeVisible();
+
+    const width = page.viewportSize()?.width ?? 0;
+    const button = await launcher(page).boundingBox();
+
+    expect((button?.x ?? width) + (button?.width ?? 0)).toBeLessThan(width / 2);
+    expect(await colour(launcher(page))).toBe('rgb(31, 111, 74)');
+
+    await launcher(page).click();
+    await expect(panel(page)).toBeVisible();
+
+    const opened = await panel(page).boundingBox();
+
+    expect((opened?.x ?? width) + (opened?.width ?? 0)).toBeLessThan(width / 2 + 60);
+    expect(opened?.x ?? -1).toBeGreaterThanOrEqual(0);
+
+    /* The accent is the storefront's all the way through: the send button wears it. */
+    await panel(page).locator('.composer-input').fill('Un rosso');
+    expect(await colour(panel(page).locator('.composer-send'))).toBe('rgb(31, 111, 74)');
+  });
+
+  test('leaves a storefront that chose nothing exactly where it was', async ({ page }) => {
+    await page.goto(harness.verified.origin);
+    await expect(launcher(page)).toBeVisible();
+
+    const width = page.viewportSize()?.width ?? 0;
+    const button = await launcher(page).boundingBox();
+
+    expect(button?.x ?? 0).toBeGreaterThan(width / 2);
+    expect(await colour(launcher(page))).toBe('rgb(123, 30, 60)');
+  });
+
+  test('still works: a question asked from the left corner is answered', async ({ page }) => {
+    await page.goto(`${harness.verified.origin}/themed`);
+    await launcher(page).click();
+
+    const composer = panel(page).locator('.composer-input');
+
+    await composer.fill('Un rosso strutturato');
+    await composer.press('Enter');
+
+    await expect(panel(page).locator('.card').first()).toBeVisible();
+  });
+});
+
 test.describe('on a page with a strict CSP and a hostile reset', () => {
   test('mounts, and is styled, under `style-src self`', async ({ page }) => {
     /*
