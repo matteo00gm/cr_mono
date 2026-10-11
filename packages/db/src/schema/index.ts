@@ -12,6 +12,7 @@ export * from './conversations.js';
 export * from './domain-claims.js';
 export * from './email-suppressions.js';
 export * from './import-runs.js';
+export * from './attributions.js';
 export * from './invitations.js';
 export * from './memberships.js';
 export * from './product-embeddings.js';

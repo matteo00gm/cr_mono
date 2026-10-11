@@ -5,12 +5,12 @@
  * ours, and it is the seller's own session that owns the cart. An absolute URL
  * pointing anywhere else adds a wine to nobody's basket.
  *
- * **The session property ships now, though nothing reads it yet.** Every line
- * we add carries `_somm_session`, which is what makes P6-07's order attribution
- * possible. Attribution cannot be reconstructed after the fact: an order placed
- * today without the property is an order we can never claim credit for, so the
- * cost of shipping it early is nothing and the cost of shipping it late is
- * every sale in between.
+ * **The session property is what an order is attributed by.** Every line we
+ * add carries `_somm_session`, and P6-07 reads it off the order Shopify reports
+ * (`ATTRIBUTION_PROPERTY` in `packages/core` says the same name). Attribution
+ * cannot be reconstructed after the fact: an order placed without the property
+ * is an order we can never claim credit for, which is why it shipped with
+ * P3-11, long before anything read it.
  */
 
 /** Shopify's endpoints, on the host page's origin. */

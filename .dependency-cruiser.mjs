@@ -187,6 +187,11 @@ export default {
           // the caller's withTenant, in withUser for the state, and in the one
           // read-only transaction that resolves a shop to its winery.
           '|^packages/db/src/shopify[.]ts$' +
+          // src/attributions.ts is exempt from P6-07 on products.ts's terms: it
+          // writes one statement in the caller's withTenant transaction and
+          // opens nothing, over attributions' boilerplate policy and the
+          // policies of the three tables it reads.
+          '|^packages/db/src/attributions[.]ts$' +
           // src/webhooks.ts is exempt from P0-64b, and unlike the two files
           // above it really does open a connection. A webhook arrives outside
           // any request — no session, no membership row, no tenant to set — and

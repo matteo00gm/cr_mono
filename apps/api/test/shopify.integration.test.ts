@@ -472,6 +472,229 @@ describe('the proof an uninstall withdraws (P6-06b, Open Decision 9)', () => {
   });
 });
 
+describe('what the sommelier sold (P6-07)', () => {
+  let rame: Winery;
+  let altra: Winery;
+  let barolo: string;
+  const SHOP = 'cantina-rame.myshopify.com';
+  const VARIANT = 45123456789;
+
+  /** A visit as the widget leaves one: a conversation, and an event under the per-tab id. */
+  const visit = async (who: Winery): Promise<{ visitorId: string; conversationId: string }> => {
+    const visitorId = randomUUID();
+    const [conversation] = [
+      ...(await db.execute(sql`
+        insert into conversations (tenant_id, session_id, origin, locale)
+        values (${who.tenantId}::uuid, ${randomUUID()}, 'https://winery.example', 'it')
+        returning id
+      `)),
+    ];
+    const conversationId = String(conversation?.id);
+
+    await db.execute(sql`
+      insert into widget_events (tenant_id, session_id, conversation_id, type)
+      values (${who.tenantId}::uuid, ${visitorId}, ${conversationId}::uuid, 'ADD_TO_CART')
+    `);
+
+    return { visitorId, conversationId };
+  };
+
+  let lineNumber = 0;
+
+  const line = (visitorId: string | undefined, overrides: Record<string, unknown> = {}) => {
+    lineNumber += 1;
+
+    return {
+      id: lineNumber,
+      admin_graphql_api_id: `gid://shopify/LineItem/${String(lineNumber)}-${randomUUID()}`,
+      variant_id: VARIANT,
+      quantity: 1,
+      price: '42.00',
+      discount_allocations: [],
+      properties: visitorId === undefined ? [] : [{ name: '_somm_session', value: visitorId }],
+      ...overrides,
+    };
+  };
+
+  /** An order as Shopify sends one — buyer and all. */
+  const orderOf = (lines: readonly unknown[], overrides: Record<string, unknown> = {}) => {
+    const orderId = `gid://shopify/Order/${randomUUID()}`;
+
+    return {
+      orderId,
+      body: JSON.stringify({
+        id: 5678901234567,
+        admin_graphql_api_id: orderId,
+        currency: 'EUR',
+        created_at: '2026-10-05T10:15:30+02:00',
+        email: 'giulia.bianchi@example.com',
+        customer: { first_name: 'Giulia', last_name: 'Bianchi' },
+        shipping_address: { address1: 'Via Roma 1', city: 'Alba' },
+        line_items: lines,
+        ...overrides,
+      }),
+    };
+  };
+
+  const created = (shop: string, body: string) =>
+    runWithRequestContext({ requestId: randomUUID() }, () => port.orderCreated(shop, body));
+
+  const sold = async (orderId: string) => [
+    ...(await db.execute(sql`
+        select tenant_id, shop, session_id, conversation_id, product_id, quantity, amount_cents, currency
+        from attributions where order_id = ${orderId}
+        order by amount_cents
+      `)),
+  ];
+
+  beforeAll(async () => {
+    rame = await winery('rame');
+    altra = await winery('altra-rame');
+
+    const [product] = [
+      ...(await db.execute(sql`
+        insert into products (tenant_id, sku, name, wine_type, price_cents, currency, stock_status, external_variant_id)
+        values (${rame.tenantId}::uuid, 'SKU-BAROLO', 'Barolo', 'RED', 4200, 'EUR', 'IN_STOCK', ${String(VARIANT)})
+        returning id
+      `)),
+    ];
+
+    barolo = String(product?.id);
+    await callback(rame.owner, await started(rame, SHOP));
+  });
+
+  it('attributes the wine we recommended, and not the two the shopper found themselves', async () => {
+    const { visitorId, conversationId } = await visit(rame);
+    const { orderId, body } = orderOf([
+      line(undefined, { price: '18.00', quantity: 2 }),
+      line(visitorId, { quantity: 2, discount_allocations: [{ amount: '8.40' }] }),
+      line(undefined, { price: '65.00' }),
+    ]);
+
+    expect(await created(SHOP, body)).toBe('attributed');
+
+    expect(await sold(orderId)).toEqual([
+      {
+        tenant_id: rame.tenantId,
+        shop: SHOP,
+        session_id: visitorId,
+        conversation_id: conversationId,
+        product_id: barolo,
+        quantity: 2,
+        amount_cents: 7560,
+        currency: 'EUR',
+      },
+    ]);
+  });
+
+  it('counts a redelivered order once', async () => {
+    const { visitorId } = await visit(rame);
+    const { orderId, body } = orderOf([line(visitorId)]);
+
+    expect(await created(SHOP, body)).toBe('attributed');
+    expect(await created(SHOP, body)).toBe('nothing');
+    expect(await sold(orderId)).toHaveLength(1);
+  });
+
+  it('attributes nothing for an order the widget had no part in', async () => {
+    const { orderId, body } = orderOf([line(undefined), line(undefined)]);
+
+    expect(await created(SHOP, body)).toBe('nothing');
+    expect(await sold(orderId)).toEqual([]);
+  });
+
+  it('attributes two visits in one order separately', async () => {
+    const [one, two] = [await visit(rame), await visit(rame)];
+    const { orderId, body } = orderOf([
+      line(one.visitorId, { price: '10.00' }),
+      line(two.visitorId, { price: '20.00' }),
+    ]);
+
+    await created(SHOP, body);
+
+    expect(
+      (await sold(orderId)).map((row) => [row.session_id, row.conversation_id, row.amount_cents]),
+    ).toEqual([
+      [one.visitorId, one.conversationId, 1000],
+      [two.visitorId, two.conversationId, 2000],
+    ]);
+  });
+
+  it('does not believe a visit nobody had, or one that was another winery’s', async () => {
+    const theirs = await visit(altra);
+    const { orderId, body } = orderOf([line(randomUUID()), line(theirs.visitorId)]);
+
+    expect(await created(SHOP, body)).toBe('nothing');
+    expect(await sold(orderId)).toEqual([]);
+  });
+
+  it('counts nothing for a test order', async () => {
+    const { visitorId } = await visit(rame);
+    const { orderId, body } = orderOf([line(visitorId)], { test: true });
+
+    expect(await created(SHOP, body)).toBe('nothing');
+    expect(await sold(orderId)).toEqual([]);
+  });
+
+  it('keeps nothing about the buyer, and has nowhere it could', async () => {
+    const { visitorId } = await visit(rame);
+    const { orderId, body } = orderOf([line(visitorId)]);
+
+    await created(SHOP, body);
+
+    const [row] = [
+      ...(await db.execute(sql`
+        select to_jsonb(a)::text as everything from attributions a where order_id = ${orderId}
+      `)),
+    ];
+
+    for (const personal of ['giulia', 'Giulia', 'Bianchi', 'Via Roma', 'Alba']) {
+      expect(String(row?.everything)).not.toContain(personal);
+    }
+
+    const columns = [
+      ...(await db.execute(sql`
+        select column_name from information_schema.columns where table_name = 'attributions'
+      `)),
+    ].map((column) => String(column.column_name));
+
+    expect(columns.sort()).toEqual([
+      'amount_cents',
+      'conversation_id',
+      'created_at',
+      'currency',
+      'id',
+      'line_item_id',
+      'order_id',
+      'ordered_at',
+      'product_id',
+      'quantity',
+      'session_id',
+      'shop',
+      'tenant_id',
+    ]);
+  });
+
+  it('says so for a body it cannot read, and records nothing', async () => {
+    expect(await created(SHOP, '{"id": 1')).toBe('unreadable');
+  });
+
+  it('records nothing for a shop that removed the app', async () => {
+    const via = await winery('via');
+    const GONE = 'cantina-via.myshopify.com';
+
+    await callback(via.owner, await started(via, GONE));
+
+    const { visitorId } = await visit(via);
+    const { orderId, body } = orderOf([line(visitorId)]);
+
+    await uninstall(GONE);
+
+    expect(await created(GONE, body)).toBe('unknown');
+    expect(await sold(orderId)).toEqual([]);
+  });
+});
+
 describe('the uninstall', () => {
   it('deletes the token, marks the shop, and stops it resolving', async () => {
     const gialli = await winery('gialli');
