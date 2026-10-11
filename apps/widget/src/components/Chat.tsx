@@ -39,7 +39,15 @@ import { ProductCard } from './ProductCard.js';
  * **What is *not* working is one union** (P3-07). The notice, whether the
  * composer takes a question and whether a retry is offered all read from
  * `stateFor`, so a state added and not handled is a type error.
+ *
+ * **A shopper is told who reads their questions before they ask one** (P3-23,
+ * Open Decision 7). One line under the composer, tied to the input so a
+ * screen reader hears it on focus, and gone with the first question — it is
+ * there to be read once, not to sit under every answer.
  */
+
+/** The notice's id, which the composer points at while it is shown. */
+const PRIVACY_NOTE_ID = 'chat-privacy';
 
 /** How a message is sent. Injected, so the component is testable without a network. */
 export type Asker = (message: string, signal: AbortSignal) => AsyncIterable<StreamEvent>;
@@ -151,6 +159,12 @@ export const Chat = ({ ask, status = 'ACTIVE', cart, cartUrl, navigate, analytic
 
   const state = stateFor(lapsed ? 'DISABLED' : status, conversation.failure);
   const open = acceptsQuestions(state);
+  /*
+   * Before the first question, and only where one can be asked: a notice
+   * about what happens to questions means nothing under a composer that
+   * takes none. A question that failed was still asked, so it does not return.
+   */
+  const unasked = open && conversation.turns.length === 0;
 
   const submit = useCallback(
     (event: Event): void => {
@@ -252,6 +266,7 @@ export const Chat = ({ ask, status = 'ACTIVE', cart, cartUrl, navigate, analytic
           autocomplete="off"
           value={draft}
           placeholder={t('composerPlaceholder')}
+          aria-describedby={unasked ? PRIVACY_NOTE_ID : undefined}
           disabled={conversation.streaming || !open}
           onInput={(event) => {
             setDraft(event.currentTarget.value);
@@ -265,6 +280,12 @@ export const Chat = ({ ask, status = 'ACTIVE', cart, cartUrl, navigate, analytic
           {t('send')}
         </button>
       </form>
+
+      {unasked && (
+        <p id={PRIVACY_NOTE_ID} class="composer-note">
+          {t('privacyNotice')}
+        </p>
+      )}
     </div>
   );
 };

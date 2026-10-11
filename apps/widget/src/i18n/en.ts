@@ -13,6 +13,8 @@ export const en: Messages = {
   composerPlaceholder: 'What wine would you recommend?',
   send: 'Send',
   retry: 'Try again',
+  privacyNotice:
+    'The winery reads questions to improve its catalogue. Do not write personal details.',
 
   disabled: 'The AI sommelier is not available right now.',
   quota: 'The sommelier is resting. Come back soon!',
