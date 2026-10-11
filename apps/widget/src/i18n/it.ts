@@ -18,6 +18,13 @@ export const it = {
   composerPlaceholder: 'Che vino mi consigli?',
   send: 'Invia',
   retry: 'Riprova',
+  /*
+   * Under the composer until the first question (P3-23, Open Decision 7). The
+   * winery's staff can read what a shopper asks, and a shopper should know
+   * that before typing — and what not to type. It informs; it asks nothing.
+   */
+  privacyNotice:
+    'La cantina legge le domande per migliorare il catalogo. Non scrivere dati personali.',
 
   /* The five states of §1.3. `active` has no notice: the chat is the notice. */
   disabled: 'Il sommelier AI non è attivo al momento.',

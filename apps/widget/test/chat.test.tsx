@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Analytics, WidgetEventType } from '../src/analytics.js';
 import type { CartPort } from '../src/cart/port.js';
 import { Chat, type Asker } from '../src/components/Chat.js';
+import { en as ENGLISH } from '../src/i18n/en.js';
 import { it as COPY } from '../src/i18n/it.js';
+import { MessagesContext } from '../src/i18n/useT.js';
 import { ChatRefused } from '../src/send.js';
 import { SessionRefused } from '../src/session.js';
 import type { StreamEvent } from '../src/sse.js';
@@ -264,6 +266,86 @@ describe('the composer', () => {
     });
 
     expect(ask.mock.calls[0]?.[0]).toBe('Che vino?');
+  });
+});
+
+describe('who reads the questions (P3-23)', () => {
+  /*
+   * A winery's staff can read what its shoppers ask (P6-04), so a shopper is
+   * told before asking — and told what not to type. Once, not under every
+   * answer: after the first question there is nothing left to warn about.
+   */
+  const note = (): HTMLElement | null => screen.queryByText(COPY.privacyNotice);
+
+  it('tells a shopper before the first question, and ties it to the box they type in', () => {
+    render(<Chat ask={streamOf({ type: 'done' })} />);
+
+    const shown = note();
+
+    expect(shown).not.toBeNull();
+    expect(shown?.id).not.toBe('');
+    /* A screen reader hears it on focusing the composer, not only by finding it. */
+    expect(box().getAttribute('aria-describedby')).toBe(shown?.id);
+  });
+
+  it('is gone once a question is asked, and does not come back with the answer', async () => {
+    render(<Chat ask={streamOf({ type: 'text', delta: 'Un Barolo.' }, { type: 'done' })} />);
+
+    await askAbout();
+
+    await waitFor(() => {
+      expect(log().textContent).toContain('Un Barolo.');
+    });
+    await settle();
+
+    expect(note()).toBeNull();
+    expect(box().hasAttribute('aria-describedby')).toBe(false);
+  });
+
+  it('stays gone when the first question failed: it was still asked', async () => {
+    render(<Chat ask={streamOf({ type: 'error', code: 'provider_error' })} />);
+
+    await askAbout();
+
+    await waitFor(() => {
+      expect(screen.getByText(COPY.errorProvider)).toBeDefined();
+    });
+
+    expect(note()).toBeNull();
+  });
+
+  it('is not shown where no question can be asked', () => {
+    render(<Chat ask={streamOf({ type: 'done' })} status="DISABLED" />);
+
+    expect(note()).toBeNull();
+    expect(box().hasAttribute('aria-describedby')).toBe(false);
+  });
+
+  it('speaks English to an English browser', () => {
+    render(
+      <MessagesContext.Provider value={ENGLISH}>
+        <Chat ask={streamOf({ type: 'done' })} />
+      </MessagesContext.Provider>,
+    );
+
+    expect(screen.queryByText(ENGLISH.privacyNotice)).not.toBeNull();
+    expect(note()).toBeNull();
+  });
+
+  it('is text and nothing else (§3.7)', () => {
+    render(<Chat ask={streamOf({ type: 'done' })} />);
+
+    const shown = note();
+
+    expect(shown?.childElementCount).toBe(0);
+    expect(shown?.childNodes).toHaveLength(1);
+    expect(shown?.firstChild?.nodeType).toBe(Node.TEXT_NODE);
+  });
+
+  it('is outside the live region, so it is never announced as an answer', () => {
+    render(<Chat ask={streamOf({ type: 'done' })} />);
+
+    expect(log().contains(note())).toBe(false);
   });
 });
 

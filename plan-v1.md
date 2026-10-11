@@ -1427,7 +1427,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P6-05 | Unauthorized-origin attempts panel | from `security_events` | P2-16 |
 | ✅ P6-06 | Shopify OAuth app + install | also becomes a domain-verification method | P4-01 |
 | ✅ P6-06b | Shopify proof lifecycle | uninstall withdraws the proof (Decision 9); a first domain proved by claim or by Shopify starts the trial (Decision 10) | P6-06 |
-| P3-23 | Widget privacy notice | the shopper is told, before the first question, that the shop reads questions and what not to write (Decision 7) | P6-04 |
+| ✅ P3-23 | Widget privacy notice | the shopper is told, before the first question, that the shop reads questions and what not to write (Decision 7) | P6-04 |
 | P6-07 | `orders/create` webhook + matching | on the `_somm_session` line-item property | P6-06,P3-11 |
 | P6-08 | Attribution correctness test | click → order → attributed exactly once | P6-07 |
 | P6-11 | Shopify inventory sync | `products/update` (not `inventory_levels`) — carries variant ids; sum across locations; **zero re-embedding** | P6-06 |
@@ -7566,7 +7566,7 @@ Assert **zero provider calls** across every blocked case, since that is what the
 - **⚠ Not the `ZERO_RESULTS` events** *(deviation, with a migration)*. The widget's event (P3-20) carries no question — it records that an answer had no cards, not what was asked — and it is sent by the page, so anyone holding a session could add to a seller's list. The answer itself is the record: migration 0071 adds `messages.zero_result_kind`, set by `recordTurn` when the turn is written, and the panel pairs each such answer with the question just before it (by `seq`). An answer that failed — provider error, schema failure, refusal — is not counted: none of those is a gap in the catalogue. A CHECK holds the kind to the two values and to answers.
 - **⚠ The two kinds are told apart by the question's words, not by P2-22's pre-cap count** *(deviation)*. The vector branch returns nearest neighbours whatever was asked and the chat applies no price ceiling, so the pre-cap count is zero only for an empty catalogue — every unanswered question would land in the second kind. Instead: **`no_match`** when no candidate that reached the model was found by the lexical branch (P2-19: every word of the question, or a close spelling) — the catalogue does not name what was asked; **`not_recommended`** when some were and the model chose none — the catalogue has the word but not the wine. Decided at the turn, from `lexicalRank`, because the candidates' ranks are not kept.
 - **The patterns are a word list** (`THEMES`: sweet, sparkling, rosé, organic, sulphite-free, vegan, alcohol-free, budget, gift, large formats, red, white), Italian and English, matched as whole words — *bio* is not *biondo* — so a seller can see why a question landed in a theme. *"14 visitatori hanno chiesto vini dolci"* counts conversations, each once however many of its questions use the theme's words, and across **every** question, not only the hundred listed: a theme counted from a truncated list would undercount the long tail this panel exists for.
-- **Every unanswered question is listed, not only those several conversations asked** — the opposite of P6-03's threshold, on purpose: here the single question is the signal (*"avete il Sassicaia 2015?"*). What keeps it safe is where it always was: contact details are removed before a question is stored (P2-33). P6-03's note, which had called its threshold the only way a visitor's words reach the seller, is corrected. *(Open Decision 7 records the safeguards this rests on; the shopper is told by the widget, row P3-23.)*
+- **Every unanswered question is listed, not only those several conversations asked** — the opposite of P6-03's threshold, on purpose: here the single question is the signal (*"avete il Sassicaia 2015?"*). What keeps it safe is where it always was: contact details are removed before a question is stored (P2-33). P6-03's note, which had called its threshold the only way a visitor's words reach the seller, is corrected. *(Open Decision 7 records the safeguards this rests on; the shopper is told by the widget, row P3-23 — ✅ built.)*
 - **The export is the view.** One list of rows feeds the table and the CSV, so they cannot drift; and every cell is made inert for a spreadsheet — these are words a visitor typed, and a question beginning `=` is a formula in Excel, on the seller's machine. The catalogue export (P1-30) does not need this: its cells are the seller's own and must round-trip through the importer.
 - **Questions are grouped with P6-03's normalisation**, now one shared SQL fragment (`normalisedQuestion`).
 - **⚠ Open: small talk lands in the list.** *"Grazie!"* is an answer with no wine, found by no words, so it is a `no_match`. The themes are unaffected, and a seller reads past it; a classifier for "was this a request for a wine" is P1-46 eval territory, not a regex.
@@ -7698,6 +7698,23 @@ Assert **zero provider calls** across every blocked case, since that is what the
 **Tests.** Shown before the first question and not after; in English for an English browser; no markup.
 
 **Files.** composer, i18n, tests. **~40 lines.**
+
+**As built (2026-10-11).** `privacyNotice` in both catalogues, one `<p>` under the composer in `Chat.tsx`, one rule in the panel's stylesheet. The widget bundle grows by 0.18 KB gzipped (14.51 of 60).
+
+- **Shown while nothing has been asked, and only where something can be**: `open && turns.length === 0`. A winery that is switched off shows a composer that takes no question, and a notice about what happens to questions would mean nothing under it. A first question that failed was still asked, so the notice does not come back with the retry.
+- **Tied to the box it is about** *(addition)*. The input carries `aria-describedby` for as long as the notice is shown, so a screen reader reads it on focusing the composer rather than leaving it to be found. It sits outside the polite live region, so it is never announced as though it were an answer.
+- **The English says "the winery"**, as the Italian does — the shopper is on a winery's site, and "the shop" would be us guessing.
+- **Both sentences are pinned** in `i18n.test.ts`, in both languages: that the winery reads questions, and not to write personal details. Open Decision 7 rests on the shopper being told both, and a notice edited down to one of them still renders and still looks like a notice.
+- **⚠ Three visual baselines change, and only three** (P3-19): the open panel before a question, in Italian, in English and on a phone. Every baseline taken after a question is byte-for-byte what it was, which is the "gone once they have asked" half seen by a browser. The Linux files are CI's own render, committed by hand after review, as P3-19 set down.
+
+**Verified.** Unit (5529 tests), coverage gates, lint, typecheck, boundaries, the bundle budget. In `chat.test.tsx`: shown before the first question with the composer described by it; gone once a question is asked and not back with the answer, nor after a first question that failed; not shown under a composer that takes no question; in English inside an English catalogue; one text node and no element; outside the live region. The browser suite, locally: 55 of 58 pass and the three that do not are exactly the three open-panel baselines, which is the change — and the full axe rule set, colour contrast included, passes over the open panel with the notice on it. 13 mutants, 13 killed.
+
+| Mutation | Caught by |
+|---|---|
+| The notice under every answer; where nobody can ask; only after a question; never shown | `chat.test.tsx` |
+| The composer not tied to the notice; tied to a notice that is gone; the notice with no id to point at | `chat.test.tsx` |
+| The notice wrapped in markup; always in Italian | `chat.test.tsx` |
+| The Italian says nothing of personal data; does not say who reads; the English says nothing of personal details; the English left in Italian | `i18n.test.ts` |
 
 ---
 
@@ -7991,7 +8008,7 @@ Everything a seller or a shopper reads is Italian: the dashboard, and the widget
 
 **7. ~~Shoppers' questions shown verbatim~~ — decided (2026-10-04): yes, under the usual safeguards.**
 
-The unanswered-questions panel (P6-04) lists what shoppers typed, verbatim, to the winery's members. The shop is the controller of its visitors' conversations and reading them is the purpose, so the list stays, held to the practices that make it safe: **minimisation** at write (P2-33 removes contact details before a question is stored); **retention** (P7-07's 90-day purge bounds the list — nothing older can appear); **access** to the winery's own members only, never aggregated across wineries; and **transparency** — the widget tells a shopper, before the first question, that the shop reads questions and not to write personal details (row **P3-23**).
+The unanswered-questions panel (P6-04) lists what shoppers typed, verbatim, to the winery's members. The shop is the controller of its visitors' conversations and reading them is the purpose, so the list stays, held to the practices that make it safe: **minimisation** at write (P2-33 removes contact details before a question is stored); **retention** (P7-07's 90-day purge bounds the list — nothing older can appear); **access** to the winery's own members only, never aggregated across wineries; and **transparency** — the widget tells a shopper, before the first question, that the shop reads questions and not to write personal details (row **P3-23**, ✅ built).
 
 **8. ~~Generation in the retrieval sandbox~~ — decided (2026-10-04): on request, billed as a message.**
 

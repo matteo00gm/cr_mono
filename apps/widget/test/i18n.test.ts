@@ -53,6 +53,19 @@ describe('both catalogues say the same things', () => {
     }
   });
 
+  it('says both things the privacy notice is for, in both languages (P3-23)', () => {
+    /*
+     * Open Decision 7 rests on a shopper being told two things: that the
+     * winery reads questions, and not to write personal details. A notice
+     * edited down to one of them still renders, and still looks like a notice.
+     */
+    expect(italian.privacyNotice).toMatch(/legge le domande/u);
+    expect(italian.privacyNotice).toMatch(/dati personali/u);
+    expect(en.privacyNotice).toMatch(/reads questions/u);
+    expect(en.privacyNotice).toMatch(/personal/u);
+    expect(en.privacyNotice).not.toBe(italian.privacyNotice);
+  });
+
   it('has a catalogue for every locale it claims', () => {
     expect(Object.keys(catalogues).sort()).toEqual([...LOCALES].sort());
   });

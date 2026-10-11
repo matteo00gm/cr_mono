@@ -117,6 +117,7 @@ const PANEL_STYLE = [
   '.composer-send { border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; }',
   '.composer-send { background: var(--accent); color: var(--on-accent); cursor: pointer; }',
   '.composer-send:disabled { background: #d8c3ca; cursor: default; }',
+  '.composer-note { margin: 0; padding: 0 16px 12px; font-size: 12px; line-height: 1.4; color: #5f5f5f; }',
   '.visually-hidden {',
   '  position: absolute; width: 1px; height: 1px; overflow: hidden;',
   '  clip-path: inset(50%); white-space: nowrap;',
