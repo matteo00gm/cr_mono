@@ -196,3 +196,67 @@ export const recordRefunds = async (
 
   return [...inserted].length;
 };
+
+/* ------------------------------------------------- privacy requests (P6-09b) */
+
+const asJson = (orderIds: readonly string[]): string => JSON.stringify(orderIds);
+
+/**
+ * How many entries are held for some orders — what a customer's data request
+ * is answered from. Sales and refunds both: each is a thing held.
+ */
+export const countOrderEntries = async (
+  tx: DbTransaction,
+  orderIds: readonly string[],
+): Promise<number> => {
+  if (orderIds.length === 0) return 0;
+
+  const rows = await tx.execute(sql`
+    SELECT count(*)::int AS held FROM attributions
+    WHERE order_id IN (SELECT jsonb_array_elements_text(${asJson(orderIds)}::jsonb))
+  `);
+
+  return ([...rows][0] as { held?: number } | undefined)?.held ?? 0;
+};
+
+/**
+ * Erases what was recorded for some orders, when Shopify says a customer's
+ * data must go (`customers/redact`).
+ *
+ * **The sale and its refunds together**: a refund left behind would be a
+ * negative amount for a sale that no longer exists. A real delete — the table
+ * is written once, never rewritten, and `app_rw` kept `DELETE` for exactly
+ * this (P6-07).
+ *
+ * What goes is the tie between an order and a conversation. The conversation
+ * itself stays, and is nobody's again: nothing else here says whose it was.
+ */
+export const eraseOrders = async (
+  tx: DbTransaction,
+  orderIds: readonly string[],
+): Promise<number> => {
+  if (orderIds.length === 0) return 0;
+
+  const erased = await tx.execute(sql`
+    DELETE FROM attributions
+    WHERE order_id IN (SELECT jsonb_array_elements_text(${asJson(orderIds)}::jsonb))
+    RETURNING id
+  `);
+
+  return [...erased].length;
+};
+
+/**
+ * Erases everything recorded for a shop's orders, when Shopify says the shop's
+ * customer data must go (`shop/redact`, 48 hours after the app is removed).
+ *
+ * Whether the shop has since been connected again is not asked: the request
+ * is for what was gathered, and it is honoured as made.
+ */
+export const eraseShop = async (tx: DbTransaction, shop: string): Promise<number> => {
+  const erased = await tx.execute(sql`
+    DELETE FROM attributions WHERE shop = ${shop} RETURNING id
+  `);
+
+  return [...erased].length;
+};

@@ -8,9 +8,11 @@ import {
   isShopDomain,
   newStateNonce,
   normaliseShop,
+  readCustomerRequest,
   readOrder,
   readProductStock,
   readRefund,
+  readShopRedact,
   scopesCovered,
   setRequestTenant,
   SHOP_EXPECTED,
@@ -25,8 +27,11 @@ import {
   type MembershipReader,
 } from '@catalogorosso/core';
 import {
+  countOrderEntries,
   deleteDomainProvedBy,
   endSessionsFor,
+  eraseOrders,
+  eraseShop,
   insertDomain,
   markDomainVerified,
   markShopifyUninstalled,
@@ -103,6 +108,15 @@ export type StockOutcome =
   | { readonly outcome: 'synced' | 'nothing' | 'unknown' | 'unreadable' }
   | { readonly outcome: 'throttled'; readonly retryAfterSec: number };
 
+/**
+ * What became of one of Shopify's privacy requests (P6-09b).
+ *
+ * `held` is a data request this service has something to answer with: it is
+ * recorded, and a person has to send the seller what is held. Everything else
+ * is finished when it returns.
+ */
+export type PrivacyOutcome = 'erased' | 'held' | 'nothing' | 'unknown' | 'unreadable';
+
 /** What became of a `refunds/create` delivery. */
 export type RefundOutcome =
   /** At least one of our lines was reduced. */
@@ -173,6 +187,12 @@ export interface ShopifyPort {
   readonly refundCreated: (shop: string, body: string) => Promise<RefundOutcome>;
   /** `products/update`: each variant's stock, as the shop now reports it (P6-11). */
   readonly productUpdated: (shop: string, body: string) => Promise<StockOutcome>;
+  /** `customers/redact`: what was recorded for a customer's orders is erased (P6-09b). */
+  readonly customerRedact: (shop: string, body: string) => Promise<PrivacyOutcome>;
+  /** `customers/data_request`: whether anything is held for a customer's orders, recorded if so. */
+  readonly customerDataRequest: (shop: string, body: string) => Promise<PrivacyOutcome>;
+  /** `shop/redact`: everything recorded for a shop's orders is erased. */
+  readonly shopRedact: (shop: string, body: string) => Promise<PrivacyOutcome>;
 }
 
 export interface ShopifyDeps {
@@ -189,6 +209,11 @@ export interface ShopifyDeps {
   readonly spendState?:
     ((userId: string, hash: string, now: Date) => Promise<SpentState | undefined>) | undefined;
   readonly resolveShop?: ((shop: string) => Promise<string | undefined>) | undefined;
+  /**
+   * The winery that holds a shop whether or not the app is still installed
+   * (P6-09b): Shopify's privacy requests arrive after an uninstall.
+   */
+  readonly resolveHolder?: ((shop: string) => Promise<string | undefined>) | undefined;
   /**
    * Counts each shop's stock deliveries (P6-11). A shop whose products are
    * rewritten in bulk — an ERP sync, another app — sends one for every product
@@ -238,6 +263,9 @@ export const unconfiguredShopify: ShopifyPort = {
   orderCreated: () => Promise.resolve('unknown'),
   refundCreated: () => Promise.resolve('unknown'),
   productUpdated: () => Promise.resolve({ outcome: 'unknown' }),
+  customerRedact: () => Promise.resolve('unknown'),
+  customerDataRequest: () => Promise.resolve('unknown'),
+  shopRedact: () => Promise.resolve('unknown'),
 };
 
 export const createShopifyPort = ({
@@ -249,6 +277,7 @@ export const createShopifyPort = ({
   exchange = config === undefined ? undefined : exchangeOverGuardedFetch(config),
   spendState = spendShopifyState,
   resolveShop = resolveTenantByShop,
+  resolveHolder = (shop) => resolveTenantByShop(shop, undefined, { removed: true }),
   limiter,
   now = () => new Date(),
 }: ShopifyDeps): ShopifyPort => {
@@ -564,6 +593,97 @@ export const createShopifyPort = ({
       );
 
       return { outcome: changed > 0 ? 'synced' : 'nothing' };
+    },
+
+    customerRedact: async (shop, body) => {
+      const request = readCustomerRequest(body);
+
+      if (request === undefined) return 'unreadable';
+
+      /* The body is what was signed; a header that names another shop is not believed. */
+      if (request.shop !== shop) return 'unknown';
+      if (request.orderIds.length === 0) return 'nothing';
+
+      const tenantId = await resolveHolder(shop);
+
+      if (tenantId === undefined) return 'unknown';
+
+      setRequestTenant(tenantId);
+
+      return withTenant(tenantId, async (tx) => {
+        const erased = await eraseOrders(tx, request.orderIds);
+
+        /* Most customers never met the sommelier: nothing held, nothing to record. */
+        if (erased === 0) return 'nothing';
+
+        await audit(tx, {
+          action: 'shopify.customer_redacted',
+          target: shop,
+          metadata: { count: erased },
+        });
+
+        return 'erased';
+      });
+    },
+
+    customerDataRequest: async (shop, body) => {
+      const request = readCustomerRequest(body);
+
+      if (request === undefined) return 'unreadable';
+      if (request.shop !== shop) return 'unknown';
+      if (request.orderIds.length === 0) return 'nothing';
+
+      const tenantId = await resolveHolder(shop);
+
+      if (tenantId === undefined) return 'unknown';
+
+      setRequestTenant(tenantId);
+
+      return withTenant(tenantId, async (tx) => {
+        const held = await countOrderEntries(tx, request.orderIds);
+
+        if (held === 0) return 'nothing';
+
+        /*
+         * **Recorded, because a person has to answer it.** Shopify asks that
+         * the seller be given what is held, and nothing here sends it: the row
+         * is what says a request is waiting, under the id Shopify gave it.
+         */
+        await audit(tx, {
+          action: 'shopify.data_requested',
+          target: request.requestId === undefined ? shop : `data_request:${request.requestId}`,
+          metadata: { count: held },
+        });
+
+        return 'held';
+      });
+    },
+
+    shopRedact: async (shop, body) => {
+      const named = readShopRedact(body);
+
+      if (named === undefined) return 'unreadable';
+      if (named !== shop) return 'unknown';
+
+      const tenantId = await resolveHolder(shop);
+
+      if (tenantId === undefined) return 'unknown';
+
+      setRequestTenant(tenantId);
+
+      return withTenant(tenantId, async (tx) => {
+        const erased = await eraseShop(tx, shop);
+
+        if (erased === 0) return 'nothing';
+
+        await audit(tx, {
+          action: 'shopify.shop_redacted',
+          target: shop,
+          metadata: { count: erased },
+        });
+
+        return 'erased';
+      });
     },
   };
 };

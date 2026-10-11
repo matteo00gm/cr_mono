@@ -1432,6 +1432,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P6-08 | Attribution correctness test | click → order → attributed exactly once | P6-07 |
 | ✅ P6-11 | Shopify inventory sync | `products/update` (not `inventory_levels`) — carries variant ids; sum across locations; **zero re-embedding** | P6-06 |
 | P6-09 | Theme app extension | removes the `theme.liquid` edit | P6-06 |
+| ✅ P6-09b | Shopify privacy webhooks | the three every listed app must answer: a customer's data request, a customer's erasure, a shop's erasure | P6-07 |
 | P6-10 | Metric labelling guard | "Aggiunte al carrello" until P6-07 ships; never fake "Vendite" | P6-02 |
 | P6-12 | Italian on the user side | every refusal the dashboard shows written in Italian at the source (Decision 6) | — |
 | P2-37b | Sandbox generation on request | off by default; each run billed as one of the winery's messages, rate-limited (Decision 8) | P2-37 |
@@ -7635,7 +7636,7 @@ Assert **zero provider calls** across every blocked case, since that is what the
 - **One shop, one winery**: `shop` is unique, so an install naming a shop another winery holds is refused and no token is kept — the orders it reports (P6-07) must have one owner. A winery may hold more than one shop.
 - **⚠ "Flagging the tenant" is the installation, not the tenant** *(deviation)*. `app/uninstalled` marks that shop's row `uninstalled_at`, deletes its token, and audits it; the winery's status does not change, because it may sell elsewhere, and a second shop may still be installed. The domain the install proved stays verified: the proof held when it was made, and the seller's storefront may still carry the widget. *(Superseded 2026-10-04 by Open Decision 9: the uninstall withdraws the proof — ✅ built in P6-06b, which also corrects this row's audit metadata.)*
 - **The callback is a redirect, not an API**: declared for access like every route (P0-49) in `DASHBOARD_REDIRECT_ROUTES`, and left out of the OpenAPI reference by name, as the widget's preflights are.
-- **⚠ Open: Shopify's compliance webhooks.** `customers/data_request`, `customers/redact` and `shop/redact` are mandatory for an app in the Shopify App Store. They are acknowledged and ignored today — nothing here holds a Shopify customer's data — and must be handled, with `shop/redact` deleting what P6-07 records, before the app is listed (P6-09). *(As built in P6-07: what it records is `attributions`, which names the shop and the order and nothing of the buyer; `app_rw` keeps DELETE on it for this.)*
+- **⚠ Open: Shopify's compliance webhooks.** `customers/data_request`, `customers/redact` and `shop/redact` are mandatory for an app in the Shopify App Store. They are acknowledged and ignored today — nothing here holds a Shopify customer's data — and must be handled, with `shop/redact` deleting what P6-07 records, before the app is listed (P6-09). *(As built in P6-07: what it records is `attributions`, which names the shop and the order and nothing of the buyer; `app_rw` keeps DELETE on it for this. ✅ Handled in P6-09b.)*
 - **⚠ Operator: the app itself.** Create it in the Shopify Partner dashboard, register `https://<dashboard>/v1/dashboard/shopify/callback` as its redirect URL and `https://<api>/v1/webhooks/shopify` for `app/uninstalled`, and set `ShopifyApiKey` and `ShopifyApiSecret` per stage. Until then the screen says Shopify is not available, and the webhook route is a 404.
 
 **Verified.** Unit, the full Postgres suite (89 files, 1155 tests), coverage gates (`packages/security` still at 100%), every `:check`. `shopify.integration.test.ts` in `packages/db`: a state spent once and only by its member, a lapsed one spent and refused, one shop per winery, a reinstall that brings the row back, an uninstall that touches only the shop named, and the shop scope seeing one installation, no tenant, no state, and writing nothing. The one in `apps/api`, end to end: started, signed, spent, exchanged, recorded — the token in the store and no token column anywhere, the domain proved by `SHOPIFY`, the install audited — and refused for a tampered signature (spending nothing), a replay, another owner of the same winery, a shop another winery holds, with a pending domain promoted and a full plan left at its allowance. The RLS isolation suite now seeds both new tables, which it caught missing. 35 mutants, 34 killed; the one that lived showed a guard to be dead code — a parameter given twice is refused by the signature itself, since it appears twice in the message Shopify never signs — and the guard is gone.
@@ -7867,6 +7868,42 @@ Reuse P5-03's HMAC verification and P5-04's `processed_webhooks` idempotency. Hi
 **Tests.** Manual verification on a development store, plus an assertion that the extension renders the same loader URL as the snippet path.
 
 **Files.** `extensions/sommelier-widget/*`. **~120 lines.**
+
+---
+
+### P6-09b · Shopify privacy webhooks
+
+**Why.** `customers/data_request`, `customers/redact` and `shop/redact` are mandatory for an app in the Shopify App Store, and Shopify's review checks that each is answered and that an unsigned one is refused. P6-06 acknowledged and ignored them, which was honest while nothing here held anything about a Shopify customer. P6-07 changed that: an attribution ties an order to a conversation.
+
+**How.** The three topics on the existing webhook route, behind the same signature check. Each comes down to orders: erase what is recorded for the orders a customer's erasure names; count what is held for the orders a data request asks after, and record the request if there is anything; erase everything recorded for a shop 48 hours after it removes the app.
+
+**Tests.** Each topic reaches its own handler and no other; unsigned and tampered deliveries get 401; a customer's orders are erased and the rest kept; a refund goes with its sale; a data request counts and erases nothing; a shop's erasure finds a shop that has already uninstalled; nothing of the customer named in the body is kept.
+
+**As built (2026-10-11).** `readCustomerRequest` and `readShopRedact` in `packages/core/src/shopify/compliance.ts`; `eraseOrders`, `countOrderEntries` and `eraseShop` beside the attribution statements; three methods on the Shopify port; no migration.
+
+- **What is held about a customer is one thing**: that an order's line was the sommelier's (P6-07), and through it which conversation led to the order. No name, address or email was ever read, so each request is a list of orders — offered in both spellings, as a refund's are (P6-08).
+- **An erasure deletes the tie, and the tie is all that named anybody.** The attribution rows for the orders go, sale and refund together — a refund left behind would be a negative amount for a sale that no longer exists. The conversation stays, and is nobody's again: nothing else here says whose it was, and the 90-day purge (P7-07) bounds it like any other.
+- **⚠ The shop comes from the signed body, and the header must agree** *(design)*. Every other topic uses the header to *find* an installation and does nothing a wrong shop could be hurt by. These erase, and the header is not covered by the signature: a delivery replayed under another shop's header would erase that shop's records. AGENTS.md and CLAUDE.md carry the rule.
+- **⚠ A shop that has removed the app is still found** *(addition)*. `shop/redact` arrives 48 hours after the uninstall, when `resolveTenantByShop` no longer answers for it. The same scope takes a `removed` option: the policy admits the same one row either way (ADR 0031), and only the statement's own filter is lifted.
+- **A shop's erasure is honoured as made**, whether or not the seller has since connected the store again: the request is for what was gathered.
+- **A data request is counted, recorded and left for a person.** Shopify asks that the *seller* be given what is held, and nothing here sends it. With something held, the answer is `held`, an audit row is written under the id Shopify gave the request, and the route logs `shopify_data_request` so an alarm can find it. With nothing held, nothing is recorded: most customers never met the sommelier.
+- **Nothing about the customer is read**, though the body names them — an id, an email, a phone number. The audit rows are searched for all three.
+- **⚠ Open: answering a data request is done by hand.** Within thirty days somebody has to send the seller the attribution rows, and the conversation they point at, for the orders named. An export for it belongs with the first one that arrives.
+- **⚠ Open: `app/uninstalled` still takes its shop from the header** (P6-06). It withdraws a domain and a token rather than erasing a record, and the same binding to the signed body would cost a dozen lines; worth doing before the app is listed.
+- **⚠ Open: a shop that removed the app still holds its name.** `shop` is unique across wineries and the installation row outlives the uninstall, so a store that changes hands cannot be connected by its new owner's winery — the dead end P4-18 removed for domains. `shop/redact` would be the moment to release it, and needs `app_rw` to be able to delete an uninstalled row.
+- **⚠ Operator.** Declare the three compliance topics in the app's configuration, at the webhook URL.
+
+**Verified.** Unit (5726 tests), the full Postgres suite (91 files, 1267 tests), coverage gates (`packages/security` still at 100%), every `:check`. Against Postgres, through an install and real orders: a customer's erasure removes the orders named and keeps the rest, takes a refund with its sale, leaves the conversation, and records nothing for a customer the sommelier never sold to; a data request with something held answers `held` and is audited under Shopify's id, erasing nothing; a shop's erasure finds a shop that has already uninstalled, erases only that shop, and is `nothing` the second time; a header naming another shop than the signed body moves nothing; and the audit log is searched for the customer's email, id and phone. Each topic reaches its own handler and no other, and an unsigned or tampered one is answered 401. 27 mutants, 27 killed. One threat-matrix test (T6's scan of every source file) failed once in a full run under load and passed in the two full runs after; nothing in this change is in what it scans for, and it is noted here rather than explained.
+
+| Mutation | Caught by |
+|---|---|
+| A request believed from something that is not a shop; an order found only under one spelling; an order number JSON could not carry believed; the orders to erase, or asked after, not read; the customer handed on with the request | `shopify-compliance.test.ts` |
+| A removed shop never found; a removed shop found by everyone | `shopify.integration.test.ts` (db) |
+| Every order erased; every shop erased; a count that erases | `attributions.integration.test.ts` |
+| No orders still asking the database | `attributions.test.ts` |
+| An erasure, a data request, or a shop's erasure under another shop's header | `shopify-port.test.ts` |
+| A removed shop's requests lost; a data request that erases; an erasure that only counts; nothing held reported as held; nothing erased recorded as an erasure; a data request recorded under no id; a shop's erasure that erases nothing | `shopify.integration.test.ts` (api) |
+| An erasure handed to the data request, and the reverse; a shop's erasure never handed on; a body other than the signed one handed on | `shopify-routes.test.ts` |
 
 ---
 

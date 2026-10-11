@@ -3,6 +3,9 @@ import type { SQL } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  countOrderEntries,
+  eraseOrders,
+  eraseShop,
   recordAttributions,
   recordRefunds,
   type OrderToAttribute,
@@ -186,5 +189,48 @@ describe('recordRefunds', () => {
     expect(await recordRefunds(fake.tx, REFUND)).toBe(0);
     expect(said(fake)).toMatch(/JOIN attributions s\s/u);
     expect(said(fake)).toMatch(/ON s\.refund_line_id IS NULL\s+AND s\.order_id IN/u);
+  });
+});
+
+describe('the privacy statements (P6-09b)', () => {
+  const ORDERS = ['gid://shopify/Order/1', '1'];
+
+  it('ask the database nothing for no orders', async () => {
+    const fake = fakeTx();
+
+    expect(await countOrderEntries(fake.tx, [])).toBe(0);
+    expect(await eraseOrders(fake.tx, [])).toBe(0);
+    expect(fake.execute).not.toHaveBeenCalled();
+  });
+
+  it('count what is held for the orders, in both spellings, without touching it', async () => {
+    const fake = fakeTx([{ held: 3 }]);
+
+    expect(await countOrderEntries(fake.tx, ORDERS)).toBe(3);
+    expect(JSON.parse(String(bound(fake)[0]))).toEqual(ORDERS);
+    expect(said(fake)).toMatch(/SELECT count/u);
+    expect(said(fake)).not.toMatch(/DELETE|UPDATE|INSERT/u);
+  });
+
+  it('count nothing when the database has nothing to say', async () => {
+    expect(await countOrderEntries(fakeTx([]).tx, ORDERS)).toBe(0);
+  });
+
+  it('erase by order, sale and refund alike, and say how many went', async () => {
+    const fake = fakeTx([{ id: 'a-1' }, { id: 'a-2' }]);
+
+    expect(await eraseOrders(fake.tx, ORDERS)).toBe(2);
+    expect(JSON.parse(String(bound(fake)[0]))).toEqual(ORDERS);
+    expect(said(fake)).toMatch(/DELETE FROM attributions\s+WHERE order_id IN/u);
+    expect(said(fake)).not.toMatch(/refund_line_id/u);
+  });
+
+  it('erase by shop, naming the shop and no tenant', async () => {
+    const fake = fakeTx([{ id: 'a-1' }]);
+
+    expect(await eraseShop(fake.tx, 'cantina-rossi.myshopify.com')).toBe(1);
+    expect(bound(fake)).toEqual(['cantina-rossi.myshopify.com']);
+    expect(said(fake)).toMatch(/DELETE FROM attributions WHERE shop =/u);
+    expect(said(fake)).not.toMatch(/tenant_id/u);
   });
 });

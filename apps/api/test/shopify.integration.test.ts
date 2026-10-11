@@ -991,6 +991,260 @@ describe('stock the shop reports (P6-11)', () => {
   });
 });
 
+describe('Shopify’s privacy requests (P6-09b)', () => {
+  let numbered = 8_000_000;
+  const next = (): number => (numbered += 1);
+
+  /** A winery with a connected shop and one sale of ours in each of `orders` orders. */
+  const withSales = async (slug: string, orders: number) => {
+    const who = await winery(slug);
+    const shop = `cantina-${slug}.myshopify.com`;
+
+    await callback(who.owner, await started(who, shop));
+
+    const sold: { number: number; orderId: string; conversationId: string }[] = [];
+
+    for (let index = 0; index < orders; index += 1) {
+      const visitorId = randomUUID();
+      const [conversation] = [
+        ...(await db.execute(sql`
+          insert into conversations (tenant_id, session_id, origin, locale)
+          values (${who.tenantId}::uuid, ${randomUUID()}, 'https://winery.example', 'it')
+          returning id
+        `)),
+      ];
+      const conversationId = String(conversation?.id);
+
+      await db.execute(sql`
+        insert into widget_events (tenant_id, session_id, conversation_id, type)
+        values (${who.tenantId}::uuid, ${visitorId}, ${conversationId}::uuid, 'ADD_TO_CART')
+      `);
+
+      const number = next();
+      const orderId = `gid://shopify/Order/${String(number)}`;
+      const line = next();
+
+      await runWithRequestContext({ requestId: randomUUID() }, () =>
+        port.orderCreated(
+          shop,
+          JSON.stringify({
+            id: number,
+            admin_graphql_api_id: orderId,
+            currency: 'EUR',
+            line_items: [
+              {
+                id: line,
+                admin_graphql_api_id: `gid://shopify/LineItem/${String(line)}`,
+                quantity: 1,
+                price: '42.00',
+                properties: [{ name: '_somm_session', value: visitorId }],
+              },
+            ],
+          }),
+        ),
+      );
+
+      sold.push({ number, orderId, conversationId });
+    }
+
+    return { who, shop, sold };
+  };
+
+  const held = async (tenantId: string): Promise<string[]> =>
+    [
+      ...(await db.execute(sql`
+        select order_id from attributions where tenant_id = ${tenantId}::uuid order by order_id
+      `)),
+    ].map((row) => String(row.order_id));
+
+  const customer = { id: 191167, email: 'giulia.bianchi@example.com', phone: '+39 333 0000000' };
+
+  const ask = (
+    method: 'customerRedact' | 'customerDataRequest' | 'shopRedact',
+    shop: string,
+    body: Record<string, unknown>,
+  ) =>
+    runWithRequestContext({ requestId: randomUUID() }, () =>
+      port[method](shop, JSON.stringify({ shop_domain: shop, customer, ...body })),
+    );
+
+  it('erases what was recorded for a customer’s orders, and only those', async () => {
+    const { who, shop, sold } = await withSales('cliente', 3);
+    const [first, second, third] = sold;
+
+    expect(
+      await ask('customerRedact', shop, { orders_to_redact: [first?.number, second?.number] }),
+    ).toBe('erased');
+
+    expect(await held(who.tenantId)).toEqual([third?.orderId]);
+    expect(await auditOf(who.tenantId, 'shopify.customer_redacted')).toEqual([
+      { target: shop, metadata: { count: 2 } },
+    ]);
+  });
+
+  it('leaves the conversation, which is nobody’s again once the order is gone', async () => {
+    const { shop, sold } = await withSales('conversazione', 1);
+    const [only] = sold;
+
+    await ask('customerRedact', shop, { orders_to_redact: [only?.number] });
+
+    const [conversation] = [
+      ...(await db.execute(sql`
+        select id from conversations where id = ${only?.conversationId ?? ''}::uuid
+      `)),
+    ];
+
+    expect(conversation).toBeDefined();
+  });
+
+  it('erases a refund with its sale, so nothing negative is left behind', async () => {
+    const { who, shop, sold } = await withSales('reso', 1);
+    const [only] = sold;
+    const [line] = [
+      ...(await db.execute(sql`
+        select line_item_id from attributions where order_id = ${only?.orderId ?? ''}
+      `)),
+    ];
+
+    await runWithRequestContext({ requestId: randomUUID() }, () =>
+      port.refundCreated(
+        shop,
+        JSON.stringify({
+          order_id: only?.number,
+          refund_line_items: [
+            {
+              id: next(),
+              line_item_id: Number(String(line?.line_item_id).replace(/\D+/gu, '')),
+              quantity: 1,
+            },
+          ],
+        }),
+      ),
+    );
+    expect(await held(who.tenantId)).toHaveLength(2);
+
+    expect(await ask('customerRedact', shop, { orders_to_redact: [only?.number] })).toBe('erased');
+    expect(await held(who.tenantId)).toEqual([]);
+  });
+
+  it('records nothing for a customer the sommelier never sold to', async () => {
+    const { who, shop } = await withSales('estraneo', 1);
+
+    expect(await ask('customerRedact', shop, { orders_to_redact: [next()] })).toBe('nothing');
+    expect(await held(who.tenantId)).toHaveLength(1);
+    expect(await auditOf(who.tenantId, 'shopify.customer_redacted')).toEqual([]);
+  });
+
+  it('says a data request has something to answer with, and records it under Shopify’s id', async () => {
+    const { who, shop, sold } = await withSales('richiesta', 2);
+    const [first] = sold;
+
+    expect(
+      await ask('customerDataRequest', shop, {
+        orders_requested: [first?.number],
+        data_request: { id: 9999 },
+      }),
+    ).toBe('held');
+
+    /* Counted, not erased. */
+    expect(await held(who.tenantId)).toHaveLength(2);
+    expect(await auditOf(who.tenantId, 'shopify.data_requested')).toEqual([
+      { target: 'data_request:9999', metadata: { count: 1 } },
+    ]);
+  });
+
+  it('says a data request has nothing to answer with, and records nothing', async () => {
+    const { who, shop } = await withSales('niente', 1);
+
+    expect(
+      await ask('customerDataRequest', shop, {
+        orders_requested: [next()],
+        data_request: { id: 1 },
+      }),
+    ).toBe('nothing');
+    expect(await auditOf(who.tenantId, 'shopify.data_requested')).toEqual([]);
+  });
+
+  it('erases everything recorded for a shop that removed the app, 48 hours on', async () => {
+    const { who, shop } = await withSales('chiuso', 2);
+
+    await uninstall(shop);
+    /* Uninstalled: the ordinary lookup no longer finds it, and the request still has to. */
+    expect(await resolveTenantByShop(shop)).toBeUndefined();
+
+    expect(await ask('shopRedact', shop, { shop_id: 954889 })).toBe('erased');
+    expect(await held(who.tenantId)).toEqual([]);
+    expect(await auditOf(who.tenantId, 'shopify.shop_redacted')).toEqual([
+      { target: shop, metadata: { count: 2 } },
+    ]);
+    /* And once more is nothing: Shopify redelivers. */
+    expect(await ask('shopRedact', shop, { shop_id: 954889 })).toBe('nothing');
+  });
+
+  it('still answers a customer’s request for a shop that has removed the app', async () => {
+    const { who, shop, sold } = await withSales('tardi', 1);
+
+    await uninstall(shop);
+
+    expect(await ask('customerRedact', shop, { orders_to_redact: [sold[0]?.number] })).toBe(
+      'erased',
+    );
+    expect(await held(who.tenantId)).toEqual([]);
+  });
+
+  it('erases only the shop named, and nothing of another winery’s', async () => {
+    const ours = await withSales('nostro', 1);
+    const theirs = await withSales('loro', 1);
+
+    await uninstall(ours.shop);
+    await ask('shopRedact', ours.shop, {});
+
+    expect(await held(ours.who.tenantId)).toEqual([]);
+    expect(await held(theirs.who.tenantId)).toHaveLength(1);
+
+    /* Nor can one winery's shop reach another's orders, whatever numbers it sends. */
+    expect(
+      await ask('customerRedact', ours.shop, { orders_to_redact: [theirs.sold[0]?.number] }),
+    ).toBe('nothing');
+    expect(await held(theirs.who.tenantId)).toHaveLength(1);
+  });
+
+  it('does not act on a header naming another shop than the signed body', async () => {
+    const victim = await withSales('vittima', 1);
+    const other = await withSales('mittente', 1);
+
+    expect(
+      await runWithRequestContext({ requestId: randomUUID() }, () =>
+        port.shopRedact(victim.shop, JSON.stringify({ shop_domain: other.shop })),
+      ),
+    ).toBe('unknown');
+    expect(await held(victim.who.tenantId)).toHaveLength(1);
+    expect(await held(other.who.tenantId)).toHaveLength(1);
+  });
+
+  it('keeps nothing of the customer who asked', async () => {
+    const { who, shop, sold } = await withSales('riservato', 1);
+
+    await ask('customerDataRequest', shop, {
+      orders_requested: [sold[0]?.number],
+      data_request: { id: 7 },
+    });
+
+    const rows = [
+      ...(await db.execute(sql`
+        select to_jsonb(a)::text as everything from audit_log a
+        where tenant_id = ${who.tenantId}::uuid
+      `)),
+    ];
+
+    for (const row of rows) {
+      expect(String(row.everything)).not.toContain('giulia');
+      expect(String(row.everything)).not.toContain('191167');
+      expect(String(row.everything)).not.toContain('333');
+    }
+  });
+});
+
 describe('the uninstall', () => {
   it('deletes the token, marks the shop, and stops it resolving', async () => {
     const gialli = await winery('gialli');

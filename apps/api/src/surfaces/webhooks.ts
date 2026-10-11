@@ -311,7 +311,7 @@ export const createWebhookApp = ({
    * the signed body, and the port checks it against the customer on file.
    */
   /**
-   * Shopify app events (P6-06, P6-07, P6-08, P6-11).
+   * Shopify app events (P6-06, P6-07, P6-08, P6-09b, P6-11).
    *
    * **The raw body, verified, before anything is read from it** — the Stripe
    * route's order and reason. The shop is in a header, not the signed body,
@@ -417,6 +417,41 @@ export const createWebhookApp = ({
       }
 
       return c.json({ received: true as const, topic, result: result.outcome });
+    }
+
+    /*
+     * Shopify's three privacy requests (P6-09b), which every listed app must
+     * answer. They erase, so unlike everything above the port takes the shop
+     * from the signed body and only checks the header agrees.
+     */
+    const privacy =
+      topic === 'customers/redact'
+        ? shopify.customerRedact
+        : topic === 'customers/data_request'
+          ? shopify.customerDataRequest
+          : topic === 'shop/redact'
+            ? shopify.shopRedact
+            : undefined;
+
+    if (privacy !== undefined) {
+      const result = await privacy(shop, body);
+
+      if (result === 'unreadable') {
+        logger.warn(
+          { kind: 'shopify_privacy_request_unreadable' },
+          'a signed Shopify privacy request could not be read (P6-09b)',
+        );
+      }
+
+      /* The one outcome that is not finished: somebody has to send the seller what is held. */
+      if (result === 'held') {
+        logger.warn(
+          { kind: 'shopify_data_request' },
+          'a customer data request is waiting to be answered (P6-09b)',
+        );
+      }
+
+      return c.json({ received: true as const, topic, result });
     }
 
     return c.json({ received: true as const, topic, result: 'ignored' as const });
@@ -532,7 +567,9 @@ export const WEBHOOK_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map<st
         'order (P6-07) is read for the lines the widget added and nothing about its buyer, ' +
         'and a refund (P6-08) for the units that came back. A product update (P6-11) moves ' +
         'the stock of the wines whose variant it names, and is the one delivery that can be ' +
-        'answered 429: a shop sending more than a minute allows is asked to send it again.',
+        'answered 429: a shop sending more than a minute allows is asked to send it again. ' +
+        'The three privacy requests (P6-09b) erase or count what is held for the orders or ' +
+        'the shop the signed body names, and read nothing about the customer.',
     ),
   ],
 ]);
