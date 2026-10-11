@@ -8,6 +8,7 @@ import {
   isShopDomain,
   newStateNonce,
   normaliseShop,
+  readOrder,
   scopesCovered,
   setRequestTenant,
   SHOP_EXPECTED,
@@ -27,6 +28,7 @@ import {
   readDomainByOrigin,
   readShopifyInstallation,
   readTenantPlan,
+  recordAttributions,
   recordShopifyInstall,
   resolveTenantByShop,
   spendShopifyState,
@@ -63,7 +65,24 @@ import type { ShopifyTokenStore } from './shopify-tokens.js';
  * shop's origin was verified because Shopify asked its owner; when the owner
  * removes the app, that origin goes the way a removed domain goes — deleted,
  * its live sessions ended — unless the seller has proved it some other way.
+ *
+ * **An order is read for the lines we sold, and for nothing else** (P6-07).
+ * `orders/create` carries a buyer's name and address; `readOrder` takes the
+ * ids, quantities and amounts of the lines the widget planted a visit on, and
+ * the rest of the body goes no further than the parser. Most orders have no
+ * such line, and those never reach the database at all.
  */
+
+/** What became of an `orders/create` delivery. */
+export type OrderOutcome =
+  /** At least one line was recorded as the sommelier's. */
+  | 'attributed'
+  /** Nothing to record: no line of ours, a visit that is not this winery's, or a redelivery. */
+  | 'nothing'
+  /** Not a shop, or a shop with no install to its name. */
+  | 'unknown'
+  /** Signed, and not an order we can read. */
+  | 'unreadable';
 
 /** Why an install did not complete, as the dashboard reads it. */
 export type InstallFailure =
@@ -120,6 +139,8 @@ export interface ShopifyPort {
     shop: string,
     triggeredAt?: Date,
   ) => Promise<'uninstalled' | 'stale' | 'unknown'>;
+  /** `orders/create`: the lines the sommelier sold, recorded once each (P6-07). */
+  readonly orderCreated: (shop: string, body: string) => Promise<OrderOutcome>;
 }
 
 export interface ShopifyDeps {
@@ -175,6 +196,7 @@ export const unconfiguredShopify: ShopifyPort = {
   callback: () => Promise.reject(new Error('No Shopify port was supplied to createApp.')),
   status: () => Promise.resolve({ configured: false, shop: null }),
   uninstalled: () => Promise.resolve('unknown'),
+  orderCreated: () => Promise.resolve('unknown'),
 };
 
 export const createShopifyPort = ({
@@ -402,6 +424,29 @@ export const createShopifyPort = ({
 
         return 'uninstalled';
       });
+    },
+
+    orderCreated: async (shop, body) => {
+      if (!isShopDomain(shop)) return 'unknown';
+
+      const order = readOrder(body);
+
+      if (order === undefined) return 'unreadable';
+
+      /* Most orders: nothing the widget added. Decided before any query is made. */
+      if (order.lines.length === 0) return 'nothing';
+
+      const tenantId = await resolveShop(shop);
+
+      if (tenantId === undefined) return 'unknown';
+
+      setRequestTenant(tenantId);
+
+      const recorded = await withTenant(tenantId, (tx) =>
+        recordAttributions(tx, { shop, ...order }),
+      );
+
+      return recorded > 0 ? 'attributed' : 'nothing';
     },
   };
 };

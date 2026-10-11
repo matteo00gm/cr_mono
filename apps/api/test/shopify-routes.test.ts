@@ -30,6 +30,7 @@ const fakePort = () => {
     ),
     status: vi.fn<ShopifyPort['status']>(() => Promise.resolve({ configured: true, shop: null })),
     uninstalled: vi.fn<ShopifyPort['uninstalled']>(() => Promise.resolve('uninstalled' as const)),
+    orderCreated: vi.fn<ShopifyPort['orderCreated']>(() => Promise.resolve('attributed' as const)),
   };
 
   return port;
@@ -264,5 +265,81 @@ describe('a Shopify webhook', () => {
 
     expect((await deliver(app)).status).toBe(404);
     expect(shopify.uninstalled).not.toHaveBeenCalled();
+  });
+
+  describe('for an order (P6-07)', () => {
+    /* What Shopify sends has a buyer in it; the route's job is to pass it on unread. */
+    const ORDER = JSON.stringify({
+      id: 5678901234567,
+      currency: 'EUR',
+      email: 'giulia.bianchi@example.com',
+      line_items: [{ id: 1, quantity: 1, price: '42.00' }],
+    });
+
+    it('hands the port the shop and the body exactly as it was signed', async () => {
+      const { app, shopify } = webhooks();
+      const response = await deliver(app, { topic: 'orders/create', body: ORDER });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        received: true,
+        topic: 'orders/create',
+        result: 'attributed',
+      });
+      expect(shopify.orderCreated).toHaveBeenCalledWith(SHOP, ORDER);
+      expect(shopify.uninstalled).not.toHaveBeenCalled();
+    });
+
+    it('refuses an order changed after it was signed, and reads none of it', async () => {
+      const { app, shopify, refused } = webhooks();
+      const signature = createHmac('sha256', SECRET).update(ORDER).digest('base64');
+      const tampered = ORDER.replace('42.00', '4200.00');
+
+      expect(
+        (await deliver(app, { topic: 'orders/create', body: tampered, signature })).status,
+      ).toBe(401);
+      expect(refused).toEqual([{ provider: 'shopify', reason: 'no-match' }]);
+      expect(shopify.orderCreated).not.toHaveBeenCalled();
+    });
+
+    it('refuses an unsigned order', async () => {
+      const { app, shopify } = webhooks();
+
+      expect(
+        (await deliver(app, { topic: 'orders/create', body: ORDER, signature: '' })).status,
+      ).toBe(401);
+      expect(shopify.orderCreated).not.toHaveBeenCalled();
+    });
+
+    it.each(['nothing', 'unknown', 'unreadable'] as const)(
+      'acknowledges an order that came to %s, so Shopify does not send it again',
+      async (outcome) => {
+        const { app, shopify } = webhooks();
+
+        shopify.orderCreated.mockResolvedValueOnce(outcome);
+
+        const response = await deliver(app, { topic: 'orders/create', body: ORDER });
+
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ result: outcome });
+      },
+    );
+
+    it('answers with nothing of the order in it', async () => {
+      const { app } = webhooks();
+      const answer = await (await deliver(app, { topic: 'orders/create', body: ORDER })).text();
+
+      expect(answer).not.toContain('giulia');
+      expect(answer).not.toContain('5678901234567');
+    });
+
+    it('is not what any other topic does', async () => {
+      const { app, shopify } = webhooks();
+
+      await deliver(app, { topic: 'orders/updated', body: ORDER });
+      await deliver(app, { topic: 'app/uninstalled', body: ORDER });
+
+      expect(shopify.orderCreated).not.toHaveBeenCalled();
+    });
   });
 });

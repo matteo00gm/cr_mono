@@ -19,7 +19,11 @@ import { pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
 export const processedWebhooks = pgTable(
   'processed_webhooks',
   {
-    /** `stripe` today; `shopify` arrives with P6-07. */
+    /**
+     * `resend` and `stripe`. Not `shopify`: its delivery id travels in a header
+     * its signature does not cover, so an order is deduplicated by the key of
+     * what it records instead (P6-07).
+     */
     provider: text('provider').notNull(),
 
     /** The provider's own event id — `evt_...` for Stripe. */

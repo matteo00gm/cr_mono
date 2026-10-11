@@ -227,6 +227,82 @@ describe('the status and the uninstall, with nothing set up', () => {
     expect(await unconfiguredShopify.uninstalled(SHOP)).toBe('unknown');
   });
 
+  describe('an order (P6-07)', () => {
+    const VISIT = '4f6c1d0a-9b7e-4c55-8e21-0d1f2a3b4c5d';
+    const orderWith = (properties: unknown[], extra: Record<string, unknown> = {}): string =>
+      JSON.stringify({
+        admin_graphql_api_id: 'gid://shopify/Order/1',
+        currency: 'EUR',
+        line_items: [
+          {
+            admin_graphql_api_id: 'gid://shopify/LineItem/1',
+            quantity: 1,
+            price: '42.00',
+            properties,
+          },
+        ],
+        ...extra,
+      });
+    const OURS = orderWith([{ name: '_somm_session', value: VISIT }]);
+
+    it('is ignored for something that is not a shop, before it is even read', async () => {
+      const resolveShop = vi.fn(() => Promise.resolve(TENANT));
+      const { port } = portWith({ resolveShop });
+
+      expect(await port.orderCreated('evil.example', OURS)).toBe('unknown');
+      expect(resolveShop).not.toHaveBeenCalled();
+    });
+
+    it('says so when the body is not an order it can read', async () => {
+      const resolveShop = vi.fn(() => Promise.resolve(TENANT));
+      const { port } = portWith({ resolveShop });
+
+      expect(await port.orderCreated(SHOP, '{"id": 1')).toBe('unreadable');
+      expect(await port.orderCreated(SHOP, JSON.stringify({ id: 1 }))).toBe('unreadable');
+      expect(resolveShop).not.toHaveBeenCalled();
+    });
+
+    it('asks nothing of the database for an order the widget had no part in', async () => {
+      /* Most orders. The shop is not even looked up. */
+      const resolveShop = vi.fn(() => Promise.resolve(TENANT));
+      const { port } = portWith({ resolveShop });
+
+      expect(await port.orderCreated(SHOP, orderWith([]))).toBe('nothing');
+      expect(await port.orderCreated(SHOP, orderWith([{ name: 'Incisione', value: VISIT }]))).toBe(
+        'nothing',
+      );
+      expect(
+        await port.orderCreated(SHOP, orderWith([{ name: '_somm_session', value: 'x' }])),
+      ).toBe('nothing');
+      expect(resolveShop).not.toHaveBeenCalled();
+    });
+
+    it('counts nothing for a test order, however it is marked', async () => {
+      const resolveShop = vi.fn(() => Promise.resolve(TENANT));
+      const { port } = portWith({ resolveShop });
+
+      expect(
+        await port.orderCreated(
+          SHOP,
+          orderWith([{ name: '_somm_session', value: VISIT }], { test: true }),
+        ),
+      ).toBe('nothing');
+      expect(resolveShop).not.toHaveBeenCalled();
+    });
+
+    it('is ignored for a shop with no install to its name', async () => {
+      const resolveShop = vi.fn(() => Promise.resolve(undefined));
+      const { port } = portWith({ resolveShop });
+
+      expect(await port.orderCreated(SHOP, OURS)).toBe('unknown');
+      expect(resolveShop).toHaveBeenCalledWith(SHOP);
+    });
+
+    it('is ignored where no port was wired', async () => {
+      expect(await unconfiguredShopify.orderCreated(SHOP, OURS)).toBe('unknown');
+    });
+  });
+
   it('refuses everything else loudly when no port was wired', async () => {
     await expect(
       unconfiguredShopify.install({ tenantId: TENANT, userId: USER, input: SHOP }),

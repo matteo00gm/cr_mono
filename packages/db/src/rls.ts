@@ -245,6 +245,7 @@ const HEADERS: Readonly<Record<string, string>> = {
   '0065_notification_events_rls': 'Row-level security for quota notices sent (P5-12).',
   '0069_tenant_directory_rls': 'The nightly rollup lists every tenant, read only (P5-13).',
   '0073_shopify_rls': 'A Shopify webhook finds its winery by shop, read only (P6-06).',
+  '0075_attributions_rls': 'Row-level security for what the sommelier sold (P6-07).',
   '0068_e_invoices_rls': 'Row-level security for charges awaiting an e-invoice (P5-03a).',
 };
 
@@ -569,6 +570,7 @@ export const RLS_POLICIES: readonly RlsPolicy[] = [
       'one more table. It spends the state by deleting it, which only USING governs; WITH CHECK ' +
       'stays tenant-only, so the user scope cannot write a state naming any winery.',
   },
+  { ...boilerplate('attributions'), migration: '0075_attributions_rls' },
 ];
 
 /**

@@ -310,7 +310,7 @@ export const createWebhookApp = ({
    * the signed body, and the port checks it against the customer on file.
    */
   /**
-   * Shopify app events (P6-06; P6-07 and P6-11 add theirs).
+   * Shopify app events (P6-06, P6-07; P6-11 adds its own).
    *
    * **The raw body, verified, before anything is read from it** — the Stripe
    * route's order and reason. The shop is in a header, not the signed body,
@@ -352,6 +352,29 @@ export const createWebhookApp = ({
         shop,
         triggeredAt(c.req.header(SHOPIFY_TRIGGERED_AT_HEADER)),
       );
+
+      return c.json({ received: true as const, topic, result });
+    }
+
+    if (topic === 'orders/create') {
+      /*
+       * The body goes to the port as it arrived and is never logged: an order
+       * carries a buyer's name and address, and the only thing read from it is
+       * which lines the widget added (P6-07).
+       */
+      const result = await shopify.orderCreated(shop, body);
+
+      /*
+       * Acknowledged all the same — a redelivery of a body we cannot read is
+       * the same body — but said out loud: a parser that stopped understanding
+       * Shopify would otherwise lose every sale in silence.
+       */
+      if (result === 'unreadable') {
+        logger.warn(
+          { kind: 'shopify_order_unreadable' },
+          'a signed Shopify order could not be read (P6-07)',
+        );
+      }
 
       return c.json({ received: true as const, topic, result });
     }
@@ -465,7 +488,8 @@ export const WEBHOOK_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map<st
         "in the sense that matters: Shopify's HMAC-SHA256 over the raw body under our app " +
         'secret, refused before anything is read and recorded as a security event. The winery ' +
         'is found from an installation that already exists for the shop Shopify names, in a ' +
-        'read-only scope that sees that one row (ADR 0031); nothing is created from it.',
+        'read-only scope that sees that one row (ADR 0031); nothing is created from it. An ' +
+        'order (P6-07) is read for the lines the widget added and nothing about its buyer.',
     ),
   ],
 ]);

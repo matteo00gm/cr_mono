@@ -32,6 +32,8 @@ const APPEND_ONLY = new Set([
   'notification_events',
   'audit_log',
   'security_events',
+  /* P6-07: an amount a seller was shown is written once; it may still be deleted. */
+  'attributions',
 ]);
 
 /** A period no other call has used, for `notification_events`' key. */
@@ -151,6 +153,18 @@ const INSERTS: Record<string, (tenantId: string, ctx: SeedContext) => SQL> = {
   shopify_oauth_states: (tenantId, ctx) =>
     sql`insert into shopify_oauth_states (tenant_id, user_id, shop, nonce_hash, expires_at)
         values (${tenantId}::uuid, ${ctx.userId}, 'x.myshopify.com', ${randomUUID()}, now())`,
+  /*
+   * P6-07. The order is per tenant for `import_runs`' reason: the key is
+   * `(tenant_id, order_id, line_item_id)`, and B's attempted write carrying
+   * A's id must fail on the policy, not on the key.
+   */
+  attributions: (tenantId) =>
+    sql`insert into attributions (
+          tenant_id, shop, order_id, line_item_id, session_id, quantity, amount_cents,
+          currency, ordered_at
+        )
+        values (${tenantId}::uuid, 'x.myshopify.com', ${`order-${randomUUID()}`}, 'line-1',
+                'visit-0001', 1, 4200, 'EUR', now())`,
   audit_log: (tenantId) =>
     sql`insert into audit_log (tenant_id, action) values (${tenantId}::uuid, 'x')`,
   security_events: (tenantId) =>
