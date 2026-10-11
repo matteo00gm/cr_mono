@@ -458,4 +458,41 @@ describe('the Shopify token store (P6-06, ADR 0031)', () => {
       shopify.clientSecret,
     );
   });
+
+  it('counts a shop’s stock reports with the limiter it is given (P6-11)', async () => {
+    /*
+     * A port built without the limiter counts nothing, and every one of its own
+     * tests still passes: a shop rewriting its products in bulk would then be
+     * limited only by what the database can take.
+     */
+    const SHOP = 'cantina-rossi.myshopify.com';
+    const check = vi.fn(() =>
+      Promise.resolve({
+        allowed: false,
+        remaining: 0,
+        resetAt: new Date('2026-10-05T10:01:00.000Z'),
+        limit: 600,
+        key: `shopify:stock:${SHOP}`,
+        retryAfterSec: 5,
+      }),
+    );
+    const { shopify: port } = buildDependencies({
+      ...config,
+      shopify,
+      shopifyTokenPrefix: '/p',
+      rateLimiter: { check },
+    });
+
+    expect(
+      await port.productUpdated(
+        SHOP,
+        JSON.stringify({
+          variants: [{ id: 45123456789, inventory_quantity: 0, inventory_management: 'shopify' }],
+        }),
+      ),
+    ).toEqual({ outcome: 'throttled', retryAfterSec: 5 });
+    expect(check).toHaveBeenCalledWith([
+      { key: `shopify:stock:${SHOP}`, limit: 600, windowSec: 60 },
+    ]);
+  });
 });

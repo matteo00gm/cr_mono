@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 
 import { ConflictError, InvalidRequestError, SHOP_EXPECTED, stateHash } from '@catalogorosso/core';
 import type { SpentState } from '@catalogorosso/db';
+import { memoryRateLimiter } from '@catalogorosso/security';
 import type { GuardedResponse } from '@catalogorosso/security/net';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -348,6 +349,120 @@ describe('the status and the uninstall, with nothing set up', () => {
 
     it('is ignored where no port was wired', async () => {
       expect(await unconfiguredShopify.refundCreated(SHOP, REFUND)).toBe('unknown');
+    });
+  });
+
+  describe('a product update (P6-11)', () => {
+    const productWith = (variants: unknown[]): string =>
+      JSON.stringify({ updated_at: '2026-10-05T10:15:30+02:00', variants });
+    const SOLD_OUT = productWith([
+      { id: 45123456789, inventory_quantity: 0, inventory_management: 'shopify' },
+    ]);
+
+    it('is ignored for something that is not a shop, before it is even read', async () => {
+      const resolveShop = vi.fn(() => Promise.resolve(TENANT));
+      const { port } = portWith({ resolveShop });
+
+      expect(await port.productUpdated('evil.example', SOLD_OUT)).toEqual({ outcome: 'unknown' });
+      expect(resolveShop).not.toHaveBeenCalled();
+    });
+
+    it('says so when the body is not a product it can read', async () => {
+      const resolveShop = vi.fn(() => Promise.resolve(TENANT));
+      const { port } = portWith({ resolveShop });
+
+      expect(await port.productUpdated(SHOP, '{"variants": [')).toEqual({ outcome: 'unreadable' });
+      expect(await port.productUpdated(SHOP, JSON.stringify({ id: 1 }))).toEqual({
+        outcome: 'unreadable',
+      });
+      expect(resolveShop).not.toHaveBeenCalled();
+    });
+
+    it('asks nothing of anything for a product with no variant it can read', async () => {
+      const resolveShop = vi.fn(() => Promise.resolve(TENANT));
+      const check = vi.fn();
+      const { port } = portWith({ resolveShop, limiter: { check } });
+
+      expect(await port.productUpdated(SHOP, productWith([]))).toEqual({ outcome: 'nothing' });
+      expect(await port.productUpdated(SHOP, productWith([{ id: 'not-a-number' }]))).toEqual({
+        outcome: 'nothing',
+      });
+      expect(resolveShop).not.toHaveBeenCalled();
+      /* Not counted either: it would have asked the database nothing. */
+      expect(check).not.toHaveBeenCalled();
+    });
+
+    it('is ignored for a shop with no install to its name', async () => {
+      const resolveShop = vi.fn(() => Promise.resolve(undefined));
+      const { port } = portWith({ resolveShop });
+
+      expect(await port.productUpdated(SHOP, SOLD_OUT)).toEqual({ outcome: 'unknown' });
+      expect(resolveShop).toHaveBeenCalledWith(SHOP);
+    });
+
+    it('counts each shop’s deliveries, before the shop is looked up', async () => {
+      const order: string[] = [];
+      const resolveShop = vi.fn(() => {
+        order.push('resolve');
+
+        return Promise.resolve(undefined);
+      });
+      const limiter = memoryRateLimiter();
+      const check = vi.fn((checks: Parameters<typeof limiter.check>[0]) => {
+        order.push('count');
+
+        return limiter.check(checks);
+      });
+      const { port } = portWith({ resolveShop, limiter: { check } });
+
+      await port.productUpdated(SHOP, SOLD_OUT);
+
+      expect(order).toEqual(['count', 'resolve']);
+      expect(check).toHaveBeenCalledWith([
+        { key: `shopify:stock:${SHOP}`, limit: 600, windowSec: 60 },
+      ]);
+    });
+
+    it('asks a shop that has sent too many to send it again, and does no work for it', async () => {
+      const resolveShop = vi.fn(() => Promise.resolve(undefined));
+      const { port } = portWith({
+        resolveShop,
+        limiter: {
+          check: () =>
+            Promise.resolve({
+              allowed: false,
+              remaining: 0,
+              resetAt: new Date('2026-10-05T10:01:00.000Z'),
+              limit: 600,
+              key: `shopify:stock:${SHOP}`,
+              retryAfterSec: 23,
+            }),
+        },
+      });
+
+      expect(await port.productUpdated(SHOP, SOLD_OUT)).toEqual({
+        outcome: 'throttled',
+        retryAfterSec: 23,
+      });
+      expect(resolveShop).not.toHaveBeenCalled();
+    });
+
+    it('does not let one shop’s burst hold back another’s', async () => {
+      const resolveShop = vi.fn(() => Promise.resolve(undefined));
+      const limiter = memoryRateLimiter();
+      const { port } = portWith({ resolveShop, limiter });
+      const busy = 'cantina-affollata.myshopify.com';
+
+      for (let sent = 0; sent < 600; sent += 1) await port.productUpdated(busy, SOLD_OUT);
+
+      expect(await port.productUpdated(busy, SOLD_OUT)).toMatchObject({ outcome: 'throttled' });
+      expect(await port.productUpdated(SHOP, SOLD_OUT)).toEqual({ outcome: 'unknown' });
+    });
+
+    it('is ignored where no port was wired', async () => {
+      expect(await unconfiguredShopify.productUpdated(SHOP, SOLD_OUT)).toEqual({
+        outcome: 'unknown',
+      });
     });
   });
 

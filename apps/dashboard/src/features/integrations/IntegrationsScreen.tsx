@@ -150,9 +150,16 @@ export const IntegrationsScreen = ({
                 vendite che consiglia compariranno nelle analisi.
               </p>
             ) : connected ? (
-              <p>
-                Collegato a <strong>{status.shop.shop}</strong> dal {day(status.shop.installedAt)}.
-              </p>
+              <>
+                <p>
+                  Collegato a <strong>{status.shop.shop}</strong> dal {day(status.shop.installedAt)}
+                  .
+                </p>
+                <p>
+                  La disponibilità dei vini che hanno un ID variante Shopify si aggiorna da sola a
+                  ogni vendita. Gli altri restano come li imposti nel catalogo.
+                </p>
+              </>
             ) : (
               <p>
                 L’app è stata disinstallata da <strong>{status.shop.shop}</strong> il{' '}

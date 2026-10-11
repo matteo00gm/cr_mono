@@ -106,6 +106,14 @@ export const products = pgTable(
     stockStatus: productStockStatus('stock_status').notNull(),
     stockQty: integer('stock_qty'),
 
+    /**
+     * When the stock above was true in the seller's shop (P6-11): the moment
+     * of the Shopify product update it came from. Deliveries are not ordered,
+     * and this is what lets an older report be told from a newer one. Null for
+     * a wine whose stock the seller keeps by hand.
+     */
+    stockSourceAt: timestamp('stock_source_at', { withTimezone: true, mode: 'date' }),
+
     productUrl: text('product_url'),
     imageUrl: text('image_url'),
 

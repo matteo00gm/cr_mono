@@ -843,6 +843,154 @@ describe('what the sommelier sold (P6-07)', () => {
   });
 });
 
+describe('stock the shop reports (P6-11)', () => {
+  let grigio: Winery;
+  const SHOP = 'cantina-grigio.myshopify.com';
+  let variantNumber = 46_000_000_000;
+
+  const addWine = async (who: Winery) => {
+    const variantId = (variantNumber += 1);
+    const [row] = [
+      ...(await db.execute(sql`
+        insert into products (
+          tenant_id, sku, name, wine_type, price_cents, currency, stock_status, stock_qty,
+          external_variant_id, content_hash, embedding_state
+        )
+        values (${who.tenantId}::uuid, ${`SKU-${String(variantId)}`}, 'Barolo', 'RED', 4200, 'EUR',
+                'IN_STOCK', 12, ${String(variantId)}, 'hash-of-what-the-model-read', 'INDEXED')
+        returning id
+      `)),
+    ];
+
+    return { id: String(row?.id), variantId };
+  };
+
+  const wine = async (id: string) =>
+    [
+      ...(await db.execute(sql`
+        select stock_status, stock_qty, content_hash, embedding_state
+        from products where id = ${id}::uuid
+      `)),
+    ][0];
+
+  const updated = (shop: string, variants: unknown[], at = '2026-10-05T10:15:30+02:00') =>
+    runWithRequestContext({ requestId: randomUUID() }, () =>
+      port.productUpdated(shop, JSON.stringify({ title: 'Barolo', updated_at: at, variants })),
+    );
+
+  const outboxOf = async (tenantId: string): Promise<number> =>
+    Number(
+      [
+        ...(await db.execute(
+          sql`select count(*)::int as n from outbox where tenant_id = ${tenantId}::uuid`,
+        )),
+      ][0]?.n,
+    );
+
+  beforeAll(async () => {
+    grigio = await winery('grigio');
+    await callback(grigio.owner, await started(grigio, SHOP));
+  });
+
+  it('sells a wine out the moment the shop says its last bottle went', async () => {
+    const barolo = await addWine(grigio);
+
+    expect(
+      await updated(SHOP, [
+        { id: barolo.variantId, inventory_quantity: 0, inventory_management: 'shopify' },
+      ]),
+    ).toEqual({ outcome: 'synced' });
+    expect(await wine(barolo.id)).toMatchObject({ stock_status: 'OUT_OF_STOCK', stock_qty: 0 });
+  });
+
+  it('costs no embedding: no outbox row, and nothing the model read is touched', async () => {
+    const barolo = await addWine(grigio);
+    const before = await outboxOf(grigio.tenantId);
+
+    await updated(SHOP, [
+      { id: barolo.variantId, inventory_quantity: 3, inventory_management: 'shopify' },
+    ]);
+
+    expect(await outboxOf(grigio.tenantId)).toBe(before);
+    expect(await wine(barolo.id)).toEqual({
+      stock_status: 'IN_STOCK',
+      stock_qty: 3,
+      content_hash: 'hash-of-what-the-model-read',
+      embedding_state: 'INDEXED',
+    });
+  });
+
+  it('keeps a wine the shop does not count in stock', async () => {
+    const barolo = await addWine(grigio);
+
+    await updated(SHOP, [
+      { id: barolo.variantId, inventory_quantity: 0, inventory_management: null },
+    ]);
+
+    expect(await wine(barolo.id)).toMatchObject({ stock_status: 'IN_STOCK', stock_qty: null });
+  });
+
+  it('does nothing with a redelivery, or with news older than what it has', async () => {
+    const barolo = await addWine(grigio);
+    const soldOut = [
+      { id: barolo.variantId, inventory_quantity: 0, inventory_management: 'shopify' },
+    ];
+
+    expect(await updated(SHOP, soldOut, '2026-10-05T10:20:00+02:00')).toEqual({
+      outcome: 'synced',
+    });
+    expect(await updated(SHOP, soldOut, '2026-10-05T10:20:00+02:00')).toEqual({
+      outcome: 'nothing',
+    });
+    expect(
+      await updated(
+        SHOP,
+        [{ id: barolo.variantId, inventory_quantity: 6, inventory_management: 'shopify' }],
+        '2026-10-05T10:19:00+02:00',
+      ),
+    ).toEqual({ outcome: 'nothing' });
+    expect(await wine(barolo.id)).toMatchObject({ stock_status: 'OUT_OF_STOCK', stock_qty: 0 });
+  });
+
+  it('ignores a variant the catalogue does not hold, without an error', async () => {
+    expect(
+      await updated(SHOP, [
+        { id: 99_999_999_999, inventory_quantity: 0, inventory_management: 'shopify' },
+      ]),
+    ).toEqual({ outcome: 'nothing' });
+  });
+
+  it('moves only this winery’s wine, whatever variant the shop names', async () => {
+    const altra = await winery('altra-grigio');
+    const theirs = await addWine(altra);
+
+    expect(
+      await updated(SHOP, [
+        { id: theirs.variantId, inventory_quantity: 0, inventory_management: 'shopify' },
+      ]),
+    ).toEqual({ outcome: 'nothing' });
+    expect(await wine(theirs.id)).toMatchObject({ stock_status: 'IN_STOCK', stock_qty: 12 });
+  });
+
+  it('moves nothing for a shop that removed the app', async () => {
+    const nero = await winery('nero');
+    const GONE = 'cantina-nero.myshopify.com';
+
+    await callback(nero.owner, await started(nero, GONE));
+
+    const barolo = await addWine(nero);
+
+    await uninstall(GONE);
+
+    expect(
+      await updated(GONE, [
+        { id: barolo.variantId, inventory_quantity: 0, inventory_management: 'shopify' },
+      ]),
+    ).toEqual({ outcome: 'unknown' });
+    expect(await wine(barolo.id)).toMatchObject({ stock_status: 'IN_STOCK', stock_qty: 12 });
+  });
+});
+
 describe('the uninstall', () => {
   it('deletes the token, marks the shop, and stops it resolving', async () => {
     const gialli = await winery('gialli');

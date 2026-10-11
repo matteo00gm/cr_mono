@@ -1,5 +1,6 @@
 import {
   NotFoundError,
+  RateLimitedError,
   UnauthenticatedError,
   isUnreadableWebhookPayload,
   verifyStripeSignature,
@@ -310,7 +311,7 @@ export const createWebhookApp = ({
    * the signed body, and the port checks it against the customer on file.
    */
   /**
-   * Shopify app events (P6-06, P6-07, P6-08; P6-11 adds its own).
+   * Shopify app events (P6-06, P6-07, P6-08, P6-11).
    *
    * **The raw body, verified, before anything is read from it** — the Stripe
    * route's order and reason. The shop is in a header, not the signed body,
@@ -391,6 +392,31 @@ export const createWebhookApp = ({
       }
 
       return c.json({ received: true as const, topic, result });
+    }
+
+    if (topic === 'products/update') {
+      const result = await shopify.productUpdated(shop, body);
+
+      /*
+       * The one delivery this route does not acknowledge (P6-11): the shop has
+       * sent more stock reports than a minute allows, and is asked to send
+       * this one again. Shopify redelivers what it is refused, and a report
+       * that arrives late changes nothing a newer one already said — so the
+       * shop's own queue is the one that absorbs the burst.
+       */
+      if (result.outcome === 'throttled') {
+        c.header('Retry-After', String(result.retryAfterSec));
+        throw new RateLimitedError('Too many stock updates. Send it again shortly.');
+      }
+
+      if (result.outcome === 'unreadable') {
+        logger.warn(
+          { kind: 'shopify_product_unreadable' },
+          'a signed Shopify product update could not be read (P6-11)',
+        );
+      }
+
+      return c.json({ received: true as const, topic, result: result.outcome });
     }
 
     return c.json({ received: true as const, topic, result: 'ignored' as const });
@@ -504,7 +530,9 @@ export const WEBHOOK_ROUTE_ACCESS: ReadonlyMap<string, RouteAccess> = new Map<st
         'is found from an installation that already exists for the shop Shopify names, in a ' +
         'read-only scope that sees that one row (ADR 0031); nothing is created from it. An ' +
         'order (P6-07) is read for the lines the widget added and nothing about its buyer, ' +
-        'and a refund (P6-08) for the units that came back.',
+        'and a refund (P6-08) for the units that came back. A product update (P6-11) moves ' +
+        'the stock of the wines whose variant it names, and is the one delivery that can be ' +
+        'answered 429: a shop sending more than a minute allows is asked to send it again.',
     ),
   ],
 ]);

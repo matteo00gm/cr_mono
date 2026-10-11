@@ -32,6 +32,9 @@ const fakePort = () => {
     uninstalled: vi.fn<ShopifyPort['uninstalled']>(() => Promise.resolve('uninstalled' as const)),
     orderCreated: vi.fn<ShopifyPort['orderCreated']>(() => Promise.resolve('attributed' as const)),
     refundCreated: vi.fn<ShopifyPort['refundCreated']>(() => Promise.resolve('reduced' as const)),
+    productUpdated: vi.fn<ShopifyPort['productUpdated']>(() =>
+      Promise.resolve({ outcome: 'synced' as const }),
+    ),
   };
 
   return port;
@@ -407,6 +410,81 @@ describe('a Shopify webhook', () => {
       await deliver(app, { topic: 'orders/create', body: REFUND });
 
       expect(shopify.refundCreated).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('for a product update (P6-11)', () => {
+    const PRODUCT = JSON.stringify({
+      id: 7890123456789,
+      updated_at: '2026-10-05T10:15:30+02:00',
+      variants: [{ id: 45123456789, inventory_quantity: 0, inventory_management: 'shopify' }],
+    });
+
+    it('hands the port the shop and the body exactly as it was signed', async () => {
+      const { app, shopify } = webhooks();
+      const response = await deliver(app, { topic: 'products/update', body: PRODUCT });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        received: true,
+        topic: 'products/update',
+        result: 'synced',
+      });
+      expect(shopify.productUpdated).toHaveBeenCalledWith(SHOP, PRODUCT);
+      expect(shopify.orderCreated).not.toHaveBeenCalled();
+    });
+
+    it('refuses a product update changed after it was signed', async () => {
+      /* "Sold out" is a claim about a seller's shop: only Shopify may make it. */
+      const { app, shopify, refused } = webhooks();
+      const signature = createHmac('sha256', SECRET).update(PRODUCT).digest('base64');
+      const tampered = PRODUCT.replace('"inventory_quantity":0', '"inventory_quantity":99');
+
+      expect(
+        (await deliver(app, { topic: 'products/update', body: tampered, signature })).status,
+      ).toBe(401);
+      expect(refused).toEqual([{ provider: 'shopify', reason: 'no-match' }]);
+      expect(shopify.productUpdated).not.toHaveBeenCalled();
+    });
+
+    it.each(['nothing', 'unknown', 'unreadable'] as const)(
+      'acknowledges one that came to %s',
+      async (outcome) => {
+        const { app, shopify } = webhooks();
+
+        shopify.productUpdated.mockResolvedValueOnce({ outcome });
+
+        const response = await deliver(app, { topic: 'products/update', body: PRODUCT });
+
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ result: outcome });
+      },
+    );
+
+    it('asks the shop to send it again when it has sent too many, and says when', async () => {
+      /*
+       * The one delivery that is not acknowledged. Shopify redelivers what it
+       * is refused; an acknowledged drop would lose the latest stock, which is
+       * the only one that matters.
+       */
+      const { app, shopify } = webhooks();
+
+      shopify.productUpdated.mockResolvedValueOnce({ outcome: 'throttled', retryAfterSec: 17 });
+
+      const response = await deliver(app, { topic: 'products/update', body: PRODUCT });
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('retry-after')).toBe('17');
+      expect(await response.json()).toMatchObject({ error: { code: 'rate_limited' } });
+    });
+
+    it('is not what any other products topic does', async () => {
+      const { app, shopify } = webhooks();
+
+      await deliver(app, { topic: 'products/create', body: PRODUCT });
+      await deliver(app, { topic: 'products/delete', body: PRODUCT });
+
+      expect(shopify.productUpdated).not.toHaveBeenCalled();
     });
   });
 });

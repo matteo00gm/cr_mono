@@ -55,6 +55,7 @@ const stored = (over: Partial<ProductRow> = {}): ProductRow => {
     currency: 'EUR',
     stockStatus: 'IN_STOCK',
     stockQty: 24,
+    stockSourceAt: null,
     productUrl: null,
     imageUrl: null,
     status: 'ACTIVE',

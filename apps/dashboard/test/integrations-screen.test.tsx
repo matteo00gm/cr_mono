@@ -65,6 +65,41 @@ describe('the status', () => {
     expect(screen.queryByRole('button', { name: 'Collega Shopify' })).toBeNull();
   });
 
+  it('says which stock keeps itself up to date, and which does not (P6-11)', async () => {
+    /* Only wines with a variant id are synced; a seller should not assume the rest are. */
+    mount({
+      configured: true,
+      shop: { shop: SHOP, installedAt: '2026-10-02T09:00:00.000Z', uninstalledAt: null },
+    });
+
+    const section = await screen.findByRole('region', { name: 'Shopify' });
+
+    await waitFor(() => {
+      expect(section.textContent).toContain(
+        'La disponibilità dei vini che hanno un ID variante Shopify si aggiorna da sola',
+      );
+    });
+    expect(section.textContent).toContain('Gli altri restano come li imposti nel catalogo.');
+  });
+
+  it('promises no stock sync from a shop that is not connected', async () => {
+    mount({
+      configured: true,
+      shop: {
+        shop: SHOP,
+        installedAt: '2026-10-02T09:00:00.000Z',
+        uninstalledAt: '2026-10-03T09:00:00.000Z',
+      },
+    });
+
+    const section = await screen.findByRole('region', { name: 'Shopify' });
+
+    await waitFor(() => {
+      expect(section.textContent).toContain('disinstallata');
+    });
+    expect(section.textContent).not.toContain('si aggiorna da sola');
+  });
+
   it('says when the app was uninstalled, and offers to connect again', async () => {
     mount({
       configured: true,

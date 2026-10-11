@@ -540,6 +540,13 @@
       "when": 1788654188611,
       "tag": "0076_attribution_refunds",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1788654188612,
+      "tag": "0077_products_stock_source",
+      "breakpoints": true
     }
   ]
 }

@@ -9,12 +9,16 @@ import {
   newStateNonce,
   normaliseShop,
   readOrder,
+  readProductStock,
   readRefund,
   scopesCovered,
   setRequestTenant,
   SHOP_EXPECTED,
   SHOPIFY_STATE_TTL_MS,
   stateHash,
+  STOCK_SYNC_PER_MINUTE,
+  STOCK_SYNC_WINDOW_SEC,
+  stockSyncLimitKey,
   TRIAL,
   verificationToken,
   verifyCallbackHmac,
@@ -36,10 +40,11 @@ import {
   spendShopifyState,
   startShopifyInstall,
   startTrial,
+  syncStock,
   withTenant,
   type SpentState,
 } from '@catalogorosso/db';
-import { can, isOwnerOnly, type PlanTier } from '@catalogorosso/security';
+import { can, isOwnerOnly, type PlanTier, type RateLimiter } from '@catalogorosso/security';
 import { guardedFetch } from '@catalogorosso/security/net';
 import { z } from 'zod';
 
@@ -85,6 +90,18 @@ export type OrderOutcome =
   | 'unknown'
   /** Signed, and not an order we can read. */
   | 'unreadable';
+
+/**
+ * What became of a `products/update` delivery (P6-11).
+ *
+ * `throttled` is the one outcome that is not an acknowledgement: the shop has
+ * sent more than this service will apply in a minute, and is asked to send
+ * this one again. Shopify redelivers what it is refused, so nothing is lost —
+ * and a report that arrives late changes nothing a newer one already said.
+ */
+export type StockOutcome =
+  | { readonly outcome: 'synced' | 'nothing' | 'unknown' | 'unreadable' }
+  | { readonly outcome: 'throttled'; readonly retryAfterSec: number };
 
 /** What became of a `refunds/create` delivery. */
 export type RefundOutcome =
@@ -154,6 +171,8 @@ export interface ShopifyPort {
   readonly orderCreated: (shop: string, body: string) => Promise<OrderOutcome>;
   /** `refunds/create`: what came back is taken off what was sold, once (P6-08). */
   readonly refundCreated: (shop: string, body: string) => Promise<RefundOutcome>;
+  /** `products/update`: each variant's stock, as the shop now reports it (P6-11). */
+  readonly productUpdated: (shop: string, body: string) => Promise<StockOutcome>;
 }
 
 export interface ShopifyDeps {
@@ -170,6 +189,13 @@ export interface ShopifyDeps {
   readonly spendState?:
     ((userId: string, hash: string, now: Date) => Promise<SpentState | undefined>) | undefined;
   readonly resolveShop?: ((shop: string) => Promise<string | undefined>) | undefined;
+  /**
+   * Counts each shop's stock deliveries (P6-11). A shop whose products are
+   * rewritten in bulk — an ERP sync, another app — sends one for every product
+   * it touches. Absent, nothing is counted: a test's choice, never a
+   * deployment's.
+   */
+  readonly limiter?: RateLimiter | undefined;
   readonly now?: (() => Date) | undefined;
 }
 
@@ -211,6 +237,7 @@ export const unconfiguredShopify: ShopifyPort = {
   uninstalled: () => Promise.resolve('unknown'),
   orderCreated: () => Promise.resolve('unknown'),
   refundCreated: () => Promise.resolve('unknown'),
+  productUpdated: () => Promise.resolve({ outcome: 'unknown' }),
 };
 
 export const createShopifyPort = ({
@@ -222,6 +249,7 @@ export const createShopifyPort = ({
   exchange = config === undefined ? undefined : exchangeOverGuardedFetch(config),
   spendState = spendShopifyState,
   resolveShop = resolveTenantByShop,
+  limiter,
   now = () => new Date(),
 }: ShopifyDeps): ShopifyPort => {
   const back = (outcome: Record<string, string>): string => {
@@ -487,6 +515,55 @@ export const createShopifyPort = ({
       const recorded = await withTenant(tenantId, (tx) => recordRefunds(tx, refund));
 
       return recorded > 0 ? 'reduced' : 'nothing';
+    },
+
+    productUpdated: async (shop, body) => {
+      if (!isShopDomain(shop)) return { outcome: 'unknown' };
+
+      const stock = readProductStock(body);
+
+      if (stock === undefined) return { outcome: 'unreadable' };
+
+      /* A product with no variant we can read has nothing to say about stock. */
+      if (stock.variants.length === 0) return { outcome: 'nothing' };
+
+      /*
+       * **Counted before anything is asked of the database**, per shop, and
+       * only for deliveries that would ask something. Over the allowance the
+       * answer is "send it again", not "received": the latest report is the
+       * one that matters, and an acknowledged drop would lose exactly that.
+       */
+      if (limiter !== undefined) {
+        const allowance = await limiter.check([
+          {
+            key: stockSyncLimitKey(shop),
+            limit: STOCK_SYNC_PER_MINUTE,
+            windowSec: STOCK_SYNC_WINDOW_SEC,
+          },
+        ]);
+
+        if (!allowance.allowed) {
+          return { outcome: 'throttled', retryAfterSec: allowance.retryAfterSec ?? 1 };
+        }
+      }
+
+      const tenantId = await resolveShop(shop);
+
+      if (tenantId === undefined) return { outcome: 'unknown' };
+
+      setRequestTenant(tenantId);
+
+      /*
+       * Stock columns only, and no outbox row (P1-33): a wine that sells out
+       * costs one `UPDATE` and no embedding. A variant the catalogue does not
+       * hold matches nothing — most of a shop's products are not wines we
+       * were given.
+       */
+      const changed = await withTenant(tenantId, (tx) =>
+        syncStock(tx, { sourceAt: stock.updatedAt, variants: stock.variants }),
+      );
+
+      return { outcome: changed > 0 ? 'synced' : 'nothing' };
     },
   };
 };

@@ -103,6 +103,13 @@ describe('the published product shape', () => {
       'embeddingAttempts',
       'embeddingError',
       /*
+       * P6-11's clock: when the seller's shop last reported this wine's stock.
+       * It exists to order deliveries, and a client shown it would start
+       * reading it as "last synced" — a promise nothing here makes, since a
+       * report that changes nothing still moves it.
+       */
+      'stockSourceAt',
+      /*
        * Not secret — the caller knows which winery they are in — but publishing
        * a field the contract does not declare invites a client to depend on it,
        * which is the same problem one step later.

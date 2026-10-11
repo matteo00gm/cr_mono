@@ -31,6 +31,7 @@ export * from './analytics/range.js';
 export * from './analytics/top.js';
 export * from './analytics/zero-results.js';
 export * from './shopify/oauth.js';
+export * from './shopify/inventory.js';
 export * from './shopify/orders.js';
 
 /**
