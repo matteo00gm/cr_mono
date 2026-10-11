@@ -466,6 +466,68 @@ describe('the status and the uninstall, with nothing set up', () => {
     });
   });
 
+  describe('a privacy request (P6-09b)', () => {
+    const request = (overrides: Record<string, unknown> = {}): string =>
+      JSON.stringify({
+        shop_domain: SHOP,
+        customer: { id: 1, email: 'giulia.bianchi@example.com' },
+        orders_to_redact: [5678901234567],
+        orders_requested: [5678901234567],
+        data_request: { id: 9999 },
+        ...overrides,
+      });
+    const METHODS = ['customerRedact', 'customerDataRequest', 'shopRedact'] as const;
+
+    it.each(METHODS)('%s says so when the body cannot be read', async (method) => {
+      const resolveHolder = vi.fn(() => Promise.resolve(TENANT));
+      const { port } = portWith({ resolveHolder });
+
+      expect(await port[method](SHOP, '{"shop_domain": ')).toBe('unreadable');
+      expect(await port[method](SHOP, request({ shop_domain: 'evil.example' }))).toBe('unreadable');
+      expect(resolveHolder).not.toHaveBeenCalled();
+    });
+
+    it.each(METHODS)(
+      '%s does not believe a header that names another shop than the signed body',
+      async (method) => {
+        /* The header is not signed. A delivery replayed under it would erase somebody else's records. */
+        const resolveHolder = vi.fn(() => Promise.resolve(TENANT));
+        const { port } = portWith({ resolveHolder });
+
+        expect(await port[method]('altra-cantina.myshopify.com', request())).toBe('unknown');
+        expect(resolveHolder).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['customerRedact', 'customerDataRequest'] as const)(
+      '%s asks nothing of the database for a customer with no orders',
+      async (method) => {
+        const resolveHolder = vi.fn(() => Promise.resolve(TENANT));
+        const { port } = portWith({ resolveHolder });
+
+        expect(
+          await port[method](SHOP, request({ orders_to_redact: [], orders_requested: [] })),
+        ).toBe('nothing');
+        expect(resolveHolder).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(METHODS)('%s is ignored for a shop no winery ever held', async (method) => {
+      const resolveHolder = vi.fn(() => Promise.resolve(undefined));
+      const resolveShop = vi.fn(() => Promise.resolve(TENANT));
+      const { port } = portWith({ resolveHolder, resolveShop });
+
+      expect(await port[method](SHOP, request())).toBe('unknown');
+      expect(resolveHolder).toHaveBeenCalledWith(SHOP);
+      /* The installed-only lookup is the wrong one here: these arrive after an uninstall. */
+      expect(resolveShop).not.toHaveBeenCalled();
+    });
+
+    it.each(METHODS)('%s is ignored where no port was wired', async (method) => {
+      expect(await unconfiguredShopify[method](SHOP, request())).toBe('unknown');
+    });
+  });
+
   it('refuses everything else loudly when no port was wired', async () => {
     await expect(
       unconfiguredShopify.install({ tenantId: TENANT, userId: USER, input: SHOP }),

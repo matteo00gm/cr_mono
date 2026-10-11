@@ -287,6 +287,37 @@ describe('resolveTenantByShop', () => {
     expect(await resolveTenantByShop(shop, db)).toBeUndefined();
   });
 
+  it('finds the winery of a shop that removed the app, only when asked to (P6-09b)', async () => {
+    /* Shopify's privacy requests arrive after an uninstall, and still have to find their winery. */
+    const shop = `rimosso-${randomUUID().slice(0, 8)}.myshopify.com`;
+
+    await withTenant(
+      tenantId,
+      (tx) => recordShopifyInstall(tx, { shop, scopes: 'read_orders' }),
+      db,
+    );
+    await withTenant(tenantId, (tx) => markShopifyUninstalled(tx, shop), db);
+
+    expect(await resolveTenantByShop(shop, db)).toBeUndefined();
+    expect(await resolveTenantByShop(shop, db, { removed: false })).toBeUndefined();
+    expect(await resolveTenantByShop(shop, db, { removed: true })).toBe(tenantId);
+  });
+
+  it('still finds an installed shop when asked for removed ones too, and nobody’s shop never', async () => {
+    const shop = `vivo-${randomUUID().slice(0, 8)}.myshopify.com`;
+
+    await withTenant(
+      tenantId,
+      (tx) => recordShopifyInstall(tx, { shop, scopes: 'read_orders' }),
+      db,
+    );
+
+    expect(await resolveTenantByShop(shop, db, { removed: true })).toBe(tenantId);
+    expect(
+      await resolveTenantByShop('mai-visto.myshopify.com', db, { removed: true }),
+    ).toBeUndefined();
+  });
+
   it('finds nothing for a shop nobody holds', async () => {
     expect(await resolveTenantByShop('nessuno.myshopify.com', db)).toBeUndefined();
   });

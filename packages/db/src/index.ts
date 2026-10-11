@@ -639,6 +639,9 @@ export { syncStock, type StockReport, type StockToSync } from './stock-sync.js';
  * transaction.
  */
 export {
+  countOrderEntries,
+  eraseOrders,
+  eraseShop,
   recordAttributions,
   recordRefunds,
   type LineToAttribute,

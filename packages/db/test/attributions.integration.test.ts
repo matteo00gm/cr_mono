@@ -3,6 +3,9 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  countOrderEntries,
+  eraseOrders,
+  eraseShop,
   recordAttributions,
   recordRefunds,
   type LineToAttribute,
@@ -588,5 +591,79 @@ describe('a refund (P6-08)', () => {
     expect(pgErrorCode(await row(null, -1, -100))).toBe(CHECK_VIOLATION);
     expect(pgErrorCode(await row(null, 1, -100))).toBe(CHECK_VIOLATION);
     expect(pgErrorCode(await row('rl-mezzo', -1, 100))).toBe(CHECK_VIOLATION);
+  });
+});
+
+describe('erasing, when Shopify says it must go (P6-09b)', () => {
+  const sold = async (shop = SHOP) => {
+    const { visitorId } = await visit();
+    const order = orderOf([lineOf(visitorId)], { shop });
+
+    await record(order);
+
+    return order;
+  };
+
+  const erase = (orderIds: readonly string[], scope = tenantId) =>
+    withTenant(scope, (tx) => eraseOrders(tx, orderIds), db);
+
+  it('removes the orders named and leaves the rest', async () => {
+    const [gone, kept] = [await sold(), await sold()];
+
+    expect(await erase([gone.orderId])).toBe(1);
+    expect(await rowsOf(gone.orderId)).toEqual([]);
+    expect(await rowsOf(kept.orderId)).toHaveLength(1);
+  });
+
+  it('takes a sale’s refunds with it', async () => {
+    const order = await sold();
+
+    await refund({ orderIds: [order.orderId], lines: [back(order.lines[0]?.lineItemId ?? '', 1)] });
+    expect(await ledgerOf(order.orderId)).toHaveLength(2);
+
+    expect(await erase([order.orderId])).toBe(2);
+    expect(await ledgerOf(order.orderId)).toEqual([]);
+  });
+
+  it('counts what is held without erasing it', async () => {
+    const order = await sold();
+    const count = () =>
+      withTenant(tenantId, (tx) => countOrderEntries(tx, [order.orderId, 'non-esiste']), db);
+
+    expect(await count()).toBe(1);
+    expect(await count()).toBe(1);
+    expect(await rowsOf(order.orderId)).toHaveLength(1);
+  });
+
+  it('cannot erase or count another winery’s orders', async () => {
+    const order = await sold();
+
+    expect(await erase([order.orderId], otherTenantId)).toBe(0);
+    expect(
+      await withTenant(otherTenantId, (tx) => countOrderEntries(tx, [order.orderId]), db),
+    ).toBe(0);
+    expect(await rowsOf(order.orderId)).toHaveLength(1);
+  });
+
+  it('removes everything for one shop and nothing for another', async () => {
+    const [mine, elsewhere] = [
+      await sold('cantina-uno.myshopify.com'),
+      await sold('cantina-due.myshopify.com'),
+    ];
+
+    expect(
+      await withTenant(tenantId, (tx) => eraseShop(tx, 'cantina-uno.myshopify.com'), db),
+    ).toBeGreaterThanOrEqual(1);
+    expect(await rowsOf(mine.orderId)).toEqual([]);
+    expect(await rowsOf(elsewhere.orderId)).toHaveLength(1);
+  });
+
+  it('cannot erase another winery’s shop, even by its name', async () => {
+    const order = await sold('cantina-tre.myshopify.com');
+
+    expect(
+      await withTenant(otherTenantId, (tx) => eraseShop(tx, 'cantina-tre.myshopify.com'), db),
+    ).toBe(0);
+    expect(await rowsOf(order.orderId)).toHaveLength(1);
   });
 });

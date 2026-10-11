@@ -181,6 +181,17 @@ export class NestedShopifyScopeError extends Error {
   }
 }
 
+export interface ResolveShopOptions {
+  /**
+   * Also find a shop whose app has been removed (P6-09b). Shopify's privacy
+   * requests arrive after an uninstall — `shop/redact` exactly 48 hours after
+   * — and still have to find the winery whose records they are about. The
+   * policy admits the same one row either way; this only stops the statement
+   * leaving it out.
+   */
+  readonly removed?: boolean | undefined;
+}
+
 /**
  * The winery that holds a shop with the app installed, or `undefined` (ADR
  * 0031).
@@ -193,6 +204,7 @@ export class NestedShopifyScopeError extends Error {
 export const resolveTenantByShop = async (
   shop: string,
   db: Database = getDb(),
+  { removed = false }: ResolveShopOptions = {},
 ): Promise<string | undefined> => {
   const active = getCurrentTenantId();
 
@@ -204,7 +216,7 @@ export const resolveTenantByShop = async (
 
       const rows = await tx.execute(sql`
         select tenant_id from shopify_installations
-        where shop = ${shop} and uninstalled_at is null
+        where shop = ${shop} and (${removed}::boolean or uninstalled_at is null)
       `);
       const row = [...rows][0];
 

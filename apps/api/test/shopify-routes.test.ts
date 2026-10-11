@@ -35,6 +35,11 @@ const fakePort = () => {
     productUpdated: vi.fn<ShopifyPort['productUpdated']>(() =>
       Promise.resolve({ outcome: 'synced' as const }),
     ),
+    customerRedact: vi.fn<ShopifyPort['customerRedact']>(() => Promise.resolve('erased' as const)),
+    customerDataRequest: vi.fn<ShopifyPort['customerDataRequest']>(() =>
+      Promise.resolve('held' as const),
+    ),
+    shopRedact: vi.fn<ShopifyPort['shopRedact']>(() => Promise.resolve('erased' as const)),
   };
 
   return port;
@@ -485,6 +490,81 @@ describe('a Shopify webhook', () => {
       await deliver(app, { topic: 'products/delete', body: PRODUCT });
 
       expect(shopify.productUpdated).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('for a privacy request (P6-09b)', () => {
+    /* What Shopify sends names the customer; the route's job is to pass it on unread. */
+    const REQUEST = JSON.stringify({
+      shop_id: 954889,
+      shop_domain: SHOP,
+      customer: { id: 191167, email: 'giulia.bianchi@example.com', phone: '+39 333 0000000' },
+      orders_to_redact: [5678901234567],
+    });
+    const TOPICS = [
+      ['customers/redact', 'customerRedact', 'erased'],
+      ['customers/data_request', 'customerDataRequest', 'held'],
+      ['shop/redact', 'shopRedact', 'erased'],
+    ] as const;
+
+    it.each(TOPICS)(
+      'hands %s to its own method, with the body exactly as it was signed',
+      async (topic, method, result) => {
+        const { app, shopify } = webhooks();
+        const response = await deliver(app, { topic, body: REQUEST });
+
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ received: true, topic, result });
+        expect(shopify[method]).toHaveBeenCalledWith(SHOP, REQUEST);
+
+        for (const [, other] of TOPICS) {
+          if (other !== method) expect(shopify[other]).not.toHaveBeenCalled();
+        }
+      },
+    );
+
+    it.each(TOPICS)(
+      'refuses an unsigned %s with 401, as Shopify’s review checks',
+      async (topic, method) => {
+        const { app, shopify, refused } = webhooks();
+
+        expect((await deliver(app, { topic, body: REQUEST, signature: '' })).status).toBe(401);
+        expect(refused).toEqual([{ provider: 'shopify', reason: 'missing-headers' }]);
+        expect(shopify[method]).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(TOPICS)('refuses a %s changed after it was signed', async (topic, method) => {
+      const { app, shopify } = webhooks();
+      const signature = createHmac('sha256', SECRET).update(REQUEST).digest('base64');
+      const tampered = REQUEST.replace('5678901234567', '1');
+
+      expect((await deliver(app, { topic, body: tampered, signature })).status).toBe(401);
+      expect(shopify[method]).not.toHaveBeenCalled();
+    });
+
+    it.each(['nothing', 'unknown', 'unreadable'] as const)(
+      'acknowledges one that came to %s',
+      async (outcome) => {
+        const { app, shopify } = webhooks();
+
+        shopify.customerRedact.mockResolvedValueOnce(outcome);
+
+        const response = await deliver(app, { topic: 'customers/redact', body: REQUEST });
+
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ result: outcome });
+      },
+    );
+
+    it('answers with nothing of the customer in it', async () => {
+      const { app } = webhooks();
+      const answer = await (
+        await deliver(app, { topic: 'customers/redact', body: REQUEST })
+      ).text();
+
+      expect(answer).not.toContain('giulia');
+      expect(answer).not.toContain('191167');
     });
   });
 });
