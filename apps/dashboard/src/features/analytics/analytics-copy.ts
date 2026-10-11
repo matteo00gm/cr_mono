@@ -1,13 +1,13 @@
 import type { FunnelResponse } from '@catalogorosso/api-client';
 
+import { CART_LABEL } from './labels.js';
+
 /**
  * The words the analytics screen uses (P6-02, §2.4).
  *
- * **The last stage is an add to cart, and says so.** Until the Shopify webhook
- * is connected (P6-07) an order happens on the seller's checkout, out of our
- * sight, and §2.4 is explicit: *"Aggiunte al carrello"*, never *"Vendite"*.
- * A number labelled as a sale that the seller's own order list contradicts is
- * how a dashboard stops being believed.
+ * **The last stage is an add to cart, and says so** — and its word is not
+ * written here. Every word about money is `labels.ts`'s (P6-10), so that what
+ * a click is called and what an order is called are decided together.
  */
 
 export type FunnelStage = FunnelResponse['stages'][number]['stage'];
@@ -16,7 +16,7 @@ export const STAGE_LABELS: Readonly<Record<FunnelStage, string>> = {
   WIDGET_OPEN: 'Aperture del sommelier',
   MESSAGE_SENT: 'Domande',
   RECOMMENDATION_SHOWN: 'Consigli mostrati',
-  ADD_TO_CART: 'Aggiunte al carrello',
+  ADD_TO_CART: CART_LABEL,
 };
 
 /** `1.230`: the Italian grouping, four digits included. */

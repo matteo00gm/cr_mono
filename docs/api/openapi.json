@@ -301,6 +301,131 @@
           }
         }
       },
+      "/v1/dashboard/analytics/sales": {
+        "get": {
+          "summary": "What the sommelier sold, and whether a sale can be seen",
+          "description": "Over `from` and `to`, as for the funnel. `hasOrderAttribution` is true while a Shopify store is connected, which is the only way an order reaches this service; when it is false the numbers are all nought and mean \"not measured\", never \"none sold\", and a client must not present them as sales. When it is true: the orders and the visits with a wine the widget added to the cart, the bottles, and what was paid for them in hundredths, per currency — only the lines the widget added, never the rest of the basket, and all of it net of refunds, so a line refunded in full is in none of the numbers. Counted by when the order was placed. A range that is not one is refused with a 422. Readable by every member.\n\nRequires the `analytics:read` capability.",
+          "operationId": "getV1DashboardAnalyticsSales",
+          "x-required-capability": "analytics:read",
+          "responses": {
+            "200": {
+              "description": "What the sommelier sold, and whether a sale can be seen",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "from": {
+                        "type": "string",
+                        "format": "date",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                      },
+                      "to": {
+                        "type": "string",
+                        "format": "date",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                      },
+                      "hasOrderAttribution": {
+                        "type": "boolean"
+                      },
+                      "orders": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "visits": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "units": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "amounts": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "currency": {
+                              "type": "string",
+                              "pattern": "^[A-Z]{3}$"
+                            },
+                            "cents": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "currency",
+                            "cents"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "to",
+                      "hasOrderAttribution",
+                      "orders",
+                      "visits",
+                      "units",
+                      "amounts"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "from": "2026-09-02",
+                    "to": "2026-10-01",
+                    "hasOrderAttribution": true,
+                    "orders": 31,
+                    "visits": 29,
+                    "units": 74,
+                    "amounts": [
+                      {
+                        "currency": "EUR",
+                        "cents": 286450
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "This role cannot billing manage.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/analytics/top": {
         "get": {
           "summary": "The questions most asked and the wines most recommended",

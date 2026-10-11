@@ -595,6 +595,38 @@ export const refusedOriginsResponse = z.strictObject({
 export type RefusedOriginsResponse = z.infer<typeof refusedOriginsResponse>;
 
 /**
+ * What the sommelier sold (P6-10, §2.4), over the funnel's range, and whether
+ * a sale can be seen at all.
+ *
+ * `hasOrderAttribution` is the one flag every revenue label hangs on: true
+ * while a Shopify store is connected, because only then does an order reach
+ * us. False, and the numbers are all nought **and mean nothing** — an order
+ * placed on a checkout nobody reports is not a sale of none, so a client must
+ * not show them as sales.
+ *
+ * Everything is net of refunds: a line refunded in full is in none of the
+ * numbers. `orders` and `visits` count orders and visits with a line of ours
+ * still standing; `amounts` is what was paid for those lines, in hundredths,
+ * one entry per currency because adding two is not a number.
+ */
+export const salesResponse = z.strictObject({
+  from: z.iso.date(),
+  to: z.iso.date(),
+  hasOrderAttribution: z.boolean(),
+  orders: tally,
+  visits: tally,
+  units: tally,
+  amounts: z.array(
+    z.strictObject({
+      currency: z.string().regex(/^[A-Z]{3}$/u),
+      cents: tally,
+    }),
+  ),
+});
+
+export type SalesResponse = z.infer<typeof salesResponse>;
+
+/**
  * The winery's Shopify store (P6-06). `configured` is false where the service
  * has no Shopify app set up, and nothing can be connected; `shop` is the
  * latest store connected, with when — and when it was uninstalled, if it was.
@@ -1059,6 +1091,7 @@ export const DASHBOARD_RESPONSES = {
   'GET /v1/dashboard/analytics/top': topResponse,
   'GET /v1/dashboard/analytics/zero-results': zeroResultsResponse,
   'GET /v1/dashboard/analytics/origins': refusedOriginsResponse,
+  'GET /v1/dashboard/analytics/sales': salesResponse,
   /* The one-click add from the refused-origins panel (P6-05): the ordinary route, nothing new. */
   'POST /v1/dashboard/domains': domainAddedResponse,
   'GET /v1/dashboard/shopify': shopifyStatusResponse,

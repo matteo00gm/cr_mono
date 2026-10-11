@@ -12,6 +12,7 @@ import {
   topResponse,
   zeroResultsResponse,
   refusedOriginsResponse,
+  salesResponse,
   shopifyInstallResponse,
   shopifyStatusResponse,
   usageResponse,
@@ -1476,6 +1477,20 @@ export const createDashboardApp = ({
     return c.json(await analytics.refusedOrigins(c.get('tenantId'), parsed.data));
   });
 
+  /**
+   * What the sommelier sold (P6-10, §2.4), and the flag that says whether a
+   * sale can be seen at all. **Every member**, through `analytics:read`. It is
+   * the one source of `hasOrderAttribution`: a screen that decided for itself
+   * whether to say "sales" would be a second definition.
+   */
+  app.get('/analytics/sales', requireCapability('analytics:read'), async (c) => {
+    const parsed = rangeQuery.safeParse(c.req.query());
+
+    if (!parsed.success) throw new InvalidRequestError(RANGE_EXPECTED);
+
+    return c.json(await analytics.sales(c.get('tenantId'), parsed.data));
+  });
+
   /** The winery's Shopify store (P6-06). Every member: the catalogue sync (P6-11) reads it. */
   app.get('/shopify', requireCapability('catalog:read'), async (c) =>
     c.json(await shopify.status(c.get('tenantId'))),
@@ -2703,6 +2718,33 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         ],
       },
       response: refusedOriginsResponse,
+    },
+  ],
+  [
+    routeKey('GET', `${DASHBOARD_PREFIX}/analytics/sales`),
+    {
+      access: requires('analytics:read'),
+      summary: 'What the sommelier sold, and whether a sale can be seen',
+      description:
+        'Over `from` and `to`, as for the funnel. `hasOrderAttribution` is true while a Shopify ' +
+        'store is connected, which is the only way an order reaches this service; when it is ' +
+        'false the numbers are all nought and mean "not measured", never "none sold", and a ' +
+        'client must not present them as sales. When it is true: the orders and the visits ' +
+        'with a wine the widget added to the cart, the bottles, and what was paid for them ' +
+        'in hundredths, per currency — only the lines the widget added, never the rest of the ' +
+        'basket, and all of it net of refunds, so a line refunded in full is in none of the ' +
+        'numbers. Counted by when the order was placed. A range that is not one is refused ' +
+        'with a 422. Readable by every member.',
+      example: {
+        from: '2026-09-02',
+        to: '2026-10-01',
+        hasOrderAttribution: true,
+        orders: 31,
+        visits: 29,
+        units: 74,
+        amounts: [{ currency: 'EUR', cents: 286_450 }],
+      },
+      response: salesResponse,
     },
   ],
   [

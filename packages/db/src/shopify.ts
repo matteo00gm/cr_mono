@@ -140,6 +140,23 @@ export const markShopifyUninstalled = async (
   return [...rows].length > 0;
 };
 
+/**
+ * Whether the winery has a shop with the app installed right now (P6-10).
+ *
+ * What says a sale can be seen at all: with no shop connected, an order
+ * happens on a checkout nobody reports to us, and the dashboard may not call
+ * anything a sale. A winery can hold more than one shop; one is enough.
+ */
+export const hasInstalledShop = async (tx: DbTransaction): Promise<boolean> => {
+  const rows = await tx.execute(sql`
+    select exists (
+      select 1 from shopify_installations where uninstalled_at is null
+    ) as connected
+  `);
+
+  return ([...rows][0] as { connected?: boolean } | undefined)?.connected === true;
+};
+
 export interface ShopifyInstallation {
   readonly shop: string;
   readonly scopes: string;
