@@ -38,7 +38,9 @@ export interface CapabilityGuard extends MiddlewareHandler<AppEnv> {
 export const requireCapability = (capability: Capability): CapabilityGuard => {
   const guard: MiddlewareHandler<AppEnv> = async (c, next) => {
     if (!can(c.get('role'), capability)) {
-      throw new ForbiddenError(`This role cannot ${capability.replace(':', ' ')}.`);
+      throw new ForbiddenError(
+        `Il tuo ruolo non può fare questa operazione (${capability}). Chiedi a un titolare.`,
+      );
     }
 
     /*

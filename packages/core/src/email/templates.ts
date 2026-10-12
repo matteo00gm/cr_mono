@@ -561,7 +561,7 @@ const paymentFailed: Copy<TemplateProps['payment-failed']> = {
  * **Says what did not change, then why, then what to do**: the widget is
  * untouched, which is the reassurance; the reason names the cut to make; and
  * asking again from Fatturazione is the way through. The reason is our own
- * wording and in English, like every refusal the API writes.
+ * wording, in the language of the email around it (`downgradeRefusal`, P6-12).
  */
 const downgradeDeferred: Copy<TemplateProps['downgrade-deferred']> = {
   it: (p) => ({

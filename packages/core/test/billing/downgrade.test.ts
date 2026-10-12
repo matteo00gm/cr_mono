@@ -47,7 +47,7 @@ describe('the refusal', () => {
         { what: 'domains', have: 2, allowed: 1 },
       ]),
     ).toBe(
-      'Cantina allows 300 wines and 1 domain. To move to Cantina, archive 112 wines (412 of 300) and remove 1 domain (2 of 1) first.',
+      'Il piano Cantina comprende 300 vini e 1 dominio. Per passare a Cantina, prima archivia 112 vini (ne hai 412, il limite è 300) e rimuovi 1 dominio (ne hai 2, il limite è 1).',
     );
   });
 
@@ -58,13 +58,42 @@ describe('the refusal', () => {
         { what: 'domains', have: 3, allowed: 1 },
       ]),
     ).toBe(
-      'Cantina allows 300 wines and 1 domain. To move to Cantina, archive 1 wine (301 of 300) and remove 2 domains (3 of 1) first.',
+      'Il piano Cantina comprende 300 vini e 1 dominio. Per passare a Cantina, prima archivia 1 vino (ne hai 301, il limite è 300) e rimuovi 2 domini (ne hai 3, il limite è 1).',
     );
   });
 
   it('writes the plan’s caps in the plural when they are', () => {
     expect(downgradeRefusal('ECOMMERCE', [{ what: 'wines', have: 2_600, allowed: 2_500 }])).toMatch(
-      /^E-commerce allows 2500 wines and 2 domains\. /,
+      /^Il piano E-commerce comprende 2500 vini e 2 domini\. /,
+    );
+  });
+
+  it('is Italian unless the reader’s language is asked for (P6-12)', () => {
+    /*
+     * The dashboard prints the default as the API's refusal. The email about a
+     * downgrade put off at period end is written in the winery's language, and
+     * an English one must not be handed an Italian reason.
+     */
+    const blockers = [
+      { what: 'wines', have: 412, allowed: 300 },
+      { what: 'domains', have: 2, allowed: 1 },
+    ] as const;
+
+    expect(downgradeRefusal('CANTINA', blockers, 'it')).toBe(downgradeRefusal('CANTINA', blockers));
+    expect(downgradeRefusal('CANTINA', blockers, 'en')).toBe(
+      'Cantina allows 300 wines and 1 domain. To move to Cantina, archive 112 wines (412 of 300) and remove 1 domain (2 of 1) first.',
+    );
+    expect(
+      downgradeRefusal(
+        'ECOMMERCE',
+        [
+          { what: 'wines', have: 2_501, allowed: 2_500 },
+          { what: 'domains', have: 4, allowed: 2 },
+        ],
+        'en',
+      ),
+    ).toBe(
+      'E-commerce allows 2500 wines and 2 domains. To move to E-commerce, archive 1 wine (2501 of 2500) and remove 2 domains (4 of 2) first.',
     );
   });
 });

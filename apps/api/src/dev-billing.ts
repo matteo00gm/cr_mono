@@ -47,6 +47,8 @@ export interface DevBillingDeps {
   readonly now?: (() => number) | undefined;
 }
 
+const NO_SUCH_WINERY = 'No such winery.';
+
 export const createDevBillingPort = ({
   stripeEvents,
   readState = (tenantId) => withTenant(tenantId, readBillingState),
@@ -55,7 +57,8 @@ export const createDevBillingPort = ({
   async apply(tenantId, transition, plan) {
     const before = await readState(tenantId);
 
-    if (before === undefined) throw new NotFoundError();
+    /* In words, and English: the classes' own defaults are a seller's (P6-12). */
+    if (before === undefined) throw new NotFoundError(NO_SUCH_WINERY);
 
     let event;
 
@@ -75,7 +78,7 @@ export const createDevBillingPort = ({
     const { applied } = await stripeEvents.record(event);
     const after = await readState(tenantId);
 
-    if (after === undefined) throw new NotFoundError();
+    if (after === undefined) throw new NotFoundError(NO_SUCH_WINERY);
 
     return { applied, status: after.status, plan: after.plan };
   },

@@ -25,7 +25,14 @@ export interface TwoFactorApi {
   readonly verifyBackupCode: (code: string) => Promise<void>;
 }
 
-/** Why a call failed, in words the screen can show, or a generic line when there are none. */
+/**
+ * Why a call failed: the status and the auth library's code.
+ *
+ * **Its `message` is never shown** (P6-12). These endpoints are the auth
+ * library's, and so are their sentences — English, and not ours to write at
+ * the source the way every other refusal on this surface is. So this is the
+ * one place the dashboard maps a code to its own copy: `twoFactorMessage`.
+ */
 export class TwoFactorError extends Error {
   constructor(
     readonly status: number,
@@ -36,6 +43,36 @@ export class TwoFactorError extends Error {
     this.name = 'TwoFactorError';
   }
 }
+
+const REQUEST_FAILED = 'La richiesta non è andata a buon fine.';
+const TOO_MANY_ATTEMPTS = 'Troppi tentativi. Riprova tra qualche minuto.';
+const CODE_REFUSED = 'Codice non valido.';
+
+/**
+ * The codes a seller can do something about. Anything else gets the generic line.
+ *
+ * A `Map`, not an object: the code is the server's, and `toString` looked up
+ * on an object is a function rather than nothing.
+ */
+const COPY_BY_CODE: ReadonlyMap<string, string> = new Map([
+  ['INVALID_PASSWORD', 'La password non è corretta.'],
+  ['INVALID_CODE', CODE_REFUSED],
+  ['INVALID_BACKUP_CODE', CODE_REFUSED],
+  ['ACCOUNT_TEMPORARILY_LOCKED', TOO_MANY_ATTEMPTS],
+  ['SESSION_EXPIRED', 'La sessione è scaduta. Accedi di nuovo.'],
+  [
+    'STEP_UP_REQUIRED',
+    'Inserisci un codice dalla tua app di autenticazione per modificare la verifica in due passaggi.',
+  ],
+]);
+
+/** What a seller reads when a two-factor call is refused: ours, by code, in Italian. */
+export const twoFactorMessage = (error: unknown): string => {
+  if (!(error instanceof TwoFactorError)) return REQUEST_FAILED;
+  if (error.status === 429) return TOO_MANY_ATTEMPTS;
+
+  return (error.code === undefined ? undefined : COPY_BY_CODE.get(error.code)) ?? REQUEST_FAILED;
+};
 
 const post = async <T>(path: string, body: unknown): Promise<T> => {
   const response = await fetch(`${AUTH_BASE_PATH}${path}`, {
@@ -50,11 +87,7 @@ const post = async <T>(path: string, body: unknown): Promise<T> => {
   };
 
   if (!response.ok) {
-    throw new TwoFactorError(
-      response.status,
-      payload.code,
-      payload.message ?? 'La richiesta non è andata a buon fine.',
-    );
+    throw new TwoFactorError(response.status, payload.code, payload.message ?? REQUEST_FAILED);
   }
 
   return payload as T;

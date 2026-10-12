@@ -144,7 +144,7 @@ describe('an owner without a second factor (P4-11)', () => {
 
     expect(response.status).toBe(403);
     expect(error.code).toBe('mfa_required');
-    expect(error.message).toMatch(/two-factor/iu);
+    expect(error.message).toMatch(/verifica in due passaggi/u);
   });
 
   it('can still work on the catalogue', async () => {

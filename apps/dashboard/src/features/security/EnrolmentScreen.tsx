@@ -3,8 +3,8 @@ import { useState } from 'preact/hooks';
 
 import {
   setupKeyOf,
-  TwoFactorError,
   twoFactorApi,
+  twoFactorMessage,
   type Enrolment,
   type TwoFactorApi,
 } from './two-factor.js';
@@ -31,9 +31,6 @@ type Step =
   | { readonly kind: 'authenticator'; readonly enrolment: Enrolment }
   | { readonly kind: 'done' };
 
-const messageOf = (error: unknown): string =>
-  error instanceof TwoFactorError ? error.message : 'La richiesta non è andata a buon fine.';
-
 export const EnrolmentScreen = ({
   enrolled,
   api = twoFactorApi,
@@ -55,7 +52,7 @@ export const EnrolmentScreen = ({
     try {
       await run();
     } catch (caught) {
-      setError(messageOf(caught));
+      setError(twoFactorMessage(caught));
     } finally {
       setBusy(false);
     }

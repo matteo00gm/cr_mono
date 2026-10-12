@@ -32,8 +32,8 @@ export interface AnalyticsRange {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const RANGE_EXPECTED =
-  `Give from and to as YYYY-MM-DD days, from no later than to, at most ${String(MAX_RANGE_DAYS)} ` +
-  'days apart.';
+  `Indica «from» e «to» come giorni AAAA-MM-GG, con «from» non successivo a «to» e al massimo ` +
+  `${String(MAX_RANGE_DAYS)} giorni di distanza.`;
 
 const dayOf = (instant: Date): string => instant.toISOString().slice(0, 10);
 

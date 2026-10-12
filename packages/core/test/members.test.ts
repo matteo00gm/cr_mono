@@ -205,7 +205,7 @@ describe('assertMemberWriteSucceeded (P0-52)', () => {
      * An owner who has just been refused needs the next step, not a diagnosis:
      * promote somebody first.
      */
-    expect((thrown as Error).message).toContain('no owner');
-    expect((thrown as Error).message).toContain('Promote another member to OWNER first');
+    expect((thrown as Error).message).toContain('senza un titolare');
+    expect((thrown as Error).message).toContain('Rendi titolare un altro membro');
   });
 });

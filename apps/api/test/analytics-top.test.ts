@@ -145,6 +145,6 @@ describe('the route', () => {
       .response;
 
     expect(response.status).toBe(422);
-    expect(JSON.stringify(await response.json())).toContain('YYYY-MM-DD');
+    expect(JSON.stringify(await response.json())).toContain('AAAA-MM-GG');
   });
 });

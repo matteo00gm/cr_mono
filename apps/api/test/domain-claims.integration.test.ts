@@ -120,7 +120,9 @@ describe('claiming a domain another winery holds', () => {
     const added = await post(claimantOwner, '/domains', { domain: origin });
 
     expect(added.status).toBe(409);
-    expect(JSON.stringify(added.body)).toContain('claim it by proving you control its DNS');
+    expect(JSON.stringify(added.body)).toContain(
+      'puoi rivendicarlo dimostrando di controllarne il DNS',
+    );
   });
 
   it('moves at once from a winery that is switched off, once the record is there', async () => {

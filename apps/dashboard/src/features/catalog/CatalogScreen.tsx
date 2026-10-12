@@ -262,14 +262,14 @@ export const CatalogScreen = ({
     } catch (error) {
       if (mine !== generation.current) return;
       /*
-       * A 409 is not a failure to report but a fact to state. The server's
-       * message carries the remaining count, in English; parsing a number out
-       * of prose would couple this screen to a sentence, so the count is left
-       * to the index column, which already shows every settling wine.
+       * A 409 is not a failure to report but a fact to state, and the server
+       * states it in Italian, with the number of wines still queued (P6-12) —
+       * so its own sentence is what the seller reads, rather than a second
+       * one here that could not carry the count.
        */
       setNotice(
         error instanceof ApiError && error.status === 409
-          ? 'Una reindicizzazione del catalogo è già in corso. Attendi che finisca prima di avviarne un’altra.'
+          ? error.message
           : describeFailure('Reindicizzazione del catalogo non avviata. Riprova tra poco.', error),
       );
     } finally {

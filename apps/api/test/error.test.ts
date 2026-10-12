@@ -34,13 +34,13 @@ import { logger, REQUEST_ID_HEADER, requestContext } from '../src/middleware/log
  */
 
 /** An app that throws whatever it is handed, through the real middleware stack. */
-const appThrowing = (error: unknown): Hono => {
+const appThrowing = (error: unknown, path = '/boom'): Hono => {
   const app = new Hono();
   app.use('*', requestContext());
   app.use('*', normaliseThrown());
   app.onError(errorHandler);
   app.notFound(notFoundHandler);
-  app.get('/boom', () => {
+  app.get(path, () => {
     throw error;
   });
   return app;
@@ -182,6 +182,60 @@ describe('unexpected errors', () => {
     const logged = vi.mocked(logger.error).mock.calls[0]?.[0] as { err: Error } | undefined;
 
     expect(logged?.err.cause).toBe('postgres://app_rw:hunter2@db.internal/x');
+  });
+});
+
+describe('the two sentences the handler writes itself (P6-12)', () => {
+  /*
+   * Every other message on the dashboard's surface is written where it is
+   * thrown, in Italian. These two are written here, for every surface at once
+   * — so they are the two a seller would still have read in English.
+   */
+  const secret = 'postgres://app_rw:hunter2@db.internal:5432/sommelier';
+
+  it.each([
+    ['/v1/dashboard/boom', 'Si è verificato un errore imprevisto.'],
+    ['/v1/dashboard', 'Si è verificato un errore imprevisto.'],
+    ['/v1/widget/boom', 'An unexpected error occurred.'],
+    ['/v1/webhooks/boom', 'An unexpected error occurred.'],
+    /* A neighbour by name is not the dashboard. */
+    ['/v1/dashboardx/boom', 'An unexpected error occurred.'],
+    ['/boom', 'An unexpected error occurred.'],
+  ])('an unexpected error at %s says “%s”', async (path, message) => {
+    const response = await appThrowing(new Error(secret), path).request(path);
+
+    expect(response.status).toBe(500);
+    expect((await bodyOf(response)).error).toMatchObject({ code: 'internal', message });
+  });
+
+  it('says the same fixed thing whatever was thrown, in Italian as in English', async () => {
+    /* The language is chosen by the path. Nothing of the error chooses anything. */
+    const said = new Set<string>();
+
+    for (const thrown of [new Error(secret), new TypeError('x'), 'oops', null]) {
+      const response = await appThrowing(thrown, '/v1/dashboard/boom').request(
+        '/v1/dashboard/boom',
+      );
+      const raw = JSON.stringify(await bodyOf(response));
+
+      expect(raw).not.toContain('hunter2');
+      said.add((JSON.parse(raw) as ErrorBody).error.message);
+    }
+
+    expect([...said]).toEqual(['Si è verificato un errore imprevisto.']);
+  });
+
+  it.each([
+    ['/v1/dashboard/nowhere', 'Non trovato.'],
+    ['/v1/dashboard', 'Non trovato.'],
+    ['/v1/widget/nowhere', 'Not found'],
+    ['/v1/dashboardx', 'Not found'],
+    ['/nowhere', 'Not found'],
+  ])('a route that is not there at %s says “%s”', async (path, message) => {
+    const response = await appThrowing(new Error('never thrown')).request(path);
+
+    expect(response.status).toBe(404);
+    expect((await bodyOf(response)).error).toMatchObject({ code: 'not_found', message });
   });
 });
 

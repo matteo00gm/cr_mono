@@ -180,7 +180,7 @@ describe('what is refused before anything is written', () => {
     });
 
     expect(response.status).toBe(422);
-    expect(await messageOf(response)).toContain('at most 5 MB');
+    expect(await messageOf(response)).toContain('al massimo 5 MB');
     expect(importRows).not.toHaveBeenCalled();
   });
 
@@ -205,8 +205,8 @@ describe('what is refused before anything is written', () => {
 
     expect(response.status).toBe(422);
     const message = await messageOf(response);
-    expect(message).toContain('Row 2, 4 ');
-    expect(message).toContain('nothing was imported');
+    expect(message).toContain('Righe non valide: 2, 4. ');
+    expect(message).toContain('non è stato importato niente');
     expect(importRows).not.toHaveBeenCalled();
   });
 
@@ -215,7 +215,7 @@ describe('what is refused before anything is written', () => {
 
     const response = await post(app({ importRows: applied() }), { rows: broken });
 
-    expect(await messageOf(response)).toContain('Row 1, 2, 3, 4, 5 and 2 more');
+    expect(await messageOf(response)).toContain('Righe non valide: 1, 2, 3, 4, 5 e altre 2. ');
   });
 });
 
@@ -371,8 +371,8 @@ describe('the idempotency key (P1-26)', () => {
   });
 
   it.each([
-    ['different-body', 'already used for an import with different rows'],
-    ['in-progress', 'released after 30 seconds'],
+    ['different-body', 'già stata usata per un’importazione con righe diverse'],
+    ['in-progress', 'rilasciato dopo 30 secondi'],
   ] as const)('refuses a %s repeat with 409, importing nothing', async (outcome, says) => {
     const importRows = applied();
 

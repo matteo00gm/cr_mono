@@ -98,6 +98,11 @@ patch will not, because the ORM's own documentation shows the forbidden form.
 - A `DomainError`'s message _is_ the API contract and reaches the caller
   verbatim — so it must never carry a secret or answer a question the caller was
   not entitled to ask (P0-55).
+- A `DomainError` on a dashboard route is written in Italian: the dashboard
+  shows it to the seller as it arrives. One the widget, a webhook or the
+  server-session route throws is English and has words of its own — the
+  classes' defaults are Italian, so a bare `new NotFoundError()` there puts
+  Italian in a developer's console (P6-12).
 - A cross-tenant id returns 404, not 403. The difference tells an attacker the
   resource exists (§3.5, P0-47).
 - A route that changes who can act for a winery, or how — keys, domain removal,

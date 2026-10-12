@@ -1,7 +1,9 @@
 import {
   BILLING_PATH,
+  downgradeRefusal,
   LOCALES,
   PLANS,
+  type Blocker,
   type Locale,
   type PlanId,
   type SendEmail,
@@ -41,8 +43,12 @@ export type BillingNotice =
       readonly kind: 'downgrade_deferred';
       readonly kept: PlanId;
       readonly wanted: PlanId;
-      /** What to reduce and by how much, already worded (`downgradeRefusal`). */
-      readonly reason: string;
+      /**
+       * What to reduce and by how much. **Not yet worded**: the sentence is
+       * written where the winery's language is known (P6-12), so an email in
+       * English is not handed an Italian reason, nor the other way round.
+       */
+      readonly blockers: readonly Blocker[];
     };
 
 export type BillingNotifier = (tenantId: string, notice: BillingNotice) => Promise<void>;
@@ -118,7 +124,7 @@ export const createBillingNotifier = ({
               tenantName: recipients.tenantName,
               keptPlan: PLANS[notice.kept].name,
               wantedPlan: PLANS[notice.wanted].name,
-              reason: notice.reason,
+              reason: downgradeRefusal(notice.wanted, notice.blockers, locale),
               billingUrl,
             },
             locale,

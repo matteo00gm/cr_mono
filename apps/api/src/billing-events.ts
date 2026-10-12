@@ -1,7 +1,6 @@
 import {
   BILLING_EVENT_TYPES,
   downgradeBlockers,
-  downgradeRefusal,
   isDowngrade,
   periodOf,
   readBillingEvent,
@@ -243,7 +242,7 @@ export const createBillingEffect =
           kind: 'downgrade_deferred',
           kept: current.plan,
           wanted: change.plan,
-          reason: downgradeRefusal(change.plan, blockers),
+          blockers,
         };
         change = { ...change, plan: current.plan };
       }

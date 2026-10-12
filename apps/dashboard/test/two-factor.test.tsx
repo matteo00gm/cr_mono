@@ -9,6 +9,7 @@ import {
   needsStepUp,
   setupKeyOf,
   TwoFactorError,
+  twoFactorMessage,
   type TwoFactorApi,
 } from '../src/features/security/two-factor.js';
 
@@ -113,7 +114,8 @@ describe('the enrolment screen', () => {
     type('Password', 'wrong');
     fireEvent.click(screen.getByRole('button', { name: 'Continua' }));
 
-    expect((await screen.findByRole('alert')).textContent).toBe('Invalid password');
+    /* Ours, by the code: the auth library's own sentence is English (P6-12). */
+    expect((await screen.findByRole('alert')).textContent).toBe('La password non è corretta.');
   });
 
   it('has nothing to do for somebody already enrolled', () => {
@@ -221,5 +223,49 @@ describe('reading the API refusals', () => {
     expect(setupKeyOf(URI)).toBe('JBSW Y3DP EHPK 3PXP');
     expect(setupKeyOf('otpauth://totp/x')).toBeUndefined();
     expect(setupKeyOf('not a url')).toBeUndefined();
+  });
+});
+
+describe('what a refused two-factor call says (P6-12)', () => {
+  /*
+   * The auth library's endpoints answer in its own words, and those are
+   * English. Every other refusal the dashboard prints was written in Italian at
+   * the source; these are not ours to write there, so the screen maps the code.
+   */
+  it.each([
+    [400, 'INVALID_PASSWORD', 'Invalid password', 'La password non è corretta.'],
+    [401, 'INVALID_CODE', 'Invalid code', 'Codice non valido.'],
+    [401, 'INVALID_BACKUP_CODE', 'Invalid backup code', 'Codice non valido.'],
+    [
+      401,
+      'SESSION_EXPIRED',
+      'Your session has ended. Sign in again.',
+      'La sessione è scaduta. Accedi di nuovo.',
+    ],
+    [
+      403,
+      'STEP_UP_REQUIRED',
+      'Enter a code from your authenticator app to change two-factor settings.',
+      'Inserisci un codice dalla tua app di autenticazione per modificare la verifica in due passaggi.',
+    ],
+  ])('%i %s is said in Italian, by its code', (status, code, theirs, ours) => {
+    expect(twoFactorMessage(new TwoFactorError(status, code, theirs))).toBe(ours);
+  });
+
+  it('says to wait for any 429, whatever code came with it', () => {
+    const wait = 'Troppi tentativi. Riprova tra qualche minuto.';
+
+    expect(twoFactorMessage(new TwoFactorError(429, 'ACCOUNT_TEMPORARILY_LOCKED', 'x'))).toBe(wait);
+    expect(twoFactorMessage(new TwoFactorError(429, 'SOMETHING_NEW', 'x'))).toBe(wait);
+    expect(twoFactorMessage(new TwoFactorError(429, undefined, 'x'))).toBe(wait);
+  });
+
+  it.each([
+    ['a code nobody mapped', new TwoFactorError(400, 'TOTP_NOT_ENABLED', 'TOTP not enabled')],
+    ['no code at all', new TwoFactorError(500, undefined, 'Internal Server Error')],
+    ['an inherited property name', new TwoFactorError(400, 'toString', 'x')],
+    ['something that is not a refusal', new TypeError('Failed to fetch')],
+  ])('never prints the server’s own sentence: %s', (_what, error) => {
+    expect(twoFactorMessage(error)).toBe('La richiesta non è andata a buon fine.');
   });
 });

@@ -19,17 +19,18 @@ import { PLANS, TRIAL } from './plans.js';
  * which is the failure mode that produces "invalid domain" in the first place.
  */
 const REFUSALS: Record<NormalizeFailure, string> = {
-  invalid_url: 'That does not look like a domain. Enter it as winery.com or www.winery.com.',
+  invalid_url: 'Non sembra un dominio. Scrivilo come cantina.it oppure www.cantina.it.',
   not_https:
-    'Only https domains can be added. Your storefront has to be served over https before the widget can run on it.',
+    'Si possono aggiungere solo domini https. Il tuo sito deve essere servito in https prima che il widget possa funzionarci.',
   ip_literal:
-    'An IP address cannot be verified as a domain. Enter the hostname your storefront is served from.',
+    'Un indirizzo IP non può essere verificato come dominio. Scrivi il nome con cui il tuo sito è raggiungibile.',
   public_suffix:
-    'That is a domain suffix rather than a domain. Enter the full name, such as winery.com.',
-  single_label: 'A domain needs a suffix. Enter winery.com rather than winery.',
+    'Questo è un suffisso, non un dominio. Scrivi il nome completo, per esempio cantina.it.',
+  single_label: 'A un dominio serve un suffisso. Scrivi cantina.it, non cantina.',
   has_path:
-    'Enter the domain on its own, with no path. The widget is allowed on every page of a domain you verify.',
-  localhost: 'localhost cannot be verified. Add the domain your storefront is published on.',
+    'Scrivi solo il dominio, senza percorso. Il widget è ammesso su tutte le pagine di un dominio verificato.',
+  localhost:
+    'localhost non può essere verificato. Aggiungi il dominio su cui il tuo sito è pubblicato.',
 };
 
 export const refusalMessage = (reason: NormalizeFailure): string => REFUSALS[reason];
@@ -47,8 +48,8 @@ export const refusalMessage = (reason: NormalizeFailure): string => REFUSALS[rea
  * to everybody says nothing about whether anybody holds the origin.
  */
 export const ORIGIN_UNAVAILABLE =
-  'That domain is not available to add. If it is yours, you can claim it by proving you ' +
-  'control its DNS.';
+  'Questo dominio non può essere aggiunto. Se è tuo, puoi rivendicarlo dimostrando di ' +
+  'controllarne il DNS.';
 
 /**
  * A verification nonce.
@@ -80,11 +81,14 @@ export const DOMAIN_CAPS: Readonly<Record<PlanTier, number>> = {
   none: TRIAL.productionDomains,
 };
 
-/** What a seller calls their plan, which is not what the enum calls it. */
+/**
+ * What a seller calls what they are on, which is not what the enum calls it —
+ * and a winery that has bought nothing is on a free trial, not on a plan.
+ */
 const PLAN_NAMES: Readonly<Record<PlanTier, string>> = {
-  CANTINA: PLANS.CANTINA.name,
-  ECOMMERCE: PLANS.ECOMMERCE.name,
-  none: TRIAL.name,
+  CANTINA: `Il tuo piano ${PLANS.CANTINA.name}`,
+  ECOMMERCE: `Il tuo piano ${PLANS.ECOMMERCE.name}`,
+  none: 'La tua prova gratuita',
 };
 
 export const capFor = (plan: PlanTier): number => DOMAIN_CAPS[plan];
@@ -98,9 +102,9 @@ export const capFor = (plan: PlanTier): number => DOMAIN_CAPS[plan];
  * plan has no way to act on it.
  */
 export const capMessage = (plan: PlanTier, cap: number): string =>
-  `Your ${PLAN_NAMES[plan]} plan includes ${String(cap)} ${cap === 1 ? 'domain' : 'domains'}, ` +
-  'and they are all in use. Remove one you no longer serve, or change plan on the ' +
-  'Fatturazione screen.';
+  `${PLAN_NAMES[plan]} comprende ${String(cap)} ${cap === 1 ? 'dominio' : 'domini'}, ` +
+  `${cap === 1 ? 'ed è già in uso' : 'e sono tutti in uso'}. Rimuovine uno che non usi più, oppure ` +
+  'cambia piano nella schermata Fatturazione.';
 
 /**
  * How many staging origins a winery may hold, whatever its plan (P4-19).
@@ -113,8 +117,8 @@ export const capMessage = (plan: PlanTier, cap: number): string =>
 export const STAGING_DOMAIN_CAP = 2;
 
 export const STAGING_CAP_MESSAGE =
-  `You can have up to ${String(STAGING_DOMAIN_CAP)} staging domains, and both are in use. ` +
-  'Remove one you no longer test on.';
+  `Puoi avere fino a ${String(STAGING_DOMAIN_CAP)} domini di prova, e sono entrambi in uso. ` +
+  'Rimuovine uno su cui non fai più prove.';
 
 /**
  * Whether a registrable domain is a Shopify store's own `*.myshopify.com`
@@ -129,9 +133,9 @@ export const isShopifyStoreDomain = (registrableDomain: string): boolean =>
   registrableDomain.endsWith('.myshopify.com');
 
 export const SHOPIFY_UNVERIFIABLE =
-  'A myshopify.com address cannot be verified with DNS or a file, because Shopify controls it. ' +
-  'Connect your Shopify store under Integrazioni instead: the install proves it and adds it ' +
-  'for you.';
+  'Un indirizzo myshopify.com non può essere verificato con il DNS o con un file, perché lo ' +
+  'controlla Shopify. Collega invece il tuo negozio Shopify da Integrazioni: il collegamento ' +
+  'lo verifica e lo aggiunge per te.';
 
 /**
  * How often one domain may be re-checked (P4-02, P2-04).
@@ -162,11 +166,11 @@ export const verifyLimitKey = (domainId: string): string => `domain-verify:${dom
  */
 const DNS_REFUSALS: Readonly<Record<DnsFailure, string>> = {
   no_record:
-    'We could not find the TXT record. DNS can take a few minutes to propagate — publish it, then try again.',
+    'Non abbiamo trovato il record TXT. Il DNS può impiegare qualche minuto a propagarsi: pubblicalo, poi riprova.',
   mismatch:
-    'We found a TXT record at that name, but it is not the value we issued. Copy the value below exactly, with no quotes around it.',
+    'Abbiamo trovato un record TXT con quel nome, ma non contiene il valore che ti abbiamo dato. Copia il valore qui sotto esattamente, senza virgolette.',
   resolver_error:
-    'We could not complete the DNS lookup. That is a problem at our end rather than with your record — try again in a moment.',
+    'Non siamo riusciti a completare la ricerca DNS. È un problema nostro, non del tuo record: riprova fra un momento.',
 };
 
 export const dnsRefusalMessage = (reason: DnsFailure): string => DNS_REFUSALS[reason];
@@ -185,11 +189,11 @@ export const isOurFault = (reason: DnsFailure): boolean => reason === 'resolver_
  */
 const WELL_KNOWN_REFUSALS: Readonly<Record<WellKnownFailure, string>> = {
   not_found:
-    'We could not find the file. Upload it to that exact path on your storefront, then try again.',
+    'Non abbiamo trovato il file. Caricalo esattamente a quel percorso sul tuo sito, poi riprova.',
   mismatch:
-    'Something answered at that path and it is not the value we issued. The file must contain the value below and nothing else — many storefronts serve a themed page instead of a 404, which looks like this.',
+    'A quel percorso risponde qualcosa, ma non è il valore che ti abbiamo dato. Il file deve contenere il valore qui sotto e nient’altro: molti siti mostrano una pagina del tema al posto di un errore 404, e l’effetto è questo.',
   unreachable:
-    'We could not reach your site to check. Make sure it is served over https on the standard port and try again.',
+    'Non siamo riusciti a raggiungere il tuo sito per controllare. Verifica che sia servito in https sulla porta standard e riprova.',
 };
 
 export const wellKnownRefusalMessage = (reason: WellKnownFailure): string =>
@@ -204,8 +208,8 @@ export const wellKnownRefusalMessage = (reason: WellKnownFailure): string =>
  * no sign anywhere that somebody turned it off.
  */
 export const LAST_DOMAIN_WARNING =
-  'That is the only verified domain you have. Removing it switches the widget off ' +
-  'everywhere it is installed, immediately. Send confirm=true if that is what you want.';
+  'È il tuo unico dominio verificato. Rimuovendolo il widget si spegne subito, ovunque sia ' +
+  'installato. Conferma la rimozione se è questo che vuoi.';
 
 /** The two proofs a seller may offer, as the API names them. */
 export const VERIFY_METHODS = ['dns', 'wellknown'] as const;

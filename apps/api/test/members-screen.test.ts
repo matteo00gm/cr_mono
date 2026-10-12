@@ -155,7 +155,7 @@ describe('PATCH /members/:userId', () => {
      * so the content is asserted rather than only the status. An owner who has
      * just been refused needs the next step, not a diagnosis.
      */
-    expect(body.error?.message).toContain('Promote another member to OWNER first');
+    expect(body.error?.message).toContain('Rendi titolare un altro membro');
   });
 
   it('answers 404 for a member of another winery', async () => {

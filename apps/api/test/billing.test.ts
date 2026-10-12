@@ -236,7 +236,7 @@ describe('the route', () => {
 
     expect(response.status).toBe(422);
     expect(JSON.stringify(await response.json())).toContain(
-      'Send a JSON body naming the plan: {\\"plan\\": \\"CANTINA\\"} or {\\"plan\\": \\"ECOMMERCE\\"}.',
+      'Invia un corpo JSON che indica il piano: {\\"plan\\": \\"CANTINA\\"} oppure {\\"plan\\": \\"ECOMMERCE\\"}.',
     );
     expect(asked).toEqual([]);
   });

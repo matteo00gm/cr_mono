@@ -103,7 +103,7 @@ describe('previewing an import', () => {
     const response = await post(app({ previewRows }), { rows: [ROW, { ...ROW, sku: '' }] });
 
     expect(response.status).toBe(422);
-    expect(await messageOf(response)).toContain('Row 2 ');
+    expect(await messageOf(response)).toContain('Righe non valide: 2. ');
     expect(previewRows).not.toHaveBeenCalled();
   });
 
@@ -115,7 +115,7 @@ describe('previewing an import', () => {
     });
 
     expect(response.status).toBe(422);
-    expect(await messageOf(response)).toContain('at most 5 MB');
+    expect(await messageOf(response)).toContain('al massimo 5 MB');
     expect(previewRows).not.toHaveBeenCalled();
   });
 });

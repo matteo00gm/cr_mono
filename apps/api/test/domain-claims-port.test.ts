@@ -236,7 +236,7 @@ describe('opening a claim', () => {
 
     await expect(port().claim({ tenantId: 't1', input: 'www.winery.com' })).rejects.toMatchObject({
       kind: 'conflict',
-      message: 'That domain is already on your account.',
+      message: 'Questo dominio è già nel tuo account.',
     });
     expect(calls.some((call) => call.startsWith('insertClaim'))).toBe(false);
   });

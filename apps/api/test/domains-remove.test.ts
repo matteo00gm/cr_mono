@@ -231,8 +231,8 @@ describe('the last verified domain', () => {
         (error: unknown) => (error as Error).message,
       );
 
-    expect(message).toMatch(/only verified domain/iu);
-    expect(message).toMatch(/confirm/iu);
+    expect(message).toMatch(/unico dominio verificato/u);
+    expect(message).toMatch(/Conferma la rimozione/u);
   });
 
   it('deletes nothing while it is refused', async () => {

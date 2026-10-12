@@ -53,8 +53,8 @@ export const normaliseShop = (input: string): string | undefined => {
 export const isShopDomain = (value: string): boolean => SHOP.test(value);
 
 export const SHOP_EXPECTED =
-  'Give your Shopify store as its myshopify.com address — for example ' +
-  'cantina-rossi.myshopify.com. You will find it under Settings → Domains in Shopify.';
+  'Indica il tuo negozio Shopify con il suo indirizzo myshopify.com, per esempio ' +
+  'cantina-rossi.myshopify.com. Lo trovi in Shopify, in Impostazioni → Domini.';
 
 /** A fresh state nonce, and the hash of it that is stored: the nonce itself is never kept. */
 export const newStateNonce = (): { readonly nonce: string; readonly hash: string } => {

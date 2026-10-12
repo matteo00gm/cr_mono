@@ -448,8 +448,7 @@ describe('a downgrade re-checked as it applies (P5-10)', () => {
           kind: 'downgrade_deferred',
           kept: 'ECOMMERCE',
           wanted: 'CANTINA',
-          reason:
-            'Cantina allows 300 wines and 1 domain. To move to Cantina, archive 112 wines (412 of 300) first.',
+          blockers: [{ what: 'wines', have: 412, allowed: 300 }],
         },
       ],
     ]);
@@ -484,8 +483,7 @@ describe('a downgrade re-checked as it applies (P5-10)', () => {
     expect((await row(tenantId)).plan).toBe('ECOMMERCE');
     expect(told[0]?.[1]).toMatchObject({
       kind: 'downgrade_deferred',
-      reason:
-        'Cantina allows 300 wines and 1 domain. To move to Cantina, remove 1 domain (2 of 1) first.',
+      blockers: [{ what: 'domains', have: 2, allowed: 1 }],
     });
   });
 

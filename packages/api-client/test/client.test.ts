@@ -165,6 +165,36 @@ describe('a failed call', () => {
     expect(error.status).toBe(502);
     expect(error.code).toBe('unknown');
   });
+
+  it('has Italian words of its own for a failure that came with none (P6-12)', async () => {
+    /*
+     * The dashboard prints an `ApiError`'s message. Every one the API writes
+     * for it is Italian; this is the one the client writes, for a body that
+     * carried no message at all.
+     */
+    const fetchMock = fetchDouble(() => Promise.resolve(jsonResponse({}, 502)));
+
+    const error = (await clientWith(fetchMock)
+      .request('GET /v1/dashboard')
+      .catch((caught: unknown) => caught)) as ApiError;
+
+    expect(error.message).toBe('La richiesta non è andata a buon fine.');
+  });
+
+  it('says what the API said when it said something', async () => {
+    const said = 'Questa cantina ha già questo piano.';
+    const fetchMock = fetchDouble(() =>
+      Promise.resolve(
+        jsonResponse({ error: { code: 'conflict', message: said, requestId: 'r1' } }, 409),
+      ),
+    );
+
+    const error = (await clientWith(fetchMock)
+      .request('GET /v1/dashboard')
+      .catch((caught: unknown) => caught)) as ApiError;
+
+    expect(error.message).toBe(said);
+  });
 });
 
 describe('the endpoint table', () => {

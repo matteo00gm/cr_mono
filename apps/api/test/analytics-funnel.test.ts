@@ -146,6 +146,6 @@ describe('the route', () => {
     const response = await get(`/v1/dashboard/analytics/funnel${query}`).response;
 
     expect(response.status).toBe(422);
-    expect(JSON.stringify(await response.json())).toContain('YYYY-MM-DD');
+    expect(JSON.stringify(await response.json())).toContain('AAAA-MM-GG');
   });
 });

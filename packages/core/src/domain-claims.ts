@@ -24,7 +24,7 @@ export const CLAIM_NOTICE_HOURS = 72;
 export const claimVerifyLimitKey = (claimId: string): string => `claim-verify:${claimId}`;
 
 export const CLAIM_TRANSFERRED =
-  'Verified. The domain is on your account now, and your widget can run on it straight away.';
+  'Verificato. Il dominio ora è nel tuo account, e il widget può funzionarci da subito.';
 
 /**
  * A paying holder has been put on notice.
@@ -34,14 +34,14 @@ export const CLAIM_TRANSFERRED =
  * for a screen that wants to show a date.
  */
 export const CLAIM_NOTICED =
-  `We found your record. The domain is in use, so its current holder has been given ` +
-  `${String(CLAIM_NOTICE_HOURS)} hours to respond. If they do not, it moves to your ` +
-  'account automatically.';
+  `Abbiamo trovato il tuo record. Il dominio è in uso, quindi chi lo ha ora ha ` +
+  `${String(CLAIM_NOTICE_HOURS)} ore per rispondere. Se non lo fa, passa al tuo account ` +
+  'in automatico.';
 
 export const CLAIM_WITHDRAWN =
-  'The current holder of that domain has kept it. If you believe that is wrong, contact support.';
+  'Chi ha questo dominio lo ha tenuto. Se pensi sia un errore, scrivi all’assistenza.';
 
-export const CLAIM_ALREADY_YOURS = 'That domain is already on your account.';
+export const CLAIM_ALREADY_YOURS = 'Questo dominio è già nel tuo account.';
 
 export const CLAIM_RACED =
-  'That domain changed hands while we were checking it. Check again in a moment.';
+  'Il dominio è passato di mano mentre lo controllavamo. Controlla di nuovo fra un momento.';

@@ -83,7 +83,7 @@ export const resolveMembership = async ({
      * an invited user whose invitation was revoked, or an account created
      * before any winery was set up. Telling them so is honest and actionable.
      */
-    throw new ForbiddenError('This account does not belong to any winery.');
+    throw new ForbiddenError('Questo account non appartiene a nessuna cantina.');
   }
 
   if (requestedTenantId === undefined) {
@@ -103,7 +103,7 @@ export const resolveMembership = async ({
      * middleware precisely so it can be called without an active tenant.
      */
     throw new InvalidRequestError(
-      `Select an active winery and send it in the ${ACTIVE_TENANT_HEADER} header.`,
+      `Scegli la cantina su cui lavorare: la richiesta deve indicarla nell’intestazione ${ACTIVE_TENANT_HEADER}.`,
     );
   }
 
@@ -123,7 +123,7 @@ export const resolveMembership = async ({
      * stale header (membership since revoked) and a forged one (never held)
      * take the same path and get the same answer, on every request.
      */
-    throw new NotFoundError('No such winery.');
+    throw new NotFoundError('Questa cantina non esiste.');
   }
 
   return match;
@@ -158,7 +158,7 @@ export const assertMemberWriteSucceeded = (outcome: MemberWriteOutcome): void =>
      * does not exist at all must be indistinguishable, or an owner of one
      * tenant can probe which accounts belong to another.
      */
-    throw new NotFoundError('No such member.');
+    throw new NotFoundError('Questo membro non esiste.');
   }
 
   /*
@@ -168,7 +168,7 @@ export const assertMemberWriteSucceeded = (outcome: MemberWriteOutcome): void =>
    * billing, and that promoting somebody first is the way through.
    */
   throw new ConflictError(
-    'This winery would be left with no owner. Promote another member to OWNER first, ' +
-      'then change or remove this one.',
+    'La cantina resterebbe senza un titolare. Rendi titolare un altro membro, ' +
+      'poi modifica o rimuovi questo.',
   );
 };

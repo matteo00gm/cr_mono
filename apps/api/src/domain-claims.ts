@@ -177,7 +177,7 @@ export const createDomainClaims = ({
   const reread = async (tenantId: string, claimId: string): Promise<DomainClaimRow> => {
     const row = await withTenant(tenantId, (tx) => readClaimById(tx, claimId));
 
-    if (row === undefined) throw new NotFoundError('No such claim.');
+    if (row === undefined) throw new NotFoundError('Questa rivendicazione non esiste.');
 
     return row;
   };
@@ -279,7 +279,7 @@ export const createDomainClaims = ({
        * longer on notice and one that never existed are all the same empty
        * result, and §3.5 wants the same answer for each.
        */
-      if (origin === undefined) throw new NotFoundError('No such claim.');
+      if (origin === undefined) throw new NotFoundError('Questa rivendicazione non esiste.');
 
       return { id: command.claimId, origin, withdrawn: true };
     },
@@ -356,8 +356,8 @@ export const createDomainClaims = ({
 
         if (!allowance.allowed) {
           throw new RateLimitedError(
-            'That claim has been checked several times in the last few minutes. ' +
-              'DNS takes a while to propagate — wait a moment and try again.',
+            'Questa rivendicazione è stata controllata più volte negli ultimi minuti. ' +
+              'Il DNS impiega un po’ a propagarsi: aspetta un momento e riprova.',
           );
         }
       }
@@ -369,7 +369,7 @@ export const createDomainClaims = ({
        * result, and §3.5 wants the same answer for both. That includes a claim
        * served *on* this winery: the holder sees it, and may not act on it here.
        */
-      if (claim === undefined) throw new NotFoundError('No such claim.');
+      if (claim === undefined) throw new NotFoundError('Questa rivendicazione non esiste.');
 
       /*
        * Settled, withdrawn, or on notice: say so, idempotently.
@@ -388,7 +388,9 @@ export const createDomainClaims = ({
       const token = claim.verificationToken;
 
       if (token === null) {
-        throw new ConflictError('That claim has no verification in progress. Open it again.');
+        throw new ConflictError(
+          'Questa rivendicazione non ha una verifica in corso. Aprila di nuovo.',
+        );
       }
 
       /* A lapsed nonce is replaced, not extended (P4-04). */
@@ -412,8 +414,8 @@ export const createDomainClaims = ({
           verified: false,
           transferred: false,
           reason:
-            'That verification value expired, so we have issued a new one. ' +
-            'Replace the TXT record with the value below and check again.',
+            'Il valore di verifica era scaduto, quindi te ne abbiamo dato uno nuovo. ' +
+            'Sostituisci il record TXT con il valore qui sotto e controlla di nuovo.',
         };
       }
 

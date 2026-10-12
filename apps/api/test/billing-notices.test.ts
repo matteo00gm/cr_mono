@@ -112,10 +112,13 @@ describe('a downgrade refused as it applied (P5-10)', () => {
     kind: 'downgrade_deferred',
     kept: 'ECOMMERCE',
     wanted: 'CANTINA',
-    reason:
-      'Cantina allows 300 wines and 1 domain. To move to Cantina, archive 112 wines (412 of 300) first.',
+    blockers: [{ what: 'wines', have: 412, allowed: 300 }],
   } as const;
   const RECIPIENTS = { tenantName: 'Cantina Rossi', locale: 'en', owners: ['anna@rossi.example'] };
+  const REASON_EN =
+    'Cantina allows 300 wines and 1 domain. To move to Cantina, archive 112 wines (412 of 300) first.';
+  const REASON_IT =
+    'Il piano Cantina comprende 300 vini e 1 dominio. Per passare a Cantina, prima archivia 112 vini (ne hai 412, il limite è 300).';
 
   it('puts Stripe back on the plan kept, then tells every owner what to reduce', async () => {
     const restored: [string, string, number][] = [];
@@ -137,12 +140,25 @@ describe('a downgrade refused as it applied (P5-10)', () => {
           tenantName: 'Cantina Rossi',
           keptPlan: 'E-commerce',
           wantedPlan: 'Cantina',
-          reason: DEFERRED.reason,
+          reason: REASON_EN,
           billingUrl: 'https://app.catalogorosso.com/fatturazione',
         },
         locale: 'en',
       },
     ]);
+  });
+
+  it.each([
+    ['it', REASON_IT],
+    ['en', REASON_EN],
+    /* A language we do not write is answered in Italian, reason included. */
+    ['de', REASON_IT],
+  ])('words what to reduce in the language of the email: %s (P6-12)', async (locale, reason) => {
+    const { sent, notify } = notifier({ ...RECIPIENTS, locale });
+
+    await notify(TENANT, DEFERRED);
+
+    expect(sent.map((message) => (message.props as { reason: string }).reason)).toEqual([reason]);
   });
 
   it('still tells the owners when Stripe cannot be put back — and says so loudly for the operator', async () => {

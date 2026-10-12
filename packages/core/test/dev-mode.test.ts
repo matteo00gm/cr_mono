@@ -39,6 +39,6 @@ describe('the grant', () => {
   });
 
   it('points a staging site at staging domains', () => {
-    expect(DEV_MODE_LOCAL_ONLY).toMatch(/staging domain/u);
+    expect(DEV_MODE_LOCAL_ONLY).toMatch(/dominio di prova/u);
   });
 });

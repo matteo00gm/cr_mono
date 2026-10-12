@@ -102,7 +102,7 @@ export const createKeysPort = ({
       previous: await readKeyInGrace(tx),
     }));
 
-    if (read.keys === undefined) throw new NotFoundError('No keys have been issued yet.');
+    if (read.keys === undefined) throw new NotFoundError('Non sono ancora state create chiavi.');
 
     return view(read.keys, read.previous);
   },
@@ -131,7 +131,9 @@ export const createKeysPort = ({
     });
 
     if (rotated === undefined) {
-      throw new NotFoundError('No keys have been issued yet, so there is nothing to rotate.');
+      throw new NotFoundError(
+        'Non sono ancora state create chiavi, quindi non c’è niente da ruotare.',
+      );
     }
 
     return view(rotated.active, rotated.previous);
@@ -174,7 +176,7 @@ export const createKeysPort = ({
      */
     if (created === undefined) {
       throw new ConflictError(
-        'This winery already has keys. To replace the secret key, rotate it instead.',
+        'Questa cantina ha già le sue chiavi. Per sostituire la chiave segreta, ruotala.',
       );
     }
 
@@ -203,7 +205,9 @@ export const createKeysPort = ({
     });
 
     if (rotated === undefined) {
-      throw new NotFoundError('No keys have been issued yet, so there is nothing to rotate.');
+      throw new NotFoundError(
+        'Non sono ancora state create chiavi, quindi non c’è niente da ruotare.',
+      );
     }
 
     return { ...view(rotated), secretKey: secret.plaintext };

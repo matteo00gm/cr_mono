@@ -140,7 +140,7 @@ describe('the screen', () => {
 
   it('says what the API said when it refuses, word for word', async () => {
     const refusal =
-      'Cantina allows 300 wines and 1 domain. To move to Cantina, archive 112 wines (412 of 300) first.';
+      'Il piano Cantina comprende 300 vini e 1 dominio. Per passare a Cantina, prima archivia 112 vini (ne hai 412, il limite è 300).';
 
     screenWith(usage({ plan: 'ECOMMERCE', allowance: 6_000, included: 6_000 }), {
       'POST /v1/dashboard/billing/plan': () =>
