@@ -1,5 +1,6 @@
 /// <reference path="../.sst/platform/config.d.ts" />
 
+import { notify } from './alerting';
 import { databaseUrl, parameterReadPermissions } from './config';
 import {
   assertConnectionBudget,
@@ -304,4 +305,5 @@ new aws.cloudwatch.MetricAlarm('EmbeddingDlqDepth', {
   threshold: 0,
   comparisonOperator: 'GreaterThanThreshold',
   treatMissingData: 'notBreaching',
+  ...notify,
 });

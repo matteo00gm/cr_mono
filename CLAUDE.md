@@ -116,6 +116,10 @@ patch will not, because the ORM's own documentation shows the forbidden form.
 - The log redaction allowlist governs every key at every depth for every
   caller. Adding a name for one call site opens it everywhere — `message` and
   `code` are the live examples of names that look harmless and are not (P0-56).
+- Never send a metric line through the logger. The allowlist above redacts
+  every key of it — `_aws`, the dimension, the metric's name — so CloudWatch
+  finds no metric and the alarm on it stays green for ever, as P2-28's did.
+  Write it with `emitMetrics`, which takes numbers and nothing else (P7-02).
 - Never write a key-shaped literal into a file, including a test fixture. Build
   it at runtime; the P0-08 history scan finds literals and they cannot be edited
   out once pushed (P0-56).

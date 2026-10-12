@@ -68,6 +68,8 @@ export interface WidgetLimitOptions {
    * absent, which is the plan's own cap.
    */
   readonly readPurchased?: ((tenantId: string) => Promise<number>) | undefined;
+  /** Told when what refused a request was the winery's month, so it can be counted (P7-02). */
+  readonly onPlanCap?: (() => void) | undefined;
 }
 
 export const limitWidgetRequest =
@@ -78,6 +80,7 @@ export const limitWidgetRequest =
     limits = WIDGET_LIMITS,
     now = Date.now,
     readPurchased,
+    onPlanCap,
   }: WidgetLimitOptions): MiddlewareHandler<AppEnv> =>
   async (c, next) => {
     const tenant = c.get('widgetTenant') as WidgetTenant | undefined;
@@ -115,7 +118,9 @@ export const limitWidgetRequest =
        * start of next month is not a secret, and a client with no retry hint
        * retries immediately.
        */
-      if (!isPlanCap(result.key)) {
+      if (isPlanCap(result.key)) {
+        onPlanCap?.();
+      } else {
         c.header('X-RateLimit-Limit', String(result.limit));
         c.header('X-RateLimit-Remaining', String(result.remaining));
         c.header('X-RateLimit-Reset', String(Math.ceil(result.resetAt.getTime() / 1000)));

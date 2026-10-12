@@ -35,6 +35,17 @@ export const ROLLUP_METRIC_NAMESPACE = 'Catalogorosso/Rollup';
 export const ROLLUP_RUNS_METRIC = 'Runs';
 export const ROLLUP_ROWS_METRIC = 'RolledUpRows';
 
+/**
+ * The most any one winery's models cost in a day, among the days this run
+ * rolled up (P7-02): the runaway-cost guard.
+ *
+ * **One metric, not one per winery.** A metric with a winery for a dimension
+ * is a custom metric per winery, billed per winery, and the question the alarm
+ * asks is "is anybody's spend out of line" — which the maximum answers. Who it
+ * was is in `usage_daily`, one query away, and deliberately not in this line.
+ */
+export const ROLLUP_TENANT_COST_METRIC = 'MaxTenantCostMicros';
+
 const DAY_MS = 86_400_000;
 
 const dayOf = (at: number): string => new Date(at).toISOString().slice(0, 10);
@@ -67,7 +78,16 @@ export interface RollupResult {
   /** Tenant-days that threw; the run fails when this is not nought. */
   readonly failed: number;
   readonly firstFailure?: unknown;
+  /** The dearest tenant-day this run wrote, in micros. Nought when it wrote none. */
+  readonly maxTenantCostMicros: number;
 }
+
+/** What a day cost, when the rollup that wrote it says. A stand-in that says nothing counts as nought. */
+const costOf = (day: unknown): number => {
+  const cost = (day as { costMicros?: unknown } | null | undefined)?.costMicros;
+
+  return typeof cost === 'number' && Number.isFinite(cost) ? cost : 0;
+};
 
 export const rollup = async ({
   now = () => new Date(),
@@ -80,6 +100,7 @@ export const rollup = async ({
   let rows = 0;
   let failed = 0;
   let firstFailure: unknown;
+  let maxTenantCostMicros = 0;
 
   for (const tenant of tenants) {
     for (const day of window) {
@@ -87,7 +108,10 @@ export const rollup = async ({
       if (tenant.createdAt.getTime() >= Date.parse(`${day}T00:00:00Z`) + DAY_MS) continue;
 
       try {
-        await rollupDay(tenant.id, day);
+        maxTenantCostMicros = Math.max(
+          maxTenantCostMicros,
+          costOf(await rollupDay(tenant.id, day)),
+        );
         rows += 1;
       } catch (error) {
         failed += 1;
@@ -96,7 +120,7 @@ export const rollup = async ({
     }
   }
 
-  return { days: window, tenants: tenants.length, rows, failed, firstFailure };
+  return { days: window, tenants: tenants.length, rows, failed, firstFailure, maxTenantCostMicros };
 };
 
 /** Some tenant-days could not be rolled up; the rest were. */
@@ -121,6 +145,7 @@ export const metricLine = (result: RollupResult, stage: string, now: number = Da
           Metrics: [
             { Name: ROLLUP_RUNS_METRIC, Unit: 'Count' },
             { Name: ROLLUP_ROWS_METRIC, Unit: 'Count' },
+            { Name: ROLLUP_TENANT_COST_METRIC, Unit: 'Count' },
           ],
         },
       ],
@@ -128,6 +153,7 @@ export const metricLine = (result: RollupResult, stage: string, now: number = Da
     Stage: stage,
     [ROLLUP_RUNS_METRIC]: 1,
     [ROLLUP_ROWS_METRIC]: result.rows,
+    [ROLLUP_TENANT_COST_METRIC]: result.maxTenantCostMicros,
     event: 'rollup.completed',
     days: result.days,
     tenants: result.tenants,

@@ -29,6 +29,13 @@ import {
   CHAT_METRIC_NAMESPACE,
   CHAT_TURNS_METRIC,
 } from '../chat-metrics.js';
+import {
+  emitMetrics,
+  QUOTA_REFUSALS_METRIC,
+  REFUSED_ORIGINS_METRIC,
+  WIDGET_METRIC_NAMESPACE,
+  type MetricSink,
+} from '../metrics.js';
 import { QuotaExceededError, type ChatPort } from '../chat.js';
 import {
   requireWidgetToken,
@@ -139,6 +146,8 @@ export interface WidgetDependencies {
    * Absent on a local run, where the metric line is a log line nobody reads.
    */
   readonly stage?: string | undefined;
+  /** Where a metric line is written. Stdout, unless a test wants to read one. */
+  readonly emit?: MetricSink | undefined;
   /** Where a refused *token* goes (P2-16). Separate from `onRejected`, which is CORS's. */
   readonly onTokenRejected?: ((event: RejectedWidgetToken) => Promise<void>) | undefined;
   /**
@@ -351,6 +360,20 @@ interface GuardedRoute {
  * `widget-route-guards.test.ts` walks the route table and fails for any route
  * that is not behind all three, which is what holds P2-12 and P2-29 to it.
  */
+/**
+ * Counts something for an alarm (P7-02). On a local run there is no stage and
+ * nothing reads a metric, so nothing is written.
+ */
+const count = (
+  widget: Pick<WidgetDependencies, 'stage' | 'emit'>,
+  namespace: string,
+  metrics: Readonly<Record<string, number>>,
+): void => {
+  if (widget.stage !== undefined) {
+    emitMetrics({ namespace, stage: widget.stage, metrics }, widget.emit);
+  }
+};
+
 const mountGuarded = (
   app: Hono<AppEnv>,
   widget: WidgetDependencies,
@@ -365,6 +388,10 @@ const mountGuarded = (
       environment: widget.environment,
       // So a recorded refusal carries the visitor's bucket, never the address (P2-16).
       ipSecret: widget.ipSecret,
+      /* Counted as well as recorded (P7-02): the row is the evidence, the count is what alarms. */
+      onRefusedOrigin: () => {
+        count(widget, WIDGET_METRIC_NAMESPACE, { [REFUSED_ORIGINS_METRIC]: 1 });
+      },
     }),
   ];
 
@@ -400,6 +427,10 @@ const mountGuarded = (
       endpoint,
       ipSecret: widget.ipSecret,
       readPurchased: widget.readPurchased,
+      /* The month's cap, met at the limiter — where almost every spent month is met (P2-36). */
+      onPlanCap: () => {
+        count(widget, WIDGET_METRIC_NAMESPACE, { [QUOTA_REFUSALS_METRIC]: 1 });
+      },
     }),
   );
 
@@ -589,38 +620,27 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
         (report) => {
           /*
            * **Embedded Metric Format**, so CloudWatch extracts the two counts
-           * from this line with no metric filter to wire and forget (P2-28,
-           * and the same mechanism the sweep uses). The alarm divides them: an
-           * escalation *rate* is what says the cheap tier is failing, where an
-           * absolute count says only that it was a busy Saturday.
+           * with no metric filter to wire and forget (P2-28, and the same
+           * mechanism the sweep uses). The alarm divides them: an escalation
+           * *rate* is what says the cheap tier is failing, where an absolute
+           * count says only that it was a busy Saturday.
            *
            * No tenant dimension. A per-tenant metric is a custom metric per
            * tenant, billed per tenant, and the question the rate answers is
            * about the model rather than about any one shop.
+           *
+           * **A line of its own, straight to stdout** (`metrics.ts`, P7-02).
+           * It used to ride on the log line below, and the logger's redaction
+           * turned every key of it into `[redacted]` — so the two counts were
+           * never published, and the alarm that divides them never had
+           * anything to divide.
            */
-          logger.info(
-            {
-              ...report,
-              tenantId: tenant.tenantId,
-              _aws: {
-                Timestamp: Date.now(),
-                CloudWatchMetrics: [
-                  {
-                    Namespace: CHAT_METRIC_NAMESPACE,
-                    Dimensions: [['Stage']],
-                    Metrics: [
-                      { Name: CHAT_TURNS_METRIC, Unit: 'Count' },
-                      { Name: CHAT_ESCALATIONS_METRIC, Unit: 'Count' },
-                    ],
-                  },
-                ],
-              },
-              Stage: widget.stage,
-              [CHAT_TURNS_METRIC]: 1,
-              [CHAT_ESCALATIONS_METRIC]: report.escalations.length > 0 ? 1 : 0,
-            },
-            'widget chat turn',
-          );
+          count(widget, CHAT_METRIC_NAMESPACE, {
+            [CHAT_TURNS_METRIC]: 1,
+            [CHAT_ESCALATIONS_METRIC]: report.escalations.length > 0 ? 1 : 0,
+          });
+
+          logger.info({ ...report, tenantId: tenant.tenantId }, 'widget chat turn');
         },
       );
 
@@ -648,6 +668,11 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
            * change. The code is ours and says nothing a visitor could not be
            * told; the provider's own message never reaches here (P0-55).
            */
+          if (error instanceof QuotaExceededError) {
+            /* The gate inside the turn (P2-36): the month was spent between the limiter and here. */
+            count(widget, WIDGET_METRIC_NAMESPACE, { [QUOTA_REFUSALS_METRIC]: 1 });
+          }
+
           await stream.writeSSE({
             event: 'error',
             data: JSON.stringify({

@@ -2,6 +2,7 @@
 
 import process from 'node:process';
 
+import { notify } from './alerting';
 import {
   CHAT_ESCALATIONS_METRIC,
   CHAT_METRIC_NAMESPACE,
@@ -415,7 +416,7 @@ export const api = new sst.aws.Function('Api', {
  * request is already worth knowing about. `treatMissingData: notBreaching` for
  * the DLQ alarm's reason: a function that is never throttled publishes no
  * datapoints, and an alarm left in INSUFFICIENT_DATA is one people learn to
- * ignore. No action yet — routing and the runbook entry are P7-02's.
+ * ignore. Routed by `notify`, with its entry in `docs/runbooks/alarms.md` (P7-02).
  */
 new aws.cloudwatch.MetricAlarm('ApiThrottles', {
   alarmDescription:
@@ -430,6 +431,7 @@ new aws.cloudwatch.MetricAlarm('ApiThrottles', {
   threshold: 0,
   comparisonOperator: 'GreaterThanThreshold',
   treatMissingData: 'notBreaching',
+  ...notify,
 });
 
 /**
@@ -517,7 +519,10 @@ export const chatUrl = chat.url;
  * learn to ignore — which is the failure `EmbeddingDlqDepth` avoids the other
  * way round.
  *
- * No action yet; routing and the runbook entry are P7-02's, as with the others.
+ * **It had nothing to divide until P7-02.** The chat route wrote these two
+ * counts through the logger, whose redaction turned the whole metric line into
+ * `[redacted]`; they are written straight to stdout now (`apps/api/src/metrics.ts`).
+ * Routed by `notify`, like the others.
  */
 new aws.cloudwatch.MetricAlarm('ChatEscalationRate', {
   alarmDescription:
@@ -557,4 +562,5 @@ new aws.cloudwatch.MetricAlarm('ChatEscalationRate', {
       },
     },
   ],
+  ...notify,
 });

@@ -105,6 +105,12 @@ export interface WidgetCorsOptions {
    * is recorded without a bucket rather than with an address.
    */
   readonly ipSecret?: string | undefined;
+  /**
+   * Told of each request refused for its origin, so it can be counted (P7-02).
+   * A count and nothing else: which origin, and for which key, is the row
+   * `onRejected` writes.
+   */
+  readonly onRefusedOrigin?: (() => void) | undefined;
 }
 
 /**
@@ -144,6 +150,7 @@ export const widgetCors =
     onRejected = logRejection,
     environment = 'production',
     ipSecret,
+    onRefusedOrigin,
   }: WidgetCorsOptions): MiddlewareHandler<AppEnv> =>
   async (c, next) => {
     // Rule 1: before any decision, so no path out of here can miss it.
@@ -167,6 +174,9 @@ export const widgetCors =
               ),
             }),
       });
+
+      if (event.type === 'UNAUTHORIZED_ORIGIN') onRefusedOrigin?.();
+
       // Rule 3: nothing but `Vary` has been set, and nothing else will be.
       throw new ForbiddenError(WIDGET_REFUSED);
     };
