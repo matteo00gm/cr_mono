@@ -205,7 +205,8 @@ export const createClient = (options: ClientOptions) => {
         throw new ApiError(
           response.status,
           error?.code ?? 'unknown',
-          error?.message ?? 'The request failed.',
+          /* Italian, like every refusal this API writes for the dashboard (P6-12). */
+          error?.message ?? 'La richiesta non è andata a buon fine.',
           error?.requestId ?? 'unknown',
         );
       }

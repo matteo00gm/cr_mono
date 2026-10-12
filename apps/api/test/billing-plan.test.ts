@@ -342,8 +342,8 @@ describe('a downgrade the winery does not fit (P5-10)', () => {
 
     await expect(port.changePlan(TENANT, 'CANTINA')).rejects.toThrow(
       new ConflictError(
-        'Cantina allows 300 wines and 1 domain. To move to Cantina, archive 112 wines (412 of 300) ' +
-          'and remove 1 domain (2 of 1) first.',
+        'Il piano Cantina comprende 300 vini e 1 dominio. Per passare a Cantina, prima archivia ' +
+          '112 vini (ne hai 412, il limite è 300) e rimuovi 1 dominio (ne hai 2, il limite è 1).',
       ),
     );
     /* The downgrade already pending is left exactly as it was. */
@@ -354,7 +354,7 @@ describe('a downgrade the winery does not fit (P5-10)', () => {
     const { port } = portWith(onEcommerce, onEcommerceStripe(), { wines: 301, domains: 1 });
 
     await expect(port.changePlan(TENANT, 'CANTINA')).rejects.toThrow(
-      'Cantina allows 300 wines and 1 domain. To move to Cantina, archive 1 wine (301 of 300) first.',
+      'Il piano Cantina comprende 300 vini e 1 dominio. Per passare a Cantina, prima archivia 1 vino (ne hai 301, il limite è 300).',
     );
   });
 

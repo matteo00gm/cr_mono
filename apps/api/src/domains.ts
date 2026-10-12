@@ -359,7 +359,7 @@ const createDomainMethods = ({
       } as const;
     });
 
-    if (outcome.kind === 'missing') throw new NotFoundError('No such domain.');
+    if (outcome.kind === 'missing') throw new NotFoundError('Questo dominio non esiste.');
     if (outcome.kind === 'needs-confirmation') throw new ConflictError(LAST_DOMAIN_WARNING);
 
     return {
@@ -392,8 +392,8 @@ const createDomainMethods = ({
 
       if (!allowance.allowed) {
         throw new RateLimitedError(
-          'That domain has been checked several times in the last few minutes. ' +
-            'DNS takes a while to propagate — wait a moment and try again.',
+          'Questo dominio è stato controllato più volte negli ultimi minuti. ' +
+            'Il DNS impiega un po’ a propagarsi: aspetta un momento e riprova.',
         );
       }
     }
@@ -412,7 +412,7 @@ const createDomainMethods = ({
      * they are the same answer because RLS makes them the same query result.
      * 403 would tell an attacker the id is real (§3.5).
      */
-    if (domain === undefined) throw new NotFoundError('No such domain.');
+    if (domain === undefined) throw new NotFoundError('Questo dominio non esiste.');
 
     /* Already done. Idempotent rather than a conflict: the seller's intent is
      * satisfied, and a screen that errors on a second click is worse. */
@@ -439,7 +439,7 @@ const createDomainMethods = ({
     }
 
     if (domain.verificationToken === null) {
-      throw new ConflictError('That domain has no verification in progress. Add it again.');
+      throw new ConflictError('Questo dominio non ha una verifica in corso. Aggiungilo di nuovo.');
     }
 
     /*
@@ -472,8 +472,8 @@ const createDomainMethods = ({
         domain: toResponse(reissued ?? domain),
         verified: false,
         reason:
-          'That verification value expired, so we have issued a new one. ' +
-          'Replace the TXT record with the value below and check again.',
+          'Il valore di verifica era scaduto, quindi te ne abbiamo dato uno nuovo. ' +
+          'Sostituisci il record TXT con il valore qui sotto e controlla di nuovo.',
       };
     }
 

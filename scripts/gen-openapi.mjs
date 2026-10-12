@@ -166,13 +166,16 @@ const sortedEntries = (object) =>
   Object.fromEntries(Object.entries(object).sort(([a], [b]) => a.localeCompare(b)));
 
 const errorResponse = {
-  description: 'The request failed. `code` is stable; `message` is for a human.',
+  description:
+    'The request failed. `code` is stable; `message` is for a human, and on this surface it is ' +
+    'written in Italian: the dashboard shows it to the seller as it is.',
   content: {
     'application/json': {
       example: {
         error: {
           code: 'forbidden',
-          message: 'This role cannot billing manage.',
+          message:
+            'Il tuo ruolo non può fare questa operazione (billing:manage). Chiedi a un titolare.',
           requestId: '5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93',
         },
       },

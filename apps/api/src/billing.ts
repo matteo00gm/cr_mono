@@ -52,7 +52,7 @@ import type { StripeClient } from './stripe.js';
 
 /** No Stripe key on this deployment, or no price under the plan's lookup key. */
 export const BILLING_UNAVAILABLE =
-  'Payments are not set up on this service yet, so a plan cannot be bought here. Contact support.';
+  'I pagamenti non sono ancora attivi su questo servizio, quindi qui non si può acquistare un piano. Scrivi all’assistenza.';
 
 /**
  * A second subscription would bill the winery twice for one widget.
@@ -61,34 +61,35 @@ export const BILLING_UNAVAILABLE =
  * prorated by Stripe, rather than a second purchase beside it.
  */
 export const ALREADY_SUBSCRIBED =
-  'This winery already has a subscription. To move to another plan, change plan on the ' +
-  'Fatturazione screen rather than buying a second one.';
+  'Questa cantina ha già un abbonamento. Per passare a un altro piano, cambialo nella ' +
+  'schermata Fatturazione invece di acquistarne un secondo.';
 
 /**
  * A winery that has never bought anything has no Stripe customer, and so no
  * account for the portal to open (P5-08).
  */
 export const NO_BILLING_ACCOUNT =
-  'This winery has not bought a plan yet, so there is no billing account to manage. ' +
-  'Choose a plan on the Fatturazione screen first.';
+  'Questa cantina non ha ancora acquistato un piano, quindi non c’è un profilo di ' +
+  'fatturazione da gestire. Scegli prima un piano nella schermata Fatturazione.';
 
 /** A plan change needs a subscription to change (P5-09). */
 export const NO_SUBSCRIPTION =
-  'This winery has no subscription to change. Choose a plan on the Fatturazione screen first.';
+  'Questa cantina non ha un abbonamento da modificare. Scegli prima un piano nella schermata Fatturazione.';
 
-export const SAME_PLAN = 'This winery is already on that plan.';
+export const SAME_PLAN = 'Questa cantina ha già questo piano.';
 
 /** Messages on top of a plan are for a winery on one (P5-11a). */
 export const NO_PLAN_FOR_TOP_UP =
-  'Extra messages are added to a plan. Choose a plan on the Fatturazione screen first.';
+  'I messaggi extra si aggiungono a un piano. Scegli prima un piano nella schermata Fatturazione.';
 
 /**
  * A winery whose payment failed has its widget paused (P5-05a): messages bought
  * now could not be used until it pays, and paying is what it needs to do.
  */
 export const PAYMENT_OVERDUE =
-  'The last payment for this winery failed, so its widget is paused. Update the payment method ' +
-  'on the Fatturazione screen first; extra messages can be bought once it is paid.';
+  'L’ultimo pagamento di questa cantina non è andato a buon fine, quindi il widget è in pausa. ' +
+  'Aggiorna prima il metodo di pagamento nella schermata Fatturazione: i messaggi extra si ' +
+  'possono acquistare una volta saldato.';
 
 export interface BillingPort {
   readonly checkout: (tenantId: string, plan: PlanId) => Promise<BillingCheckoutResponse>;

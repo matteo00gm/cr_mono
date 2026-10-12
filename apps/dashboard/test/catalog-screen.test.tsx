@@ -258,21 +258,22 @@ describe('reindexing', () => {
     });
   });
 
-  it('says a run is already going, in Italian, rather than reporting a failure', async () => {
+  it('says a run is already going, in the API’s own words, rather than reporting a failure', async () => {
+    /* The API's sentence is Italian and carries the count still queued (P6-12). */
+    const said =
+      'Una reindicizzazione di questo catalogo è già in corso (vini ancora in coda: 12). ' +
+      'Aspetta che finisca invece di avviarne una seconda.';
     const { client } = fakeClient({
       [LIST]: () => Promise.resolve(listOf([wine()])),
-      [REINDEX_ALL]: () =>
-        Promise.reject(
-          new ApiError(409, 'conflict', 'A reindex is already running for this catalogue', 'req_1'),
-        ),
+      [REINDEX_ALL]: () => Promise.reject(new ApiError(409, 'conflict', said, 'req_1')),
     });
 
     render(<CatalogScreen client={client} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Reindicizza tutto il catalogo' }));
 
     const status = await screen.findByRole('status');
-    expect(status.textContent).toContain('già in corso');
-    expect(status.textContent).not.toContain('already');
+    expect(status.textContent).toBe(said);
+    /* A fact, not a failure: no request id to quote to support. */
     expect(status.textContent).not.toContain('req_1');
   });
 

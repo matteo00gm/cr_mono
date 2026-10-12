@@ -213,11 +213,11 @@ describe('adding a domain', () => {
 
   it('says what was wrong, in words a seller can act on', async () => {
     const refusals: readonly (readonly [string, string])[] = [
-      ['winery', 'suffix'],
-      ['com', 'suffix'],
+      ['winery', 'suffisso'],
+      ['com', 'suffisso'],
       ['http://winery.com', 'https'],
-      ['https://192.168.1.1', 'IP address'],
-      ['https://winery.com/shop', 'path'],
+      ['https://192.168.1.1', 'indirizzo IP'],
+      ['https://winery.com/shop', 'percorso'],
       ['https://localhost', 'localhost'],
     ];
 
@@ -288,7 +288,9 @@ describe('an origin another winery holds', () => {
         (error: unknown) => (error as Error).message,
       );
 
-    expect(message).not.toMatch(/tenant|winery\.com|another|owner|belongs|taken/iu);
+    expect(message).not.toMatch(
+      /tenant|winery\.com|cantina|un altro|un’altra|titolare|proprietari|appartiene|occupato/iu,
+    );
   });
 
   it('is a conflict rather than a validation failure', async () => {
@@ -380,7 +382,7 @@ describe('the plan cap', () => {
       );
 
     expect(message).toMatch(/Cantina/u);
-    expect(message).toMatch(/1 domain\b/u);
+    expect(message).toMatch(/1 dominio\b/u);
     expect(message).toMatch(/Fatturazione/u);
   });
 
@@ -444,7 +446,7 @@ describe('staging and covered origins (P4-19)', () => {
       }),
     ).rejects.toMatchObject({
       kind: 'conflict',
-      message: expect.stringContaining('staging') as unknown,
+      message: expect.stringContaining('domini di prova') as unknown,
     });
   });
 

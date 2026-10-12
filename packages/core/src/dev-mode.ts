@@ -12,8 +12,8 @@ import { normalizeOrigin } from '@catalogorosso/security';
 export const DEV_MODE_HOURS = 24;
 
 export const DEV_MODE_LOCAL_ONLY =
-  'Development mode is for a local address, such as http://localhost:3000. For a staging site, ' +
-  'add it as a staging domain instead.';
+  'La modalità sviluppo è per un indirizzo locale, come http://localhost:3000. Un sito di prova ' +
+  'va invece aggiunto come dominio di prova.';
 
 /**
  * The normalised origin, if the input is a local one — `localhost` or a name

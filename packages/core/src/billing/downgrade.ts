@@ -1,3 +1,4 @@
+import type { Locale } from '../email/templates.js';
 import { PLAN_IDS, PLANS, type PlanId } from '../plans.js';
 
 /**
@@ -45,20 +46,44 @@ const count = (n: number, one: string, many: string) => `${String(n)} ${n === 1 
  *
  * A bare "you cannot downgrade" produces a support ticket every time (P5-10);
  * "archive 112 wines" is something they can do this afternoon.
+ *
+ * **Italian unless asked otherwise** (P6-12): the dashboard prints this as the
+ * API's refusal, and the dashboard has one language. The other reader is the
+ * email sent when a downgrade is put off at period end, which is written in
+ * the winery's own language and asks for that one.
  */
-export const downgradeRefusal = (plan: PlanId, blockers: readonly Blocker[]): string => {
-  const { name } = PLANS[plan];
+export const downgradeRefusal = (
+  plan: PlanId,
+  blockers: readonly Blocker[],
+  locale: Locale = 'it',
+): string => {
+  const { name, skuCap, productionDomains } = PLANS[plan];
+
+  if (locale === 'en') {
+    const cuts = blockers.map(({ what, have, allowed }) =>
+      what === 'wines'
+        ? `archive ${count(have - allowed, 'wine', 'wines')} (${String(have)} of ${String(allowed)})`
+        : `remove ${count(have - allowed, 'domain', 'domains')} (${String(have)} of ${String(allowed)})`,
+    );
+
+    return `${name} allows ${count(skuCap, 'wine', 'wines')} and ${count(
+      productionDomains,
+      'domain',
+      'domains',
+    )}. To move to ${name}, ${cuts.join(' and ')} first.`;
+  }
+
   const cuts = blockers.map(({ what, have, allowed }) =>
     what === 'wines'
-      ? `archive ${count(have - allowed, 'wine', 'wines')} (${String(have)} of ${String(allowed)})`
-      : `remove ${count(have - allowed, 'domain', 'domains')} (${String(have)} of ${String(allowed)})`,
+      ? `archivia ${count(have - allowed, 'vino', 'vini')} (ne hai ${String(have)}, il limite è ${String(allowed)})`
+      : `rimuovi ${count(have - allowed, 'dominio', 'domini')} (ne hai ${String(have)}, il limite è ${String(allowed)})`,
   );
 
-  return `${name} allows ${count(PLANS[plan].skuCap, 'wine', 'wines')} and ${count(
-    PLANS[plan].productionDomains,
-    'domain',
-    'domains',
-  )}. To move to ${name}, ${cuts.join(' and ')} first.`;
+  return `Il piano ${name} comprende ${count(skuCap, 'vino', 'vini')} e ${count(
+    productionDomains,
+    'dominio',
+    'domini',
+  )}. Per passare a ${name}, prima ${cuts.join(' e ')}.`;
 };
 
 /** Whether moving from one plan to another is down the ladder (`PLAN_IDS` is cheapest first). */

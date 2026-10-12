@@ -28,7 +28,7 @@ export const SUGGEST_AFTER_UNAUTHORIZED_ORIGINS = 50;
 export const SUGGEST_AFTER_RATE_LIMITED = 100;
 
 export const TURNSTILE_UNAVAILABLE =
-  'Turnstile is not set up on this service yet, so it cannot be turned on. Contact support.';
+  'Turnstile non è ancora attivo su questo servizio, quindi non può essere acceso. Scrivi all’assistenza.';
 
 export const suggestTurnstile = ({ enabled, signals }: TurnstileState): boolean =>
   !enabled &&

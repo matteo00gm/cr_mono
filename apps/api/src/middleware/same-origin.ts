@@ -25,7 +25,7 @@ import type { AppEnv } from '../env.js';
 
 const SAFE_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-export const CROSS_ORIGIN_REFUSED = 'This request did not come from the dashboard.';
+export const CROSS_ORIGIN_REFUSED = 'Questa richiesta non arriva dalla dashboard.';
 
 export const requireSameOrigin =
   (dashboardOrigin: string): MiddlewareHandler<AppEnv> =>

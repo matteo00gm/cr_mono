@@ -84,37 +84,37 @@ export class DomainError extends Error {
  * thing exists — refusing to demote the last OWNER, say.
  */
 export class NotFoundError extends DomainError {
-  constructor(message = 'Not found', options?: { cause?: unknown }) {
+  constructor(message = 'Non trovato.', options?: { cause?: unknown }) {
     super('not_found', message, options);
   }
 }
 
 export class UnauthenticatedError extends DomainError {
-  constructor(message = 'Authentication required', options?: { cause?: unknown }) {
+  constructor(message = 'Accedi per continuare.', options?: { cause?: unknown }) {
     super('unauthenticated', message, options);
   }
 }
 
 export class ForbiddenError extends DomainError {
-  constructor(message = 'Not permitted', options?: { cause?: unknown }) {
+  constructor(message = 'Non hai i permessi per farlo.', options?: { cause?: unknown }) {
     super('forbidden', message, options);
   }
 }
 
 export class InvalidRequestError extends DomainError {
-  constructor(message = 'Invalid request', options?: { cause?: unknown }) {
+  constructor(message = 'La richiesta non è valida.', options?: { cause?: unknown }) {
     super('invalid', message, options);
   }
 }
 
 export class ConflictError extends DomainError {
-  constructor(message = 'Conflict', options?: { cause?: unknown }) {
+  constructor(message = 'Non si può fare nello stato attuale.', options?: { cause?: unknown }) {
     super('conflict', message, options);
   }
 }
 
 export class RateLimitedError extends DomainError {
-  constructor(message = 'Too many requests', options?: { cause?: unknown }) {
+  constructor(message = 'Troppe richieste. Riprova fra poco.', options?: { cause?: unknown }) {
     super('rate_limited', message, options);
   }
 }
@@ -128,7 +128,7 @@ export class RateLimitedError extends DomainError {
  * message names no billing state — §1.3 says a visitor is never shown one.
  */
 export class UnavailableError extends DomainError {
-  constructor(message = 'Not available', options?: { cause?: unknown }) {
+  constructor(message = 'Non disponibile.', options?: { cause?: unknown }) {
     super('unavailable', message, options);
   }
 }
@@ -142,8 +142,8 @@ export class UnavailableError extends DomainError {
  */
 export class MfaRequiredError extends DomainError {
   constructor(
-    message = 'Turn on two-factor authentication to manage this winery. Owners need it for keys, ' +
-      'domains, billing and members; the catalogue stays available meanwhile.',
+    message = 'Attiva la verifica in due passaggi per gestire questa cantina. Ai titolari serve per ' +
+      'chiavi, domini, fatturazione e membri; il catalogo resta disponibile nel frattempo.',
     options?: { cause?: unknown },
   ) {
     super('mfa_required', message, options);
@@ -156,7 +156,7 @@ export class MfaRequiredError extends DomainError {
  */
 export class StepUpRequiredError extends DomainError {
   constructor(
-    message = 'Confirm it is you: enter a code from your authenticator app to continue.',
+    message = 'Conferma che sei tu: inserisci un codice dalla tua app di autenticazione per continuare.',
     options?: { cause?: unknown },
   ) {
     super('step_up_required', message, options);

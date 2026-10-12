@@ -60,11 +60,11 @@ describe('the message for a refused domain', () => {
 
   it('names the thing that was wrong', () => {
     expect(refusalMessage('not_https')).toMatch(/https/iu);
-    expect(refusalMessage('ip_literal')).toMatch(/IP address/iu);
-    expect(refusalMessage('has_path')).toMatch(/path/iu);
+    expect(refusalMessage('ip_literal')).toMatch(/indirizzo IP/iu);
+    expect(refusalMessage('has_path')).toMatch(/percorso/iu);
     expect(refusalMessage('localhost')).toMatch(/localhost/iu);
-    expect(refusalMessage('single_label')).toMatch(/suffix/iu);
-    expect(refusalMessage('public_suffix')).toMatch(/suffix/iu);
+    expect(refusalMessage('single_label')).toMatch(/suffisso/iu);
+    expect(refusalMessage('public_suffix')).toMatch(/suffisso/iu);
   });
 });
 
@@ -75,14 +75,16 @@ describe('the message for an origin somebody else holds', () => {
      * another winery" confirms a competitor is a customer, and run against a
      * list of domains it enumerates our customer base.
      */
-    expect(ORIGIN_UNAVAILABLE).not.toMatch(/tenant|another|owner|belongs|customer|winery/iu);
+    expect(ORIGIN_UNAVAILABLE).not.toMatch(
+      /tenant|cantina|un altro|un’altra|titolare|proprietari|appartiene|cliente/iu,
+    );
   });
 
   it('still leaves the seller somewhere to go', () => {
     /* A refusal with no next step on the one screen that gates the product is
      * how a legitimate seller gives up. For one who really owns the domain the
      * next step is the claim (P4-18). */
-    expect(ORIGIN_UNAVAILABLE).toMatch(/claim it by proving you control its DNS/iu);
+    expect(ORIGIN_UNAVAILABLE).toMatch(/rivendicarlo dimostrando di controllarne il DNS/iu);
   });
 });
 
@@ -137,12 +139,12 @@ describe('what a seller at their cap is told', () => {
     const message = capMessage('CANTINA', 1);
 
     expect(message).toMatch(/Cantina/u);
-    expect(message).toMatch(/\b1 domain\b/u);
+    expect(message).toMatch(/\b1 dominio, ed è già in uso\b/u);
     expect(message).toMatch(/Fatturazione/u);
   });
 
   it('counts in the plural when there is more than one', () => {
-    expect(capMessage('ECOMMERCE', 2)).toMatch(/\b2 domains\b/u);
+    expect(capMessage('ECOMMERCE', 2)).toMatch(/\b2 domini, e sono tutti in uso\b/u);
     expect(capMessage('ECOMMERCE', 2)).toMatch(/E-commerce/u);
   });
 
@@ -151,11 +153,12 @@ describe('what a seller at their cap is told', () => {
     const message = capMessage('none', 1);
 
     expect(message).not.toMatch(/none/u);
-    expect(message).toMatch(/trial/iu);
+    /* Not "il tuo piano": a winery that has bought nothing is not on one. */
+    expect(message).toMatch(/^La tua prova gratuita comprende 1 dominio/u);
   });
 
   it('says what to do, not only what went wrong', () => {
-    expect(capMessage('CANTINA', 1)).toMatch(/remove/iu);
+    expect(capMessage('CANTINA', 1)).toMatch(/Rimuovine uno/u);
   });
 });
 
@@ -176,11 +179,12 @@ describe('what a seller is told when the file check fails (P4-03)', () => {
   });
 
   it('says what to do about a missing file', () => {
-    expect(wellKnownRefusalMessage('not_found')).toMatch(/upload/iu);
+    expect(wellKnownRefusalMessage('not_found')).toMatch(/Caricalo/u);
   });
 
   it('warns that a themed page looks like this, because most hosts serve one', () => {
-    expect(wellKnownRefusalMessage('mismatch')).toMatch(/themed|404/iu);
+    expect(wellKnownRefusalMessage('mismatch')).toMatch(/pagina del tema/u);
+    expect(wellKnownRefusalMessage('mismatch')).toMatch(/404/u);
   });
 
   it('never names what our own network refused', () => {
@@ -192,8 +196,10 @@ describe('what a seller is told when the file check fails (P4-03)', () => {
      */
     const message = wellKnownRefusalMessage('unreachable');
 
-    expect(message).not.toMatch(/private|internal|blocked|metadata|redirect|10\.|169\.254/iu);
-    expect(message).toMatch(/could not reach/iu);
+    expect(message).not.toMatch(
+      /privat|intern|blocc|metadat|redirect|reindirizz|indirizz|10\.|169\.254/iu,
+    );
+    expect(message).toMatch(/Non siamo riusciti a raggiungere il tuo sito/u);
   });
 });
 
@@ -270,18 +276,24 @@ describe('what a seller is told before removing their last domain (P4-06)', () =
      * remove that domain" tells them neither what would happen nor how to go
      * ahead.
      */
-    expect(LAST_DOMAIN_WARNING).toMatch(/only verified domain/iu);
-    expect(LAST_DOMAIN_WARNING).toMatch(/switches the widget off/iu);
+    expect(LAST_DOMAIN_WARNING).toMatch(/unico dominio verificato/u);
+    expect(LAST_DOMAIN_WARNING).toMatch(/il widget si spegne/u);
   });
 
   it('says it happens immediately, because that is the part that surprises people', () => {
-    expect(LAST_DOMAIN_WARNING).toMatch(/immediat/iu);
+    expect(LAST_DOMAIN_WARNING).toMatch(/subito/u);
   });
 
   it('says how to go ahead', () => {
-    /* A confirmation that does not say how to confirm is a refusal with extra
-     * steps. */
-    expect(LAST_DOMAIN_WARNING).toMatch(/confirm=true/u);
+    /*
+     * A confirmation that does not say there is a way to confirm is a refusal
+     * with extra steps. **In a seller's words, not the API's** (P6-12): the
+     * screen prints this sentence, and `confirm=true` is the query parameter
+     * its button sends — the reference documents it for whoever calls the
+     * route by hand.
+     */
+    expect(LAST_DOMAIN_WARNING).toMatch(/Conferma la rimozione/u);
+    expect(LAST_DOMAIN_WARNING).not.toMatch(/confirm=/u);
   });
 });
 
@@ -316,7 +328,7 @@ describe('the tag a seller pastes (P4-08)', () => {
 describe('staging domains (P4-19)', () => {
   it('are capped at two, outside the plan', () => {
     expect(STAGING_DOMAIN_CAP).toBe(2);
-    expect(STAGING_CAP_MESSAGE).toContain('up to 2 staging domains');
+    expect(STAGING_CAP_MESSAGE).toContain('fino a 2 domini di prova');
   });
 });
 
@@ -335,7 +347,7 @@ describe('a Shopify store’s own address (P4-19)', () => {
   );
 
   it('points the seller somewhere that will work', () => {
-    expect(SHOPIFY_UNVERIFIABLE).toMatch(/Shopify controls it/u);
+    expect(SHOPIFY_UNVERIFIABLE).toMatch(/lo controlla Shopify/u);
     /* The install proves it now (P6-06), so the seller is sent there, not to support. */
     expect(SHOPIFY_UNVERIFIABLE).toMatch(/Integrazioni/u);
   });

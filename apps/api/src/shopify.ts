@@ -143,7 +143,7 @@ export type InstallFailure =
 export type ShopDomainOutcome = 'verificato' | 'limite' | 'occupato';
 
 export const SHOPIFY_NOT_CONFIGURED =
-  'Shopify is not set up on this service yet, so a store cannot be connected.';
+  'Shopify non è ancora attivo su questo servizio, quindi non si può collegare un negozio.';
 
 export interface ShopifyConfig {
   /** The app's client id: public, it is in every authorize URL. */

@@ -248,7 +248,8 @@ describe('a domain whose record is not', () => {
   it('says where to look when the record is absent', async () => {
     const result = await port([]).verify({ tenantId: 't1', domainId: 'd1', method: 'dns' });
 
-    expect(result.reason).toMatch(/propagate|publish/iu);
+    expect(result.reason).toMatch(/propagarsi/u);
+    expect(result.reason).toMatch(/pubblicalo/u);
   });
 
   it('says something different when the record is there and wrong', async () => {
@@ -262,7 +263,8 @@ describe('a domain whose record is not', () => {
     });
 
     expect(wrong.reason).not.toBe(absent.reason);
-    expect(wrong.reason).toMatch(/not the value|exactly/iu);
+    expect(wrong.reason).toMatch(/non contiene il valore/u);
+    expect(wrong.reason).toMatch(/esattamente/u);
   });
 
   it('says a resolver failure is ours', async () => {
@@ -272,7 +274,7 @@ describe('a domain whose record is not', () => {
       method: 'dns',
     });
 
-    expect(result.reason).toMatch(/our end/iu);
+    expect(result.reason).toMatch(/È un problema nostro/u);
   });
 
   it('leaves the status alone', async () => {
@@ -378,8 +380,8 @@ describe('how often it may be asked', () => {
         (error: unknown) => (error as Error).message,
       );
 
-    expect(message).toMatch(/wait|try again/iu);
-    expect(message).not.toMatch(/limit exceeded|forbidden|error/iu);
+    expect(message).toMatch(/aspetta un momento e riprova/u);
+    expect(message).not.toMatch(/limite|superat|vietat|errore/iu);
   });
 });
 
@@ -438,8 +440,9 @@ describe('a nonce that has lapsed (P4-04)', () => {
       method: 'dns',
     });
 
-    expect(result.reason).toMatch(/expired/iu);
-    expect(result.reason).toMatch(/new one|replace/iu);
+    expect(result.reason).toMatch(/era scaduto/u);
+    expect(result.reason).toMatch(/uno nuovo/u);
+    expect(result.reason).toMatch(/Sostituisci il record TXT/u);
   });
 
   it('is recorded, so a claim nobody ever completes is visible', async () => {
@@ -578,7 +581,7 @@ describe('the file proof (P4-03)', () => {
     });
 
     expect(result.verified).toBe(false);
-    expect(result.reason).toMatch(/upload/iu);
+    expect(result.reason).toMatch(/Caricalo/u);
   });
 
   it('tells a seller to check the contents when something else answers', async () => {
@@ -588,7 +591,8 @@ describe('the file proof (P4-03)', () => {
       method: 'wellknown',
     });
 
-    expect(result.reason).toMatch(/value we issued|themed page/iu);
+    expect(result.reason).toMatch(/non è il valore che ti abbiamo dato/u);
+    expect(result.reason).toMatch(/pagina del tema/u);
   });
 
   it('says only that it could not reach the site, whatever the refusal was', async () => {
@@ -602,8 +606,8 @@ describe('the file proof (P4-03)', () => {
       Promise.reject(new GuardedFetchRefused('blocked_address')),
     ).verify({ tenantId: 't1', domainId: 'd1', method: 'wellknown' });
 
-    expect(result.reason).toMatch(/could not reach/iu);
-    expect(result.reason).not.toMatch(/blocked|address|redirect|private/iu);
+    expect(result.reason).toMatch(/Non siamo riusciti a raggiungere il tuo sito/u);
+    expect(result.reason).not.toMatch(/blocc|indirizz|redirect|reindirizz|privat/iu);
   });
 
   it('records what our own agent actually refused', async () => {
@@ -802,7 +806,7 @@ describe('a Shopify store’s own address (P4-19)', () => {
 
       expect(result).toMatchObject({
         verified: false,
-        reason: expect.stringContaining('Shopify controls it') as unknown,
+        reason: expect.stringContaining('lo controlla Shopify') as unknown,
       });
       expect(calls.some((call) => call.startsWith('markDomainVerified'))).toBe(false);
       expect(calls.some((call) => call.startsWith('fetch'))).toBe(false);

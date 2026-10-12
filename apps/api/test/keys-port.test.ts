@@ -188,7 +188,7 @@ describe('issuing a winery its first keys', () => {
   it('tells a seller how to get a new secret instead', async () => {
     state.inserted = undefined;
 
-    await expect(port().create('t1')).rejects.toThrow(/rotate/iu);
+    await expect(port().create('t1')).rejects.toThrow(/Per sostituire la chiave segreta, ruotala/u);
   });
 
   it('writes no audit row for a refusal', async () => {

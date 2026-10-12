@@ -109,7 +109,7 @@ describe('reindexing one wine', () => {
     );
 
     expect(response.status).toBe(409);
-    expect(await response.text()).toContain('archived');
+    expect(await response.text()).toContain('Questo vino è archiviato');
   });
 });
 

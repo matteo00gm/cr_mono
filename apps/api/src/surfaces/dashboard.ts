@@ -60,6 +60,7 @@ import {
   MAX_IMPORT_ROWS,
   NotFoundError,
   PLAN_IDS,
+  CLAIM_NOTICED,
   RANGE_EXPECTED,
   rangeOfBand,
   SHOP_EXPECTED,
@@ -225,8 +226,8 @@ const readImportBody = async <T>(
 
   if (new TextEncoder().encode(raw).byteLength > MAX_IMPORT_BODY_BYTES) {
     throw new InvalidRequestError(
-      `An import body may be at most ${String(MAX_IMPORT_BODY_BYTES / 1024 / 1024)} MB. ` +
-        'Split the rows into several imports, each with its own Idempotency-Key.',
+      `Un’importazione può pesare al massimo ${String(MAX_IMPORT_BODY_BYTES / 1024 / 1024)} MB. ` +
+        'Dividi le righe in più importazioni, ciascuna con la propria Idempotency-Key.',
     );
   }
 
@@ -234,7 +235,7 @@ const readImportBody = async <T>(
 
   if (!body.success) {
     throw new InvalidRequestError(
-      `Send a JSON body of the form ${shape} carrying between 1 and ${String(MAX_IMPORT_ROWS)} products.`,
+      `Invia un corpo JSON nella forma ${shape}, con un numero di vini compreso fra 1 e ${String(MAX_IMPORT_ROWS)}.`,
     );
   }
 
@@ -289,11 +290,11 @@ const contractRows = (candidates: readonly unknown[]): ProductInsert[] => {
 
   if (invalid.length > 0) {
     const named = invalid.slice(0, 5).join(', ');
-    const more = invalid.length > 5 ? ` and ${String(invalid.length - 5)} more` : '';
+    const more = invalid.length > 5 ? ` e altre ${String(invalid.length - 5)}` : '';
 
     throw new InvalidRequestError(
-      `Row ${named}${more} did not match the product contract, so nothing was imported. ` +
-        'Validate every row before sending an import.',
+      `Righe non valide: ${named}${more}. Non rispettano il formato di un vino, quindi non è ` +
+        'stato importato niente. Controlla ogni riga prima di inviare un’importazione.',
     );
   }
 
@@ -451,6 +452,14 @@ const listQuery = z.object({
    */
   completeness: z.enum(COMPLETENESS_BANDS).optional(),
 });
+
+/** One sentence for the three routes that can miss a wine, so they cannot drift apart. */
+const NO_SUCH_PRODUCT = 'Questo vino non esiste.';
+
+/** What Checkout and a plan change say to a body that names no plan. */
+const PLAN_EXPECTED = `Invia un corpo JSON che indica il piano: ${PLAN_IDS.map(
+  (id) => `{"plan": "${id}"}`,
+).join(' oppure ')}.`;
 
 /**
  * What a merchant asks the sandbox (P2-37).
@@ -645,7 +654,7 @@ export const createDashboardApp = ({
     const parsed = acceptBody.safeParse(await readJson(c));
 
     if (!parsed.success) {
-      throw new InvalidRequestError('Send a JSON body carrying the invitation token.');
+      throw new InvalidRequestError('Invia un corpo JSON con il token dell’invito.');
     }
 
     const membership = await members.accept({
@@ -660,7 +669,7 @@ export const createDashboardApp = ({
      * open invitations, and none of the distinctions helps a legitimate caller,
      * who either has a working link or needs a new one either way.
      */
-    if (!membership) throw new NotFoundError('That invitation link is not usable.');
+    if (!membership) throw new NotFoundError('Questo link di invito non è utilizzabile.');
 
     return c.json(membership);
   });
@@ -720,7 +729,7 @@ export const createDashboardApp = ({
     const parsed = inviteBody.safeParse(await readJson(c));
 
     if (!parsed.success) {
-      throw new InvalidRequestError('Send a JSON body carrying an email and a role.');
+      throw new InvalidRequestError('Invia un corpo JSON con un indirizzo email e un ruolo.');
     }
 
     const result = await members.invite({
@@ -783,7 +792,7 @@ export const createDashboardApp = ({
     const parsed = productInsert.safeParse(await readJson(c));
 
     if (!parsed.success) {
-      throw new InvalidRequestError('Send a JSON body describing a product.');
+      throw new InvalidRequestError('Invia un corpo JSON che descrive un vino.');
     }
 
     /* Same normalisation as the import path, for the same reason (P3-11). */
@@ -809,8 +818,8 @@ export const createDashboardApp = ({
        * the answer discloses nothing about anybody else's catalogue.
        */
       throw new ConflictError(
-        `A product with SKU "${parsed.data.sku}" already exists in this catalogue. ` +
-          'Edit that one, or choose a different SKU.',
+        `In questo catalogo esiste già un vino con lo SKU "${parsed.data.sku}". ` +
+          'Modifica quello, oppure scegli un altro SKU.',
       );
     }
 
@@ -878,8 +887,8 @@ export const createDashboardApp = ({
 
     if (!idempotencyKey.success) {
       throw new InvalidRequestError(
-        `Send an ${IDEMPOTENCY_KEY_HEADER} header carrying a UUID generated for this import, ` +
-          'and send the same UUID again if you retry it.',
+        `Invia un’intestazione ${IDEMPOTENCY_KEY_HEADER} con un UUID generato per questa ` +
+          'importazione, e invia lo stesso UUID se la ripeti.',
       );
     }
 
@@ -903,16 +912,16 @@ export const createDashboardApp = ({
 
     if (claim.outcome === 'different-body') {
       throw new ConflictError(
-        `This ${IDEMPOTENCY_KEY_HEADER} was already used for an import with different rows. ` +
-          'Generate a new key for each import.',
+        `Questa ${IDEMPOTENCY_KEY_HEADER} è già stata usata per un’importazione con righe ` +
+          'diverse. Genera una chiave nuova per ogni importazione.',
       );
     }
 
     if (claim.outcome === 'in-progress') {
       throw new ConflictError(
-        `The import sent with this ${IDEMPOTENCY_KEY_HEADER} has not finished. Retry with the ` +
-          'same key shortly to read its result; an attempt that never finishes is released ' +
-          `after ${String(IMPORT_CLAIM_EXPIRES_AFTER_SECONDS)} seconds.`,
+        `L’importazione inviata con questa ${IDEMPOTENCY_KEY_HEADER} non è ancora finita. ` +
+          'Riprova fra poco con la stessa chiave per leggerne il risultato; un tentativo che ' +
+          `non finisce mai viene rilasciato dopo ${String(IMPORT_CLAIM_EXPIRES_AFTER_SECONDS)} secondi.`,
       );
     }
 
@@ -1001,7 +1010,7 @@ export const createDashboardApp = ({
     const parsed = productUpdate.safeParse(await readJson(c));
 
     if (!parsed.success) {
-      throw new InvalidRequestError('Send a JSON body with the product fields to change.');
+      throw new InvalidRequestError('Invia un corpo JSON con i campi del vino da modificare.');
     }
 
     const result = await products.update({
@@ -1016,13 +1025,13 @@ export const createDashboardApp = ({
        * winery, and one that is not a uuid at all. Distinguishing them would
        * tell a caller which ids are real.
        */
-      throw new NotFoundError('No such product.');
+      throw new NotFoundError(NO_SUCH_PRODUCT);
     }
 
     if (result.outcome === 'duplicate-sku') {
       throw new ConflictError(
-        'Another product in this catalogue already uses that SKU. ' +
-          'Edit that one, or choose a different SKU.',
+        'Un altro vino di questo catalogo usa già questo SKU. ' +
+          'Modifica quello, oppure scegli un altro SKU.',
       );
     }
 
@@ -1058,7 +1067,7 @@ export const createDashboardApp = ({
       productId: c.req.param('id'),
     });
 
-    if (result.outcome === 'not-found') throw new NotFoundError('No such product.');
+    if (result.outcome === 'not-found') throw new NotFoundError(NO_SUCH_PRODUCT);
 
     return c.json({
       id: result.product.id,
@@ -1093,10 +1102,10 @@ export const createDashboardApp = ({
        * convinced they were sorting by something.
        */
       throw new InvalidRequestError(
-        'Check the query parameters: sort must be one of createdAt, updatedAt, name or ' +
-          `priceCents, direction asc or desc, limit a whole number up to ${String(MAX_LIMIT)}, ` +
-          'and stockStatus, embeddingState, completeness and the price bounds must be ' +
-          'values the catalogue actually uses.',
+        'Controlla i parametri della richiesta: sort deve essere uno fra createdAt, updatedAt, ' +
+          `name o priceCents, direction asc o desc, limit un numero intero fino a ${String(MAX_LIMIT)}, ` +
+          'e stockStatus, embeddingState, completeness e i limiti di prezzo devono essere ' +
+          'valori che il catalogo usa davvero.',
       );
     }
 
@@ -1168,9 +1177,9 @@ export const createDashboardApp = ({
 
     if (result.outcome === 'in-flight') {
       throw new ConflictError(
-        `A reindex is already running for this catalogue, with ${String(result.queued)} ` +
-          'wine(s) still queued. Wait for it to finish rather than starting a second one — ' +
-          'two runs do not index anything twice, they only make the wait longer.',
+        'Una reindicizzazione di questo catalogo è già in corso (vini ancora in coda: ' +
+          `${String(result.queued)}). Aspetta che finisca invece di avviarne una seconda: due ` +
+          'esecuzioni non indicizzano niente due volte, allungano soltanto l’attesa.',
       );
     }
 
@@ -1203,12 +1212,12 @@ export const createDashboardApp = ({
       productId: c.req.param('id'),
     });
 
-    if (result.outcome === 'not-found') throw new NotFoundError('No such product.');
+    if (result.outcome === 'not-found') throw new NotFoundError(NO_SUCH_PRODUCT);
 
     if (result.outcome === 'archived') {
       throw new ConflictError(
-        'This wine is archived, so it is not indexed and reindexing it would do nothing. ' +
-          'Restore it first if it should be recommended again.',
+        'Questo vino è archiviato, quindi non è indicizzato e reindicizzarlo non avrebbe effetto. ' +
+          'Ripristinalo prima, se deve tornare fra i consigliati.',
       );
     }
 
@@ -1243,7 +1252,7 @@ export const createDashboardApp = ({
 
     if (!parsed.success) {
       throw new InvalidRequestError(
-        'Send a JSON body with a query, and optionally maxPriceCents or cap.',
+        'Invia un corpo JSON con una query e, se vuoi, maxPriceCents o cap.',
       );
     }
 
@@ -1316,7 +1325,7 @@ export const createDashboardApp = ({
     const parsed = turnstileBody.safeParse(await readJson(c));
 
     if (!parsed.success) {
-      throw new InvalidRequestError('Send a JSON body carrying enabled: true or false.');
+      throw new InvalidRequestError('Invia un corpo JSON con enabled: true oppure false.');
     }
 
     return c.json(await turnstileSettings.set(c.get('tenantId'), parsed.data.enabled));
@@ -1340,7 +1349,7 @@ export const createDashboardApp = ({
     const parsed = devModeBody.safeParse(await readJson(c));
 
     if (!parsed.success) {
-      throw new InvalidRequestError('Send a JSON body carrying the local origin to allow.');
+      throw new InvalidRequestError('Invia un corpo JSON con l’origine locale da autorizzare.');
     }
 
     return c.json(
@@ -1365,11 +1374,7 @@ export const createDashboardApp = ({
   app.post('/billing/checkout', requireCapability('billing:manage'), async (c) => {
     const parsed = checkoutBody.safeParse(await readJson(c));
 
-    if (!parsed.success) {
-      throw new InvalidRequestError(
-        `Send a JSON body naming the plan: ${PLAN_IDS.map((id) => `{"plan": "${id}"}`).join(' or ')}.`,
-      );
-    }
+    if (!parsed.success) throw new InvalidRequestError(PLAN_EXPECTED);
 
     return c.json(await billing.checkout(c.get('tenantId'), parsed.data.plan));
   });
@@ -1384,11 +1389,7 @@ export const createDashboardApp = ({
   app.post('/billing/plan', requireCapability('billing:manage'), stepUp, async (c) => {
     const parsed = checkoutBody.safeParse(await readJson(c));
 
-    if (!parsed.success) {
-      throw new InvalidRequestError(
-        `Send a JSON body naming the plan: ${PLAN_IDS.map((id) => `{"plan": "${id}"}`).join(' or ')}.`,
-      );
-    }
+    if (!parsed.success) throw new InvalidRequestError(PLAN_EXPECTED);
 
     return c.json(await billing.changePlan(c.get('tenantId'), parsed.data.plan));
   });
@@ -1586,7 +1587,7 @@ export const createDashboardApp = ({
     const parsed = verifyBody.safeParse(await readJson(c));
 
     if (!parsed.success) {
-      throw new InvalidRequestError('Send a JSON body naming the verification method.');
+      throw new InvalidRequestError('Invia un corpo JSON che indica il metodo di verifica.');
     }
 
     return c.json(
@@ -1611,7 +1612,7 @@ export const createDashboardApp = ({
     const parsed = domainBody.safeParse(await readJson(c));
 
     if (!parsed.success) {
-      throw new InvalidRequestError('Send a JSON body carrying the domain to claim.');
+      throw new InvalidRequestError('Invia un corpo JSON con il dominio da rivendicare.');
     }
 
     return c.json(
@@ -1686,7 +1687,7 @@ export const createDashboardApp = ({
     const parsed = addDomainBody.safeParse(await readJson(c));
 
     if (!parsed.success) {
-      throw new InvalidRequestError('Send a JSON body carrying the domain to add.');
+      throw new InvalidRequestError('Invia un corpo JSON con il dominio da aggiungere.');
     }
 
     return c.json(
@@ -1712,7 +1713,7 @@ export const createDashboardApp = ({
     const parsed = roleChangeBody.safeParse(await readJson(c));
 
     if (!parsed.success) {
-      throw new InvalidRequestError('Send a JSON body carrying a role of OWNER or EDITOR.');
+      throw new InvalidRequestError('Invia un corpo JSON con un ruolo: OWNER oppure EDITOR.');
     }
 
     const userId = c.req.param('userId');
@@ -1762,7 +1763,7 @@ export const createDashboardApp = ({
     const invitationId = c.req.param('id');
 
     const revoked = await members.revoke({ tenantId: c.get('tenantId'), invitationId });
-    if (!revoked) throw new NotFoundError('No such invitation.');
+    if (!revoked) throw new NotFoundError('Questo invito non esiste.');
 
     return c.json({ invitationId, revoked: true as const });
   });
@@ -3011,9 +3012,8 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         verified: true,
         transferred: false,
         transferAt: '2026-10-02T09:00:00.000Z',
-        reason:
-          'We found your record. The domain is in use, so its current holder has been given 72 ' +
-          'hours to respond. If they do not, it moves to your account automatically.',
+        /* The sentence itself, so the reference cannot say one thing and the API another. */
+        reason: CLAIM_NOTICED,
       },
       response: domainClaimCheckedResponse,
     },

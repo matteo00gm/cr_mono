@@ -2,6 +2,8 @@ import { getRequestContext, isDomainError, type DomainErrorKind } from '@catalog
 import type { ErrorHandler, MiddlewareHandler, NotFoundHandler } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
+import { DASHBOARD_PREFIX } from '../routes.js';
+
 import { logger } from './logger.js';
 
 /**
@@ -70,6 +72,24 @@ export interface ErrorBody {
  */
 const GENERIC_MESSAGE = 'An unexpected error occurred.';
 
+/**
+ * The same two fixed sentences, for a seller (P6-12).
+ *
+ * The dashboard prints a failure's message as it arrives, so the two this
+ * handler writes itself are Italian under `/v1/dashboard` like every refusal a
+ * route there writes. **Chosen by the path and nothing else**: still fixed
+ * text, still nothing derived from the error. Every other surface is read by a
+ * developer — the widget maps codes to its own copy and never shows a message
+ * — and keeps the English.
+ */
+const GENERIC_MESSAGE_IT = 'Si è verificato un errore imprevisto.';
+const NOT_FOUND = 'Not found';
+const NOT_FOUND_IT = 'Non trovato.';
+
+/** `/v1/dashboard` and what is under it — not `/v1/dashboardx`, which is nobody's. */
+const forSeller = (path: string): boolean =>
+  path === DASHBOARD_PREFIX || path.startsWith(`${DASHBOARD_PREFIX}/`);
+
 const requestId = (): string => getRequestContext()?.requestId ?? 'unknown';
 
 const body = (code: ErrorBody['error']['code'], message: string): ErrorBody => ({
@@ -124,7 +144,10 @@ export const errorHandler: ErrorHandler = (error, c) => {
    * but the request id comes back to the caller.
    */
   logger.error({ err: error }, 'unhandled error');
-  return c.json(body('internal', GENERIC_MESSAGE), 500);
+  return c.json(
+    body('internal', forSeller(c.req.path) ? GENERIC_MESSAGE_IT : GENERIC_MESSAGE),
+    500,
+  );
 };
 
 /**
@@ -135,4 +158,5 @@ export const errorHandler: ErrorHandler = (error, c) => {
  * and reports it as "the API returned garbage" rather than "that route does not
  * exist".
  */
-export const notFoundHandler: NotFoundHandler = (c) => c.json(body('not_found', 'Not found'), 404);
+export const notFoundHandler: NotFoundHandler = (c) =>
+  c.json(body('not_found', forSeller(c.req.path) ? NOT_FOUND_IT : NOT_FOUND), 404);
