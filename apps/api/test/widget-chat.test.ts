@@ -13,6 +13,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.js';
 import { QuotaExceededError, type ChatPort, type ChatRequest } from '../src/chat.js';
 import { SSE_HEADERS, type WidgetDependencies } from '../src/surfaces/widget.js';
+import { createTelemetry, type OtlpTraces, type Telemetry } from '../src/telemetry.js';
 import {
   WIDGET_TOKEN_AUDIENCE,
   WIDGET_TOKEN_ISSUER,
@@ -83,10 +84,11 @@ const answering = (...chunks: readonly WidgetChatEvent[]): ChatPort => ({
     })(),
 });
 
-const appWith = (overrides: Partial<WidgetDependencies> = {}) =>
+const appWith = (overrides: Partial<WidgetDependencies> = {}, telemetry?: Telemetry) =>
   createApp({
     auth: fakeAuth(),
     readMemberships: oneMembership(),
+    ...(telemetry === undefined ? {} : { telemetry }),
     widget: {
       resolve: () => Promise.resolve(FOUND),
       limiter: memoryRateLimiter(),
@@ -417,5 +419,98 @@ describe('what it will not answer', () => {
     const response = await ask(appWith({ chat: undefined }));
 
     expect(response.status).toBeGreaterThanOrEqual(500);
+  });
+});
+
+describe('the turn’s trace (P7-01)', () => {
+  it('is sent while the stream is still open, with the visitor’s winery and session on it', async () => {
+    const exports: OtlpTraces[] = [];
+    let delivered = false;
+    const telemetry = createTelemetry({
+      random: () => 0,
+      /* A collector that takes a moment, as one does: the stream must not close before it has it. */
+      exporter: async (traces) => {
+        exports.push(traces);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        delivered = true;
+      },
+    });
+
+    /*
+     * A model that takes a moment too, as one does — so the handler has
+     * returned, and its own wait for exports has found nothing to wait for,
+     * long before the turn ends. From there the route is the only thing
+     * between the export and a frozen function.
+     */
+    const thinking: ChatPort = {
+      answer: () =>
+        (async function* (): AsyncGenerator<WidgetChatEvent> {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+
+          yield { type: 'text', delta: 'Un Barolo.' };
+        })(),
+    };
+
+    const response = await ask(appWith({ chat: thinking }, telemetry));
+
+    expect(response.status).toBe(200);
+    /* Returned, and nothing sent: the turn is still being written. */
+    expect(exports).toEqual([]);
+    expect(eventsOf(await response.text())).toEqual(['text', 'done']);
+    /* The body has ended, so the function may be frozen now — and the trace has already arrived. */
+    expect(delivered).toBe(true);
+
+    const spans = exports.flatMap((sent) =>
+      sent.resourceSpans.flatMap((resource) => resource.scopeSpans.flatMap((scope) => scope.spans)),
+    );
+    const [root, turn] = spans;
+    const said = (span: (typeof spans)[number] | undefined): Record<string, unknown> =>
+      Object.fromEntries(
+        (span?.attributes ?? []).map(({ key, value }) => [key, Object.values(value)[0]]),
+      );
+
+    /* One export, and the whole trace in it: the stream's own wait is what got it out. */
+    expect(exports).toHaveLength(1);
+    expect(spans.map((span) => span.name)).toEqual(['http.request', 'chat.turn']);
+    expect(turn?.parentSpanId).toBe(root?.spanId);
+
+    for (const span of spans) {
+      expect(said(span), span.name).toMatchObject({ tenant_id: TENANT });
+      expect(said(span).session_id, span.name).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/u));
+    }
+
+    expect(said(root)).toMatchObject({ 'http.route': PATH, 'http.status_code': '200' });
+    /* Not a word of the question or the answer. */
+    expect(JSON.stringify(exports)).not.toContain('bistecca');
+    expect(JSON.stringify(exports)).not.toContain('Barolo');
+  });
+
+  it('marks a turn that failed mid-stream, and keeps it whatever the dice say', async () => {
+    const exports: OtlpTraces[] = [];
+    const telemetry = createTelemetry({
+      random: () => 0.999,
+      exporter: (traces) => {
+        exports.push(traces);
+
+        return Promise.resolve();
+      },
+    });
+    const breaking: ChatPort = {
+      answer: () =>
+        (async function* (): AsyncGenerator<WidgetChatEvent> {
+          yield await Promise.resolve({ type: 'text', delta: 'Un ' });
+
+          throw new Error('bedrock is down');
+        })(),
+    };
+
+    const response = await ask(appWith({ chat: breaking }, telemetry));
+
+    expect(eventsOf(await response.text())).toEqual(['text', 'error', 'done']);
+
+    const spans = exports.flatMap((sent) => sent.resourceSpans[0]?.scopeSpans[0]?.spans ?? []);
+
+    expect(exports).toHaveLength(1);
+    expect(spans.find((span) => span.name === 'chat.turn')?.status).toEqual({ code: 2 });
   });
 });

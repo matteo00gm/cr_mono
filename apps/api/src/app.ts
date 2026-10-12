@@ -29,6 +29,7 @@ import {
   type SignatureRejection,
 } from './surfaces/webhooks.js';
 import type { StripeEventsPort } from './stripe-events.js';
+import { createTelemetry, type Telemetry } from './telemetry.js';
 import {
   createWidgetApp,
   WIDGET_ROUTE_ACCESS,
@@ -177,6 +178,12 @@ export interface AppOptions {
    * a startup failure rather than a configuration (P5-14).
    */
   readonly production?: boolean | undefined;
+
+  /**
+   * Tracing (P7-01). Absent — every suite, and a deployment with nowhere to
+   * send a trace — nothing is traced and nothing is added to a request.
+   */
+  readonly telemetry?: Telemetry | undefined;
 }
 
 export const createApp = ({
@@ -202,6 +209,7 @@ export const createApp = ({
   widget,
   dev,
   production = false,
+  telemetry = createTelemetry(),
 }: AppOptions): Hono<AppEnv> => {
   const app = new Hono<AppEnv>();
 
@@ -215,6 +223,14 @@ export const createApp = ({
    * surface-specific, and every request on both surfaces needs it.
    */
   app.use('*', requestContext());
+
+  /*
+   * The trace, directly inside the request context and outside everything
+   * else (P7-01): its root span is the whole request as the caller saw it, a
+   * refusal by any guard below included, and it reads the request id and the
+   * winery out of the context opened above.
+   */
+  app.use('*', telemetry.middleware());
 
   /*
    * Directly inside the request context, so the headers land on every response

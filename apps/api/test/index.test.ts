@@ -50,6 +50,8 @@ const LOCAL = {
   RESEND_WEBHOOK_SECRET: '',
   STRIPE_WEBHOOK_SECRET: '',
   WIDGET_TOKEN_KEYS: '',
+  OTEL_EXPORTER_OTLP_ENDPOINT: '',
+  OTEL_EXPORTER_OTLP_HEADERS: '',
 };
 
 type Environment = Partial<Record<keyof typeof LOCAL, string>>;
@@ -172,6 +174,36 @@ describe('the Lambda entry point', () => {
 
       expect(seen).toHaveLength(1);
       expect(seen[0]?.readUsage).toBeUndefined();
+    },
+    COLD_START_MS,
+  );
+
+  it(
+    'traces nowhere until it is told where (P7-01)',
+    async () => {
+      const seen = capturingConfig();
+
+      await load({});
+
+      expect(seen[0]?.otlp).toBeUndefined();
+    },
+    COLD_START_MS,
+  );
+
+  it(
+    'hands the composition root the OTLP endpoint and its headers, under OpenTelemetry’s own names',
+    async () => {
+      const seen = capturingConfig();
+
+      await load({
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318',
+        OTEL_EXPORTER_OTLP_HEADERS: 'x-team=wine,x-env=review',
+      });
+
+      expect(seen[0]?.otlp).toEqual({
+        endpoint: 'http://localhost:4318',
+        headers: { 'x-team': 'wine', 'x-env': 'review' },
+      });
     },
     COLD_START_MS,
   );

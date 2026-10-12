@@ -31,6 +31,7 @@ import type { RateLimiter } from '@catalogorosso/security';
 
 import { QuotaExceededError, type ChatPort } from './chat.js';
 import { retrieve, SIMULATION_LIMIT } from './retrieval.js';
+import { withSpan } from './telemetry.js';
 
 /**
  * The retrieval diagnostic (P2-37, §4.4).
@@ -290,20 +291,26 @@ export const createRagPort = ({
         },
       );
 
-      for await (const event of turn) {
-        if (event.type === 'text') reply += event.delta;
+      await withSpan(
+        'chat.turn',
+        async () => {
+          for await (const event of turn) {
+            if (event.type === 'text') reply += event.delta;
 
-        if (event.type === 'recommendations') {
-          recommendations.push(
-            ...event.items.map((item) => ({
-              productId: item.productId,
-              name: item.product.name,
-              reason: item.reason,
-              confidence: item.confidence,
-            })),
-          );
-        }
-      }
+            if (event.type === 'recommendations') {
+              recommendations.push(
+                ...event.items.map((item) => ({
+                  productId: item.productId,
+                  name: item.product.name,
+                  reason: item.reason,
+                  confidence: item.confidence,
+                })),
+              );
+            }
+          }
+        },
+        { 'chat.sandbox': true },
+      );
     } catch (error) {
       /* Refused before anything was spent, as a visitor's would be — and told to somebody who can act. */
       if (error instanceof QuotaExceededError) throw new ConflictError(SANDBOX_QUOTA_EXCEEDED);

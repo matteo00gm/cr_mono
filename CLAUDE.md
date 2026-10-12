@@ -122,6 +122,10 @@ patch will not, because the ORM's own documentation shows the forbidden form.
 - `audit()` takes the caller's transaction, never its own. An audit row for an
   action that rolled back is worse than none, because it is a record people
   will believe (P0-53).
+- A span says only what `SPAN_ATTRIBUTES` names, and never what a person typed
+  or an error's message: the kind of error is enough. Traces leave the process
+  for wherever the operator points them, so the list is the same decision the
+  log allowlist is (P7-01, ADR 0032).
 - Never log or store the body of a Shopify order, refund or privacy request,
   and never read one anywhere but `readOrder`, `readRefund`,
   `readCustomerRequest` and `readShopRedact`. An order carries a buyer's name,

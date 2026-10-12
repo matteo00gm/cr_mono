@@ -16,6 +16,7 @@ import {
 import { unconfiguredMembers } from '../src/members.js';
 import { logger } from '../src/middleware/logger.js';
 import { ORIGIN_SECRET_HEADER } from '../src/middleware/origin-secret.js';
+import { fakeAuth, oneMembership } from './support/auth.js';
 
 /**
  * The composition root (E9).
@@ -428,6 +429,51 @@ describe('billing (P5-02)', () => {
     await expect(deps.billing.checkout(randomUUID(), 'CANTINA')).rejects.toThrow(
       BILLING_UNAVAILABLE,
     );
+  });
+});
+
+describe('tracing (P7-01)', () => {
+  const traced = async (otlp?: { endpoint: string; headers?: Record<string, string> }) => {
+    const sent = vi.fn<typeof fetch>(() => Promise.resolve(new Response('{}')));
+
+    vi.stubGlobal('fetch', sent);
+    vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+
+    const { telemetry } = buildDependencies({ ...config, ...(otlp === undefined ? {} : { otlp }) });
+    const app = createApp({ auth: fakeAuth(), readMemberships: oneMembership(), telemetry });
+
+    /* Enough requests that a tenth of them is some of them. */
+    for (let i = 0; i < 80; i += 1) await app.request('/v1/health');
+    await telemetry.flush();
+
+    return sent;
+  };
+
+  it('is off with nowhere to send a trace, which is how every deployment starts', async () => {
+    expect(await traced()).not.toHaveBeenCalled();
+  });
+
+  it('sends to the endpoint it is given, as this service at this stage', async () => {
+    const sent = await traced({
+      endpoint: 'http://localhost:4318',
+      headers: { 'x-team': 'wine' },
+    });
+
+    /* Some and not all: the tenth the row asks for, not every health check. */
+    expect(sent.mock.calls.length).toBeGreaterThan(0);
+    expect(sent.mock.calls.length).toBeLessThan(40);
+
+    const [url, init] = sent.mock.calls[0] ?? [];
+    const body = JSON.parse(init?.body as string) as {
+      resourceSpans: { resource: { attributes: unknown[] } }[];
+    };
+
+    expect(url).toBe('http://localhost:4318/v1/traces');
+    expect(init?.headers).toMatchObject({ 'x-team': 'wine' });
+    expect(body.resourceSpans[0]?.resource.attributes).toEqual([
+      { key: 'service.name', value: { stringValue: 'catalogorosso-api' } },
+      { key: 'deployment.environment', value: { stringValue: 'dev' } },
+    ]);
   });
 });
 
