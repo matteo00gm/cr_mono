@@ -57,6 +57,45 @@ export const readBillingState = async (tx: DbTransaction): Promise<BillingState 
       };
 };
 
+/**
+ * What the widget's own gates read of a winery (P5-05a), for a caller that is
+ * already in its scope: the dashboard's sandbox, asking whether an answer may
+ * be generated here as it would be on the winery's site (P2-37b).
+ */
+export interface ServiceState {
+  readonly status: TenantStatus;
+  readonly trialEndsAt: Date | null;
+  readonly plan: TenantPlan | null;
+  readonly locale: string;
+}
+
+/** `undefined` when there is no tenant row to read — outside a scope, say. */
+export const readServiceState = async (tx: DbTransaction): Promise<ServiceState | undefined> => {
+  const rows = await tx.execute(sql`
+    SELECT status, trial_ends_at, plan, locale
+    FROM tenants
+    LIMIT 1
+  `);
+
+  const row = [...rows][0] as
+    | {
+        status: TenantStatus;
+        trial_ends_at: string | Date | null;
+        plan: TenantPlan | null;
+        locale: string;
+      }
+    | undefined;
+
+  return row === undefined
+    ? undefined
+    : {
+        status: row.status,
+        trialEndsAt: row.trial_ends_at === null ? null : new Date(row.trial_ends_at),
+        plan: row.plan,
+        locale: row.locale,
+      };
+};
+
 /* ------------------------------------------------------------ the machine */
 
 /** What the state machine reads (P5-05): the state, and the ordering clock. */

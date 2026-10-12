@@ -431,6 +431,32 @@ describe('billing (P5-02)', () => {
   });
 });
 
+describe('the sandbox’s answers (P2-37b)', () => {
+  it('are counted by the limiter every other counted path uses, before anything else', async () => {
+    /*
+     * A refusal from the limiter is the proof of the wiring: an `answering`
+     * left off the port would be a wiring error instead, and a limiter of the
+     * port's own would have let this through to a database that is not there.
+     */
+    const check = vi.fn(() =>
+      Promise.resolve({
+        allowed: false,
+        remaining: 0,
+        resetAt: new Date('2026-10-12T10:01:00.000Z'),
+        limit: 10,
+        key: 'sandbox:answer:t1',
+        retryAfterSec: 30,
+      }),
+    );
+    const { rag } = buildDependencies({ ...config, rateLimiter: { check } });
+
+    await expect(
+      rag.answer({ tenantId: 't1', query: 'barolo', signal: new AbortController().signal }),
+    ).rejects.toMatchObject({ kind: 'rate_limited' });
+    expect(check).toHaveBeenCalledWith([{ key: 'sandbox:answer:t1', limit: 10, windowSec: 60 }]);
+  });
+});
+
 describe('the Shopify token store (P6-06, ADR 0031)', () => {
   const shopify = { clientId: 'client-1', clientSecret: ['shpss', 'c', 'd'.repeat(20)].join('_') };
 

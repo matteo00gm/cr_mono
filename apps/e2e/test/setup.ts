@@ -182,11 +182,13 @@ export const start = async ({ shopify = false }: StartOptions = {}): Promise<Har
              * press *Aggiungi al carrello* the conversation is there for the
              * widget's own events to find.
              */
-            if (store !== undefined) {
+            const { visitor } = request;
+
+            if (store !== undefined && visitor !== null) {
               await withTenant(request.tenant.tenantId, (tx) =>
                 recordTurn(tx, {
-                  sessionId: request.sessionId,
-                  origin: request.origin,
+                  sessionId: visitor.sessionId,
+                  origin: visitor.origin,
                   visitorHash: null,
                   locale: 'it',
                   question: request.message,

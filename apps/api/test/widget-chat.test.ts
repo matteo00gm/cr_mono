@@ -348,7 +348,7 @@ describe('the body it accepts', () => {
     expect(request?.message).toBe('un rosso');
     expect(request?.tenant.tenantId).toBe(TENANT);
     /* The session comes from the token, never from the body (P0-48). */
-    expect(request?.sessionId).toEqual(expect.any(String));
+    expect(request?.visitor?.sessionId).toEqual(expect.any(String));
   });
 
   it('refuses a body offering a tenant of its own', async () => {

@@ -276,6 +276,7 @@ export {
   readBillingSnapshot,
   readBillingState,
   readPlanFootprint,
+  readServiceState,
   startTrial,
   writeBillingChange,
   writeTaxDetails,
@@ -283,6 +284,7 @@ export {
   type BillingSnapshotRow,
   type BillingState,
   type BillingWriteRefusal,
+  type ServiceState,
   type TaxDetailsRow,
 } from './billing.js';
 

@@ -44,6 +44,8 @@ export interface NavItem {
 export const NAV: readonly NavItem[] = [
   { href: '/', label: 'Panoramica' },
   { href: '/catalogo', label: 'Catalogo', capability: 'catalog:write' },
+  /* The answer it can ask for is `catalog:write`'s; the search beside it is every member's (P2-37b). */
+  { href: '/prova', label: 'Prova il sommelier', capability: 'catalog:write' },
   { href: '/analisi', label: 'Analisi', capability: 'analytics:read' },
   { href: '/conversazioni', label: 'Conversazioni', capability: 'analytics:read' },
   { href: '/membri', label: 'Membri', capability: 'members:manage' },

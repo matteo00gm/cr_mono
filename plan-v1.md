@@ -1435,7 +1435,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P6-09b | Shopify privacy webhooks | the three every listed app must answer: a customer's data request, a customer's erasure, a shop's erasure | P6-07 |
 | ✅ P6-10 | Metric labelling guard | "Aggiunte al carrello" until P6-07 ships; never fake "Vendite" | P6-02 |
 | ✅ P6-12 | Italian on the user side | every refusal the dashboard shows written in Italian at the source (Decision 6) | — |
-| P2-37b | Sandbox generation on request | off by default; each run billed as one of the winery's messages, rate-limited (Decision 8) | P2-37 |
+| ✅ P2-37b | Sandbox generation on request | off by default; each run billed as one of the winery's messages, rate-limited (Decision 8) | P2-37 |
 
 ### P7 — GA readiness
 
@@ -5596,7 +5596,7 @@ X-Accel-Buffering: no
 
 **⚠ Found here and fixed in P2-27:** `withSchemaRepair` collected each attempt and yielded it when the attempt ended — **not a stream at all**. Time-to-first-token became total-generation-time, and a reply the model had already written was lost if the provider then failed. Every case in P2-27's suite passed either way, because a buffered stream and a streamed one produce the same chunks in the same order; the difference is only *when*, and only a caller reading them live can see it. Two cases were added that can.
 
-**⚠ Open: generation is retrieval-only in P2-37's sandbox.** P2-31 now exists, so the opt-in flag that row deferred is unblocked — it needs a rate limit of its own and a decision about who pays. *(Decided 2026-10-04, Open Decision 8: on request, billed as one of the winery's messages, ten a minute — row P2-37b.)*
+**⚠ Open: generation is retrieval-only in P2-37's sandbox.** P2-31 now exists, so the opt-in flag that row deferred is unblocked — it needs a rate limit of its own and a decision about who pays. *(Decided 2026-10-04, Open Decision 8: on request, billed as one of the winery's messages, ten a minute — row P2-37b, ✅ built.)*
 
 **Carried in from P2-36:** the cap is checked here, before retrieval and before generation, and a refusal answers `QUOTA_EXCEEDED` having made **zero** provider calls — the row's own test, which needs a provider to assert. This route is also where the double count above is closed: once it gates, `planCapCheck` comes out of `widgetLimitChecks` so the month is counted once.
 
@@ -5719,8 +5719,8 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 - **`vectorScore` is a similarity**, `1 - distance`, carried out of the fused statement as `vectorDistance` rather than recomputed. RRF reads ranks, so nothing depends on the number — which is exactly why it has to come from the statement that computed it and not from a vector that may have been re-indexed since.
 - **Hydration is a second statement** (`productsByIds`), not more columns on the fused one. Only this endpoint needs a wine's whole row; the widget path ranks ids. Order is the caller's, because fusion's order *is* the answer.
 - **The `.strict()` body** — unlike the product bodies, and the difference is who is sending. Every field here is a knob on an experiment: a misspelt `maxPrice` that parsed cleanly would report on a run nobody asked for, and the report would look exactly like the one they wanted.
-- **Generation is not built, rather than built and defaulted off** *(scope)*. The row puts an LLM call behind an opt-in flag, "hard rate-limited, and billed" — and there is nothing to bill it to until P2-31's `usage_events` writer exists. A flag with no writer behind it would be the endpoint's one dangerous default shipped untested. The suite asserts what is true instead: one embedding per run and no model asked to write anything.
-- **No dashboard drawer** *(scope)*. The endpoint is what P1-47's bake-off and P2's tuning need; the drawer is a screen for it and belongs with P6-04's panels.
+- **Generation is not built, rather than built and defaulted off** *(scope)*. The row puts an LLM call behind an opt-in flag, "hard rate-limited, and billed" — and there is nothing to bill it to until P2-31's `usage_events` writer exists. A flag with no writer behind it would be the endpoint's one dangerous default shipped untested. The suite asserts what is true instead: one embedding per run and no model asked to write anything. *(Built in P2-37b, as a route of its own rather than a flag.)*
+- **No dashboard drawer** *(scope)*. The endpoint is what P1-47's bake-off and P2's tuning need; the drawer is a screen for it and belongs with P6-04's panels. *(A screen exists since P2-37b: Prova il sommelier.)*
 - **The Titan adapter moved to `packages/llm`** *(deviation)*. It lived in `apps/worker`, which the API cannot import — correctly, since apps do not import apps — so the choice was a second copy or one package. This is the package whose stated job is model adapters. `apps/worker` no longer depends on the Bedrock SDK directly.
 - **This is where P2-17's startup check becomes real.** `assertQueryProviderMatchesIndex` had no caller; the composition root now runs it, so a provider that cannot read this catalogue's vectors fails the deployment rather than a request.
 - **`infra/api.ts` grants `bedrock:InvokeModel` on Titan alone**, and `infra/test/model-grants.test.ts` reads both function definitions to assert no wildcard reaches either. A wildcard there is one careless line, deploys cleanly, works, and shows up only on an invoice.
@@ -8029,6 +8029,37 @@ Reuse P5-03's HMAC verification and P5-04's `processed_webhooks` idempotency. Hi
 
 **Files.** `rag.ts`, the sandbox route and screen, tests. **~120 lines.**
 
+**As built (2026-10-12).** `POST /v1/dashboard/rag/answer`, on `catalog:write`, and a screen — *Prova il sommelier* — that asks for an answer only from a button that says what it costs.
+
+- **⚠ Its own route, not a flag on the simulation** *(decision — P2-37 said "behind an opt-in flag")*. The simulation is free, moves no counter and can be clicked all afternoon; an answer is a model call on the winery's bill. A flag would make one endpoint sometimes cost money, and one capability guard decide two different things. So "off unless asked" is the URL: the simulation is `.strict()` and refuses a body that tries to ask for one.
+- **A real turn through the chat port, with nobody behind it.** `ChatRequest` carries `visitor`, and a seller's turn has `null` there. Everything else is the widget's own and is not a second pipeline: the monthly gate first, the redaction, retrieval, the prompt, both boundaries on the stream, and one row in `usage_events` of the same kind a visitor's is — so the gate counts it, and the 80% and 100% notices (P5-12) move with it.
+- **⚠ Billed, and kept nowhere** *(decision: Decision 8 says "a real turn"; P2-37 says a seller debugging must not move what they look at next)*. No history is read and no conversation is written. A seller's own questions would otherwise be counted among the questions shoppers ask and the wines they were shown (P6-03, P6-04) by the panels that seller opens next. The bill's row has no session, which is also what tells it from a visitor's.
+- **⚠ Answered here exactly when it would be on the winery's site** *(decision)*: `isServed` — a plan, or a trial still running (P5-05a). The answer is billed against one or the other, and a winery with neither has nothing to bill: one that never verified a domain would otherwise have a model to talk to, 150 messages a month, for ever, and one whose payment failed has not paid. The free simulation stays open to all of them. Refused in one sentence that says where to go.
+- **Ten a minute per winery, counted before anything else** — before the winery is read, by the limiter every counted path shares (Postgres in a deployment), under `sandbox:answer:<tenant>`. Per winery, not per member: the bill is the winery's. The limiter is a required part of answering rather than an optional one, because a model call nothing counts is what the row exists to prevent.
+- **The cap is a 409 in a seller's words; the limit is a 429.** A visitor at the cap is told nothing about a plan (§1.3); the winery's own member is told the month is used up and where to buy more. Two statuses, so "wait a minute" and "buy more" can be told apart without reading the sentence. Both are Italian and registered with P6-12's guard — which failed the first run of this row until they were.
+- **The reply arrives whole.** A body, not a stream: a seller reads one answer at a time and the dashboard's client parses JSON. Each wine's name is read from the catalogue and the reason is the model's (P2-25); `outcome` says how the turn ended, which is what explains a reply with no wines under it. The request's own signal is handed to the model, so a closed tab stops generation and what is billed for it.
+- **The screen** *(the row's "screen": there was none — P2-37 left the drawer out)*. `/prova`, shown to members who hold `catalog:write`. One field and two buttons: *Cerca nel catalogo* is the form's own, so Enter — the key pressed without thinking — never spends a message; the second button says on its face that it counts as one. What the catalogue found is listed with why each wine was left out, in a seller's words; refusals are printed in the API's (P6-12). A question that changes takes the results with it, and an answer that arrives for a question that has gone is dropped.
+- **`readServiceState`** *(addition)*: status, trial end, plan and locale in the winery's own scope, in `packages/db/src/billing.ts` — what the widget's gates read by key and origin, for a caller that already has a membership.
+- **⚠ Open: an answer has no history.** One question, one answer; a follow-up cannot be tried, so a complaint about the second turn of a conversation is still reproduced through the widget.
+- **⚠ Open: the simulation's knobs do not reach an answer.** A price ceiling or a cap can be tried on retrieval and not on a generated answer, which is always what a visitor would get.
+- **⚠ Open: not streamed.** A slow model is bounded by the API's own request time rather than by a stream the seller watches; tokens spent before a timeout are billed.
+- **⚠ Open: a sandbox message is in the month's count with nothing saying which it was** beyond the missing session. The usage meter shows it as a message, which it is; a seller who asks "who spent these" has no screen for it.
+
+**Verified.** Unit (5945 tests), the full Postgres suite (93 files, 1297 tests), coverage gates, every `:check` (the OpenAPI reference and the consumers map regenerated for the new route), the bundle budget, the browser suite (68 cases) and the threat matrix. `rag-answer.integration.test.ts`, against Postgres with the real chat port, gate and limiter: one answer writes one `usage_events` row of the kind the gate counts, under no session, with what the model cost, and no conversation or message; the 1,500th message of a Cantina month may be a seller's own and the next is refused with no model call; a trial is answered against its own 150 and refused once its date has passed; a winery that verified nothing is refused before the gate; ten are answered and billed in a minute and the eleventh is neither, with another winery untouched; and twelve simulations call no model and write nothing. `chat-port.test.ts`: a turn with no visitor is billed, kept nowhere, reads no history, passes the same gate and moves the month's notices, and a visitor's turn is exactly what it was. `rag-answer.test.ts`: the limit, its key and its minute; each state the widget would not serve; the cap in a seller's words; the route's body, capability, statuses and the request's own signal. `sandbox-screen.test.tsx`: the search never asks for an answer, Enter included; the answer is asked once, by a button that names its cost. 45 mutants, 45 killed on the first run — after a guard I had taken for unreachable was put back, because two tests failed without it.
+
+| Mutation | Caught by |
+|---|---|
+| A seller's turn reading somebody's history, kept as a conversation, not billed, or billed as a kind the gate does not count; a visitor's turn billed under no session | `chat-port.test.ts` |
+| The limit not enforced; one limit for every winery; eleven a minute; ten an hour; the row's ten changed where it is defined | `rag-answer.test.ts` |
+| Answered for a winery the widget would not answer for; a trial read against some other clock; a winery that is gone not noticed; the cap told in the widget's words | `rag-answer.test.ts` |
+| The turn given a visitor, so it is kept; the reply lost; a wine named by its id; how the turn ended not reported; the winery's plan not handed to the gate; the request's signal not handed on | `rag-answer.test.ts` |
+| A body with fields of its own accepted; a blank question asked; a question longer than a visitor's; a closed tab not stopping generation | `rag-answer.test.ts` (the route) |
+| The route open to a capability that only reads | `rbac-matrix.test.ts` |
+| Answering not wired; a limiter of its own | `composition.test.ts` |
+| The uncounted kind against the real ledger; the limit not enforced in Postgres; a winery not served, answered; a conversation written; the plan lost against the real gate; the trial's end not read from the row | `rag-answer.integration.test.ts` |
+| Enter asking for a billed answer; a search with nothing typed, or started while an answer is being written; a second click a second message; an answer asked with nothing typed; the button silent about what it costs; the question sent untrimmed | `sandbox-screen.test.tsx` |
+| An old answer, or old results, shown under a new question; a late answer shown for a question that has gone; a refusal not in the API's words; a proposed wine shown as left out | `sandbox-screen.test.tsx` |
+
 ---
 
 ### P7-01 · OpenTelemetry tracing
@@ -8231,7 +8262,7 @@ The unanswered-questions panel (P6-04) lists what shoppers typed, verbatim, to t
 
 **8. ~~Generation in the retrieval sandbox~~ — decided (2026-10-04): on request, billed as a message.**
 
-Off by default. A member who may write the catalogue asks for one answer at a time; each is a real turn, billed as one of the winery's own messages against the monthly gate (P2-36), and limited to ten a minute per winery. No model call is free, so the sandbox costs us nothing a winery has not already paid for. Row **P2-37b**.
+Off by default. A member who may write the catalogue asks for one answer at a time; each is a real turn, billed as one of the winery's own messages against the monthly gate (P2-36), and limited to ten a minute per winery. No model call is free, so the sandbox costs us nothing a winery has not already paid for. Row **P2-37b** *(✅ built: its own route, kept out of the conversations, and answered only while the widget would be)*.
 
 **9. ~~What a Shopify uninstall does to the proved domain~~ — decided (2026-10-04): it withdraws the proof.**
 

@@ -9,6 +9,7 @@ import { BillingScreen } from './features/billing/BillingScreen.js';
 import { CatalogScreen } from './features/catalog/CatalogScreen.js';
 import { ClaimNotice } from './features/domains/ClaimNotice.js';
 import { IntegrationsScreen } from './features/integrations/IntegrationsScreen.js';
+import { SandboxScreen } from './features/sandbox/SandboxScreen.js';
 import { EnrolmentScreen } from './features/security/EnrolmentScreen.js';
 import { navFor } from './nav.js';
 import { apiFor, rememberTenant, useSession, type SessionState } from './session.js';
@@ -181,6 +182,18 @@ const IntegrationsRoute = ({
   return <IntegrationsScreen client={client} canConnect={can(role, 'domains:manage')} />;
 };
 
+/** Prova il sommelier (P2-37b), with a client built once per winery for `CatalogRoute`'s reason. */
+const SandboxRoute = ({
+  tenantId,
+  clientFor,
+}: {
+  readonly tenantId: string;
+  readonly clientFor: (tenantId: string) => ApiClient;
+}): JSX.Element => {
+  const client = useMemo(() => clientFor(tenantId), [tenantId, clientFor]);
+  return <SandboxScreen client={client} />;
+};
+
 /**
  * The signed-in layout.
  *
@@ -274,6 +287,9 @@ export const Layout = ({
           </Route>
           <Route path="/catalogo">
             <CatalogRoute tenantId={active.tenantId} clientFor={clientFor} />
+          </Route>
+          <Route path="/prova">
+            <SandboxRoute tenantId={active.tenantId} clientFor={clientFor} />
           </Route>
           <Route path="/analisi">
             <AnalyticsRoute tenantId={active.tenantId} role={active.role} clientFor={clientFor} />

@@ -139,6 +139,10 @@ patch will not, because the ORM's own documentation shows the forbidden form.
   only (§3.7, P3-08).
 - Never render a card from model output. The model supplies a `productId` and a
   reason; every displayed field comes from our own catalogue (P2-25).
+- Never ask a chat model to answer for a winery except through the chat port.
+  The monthly gate is checked first there and the bill is written there, so a
+  second path to the model is a free one. The sandbox's answer is a turn with
+  no visitor behind it, not a pipeline of its own (P2-36, P2-37b).
 - CORS matching is exact-set equality. Never a regular expression, never
   `startsWith`, never `endsWith` — suffix matching is defeated by
   `evil-example.com` (§3.4, P2-08).

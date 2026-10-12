@@ -78,15 +78,30 @@ export interface ProviderTierFactories {
   readonly strong: ProviderFor;
 }
 
-export interface ChatRequest {
-  readonly tenant: WidgetTenant;
+/** Whose conversation a turn belongs to. */
+export interface ChatVisitor {
   /** From the verified token (P2-13), never from the body. */
   readonly sessionId: string;
   /** As CORS verified it (P2-08). */
   readonly origin: string;
   /** The visitor's address as P2-04 buckets it, or null when no secret is configured. */
   readonly visitorHash: string | null;
-  /** What the visitor typed. Untrusted, and the only thing in the body that is read. */
+}
+
+export interface ChatRequest {
+  readonly tenant: WidgetTenant;
+  /**
+   * The visitor asking — or `null` for a turn that is nobody's: a seller
+   * trying a question in the sandbox (P2-37b).
+   *
+   * **A turn with no visitor is billed like any other and kept nowhere.** The
+   * same gate, the same retrieval, the same model and the same row in
+   * `usage_events`; no history read and no conversation written, so it cannot
+   * turn up among the questions and wines the seller's own panels count
+   * (P6-03, P6-04) — which is the reason the sandbox exists at all (P2-37).
+   */
+  readonly visitor: ChatVisitor | null;
+  /** What was typed. Untrusted, and the only thing in the body that is read. */
   readonly message: string;
   /** Wired into the provider so a closed tab stops generation, and stops billing. */
   readonly signal: AbortSignal;
@@ -208,7 +223,7 @@ export const createChatPort = ({
   assertModelPriced(models.strong);
 
   return {
-    answer: ({ tenant, sessionId, origin, visitorHash, message, signal }, onReport) =>
+    answer: ({ tenant, visitor, message, signal }, onReport) =>
       (async function* (): AsyncGenerator<WidgetChatEvent> {
         /*
          * **First, before anything is spent.** Retrieval is a query and
@@ -249,10 +264,13 @@ export const createChatPort = ({
          */
         const { locale, detected } = replyLocale(question, tenant.locale);
 
+        /* A turn that is nobody's has nothing behind it, and reads nothing (P2-37b). */
         const history: Turn[] = (
-          await withTenant(tenant.tenantId, (tx) =>
-            readConversation(tx, sessionId, MAX_HISTORY_TURNS * 2),
-          )
+          visitor === null
+            ? []
+            : await withTenant(tenant.tenantId, (tx) =>
+                readConversation(tx, visitor.sessionId, MAX_HISTORY_TURNS * 2),
+              )
         ).flatMap((entry) =>
           entry.role === 'SYSTEM'
             ? []
@@ -378,35 +396,49 @@ export const createChatPort = ({
                 });
 
           await withTenant(tenant.tenantId, async (tx) => {
-            await recordTurn(tx, {
-              sessionId,
-              origin,
-              visitorHash,
-              locale,
-              question,
-              reply,
-              retrievedProductIds: candidates.map((candidate) => candidate.id),
-              recommendedProductIds: shown,
-              /*
-               * Decided now, from what reached the model, because that is not
-               * kept: §2.4's ZERO_RESULTS panel reads it (P6-04).
-               */
-              zeroResultKind: zeroResultOf({
-                outcome,
-                cards: shown.length,
-                wordMatches: capped.candidates.filter((candidate) => candidate.lexicalRank !== null)
-                  .length,
-              }),
-              model,
-              inputTokens: usage?.inputTokens ?? null,
-              outputTokens: usage?.outputTokens ?? null,
-              latencyMs: now().getTime() - started,
-            });
+            /*
+             * **Only a visitor's turn is kept.** A seller's own question would
+             * otherwise be counted among the questions shoppers ask and the
+             * wines they were shown, by the panels that seller reads next.
+             */
+            if (visitor !== null) {
+              await recordTurn(tx, {
+                sessionId: visitor.sessionId,
+                origin: visitor.origin,
+                visitorHash: visitor.visitorHash,
+                locale,
+                question,
+                reply,
+                retrievedProductIds: candidates.map((candidate) => candidate.id),
+                recommendedProductIds: shown,
+                /*
+                 * Decided now, from what reached the model, because that is not
+                 * kept: §2.4's ZERO_RESULTS panel reads it (P6-04).
+                 */
+                zeroResultKind: zeroResultOf({
+                  outcome,
+                  cards: shown.length,
+                  wordMatches: capped.candidates.filter(
+                    (candidate) => candidate.lexicalRank !== null,
+                  ).length,
+                }),
+                model,
+                inputTokens: usage?.inputTokens ?? null,
+                outputTokens: usage?.outputTokens ?? null,
+                latencyMs: now().getTime() - started,
+              });
+            }
 
+            /*
+             * **Every turn is billed, a seller's included** (Open Decision 8):
+             * the model was called either way. The same kind as a visitor's,
+             * so the monthly gate counts it — a kind of its own would be a
+             * second allowance nobody sold.
+             */
             await recordUsage(tx, {
               period: periodOf(now()),
               kind: CHAT_MESSAGE,
-              sessionId,
+              sessionId: visitor?.sessionId ?? null,
               inputTokens: usage?.inputTokens ?? null,
               outputTokens: usage?.outputTokens ?? null,
               costMicros,
