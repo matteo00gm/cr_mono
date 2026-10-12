@@ -205,6 +205,16 @@ export {
   type SupportedLocale,
 } from './locale.js';
 
+/** An answer in the sandbox, on request: how often, and what a refusal says (P2-37b). */
+export {
+  SANDBOX_ANSWER_WINDOW_SEC,
+  SANDBOX_ANSWERS_PER_MINUTE,
+  SANDBOX_NOT_SERVED,
+  SANDBOX_QUOTA_EXCEEDED,
+  SANDBOX_TOO_FAST,
+  sandboxAnswerLimitKey,
+} from './sandbox.js';
+
 /**
  * How much of a conversation reaches the prompt (P2-35).
  *

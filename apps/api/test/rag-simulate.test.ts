@@ -56,7 +56,7 @@ const post = (rag: RagPort, body: unknown) =>
 const recording = (result: RetrievalSimulation = EMPTY) => {
   const simulate = vi.fn(() => Promise.resolve(result));
 
-  return { simulate, port: { simulate } satisfies RagPort };
+  return { simulate, port: { ...unconfiguredRag, simulate } satisfies RagPort };
 };
 
 describe('the body it accepts', () => {

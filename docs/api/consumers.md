@@ -30,4 +30,6 @@ complete only because raw `fetch` to our own API is forbidden outside
 | `POST /v1/dashboard/products/import` | apps/dashboard/src/features/catalog/ImportSummary.tsx:236 |
 | `POST /v1/dashboard/products/import/preview` | apps/dashboard/src/features/catalog/ImportSummary.tsx:210 |
 | `POST /v1/dashboard/products/reindex-all` | apps/dashboard/src/features/catalog/CatalogScreen.tsx:257 |
+| `POST /v1/dashboard/rag/answer` | apps/dashboard/src/features/sandbox/SandboxScreen.tsx:119 |
+| `POST /v1/dashboard/rag/simulate` | apps/dashboard/src/features/sandbox/SandboxScreen.tsx:94 |
 | `POST /v1/dashboard/shopify/install` | apps/dashboard/src/features/integrations/IntegrationsScreen.tsx:114 |

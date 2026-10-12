@@ -1047,9 +1047,9 @@ export const simulatedCandidate = z.object({
  * would have been sent without disclosing it — returning the assembled prompt
  * would publish our instructions to every tenant (§3.7).
  *
- * **No generation.** The row keeps an LLM call behind an opt-in flag; until
- * P2-31 can bill one, there is nothing here to opt into, so a simulation makes
- * no provider call beyond the one embedding it needs.
+ * **No generation.** A simulation makes no provider call beyond the one
+ * embedding it needs; an answer is asked for on its own route and is billed
+ * (`ragAnswerResponse`, P2-37b).
  */
 export const ragSimulationResponse = z.object({
   candidates: z.array(simulatedCandidate),
@@ -1059,6 +1059,33 @@ export const ragSimulationResponse = z.object({
   timings: z.object({ embedMs: z.number(), searchMs: z.number() }),
   systemPromptHash: z.string(),
 });
+
+/**
+ * One answer from the sandbox (P2-37b).
+ *
+ * **The reply whole, not a stream.** A seller reads one answer at a time and
+ * the dashboard's client parses a body; the widget's stream exists for a
+ * visitor watching words arrive.
+ *
+ * **A recommendation's name is ours.** The model names an id and writes a
+ * reason; the name beside it is read from the catalogue, like every field of a
+ * card (P2-25). `outcome` is what explains a reply with no wines under it.
+ */
+export const ragAnswerResponse = z.object({
+  reply: z.string(),
+  recommendations: z.array(
+    z.object({
+      productId: z.string(),
+      name: z.string(),
+      reason: z.string(),
+      confidence: z.number().min(0).max(1),
+    }),
+  ),
+  outcome: z.enum(['ok', 'repaired', 'schema_failed', 'refusal', 'provider_error']),
+});
+
+export type RagSimulationResponse = z.infer<typeof ragSimulationResponse>;
+export type RagAnswerResponse = z.infer<typeof ragAnswerResponse>;
 
 export const DASHBOARD_RESPONSES = {
   'GET /v1/dashboard': surfaceResponse,
@@ -1080,6 +1107,7 @@ export const DASHBOARD_RESPONSES = {
   'POST /v1/dashboard/products/import': productsImportedResponse,
   'POST /v1/dashboard/products/import/preview': importPreviewResponse,
   'POST /v1/dashboard/rag/simulate': ragSimulationResponse,
+  'POST /v1/dashboard/rag/answer': ragAnswerResponse,
   'GET /v1/dashboard/domains/claims/served': servedClaimsResponse,
   'POST /v1/dashboard/domains/claims/:id/withdraw': claimWithdrawnResponse,
   'POST /v1/dashboard/billing/checkout': billingCheckoutResponse,

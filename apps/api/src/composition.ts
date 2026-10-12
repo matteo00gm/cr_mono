@@ -604,6 +604,13 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
         titanEmbeddingProvider(QUERY_EMBEDDING),
         INDEXED_EMBEDDING,
       ),
+      /*
+       * An answer on request (P2-37b): **the chat port a visitor's question
+       * goes through**, so the gate, the bill and the checks on the reply are
+       * the widget's own. The limiter is the one every counted path shares, and
+       * the in-process one on a local run for the widget's reason below.
+       */
+      answering: { chat, limiter: config.rateLimiter ?? memoryRateLimiter() },
     }),
 
     /*

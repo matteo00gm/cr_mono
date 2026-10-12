@@ -27,6 +27,8 @@ const recorded = {
   turns: [] as Record<string, unknown>[],
   usage: [] as Record<string, unknown>[],
   history: [] as { role: string; content: string; retrievedProductIds: string[] }[],
+  /** How many times a conversation was read, whatever came back. */
+  historyReads: 0,
   rows: [] as Record<string, unknown>[],
   fused: [] as Record<string, unknown>[],
 };
@@ -35,7 +37,11 @@ vi.mock('@catalogorosso/db', () => ({
   withTenant: (_tenantId: string, run: (tx: unknown) => unknown) => run({}),
   fusedSearch: () => Promise.resolve(recorded.fused),
   productsByIds: () => Promise.resolve(recorded.rows),
-  readConversation: () => Promise.resolve(recorded.history),
+  readConversation: () => {
+    recorded.historyReads += 1;
+
+    return Promise.resolve(recorded.history);
+  },
   recordTurn: (_tx: unknown, turn: Record<string, unknown>) => {
     recorded.turns.push(turn);
 
@@ -104,9 +110,19 @@ const wine = (id: string) => ({
   externalVariantId: '45123456789',
 });
 
+type Visitor = Parameters<ReturnType<typeof createChatPort>['answer']>[0]['visitor'];
+
+const SHOPPER: Visitor = {
+  sessionId: 'sess-1',
+  origin: 'https://cantina-rossi.example',
+  visitorHash: null,
+};
+
 const ask = async (
   port: ReturnType<typeof createChatPort>,
   message = 'qualcosa per una bistecca',
+  /* `null` is a turn that is nobody's (P2-37b), and is not the default. */
+  visitor: Visitor = SHOPPER,
 ) => {
   const chunks: WidgetChatEvent[] = [];
   let report: TurnReport | undefined;
@@ -114,9 +130,7 @@ const ask = async (
   for await (const chunk of port.answer(
     {
       tenant,
-      sessionId: 'sess-1',
-      origin: 'https://cantina-rossi.example',
-      visitorHash: null,
+      visitor,
       message,
       signal: new AbortController().signal,
     },
@@ -149,6 +163,7 @@ beforeEach(() => {
   recorded.turns = [];
   recorded.usage = [];
   recorded.history = [];
+  recorded.historyReads = 0;
   recorded.rows = [wine(id)];
   recorded.fused = [
     {
@@ -476,6 +491,103 @@ describe('the card a visitor is shown', () => {
   });
 });
 
+describe('a turn that is nobody’s: a seller’s, in the sandbox (P2-37b)', () => {
+  const QUESTION = 'qualcosa per una bistecca';
+  const answering = speaking(
+    { type: 'text', delta: 'Un Barolo.' },
+    {
+      type: 'recommendations',
+      items: [{ productId: 'filled-in-below', reason: 'Regge la carne.', confidence: 0.9 }],
+    },
+  );
+
+  it('is billed as one of the winery’s messages, under no session', async () => {
+    await ask(portWith(answering), QUESTION, null);
+
+    expect(recorded.usage).toHaveLength(1);
+    expect(recorded.usage[0]).toMatchObject({ kind: 'chat_message', sessionId: null });
+    expect(recorded.usage[0]?.period).toMatch(/^\d{6}$/u);
+  });
+
+  it('is kept nowhere, so it is not among the questions the panels count', async () => {
+    await ask(portWith(answering), QUESTION, null);
+
+    expect(recorded.turns).toEqual([]);
+  });
+
+  it('reads no conversation and sends the model no history', async () => {
+    /* Somebody else's turns are in the table; none of them is this turn's past. */
+    recorded.history = [{ role: 'USER', content: 'e con il pesce?', retrievedProductIds: [] }];
+
+    const seen: unknown[] = [];
+    const watching: LlmProvider = {
+      id: 'watching',
+      streamPairing: (request) => {
+        seen.push(request.history);
+
+        return speaking().streamPairing({} as never, new AbortController().signal);
+      },
+    };
+
+    await ask(portWith(watching), QUESTION, null);
+
+    expect(recorded.historyReads).toBe(0);
+    expect(seen).toEqual([[]]);
+  });
+
+  it('passes the same gate, and at the cap spends and bills nothing', async () => {
+    const never = { calls: 0 };
+    const counting: LlmProvider = {
+      id: 'never',
+      streamPairing: () => {
+        never.calls += 1;
+
+        return speaking().streamPairing({} as never, new AbortController().signal);
+      },
+    };
+
+    await expect(ask(portWith(counting, counting, false), QUESTION, null)).rejects.toThrow(
+      QuotaExceededError,
+    );
+    expect(never.calls).toBe(0);
+    expect(recorded.usage).toEqual([]);
+  });
+
+  it('is answered by the same path: the wine’s card still comes from the catalogue', async () => {
+    const [row] = recorded.rows as { id: string; name: string }[];
+    const naming = speaking(
+      { type: 'text', delta: 'Un Barolo.' },
+      {
+        type: 'recommendations',
+        items: [{ productId: row?.id ?? '', reason: 'Regge la carne.', confidence: 0.9 }],
+      },
+    );
+
+    const { chunks, report } = await ask(portWith(naming), QUESTION, null);
+
+    const cards = chunks.flatMap((chunk) =>
+      chunk.type === 'recommendations' ? [...chunk.items] : [],
+    );
+
+    expect(cards.map((card) => card.product.name)).toEqual([row?.name]);
+    expect(report?.outcome).toBe('ok');
+  });
+
+  it('leaves a visitor’s turn exactly as it was: kept, and billed under its session', async () => {
+    await ask(portWith(answering));
+
+    expect(recorded.historyReads).toBe(1);
+    expect(recorded.turns).toHaveLength(1);
+    expect(recorded.turns[0]).toMatchObject({
+      sessionId: 'sess-1',
+      origin: 'https://cantina-rossi.example',
+      visitorHash: null,
+      question: QUESTION,
+    });
+    expect(recorded.usage[0]).toMatchObject({ kind: 'chat_message', sessionId: 'sess-1' });
+  });
+});
+
 describe('the month’s notices (P5-12)', () => {
   const noticed = (allowed = true, notify?: () => Promise<void>) => {
     const asked: [string, string | null, number, number][] = [];
@@ -513,6 +625,14 @@ describe('the month’s notices (P5-12)', () => {
     await ask(port);
 
     expect(recorded.usage).toHaveLength(1);
+    expect(asked).toEqual([[tenant.tenantId, tenant.plan, 1_200, 1_500]]);
+  });
+
+  it('are asked for a seller’s own question too: it moved the month like any other', async () => {
+    const { asked, port } = noticed();
+
+    await ask(port, 'un rosso', null);
+
     expect(asked).toEqual([[tenant.tenantId, tenant.plan, 1_200, 1_500]]);
   });
 

@@ -5010,6 +5010,117 @@
           }
         }
       },
+      "/v1/dashboard/rag/answer": {
+        "post": {
+          "summary": "Ask the sommelier one question, as a visitor would",
+          "description": "Generates one real answer for a question: the same monthly allowance, the same retrieval, the same model and the same checks on what it wrote that a visitor on the storefront gets. It is billed as one of the winery's messages - no answer here is free - and is refused, before any model is called, once the month's messages are used up, with a 409 that says so. It is answered only while the winery's widget would be: with a plan, or a trial still running. At most ten a minute per winery, whoever asks; the eleventh is a 429. Unlike a visitor's, the question and the answer are kept nowhere, so they do not appear among the conversations and analytics. The reply arrives whole. Each recommendation's name comes from the catalogue; the reason is the model's. outcome says how the turn ended, which is what explains a reply with no wines under it.\n\nRequires the `catalog:write` capability.",
+          "operationId": "postV1DashboardRagAnswer",
+          "x-required-capability": "catalog:write",
+          "responses": {
+            "200": {
+              "description": "Ask the sommelier one question, as a visitor would",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "properties": {
+                      "reply": {
+                        "type": "string"
+                      },
+                      "recommendations": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "productId": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "reason": {
+                              "type": "string"
+                            },
+                            "confidence": {
+                              "type": "number",
+                              "minimum": 0,
+                              "maximum": 1
+                            }
+                          },
+                          "required": [
+                            "productId",
+                            "name",
+                            "reason",
+                            "confidence"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "outcome": {
+                        "type": "string",
+                        "enum": [
+                          "ok",
+                          "repaired",
+                          "schema_failed",
+                          "refusal",
+                          "provider_error"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "reply",
+                      "recommendations",
+                      "outcome"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "example": {
+                    "reply": "Con una bistecca alla fiorentina sta molto bene un rosso strutturato: ti consiglio il Barolo Monfortino Riserva.",
+                    "recommendations": [
+                      {
+                        "productId": "3f1c0b7e-4a30-4c1a-9f2e-1b7e4a304c1a",
+                        "name": "Barolo Monfortino Riserva",
+                        "reason": "Tannini e struttura reggono la carne alla griglia.",
+                        "confidence": 0.86
+                      }
+                    ],
+                    "outcome": "ok"
+                  }
+                }
+              }
+            },
+            "401": {
+              "description": "The request failed. `code` is stable; `message` is for a human, and on this surface it is written in Italian: the dashboard shows it to the seller as it is.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "Il tuo ruolo non può fare questa operazione (billing:manage). Chiedi a un titolare.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            },
+            "403": {
+              "description": "The request failed. `code` is stable; `message` is for a human, and on this surface it is written in Italian: the dashboard shows it to the seller as it is.",
+              "content": {
+                "application/json": {
+                  "example": {
+                    "error": {
+                      "code": "forbidden",
+                      "message": "Il tuo ruolo non può fare questa operazione (billing:manage). Chiedi a un titolare.",
+                      "requestId": "5b8c1f0e-6d2a-4c93-9a71-3f0e6d2a4c93"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "/v1/dashboard/rag/simulate": {
         "post": {
           "summary": "Run retrieval for a question and show its working",

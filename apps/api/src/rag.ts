@@ -2,14 +2,34 @@ import { createHash } from 'node:crypto';
 
 import {
   completenessOf,
+  ConflictError,
+  isServed,
   MAX_CANDIDATES,
+  NotFoundError,
   pairingSystemPrompt,
+  RateLimitedError,
+  SANDBOX_ANSWER_WINDOW_SEC,
+  SANDBOX_ANSWERS_PER_MINUTE,
+  SANDBOX_NOT_SERVED,
+  SANDBOX_QUOTA_EXCEEDED,
+  SANDBOX_TOO_FAST,
+  sandboxAnswerLimitKey,
   type Completeness,
   type EmbeddingProvider,
+  type PairingOutcome,
   type ScorableProduct,
 } from '@catalogorosso/core';
-import type { FusedCandidate, ProductRow, StockStatus } from '@catalogorosso/db';
+import {
+  readServiceState,
+  withTenant,
+  type FusedCandidate,
+  type ProductRow,
+  type ServiceState,
+  type StockStatus,
+} from '@catalogorosso/db';
+import type { RateLimiter } from '@catalogorosso/security';
 
+import { QuotaExceededError, type ChatPort } from './chat.js';
 import { retrieve, SIMULATION_LIMIT } from './retrieval.js';
 
 /**
@@ -30,9 +50,12 @@ import { retrieve, SIMULATION_LIMIT } from './retrieval.js';
  * move a number that anyone later reads as traffic.
  *
  * **Retrieval only.** Most complaints are retrieval problems, generation costs
- * money, and this is the endpoint a frustrated merchant clicks repeatedly. The
- * row's opt-in generation flag waits for P2-31's usage writer, because billing
- * a call this endpoint makes needs somewhere to write the bill.
+ * money, and this is the endpoint a frustrated merchant clicks repeatedly.
+ *
+ * **An answer is a second thing, asked for on its own** (`answer`, P2-37b). It
+ * is a real turn through the chat port and is billed as one, so none of the
+ * three sentences above is true of it — which is why it is another method on
+ * another route, and not a flag that would make this one sometimes cost money.
  */
 
 /**
@@ -104,8 +127,51 @@ export interface SimulateRetrievalCommand {
   readonly cap?: number | undefined;
 }
 
+/** A wine the sommelier recommended, as the seller is shown it. */
+export interface SandboxRecommendation {
+  readonly productId: string;
+  /** From our own row, like every field of a card (P2-25): the model named an id. */
+  readonly name: string;
+  /** The model's own words for why. */
+  readonly reason: string;
+  readonly confidence: number;
+}
+
+/** One answer, whole (P2-37b). */
+export interface SandboxAnswer {
+  readonly reply: string;
+  readonly recommendations: readonly SandboxRecommendation[];
+  /**
+   * How the turn ended. A reply with no wines under it is explained by this:
+   * the model declined, or failed the schema twice, or the provider raised.
+   */
+  readonly outcome: PairingOutcome;
+}
+
+export interface AnswerInSandboxCommand {
+  readonly tenantId: string;
+  /** The question, as a visitor would type it. */
+  readonly query: string;
+  /** Stops generation — and so the tokens billed — when the request goes away. */
+  readonly signal: AbortSignal;
+}
+
 export interface RagPort {
   simulate(command: SimulateRetrievalCommand): Promise<RetrievalSimulation>;
+  /** One real answer, billed as one of the winery's messages (P2-37b). */
+  answer(command: AnswerInSandboxCommand): Promise<SandboxAnswer>;
+}
+
+/** What answering needs beyond retrieval. All of it or none: there is no half of a billed call. */
+export interface SandboxAnswering {
+  /** The port a visitor's question goes through — the same one, not a second pipeline. */
+  readonly chat: ChatPort;
+  /** Required, not optional: a model call nothing counts is the thing this row exists to prevent. */
+  readonly limiter: RateLimiter;
+  /** The winery as the widget's own gates read it, in its own scope. */
+  readonly readService?: ((tenantId: string) => Promise<ServiceState | undefined>) | undefined;
+  /** The clock a trial's end is read against. */
+  readonly clock?: (() => Date) | undefined;
 }
 
 export interface RagPortOptions {
@@ -113,6 +179,8 @@ export interface RagPortOptions {
   readonly provider: EmbeddingProvider;
   /** Monotonic milliseconds. Injected so a test can assert a timing without sleeping. */
   readonly now?: () => number;
+  /** Absent, `answer` is a wiring error and `simulate` works as it always did. */
+  readonly answering?: SandboxAnswering | undefined;
 }
 
 /**
@@ -155,7 +223,97 @@ const zeroResultOf = (
 export const createRagPort = ({
   provider,
   now = () => performance.now(),
+  answering,
 }: RagPortOptions): RagPort => ({
+  async answer({ tenantId, query, signal }) {
+    if (answering === undefined) throw new SandboxAnsweringNotConfiguredError();
+
+    const {
+      chat,
+      limiter,
+      readService = (id) => withTenant(id, readServiceState),
+      clock = () => new Date(),
+    } = answering;
+
+    /*
+     * **Counted first, before the winery is even read.** Per winery rather
+     * than per member: the bill is the winery's, and two members with one
+     * script each are still one winery's month being spent.
+     */
+    const allowance = await limiter.check([
+      {
+        key: sandboxAnswerLimitKey(tenantId),
+        limit: SANDBOX_ANSWERS_PER_MINUTE,
+        windowSec: SANDBOX_ANSWER_WINDOW_SEC,
+      },
+    ]);
+
+    if (!allowance.allowed) throw new RateLimitedError(SANDBOX_TOO_FAST);
+
+    const service = await readService(tenantId);
+
+    if (service === undefined) throw new NotFoundError();
+
+    /*
+     * **Answered here exactly when it would be answered on the winery's site**
+     * (P5-05a). The sandbox is billed against a plan or a running trial, and a
+     * winery with neither has nothing to bill: one that never verified a
+     * domain would otherwise have a model to talk to for nothing, for ever.
+     */
+    if (!isServed(service, clock())) throw new ConflictError(SANDBOX_NOT_SERVED);
+
+    let reply = '';
+    let outcome: PairingOutcome = 'provider_error';
+    const recommendations: SandboxRecommendation[] = [];
+
+    try {
+      /*
+       * **The chat port, with nobody behind the turn**: the monthly gate, the
+       * redaction, retrieval, the prompt, both boundaries on the stream and
+       * the bill are the widget's own, and no conversation is kept.
+       */
+      const turn = chat.answer(
+        {
+          tenant: {
+            tenantId,
+            ...service,
+            /* Neither is read on this path: no session is minted, no origin is limited. */
+            turnstile: false,
+            originKind: 'production',
+          },
+          visitor: null,
+          message: query,
+          signal,
+        },
+        (report) => {
+          outcome = report.outcome;
+        },
+      );
+
+      for await (const event of turn) {
+        if (event.type === 'text') reply += event.delta;
+
+        if (event.type === 'recommendations') {
+          recommendations.push(
+            ...event.items.map((item) => ({
+              productId: item.productId,
+              name: item.product.name,
+              reason: item.reason,
+              confidence: item.confidence,
+            })),
+          );
+        }
+      }
+    } catch (error) {
+      /* Refused before anything was spent, as a visitor's would be — and told to somebody who can act. */
+      if (error instanceof QuotaExceededError) throw new ConflictError(SANDBOX_QUOTA_EXCEEDED);
+
+      throw error;
+    }
+
+    return { reply, recommendations, outcome };
+  },
+
   async simulate({ tenantId, query, maxPriceCents, cap = MAX_CANDIDATES }) {
     /*
      * **The same function the chat route calls**, which is this endpoint's one
@@ -238,8 +396,22 @@ export class RagPortNotConfiguredError extends Error {
   }
 }
 
+/** Retrieval is wired and answering is not: a deployment with no chat port handed to this one. */
+export class SandboxAnsweringNotConfiguredError extends Error {
+  constructor() {
+    super(
+      'The RAG port was built without `answering`, so the sandbox cannot generate an answer. ' +
+        'This is a wiring bug at the composition root, not a request problem.',
+    );
+    this.name = 'SandboxAnsweringNotConfiguredError';
+  }
+}
+
 export const unconfiguredRag: RagPort = {
   simulate() {
+    throw new RagPortNotConfiguredError();
+  },
+  answer() {
     throw new RagPortNotConfiguredError();
   },
 };

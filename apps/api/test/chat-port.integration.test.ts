@@ -120,9 +120,7 @@ const ask = async (
   for await (const chunk of port.answer(
     {
       tenant: tenant(id),
-      sessionId,
-      origin: 'https://cantina-rossi.example',
-      visitorHash: null,
+      visitor: { sessionId, origin: 'https://cantina-rossi.example', visitorHash: null },
       message,
       signal: new AbortController().signal,
     },

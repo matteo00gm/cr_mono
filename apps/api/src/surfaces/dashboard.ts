@@ -41,6 +41,7 @@ import {
   productReindexedResponse,
   productUpdatedResponse,
   productsImportedResponse,
+  ragAnswerResponse,
   ragSimulationResponse,
   roleChangeResponse,
   rosterResponse,
@@ -478,6 +479,15 @@ const simulationRequest = z
     cap: z.number().int().nonnegative().max(40).optional(),
   })
   .strict();
+
+/**
+ * What a seller asks the sommelier to answer in the sandbox (P2-37b).
+ *
+ * **The question and nothing else**, strict for `simulationRequest`'s reason.
+ * A real turn has no price ceiling or cap to set: the point of asking for the
+ * answer is to read what a visitor would have been told.
+ */
+const answerRequest = z.object({ query: z.string().trim().min(1).max(500) }).strict();
 
 /**
  * What a seller types into the domains screen.
@@ -1261,6 +1271,38 @@ export const createDashboardApp = ({
         /* From a `memberships` row, never from the body (P0-48). */
         tenantId: c.get('tenantId'),
         ...parsed.data,
+      }),
+    );
+  });
+
+  /**
+   * One real answer to a question, on request (P2-37b, Open Decision 8).
+   *
+   * **Its own route, and not a flag on the one above**: that one is free, moves
+   * no counter and can be clicked all afternoon, and this one is a model call
+   * billed as one of the winery's messages. A request cannot turn the first
+   * into the second by adding a field — "off unless asked" is the URL.
+   *
+   * **`catalog:write`**, the capability of the people who tune a catalogue,
+   * and of nobody who can only read one: asking spends the winery's month.
+   *
+   * The winery's cap, the widget's own serving rule and ten a minute are the
+   * port's, in that order after the limit; the conversation is kept nowhere.
+   */
+  app.post('/rag/answer', requireCapability('catalog:write'), async (c) => {
+    const parsed = answerRequest.safeParse(await readJson(c));
+
+    if (!parsed.success) {
+      throw new InvalidRequestError('Invia un corpo JSON con una query, la domanda da fare.');
+    }
+
+    return c.json(
+      await rag.answer({
+        /* From a `memberships` row, never from the body (P0-48). */
+        tenantId: c.get('tenantId'),
+        query: parsed.data.query,
+        /* A seller who closes the tab stops generation, and stops what is billed for it. */
+        signal: c.req.raw.signal,
       }),
     );
   });
@@ -2169,6 +2211,40 @@ export const DASHBOARD_ROUTES: ReadonlyMap<string, RouteDoc> = new Map<string, R
         systemPromptHash: '9f2e1b7e4a304c1a',
       },
       response: ragSimulationResponse,
+    },
+  ],
+  [
+    routeKey('POST', `${DASHBOARD_PREFIX}/rag/answer`),
+    {
+      access: requires('catalog:write'),
+      summary: 'Ask the sommelier one question, as a visitor would',
+      description:
+        'Generates one real answer for a question: the same monthly allowance, the same ' +
+        'retrieval, the same model and the same checks on what it wrote that a visitor on ' +
+        "the storefront gets. It is billed as one of the winery's messages - no answer " +
+        "here is free - and is refused, before any model is called, once the month's " +
+        'messages are used up, with a 409 that says so. It is answered only while the ' +
+        "winery's widget would be: with a plan, or a trial still running. At most ten a " +
+        "minute per winery, whoever asks; the eleventh is a 429. Unlike a visitor's, the " +
+        'question and the answer are kept nowhere, so they do not appear among the ' +
+        "conversations and analytics. The reply arrives whole. Each recommendation's " +
+        "name comes from the catalogue; the reason is the model's. outcome says how the " +
+        'turn ended, which is what explains a reply with no wines under it.',
+      example: {
+        reply:
+          'Con una bistecca alla fiorentina sta molto bene un rosso strutturato: ti consiglio ' +
+          'il Barolo Monfortino Riserva.',
+        recommendations: [
+          {
+            productId: '3f1c0b7e-4a30-4c1a-9f2e-1b7e4a304c1a',
+            name: 'Barolo Monfortino Riserva',
+            reason: 'Tannini e struttura reggono la carne alla griglia.',
+            confidence: 0.86,
+          },
+        ],
+        outcome: 'ok',
+      },
+      response: ragAnswerResponse,
     },
   ],
   [

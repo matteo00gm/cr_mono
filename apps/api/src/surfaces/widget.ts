@@ -576,9 +576,11 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
       const answering = chat.answer(
         {
           tenant,
-          sessionId: c.get('widgetSessionId'),
-          origin: c.get('widgetOrigin'),
-          visitorHash: visitorHashOf(c, widget.ipSecret),
+          visitor: {
+            sessionId: c.get('widgetSessionId'),
+            origin: c.get('widgetOrigin'),
+            visitorHash: visitorHashOf(c, widget.ipSecret),
+          },
           message: parsed.data.message,
           /* A visitor who closes the tab stops generation, and stops billing. */
           signal: c.req.raw.signal,
