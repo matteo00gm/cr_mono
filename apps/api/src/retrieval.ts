@@ -15,6 +15,8 @@ import {
   type ProductRow,
 } from '@catalogorosso/db';
 
+import { withSpan } from './telemetry.js';
+
 /**
  * The retrieval path, P2-17 through P2-22, in one place (P2-29, P2-37).
  *
@@ -72,7 +74,9 @@ export const retrieve = async (
   }: RetrievalRequest,
 ): Promise<Retrieved> => {
   const embedStarted = now();
-  const { vector } = await embedQuery(provider, query);
+  const { vector } = await withSpan('rag.embed', () => embedQuery(provider, query), {
+    'rag.model': provider.model,
+  });
   const embedMs = now() - embedStarted;
 
   /*
@@ -82,13 +86,31 @@ export const retrieve = async (
    */
   const searchStarted = now();
   const { fused, rows } = await withTenant(tenantId, async (tx) => {
-    const found = await fusedSearch(tx, { vector, query, limit });
+    /*
+     * **One span, three numbers** (P7-01). The row asks for the vector branch,
+     * the lexical branch and the fusion as separate spans; they are one
+     * statement (P2-20), so there is one duration to report and the split is
+     * in how many candidates each branch contributed.
+     */
+    const found = await withSpan('rag.search', async (span) => {
+      const candidates = await fusedSearch(tx, { vector, query, limit });
+
+      span.set({
+        'rag.vector_hits': candidates.filter((candidate) => candidate.vectorRank !== null).length,
+        'rag.lexical_hits': candidates.filter((candidate) => candidate.lexicalRank !== null).length,
+        'rag.fused': candidates.length,
+      });
+
+      return candidates;
+    });
 
     return {
       fused: found,
-      rows: await productsByIds(
-        tx,
-        found.map((candidate) => candidate.productId),
+      rows: await withSpan('db.products', () =>
+        productsByIds(
+          tx,
+          found.map((candidate) => candidate.productId),
+        ),
       ),
     };
   });

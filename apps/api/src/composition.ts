@@ -49,6 +49,7 @@ import { createDevBillingPort, type DevBillingPort } from './dev-billing.js';
 import { createQuotaPort, type QuotaPort } from './quota.js';
 import { createQuotaNotifier } from './quota-notices.js';
 import { createRagPort, type RagPort } from './rag.js';
+import { createTelemetry, otlpHttpExporter, type Telemetry } from './telemetry.js';
 import { refusalRecorders, webhookRejectionRecorder } from './security-events.js';
 import { createStripeClient } from './stripe.js';
 import { createStripeEventsPort, type StripeEventsPort } from './stripe-events.js';
@@ -112,6 +113,18 @@ export interface RuntimeConfig {
   readonly acceptUrlBase?: string | undefined;
   /** Injected so a test can read what the log transport wrote. */
   readonly log?: ((line: string) => void) | undefined;
+  /**
+   * Where traces go (P7-01): an OTLP/HTTP endpoint and the headers it wants.
+   *
+   * Absent, nothing is traced. Which endpoint — the AWS collector beside the
+   * function, or a vendor's — is an operator's choice and not this code's.
+   */
+  readonly otlp?:
+    | {
+        readonly endpoint: string;
+        readonly headers?: Readonly<Record<string, string>> | undefined;
+      }
+    | undefined;
   /** Raised when a message is finally abandoned, for the P0-64 alarm. */
   readonly onEmailFailure?: ((failure: { readonly to: string }) => void) | undefined;
   /**
@@ -238,6 +251,8 @@ export const QUERY_EMBEDDING = { maxAttempts: 2, timeoutMs: 3_000 } as const;
 
 export interface Dependencies {
   readonly auth: AuthPort;
+  /** Tracing (P7-01): a no-op unless `otlp` names somewhere to send it. */
+  readonly telemetry: Telemetry;
   /** Passed through to `createApp`; absent means the guard is not installed. */
   readonly originSecret?: string | undefined;
   /** Where state-changing dashboard requests must come from (review, R5). */
@@ -461,6 +476,11 @@ export const buildDependencies = (config: RuntimeConfig): Dependencies => {
   };
 
   return {
+    telemetry: createTelemetry({
+      ...(config.otlp === undefined ? {} : { exporter: otlpHttpExporter(config.otlp) }),
+      resource: { 'service.name': 'catalogorosso-api', 'deployment.environment': config.stage },
+    }),
+
     auth: createAuth({
       secret: config.authSecret,
       baseUrl: config.authBaseUrl,

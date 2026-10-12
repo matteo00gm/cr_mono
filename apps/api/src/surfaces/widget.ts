@@ -47,6 +47,7 @@ import { mintServerSession, type ServerSessionDeps } from '../server-session.js'
 import { WIDGET_PREFIX } from '../routes.js';
 import { widgetConfigFor } from '../widget-config.js';
 import { readEventBatch, tokenInBatch } from '../widget-events.js';
+import { flushTraces, withSpan } from '../telemetry.js';
 import { TURNSTILE_REFUSED, type TurnstileVerifier } from '../turnstile.js';
 import { mintWidgetSession } from '../widget-session.js';
 import {
@@ -631,9 +632,16 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
         }, HEARTBEAT_MS);
 
         try {
-          for await (const chunk of answering) {
-            await stream.writeSSE({ event: chunk.type, data: JSON.stringify(chunk) });
-          }
+          /*
+           * The turn's own span (P7-01), begun as the stream begins — which is
+           * before this handler has returned, so the request's trace stays
+           * open for as long as the answer is being written.
+           */
+          await withSpan('chat.turn', async () => {
+            for await (const chunk of answering) {
+              await stream.writeSSE({ event: chunk.type, data: JSON.stringify(chunk) });
+            }
+          });
         } catch (error) {
           /*
            * The response has already begun, so there is no status left to
@@ -650,6 +658,12 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
         } finally {
           clearInterval(beat);
           await stream.writeSSE({ event: 'done', data: '{}' });
+          /*
+           * After `done`, so a visitor never waits for it: the trace is sent
+           * while the response is still open, because a function frozen with
+           * an export in flight has not sent it.
+           */
+          await flushTraces();
         }
       });
 

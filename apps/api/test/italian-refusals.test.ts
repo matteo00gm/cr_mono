@@ -91,7 +91,10 @@ const RELAYED: ReadonlyMap<string, string> = new Map([
 
 const filesUnder = (directory: string): string[] =>
   readdirSync(join(REPO, directory), { withFileTypes: true, recursive: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
+    /* Not another suite's scratch file, which is gone again before it can be read (see T6). */
+    .filter(
+      (entry) => entry.isFile() && entry.name.endsWith('.ts') && !entry.name.includes('.fixture.'),
+    )
     .map((entry) =>
       join(entry.parentPath, entry.name)
         .slice(REPO.length + 1)

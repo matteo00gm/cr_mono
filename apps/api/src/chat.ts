@@ -38,6 +38,7 @@ import { logger } from './middleware/logger.js';
 import type { QuotaPort } from './quota.js';
 import type { QuotaNotifier } from './quota-notices.js';
 import { retrieve } from './retrieval.js';
+import { openSpan, withSpan } from './telemetry.js';
 
 /**
  * Answering one visitor's question (P2-29, §4.5).
@@ -230,7 +231,7 @@ export const createChatPort = ({
          * generation is a bill; a quota checked after either has already cost
          * what it exists to save (P2-36, §3.6).
          */
-        const month = await quota.check(tenant);
+        const month = await withSpan('db.quota', () => quota.check(tenant));
 
         if (!month.allowed) throw new QuotaExceededError();
 
@@ -268,8 +269,10 @@ export const createChatPort = ({
         const history: Turn[] = (
           visitor === null
             ? []
-            : await withTenant(tenant.tenantId, (tx) =>
-                readConversation(tx, visitor.sessionId, MAX_HISTORY_TURNS * 2),
+            : await withSpan('db.history', () =>
+                withTenant(tenant.tenantId, (tx) =>
+                  readConversation(tx, visitor.sessionId, MAX_HISTORY_TURNS * 2),
+                ),
               )
         ).flatMap((entry) =>
           entry.role === 'SYSTEM'
@@ -346,6 +349,17 @@ export const createChatPort = ({
         );
 
         const started = now().getTime();
+        /*
+         * Opened and ended by hand (P7-01): the model's stream is consumed by
+         * this generator's own `yield`, which no callback can wrap. Its
+         * attributes are the model's name and what it cost — never a word of
+         * the question or the reply.
+         */
+        const generating = openSpan('llm.generate', {
+          'llm.model': model,
+          'llm.tier': escalations.length > 0 ? 'strong' : 'base',
+        });
+        let raised: unknown;
 
         try {
           for await (const chunk of answered) {
@@ -379,7 +393,18 @@ export const createChatPort = ({
             shown.push(...items.map((item) => item.productId));
             yield { type: 'recommendations', items };
           }
+        } catch (error) {
+          raised = error;
+
+          throw error;
         } finally {
+          generating.set({
+            'llm.input_tokens': usage?.inputTokens,
+            'llm.output_tokens': usage?.outputTokens,
+            'llm.outcome': outcome,
+          });
+          generating.end(raised);
+
           /*
            * **After the stream, in one transaction, however it ended.** A
            * visitor who closed the tab still has what was generated recorded,
@@ -395,55 +420,57 @@ export const createChatPort = ({
                   outputTokens: usage.outputTokens,
                 });
 
-          await withTenant(tenant.tenantId, async (tx) => {
-            /*
-             * **Only a visitor's turn is kept.** A seller's own question would
-             * otherwise be counted among the questions shoppers ask and the
-             * wines they were shown, by the panels that seller reads next.
-             */
-            if (visitor !== null) {
-              await recordTurn(tx, {
-                sessionId: visitor.sessionId,
-                origin: visitor.origin,
-                visitorHash: visitor.visitorHash,
-                locale,
-                question,
-                reply,
-                retrievedProductIds: candidates.map((candidate) => candidate.id),
-                recommendedProductIds: shown,
-                /*
-                 * Decided now, from what reached the model, because that is not
-                 * kept: §2.4's ZERO_RESULTS panel reads it (P6-04).
-                 */
-                zeroResultKind: zeroResultOf({
-                  outcome,
-                  cards: shown.length,
-                  wordMatches: capped.candidates.filter(
-                    (candidate) => candidate.lexicalRank !== null,
-                  ).length,
-                }),
-                model,
+          await withSpan('db.record', () =>
+            withTenant(tenant.tenantId, async (tx) => {
+              /*
+               * **Only a visitor's turn is kept.** A seller's own question would
+               * otherwise be counted among the questions shoppers ask and the
+               * wines they were shown, by the panels that seller reads next.
+               */
+              if (visitor !== null) {
+                await recordTurn(tx, {
+                  sessionId: visitor.sessionId,
+                  origin: visitor.origin,
+                  visitorHash: visitor.visitorHash,
+                  locale,
+                  question,
+                  reply,
+                  retrievedProductIds: candidates.map((candidate) => candidate.id),
+                  recommendedProductIds: shown,
+                  /*
+                   * Decided now, from what reached the model, because that is not
+                   * kept: §2.4's ZERO_RESULTS panel reads it (P6-04).
+                   */
+                  zeroResultKind: zeroResultOf({
+                    outcome,
+                    cards: shown.length,
+                    wordMatches: capped.candidates.filter(
+                      (candidate) => candidate.lexicalRank !== null,
+                    ).length,
+                  }),
+                  model,
+                  inputTokens: usage?.inputTokens ?? null,
+                  outputTokens: usage?.outputTokens ?? null,
+                  latencyMs: now().getTime() - started,
+                });
+              }
+
+              /*
+               * **Every turn is billed, a seller's included** (Open Decision 8):
+               * the model was called either way. The same kind as a visitor's,
+               * so the monthly gate counts it — a kind of its own would be a
+               * second allowance nobody sold.
+               */
+              await recordUsage(tx, {
+                period: periodOf(now()),
+                kind: CHAT_MESSAGE,
+                sessionId: visitor?.sessionId ?? null,
                 inputTokens: usage?.inputTokens ?? null,
                 outputTokens: usage?.outputTokens ?? null,
-                latencyMs: now().getTime() - started,
+                costMicros,
               });
-            }
-
-            /*
-             * **Every turn is billed, a seller's included** (Open Decision 8):
-             * the model was called either way. The same kind as a visitor's,
-             * so the monthly gate counts it — a kind of its own would be a
-             * second allowance nobody sold.
-             */
-            await recordUsage(tx, {
-              period: periodOf(now()),
-              kind: CHAT_MESSAGE,
-              sessionId: visitor?.sessionId ?? null,
-              inputTokens: usage?.inputTokens ?? null,
-              outputTokens: usage?.outputTokens ?? null,
-              costMicros,
-            });
-          });
+            }),
+          );
 
           onReport({
             outcome,

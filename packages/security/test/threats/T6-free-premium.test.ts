@@ -48,6 +48,15 @@ const productionSources = (): string[] => {
   const files: string[] = [];
   const walk = (dir: string): void => {
     for (const name of readdirSync(dir)) {
+      /*
+       * Another suite's scratch file, not source: `tenant-from-input.test.ts`
+       * writes `*.fixture.ts` into these folders for a moment and removes them.
+       * Listed here and gone by the time it is read, one of them failed this
+       * test once in a full run and never alone — skipped by the suffix that
+       * suite gives them for exactly this.
+       */
+      if (name.includes('.fixture.')) continue;
+
       const path = join(dir, name);
 
       if (statSync(path).isDirectory()) {

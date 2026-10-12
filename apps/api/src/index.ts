@@ -6,6 +6,7 @@ import { createRateLimiter } from '@catalogorosso/db';
 import { createApp } from './app.js';
 import { buildDependencies } from './composition.js';
 import { logger } from './middleware/logger.js';
+import { otlpHeaders } from './telemetry.js';
 
 /**
  * The Lambda entry point (P0-45).
@@ -58,6 +59,15 @@ const optionalEnvironment = (name: string): string | undefined => {
  * conditional on being deployed at all.
  */
 const stage = optionalEnvironment('SST_STAGE') ?? 'unknown';
+
+/**
+ * Where traces go, under OpenTelemetry's own variable names (P7-01).
+ *
+ * Unset — today, everywhere — and nothing is traced. Which endpoint to set is
+ * the operator's decision: the AWS collector beside the function keeps traces
+ * in the account, and a vendor's endpoint makes that vendor a processor.
+ */
+const otlpEndpoint = optionalEnvironment('OTEL_EXPORTER_OTLP_ENDPOINT');
 
 /**
  * The origin secret, and the assertion that a deployment has one (A2).
@@ -224,6 +234,15 @@ export const dependencies = buildDependencies({
   stripeSecretKey: optionalEnvironment('STRIPE_SECRET_KEY'),
   ...(shopify === undefined ? {} : { shopify }),
   shopifyTokenPrefix: optionalEnvironment('SHOPIFY_TOKEN_PREFIX'),
+
+  ...(otlpEndpoint === undefined
+    ? {}
+    : {
+        otlp: {
+          endpoint: otlpEndpoint,
+          headers: otlpHeaders(optionalEnvironment('OTEL_EXPORTER_OTLP_HEADERS')),
+        },
+      }),
 
   emailFrom: optionalEnvironment('EMAIL_FROM') ?? 'AI Sommelier <noreply@localhost>',
   resendApiKey: optionalEnvironment('RESEND_API_KEY'),
