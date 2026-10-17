@@ -1,6 +1,7 @@
 import {
   boolean,
   customType,
+  integer,
   pgEnum,
   pgTable,
   smallint,
@@ -136,6 +137,15 @@ export const tenants = pgTable('tenants', {
    * The `>= 1` CHECK lives in migration 0041.
    */
   embeddingVersion: smallint('embedding_version').notNull().default(1),
+
+  /**
+   * How long this winery's chat transcripts are kept, in days (P7-07, §3.9).
+   *
+   * Null is the default, which the purge holds (ninety days) rather than every
+   * row: the day the default changes, it changes for every winery that never
+   * chose. One day to ten years, by the CHECK in migration 0078.
+   */
+  transcriptRetentionDays: integer('transcript_retention_days'),
 
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 

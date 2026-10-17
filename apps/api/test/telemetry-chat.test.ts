@@ -290,12 +290,16 @@ describe('one answer asked in the sandbox, through the app', () => {
     const { sink } = await answered();
     const sent = JSON.stringify(sink.exports);
 
+    /*
+     * The phone number by its long run of digits, never by a short one: the
+     * export is full of random hex ids and nanosecond timestamps, and "333"
+     * turns up in one of those every few runs whatever the code does.
+     */
     for (const secret of [
       'Giulia',
       'giulia',
       'Rossi',
       'example.com',
-      '333',
       '1234567',
       'bistecca',
       'Barolo',

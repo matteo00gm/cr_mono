@@ -1447,7 +1447,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | P7-04 | k6: abuse scenario | validates T4 under real concurrency | P2-04 |
 | P7-05 | Retrieval headroom check | 30 tenants, one assertion — **scaled down from the 200-tenant study** (§5.0) | P2-18 |
 | P7-06 | Backup restore drill + runbook | an untested backup is not a backup | P0-14 |
-| P7-07 | Transcript retention purge job | 90 days default, per-tenant override, tested | P0-28 |
+| ✅ P7-07 | Transcript retention purge job | 90 days default, per-tenant override, tested | P0-28 |
 | P7-08 | GDPR ops runbook + export/delete script | the deferred self-serve UI's stand-in | P7-07 |
 | P7-09 | Integration docs | Shopify install, custom-site adapter, CSP requirements | P3-12 |
 | P7-10 | Status page | | P7-02 |
@@ -8209,6 +8209,31 @@ What remains worth doing is confirming there is no cliff just past the ceiling, 
 
 **Files.** `apps/worker/src/retention.ts`, tests. **~110 lines.**
 
+**As built (2026-10-17).** `apps/worker/src/retention.ts`, nightly at 02:15 UTC (`RetentionPurge` in `infra/schedules.ts`), with its statements in `packages/db/src/retention.ts` and the per-winery period in migration 0078.
+
+- **Per winery, in its own scope.** The job walks the tenant directory (ADR 0030) and opens `withTenant` for each winery, as the usage rollup does: every statement runs under the boilerplate tenant policy, so there is no path here that can reach two wineries, and none that needed an ADR.
+- **A conversation goes when it has been quiet for the period**, counted from its last message rather than its first — one a visitor came back to is younger than it started — and its messages go with it (`ON DELETE CASCADE`). `widget_events` keep their counts with the link cut (`ON DELETE SET NULL`, P0-28), so the funnel outlives the words.
+- **The period is each winery's, defaulting to ninety days** (§3.9): `tenants.transcript_retention_days`, null for the default, one day to ten years by CHECK. The default lives in the job, not in every row, so changing it changes it for every winery that never chose.
+- **Widget events on a fixed four hundred days** — a year-on-year comparison of the same month, with room for the month to be over. They hold no words a person wrote.
+- **In batches, oldest first, a transaction each**, through the sweep's own `drain` (P2-14): nothing holds a winery's conversations locked for longer than a batch, a short batch is the end, and what the pass cap leaves is the next night's first batch. The run says whether it finished.
+- **One clock for the whole run**, so every winery is cut at the same instant however long the run takes.
+- **A dry run** — `{ "dryRun": true }` as the invocation's event, and only exactly that — counts by the same cutoffs and deletes nothing. It is reported, and not counted as a night's run, so a check by hand cannot hide a schedule that stopped.
+- **⚠ The alarm is on runs, not on deletions** *(deviation — the row says "alarm if a run deletes nothing for a week")*. Every winery deletes nothing for its first ninety days, and any quiet week after; that alarm would fire until it was muted. A dead job is one that never reports: `RetentionPurgeSilent` (a day without a run, missing data breaching), and a failing one is `ScheduledJobErrors`, which now watches this job too. Both are in `docs/runbooks/alarms.md`.
+- **⚠ `security_events` are not purged** *(deviation — the row asks for them "on a longer horizon still")*. The runtime role cannot delete from them: they are append-only at the grant level so that whoever holds its credentials cannot erase the record of what they did (migration 0019), and the unattributed ones are visible only to `app_admin`. Purging them needs a path that deletes from a ledger — a floor-guarded function, or a job under another role — which is a design change with its own ADR. Until then they are an operator's, in P7-08's runbook.
+- **⚠ Open: no screen sets the period.** A winery's own period is a column an operator sets; the dashboard does not offer it yet.
+- **⚠ Open: `audit_log`, `usage_events` and `attributions` keep no transcript text and are not purged** — the ledgers by the same rule as `security_events`, and attributions because a sale that happened stays a sale (P6-07).
+
+**Verified.** Unit (6075 tests), the full Postgres suite (94 files, 1312 tests), coverage gates — `packages/db` dipped under its 90% line gate on the first run, because the new statements and P2-37b's `readServiceState` had only Postgres tests, and has unit tests of its own now — every `:check`, `typecheck:infra` and the threat matrix. `retention.integration.test.ts`, under `app_rw` and RLS: a conversation quiet past the period goes with its messages and the rest stay; one somebody came back to stays; one exactly at the cutoff stays; its events stay with the link cut; batches oldest first and a short one is the end; another winery untouched, and nothing reached outside a scope; events by their own horizon; the dry run's count by each table's own cutoff; a winery's period read back, and nought, minus one and ten years and a day refused by the CHECK. `retention.test.ts` (worker): each winery's own cutoff and one horizon for events; one instant for the run; batches until a short one, and the pass cap reported; a failing winery counted and the rest purged; the dry run, and only exactly `{ dryRun: true }`; one line that is the metrics, and a dry run not counted as a run. 25 mutants, 25 killed on the first run. The full run also turned up a flake in P7-01's privacy test — it looked for "333" in an export full of random hex ids — fixed in its own commit.
+
+| Mutation | Caught by |
+|---|---|
+| A conversation aged from its first message; the cutoff's own instant taken; not the oldest first; a batch larger than asked, for conversations or for events; every event taken | `retention.integration.test.ts` |
+| The dry run counting conversations by their first message, or events by the transcripts' cutoff; a winery's choice not read; nought days, or a hundred years, allowed | `retention.integration.test.ts` |
+| A winery's choice ignored; thirty days by default; events kept a year exactly; a fresh clock for every winery | `retention.test.ts` (worker) |
+| A dry run that deletes, or counts and then deletes; anything truthy taken for a dry run; a dry run counted as a night's run | `retention.test.ts` (worker) |
+| A capped purge reported as finished; a failing winery not counted; a failing night that does not fail; the events left out of what was purged | `retention.test.ts` (worker) |
+| The alarm watching a name the job does not write; the alarm not on the list | `retention-config.test.ts`, `alarm-config.test.ts` |
+
 ---
 
 ### P7-08 · GDPR ops runbook and scripts
@@ -8658,6 +8683,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 | Item | Owner | Note |
 |---|---|---|
 | Tracing has nowhere to send | **operator decision (Open Decision 11)** | P7-01 is built and off. Choose the AWS collector (no new processor; recommended) or a vendor's OTLP endpoint (a sub-processor: DPA and privacy notice first), then wire it in `infra/` — the collector layer on both functions, or the vendor's key in SSM. |
+| `security_events` grow for ever | **design decision** | P7-07 purges transcripts and widget events and cannot touch `security_events`, which are append-only at the grant level (migration 0019). A purge needs a path that deletes from a ledger — a function with a hard floor on age, or a scheduled job under `app_admin` — and its own ADR. Small table; not urgent at two wineries. |
 | Alarms have never fired | **operator** | P7-02 creates sixteen and nothing is deployed. Confirm the SNS email subscription once per stage, then force each condition once in a review stage — `docs/runbooks/alarms.md` says how for each. |
 | The SdI bridge has nothing to send through | **operator decision** | P5-03a records every paid charge in `e_invoices`, and nothing drains it yet. Choose the provider (Fatture in Cloud, Fatturapertutti or Striptu), open its account and sandbox, agree the spend (P1-47's rule), and decide `tax_behavior` — VAT-inclusive or exclusive — which the invoice must state. Then the queue, worker job and adapter, verified against the sandbox, close the row. |
 | API refusals are English in an Italian dashboard | **✅ done (Open Decision 6, P6-12)** | A `DomainError`'s message reaches the caller verbatim (P0-55), and the messages are English — P5-10's downgrade refusal, P5-11a's top-up refusals — while the dashboard is Italian. P5-12's Fatturazione screen shows them as they are. Localising means a code-to-copy map in the dashboard or a locale on the contract; either touches every route. |
