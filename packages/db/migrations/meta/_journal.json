@@ -547,6 +547,13 @@
       "when": 1788654188612,
       "tag": "0077_products_stock_source",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1788740588612,
+      "tag": "0078_tenants_transcript_retention",
+      "breakpoints": true
     }
   ]
 }

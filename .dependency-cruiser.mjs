@@ -199,6 +199,10 @@ export default {
           // src/sales.ts is exempt from P6-10 on funnel.ts's terms: one read in
           // the caller's withTenant transaction, over attributions' policy.
           '|^packages/db/src/sales[.]ts$' +
+          // src/retention.ts is exempt from P7-07 on the same terms: deletes and
+          // reads in the caller's withTenant transaction, under the boilerplate
+          // policies of the tables it purges. The job opens a scope per winery.
+          '|^packages/db/src/retention[.]ts$' +
           // src/webhooks.ts is exempt from P0-64b, and unlike the two files
           // above it really does open a connection. A webhook arrives outside
           // any request — no session, no membership row, no tenant to set — and

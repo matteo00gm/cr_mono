@@ -120,9 +120,21 @@ their dashboard and can add it. A domain that is nobody's is a copied snippet; t
 system working, and rotating the public key (P4-09) stops the noise.
 **Force it:** load a review winery's snippet fifty-one times from a page on an unverified origin.
 
+## RetentionPurgeSilent
+
+**Means:** the retention purge reported no run for a day. Transcripts past their winery's period
+are being kept, which §3.9 says they are not.
+**Do:** if `ScheduledJobErrors` also fired, start there. Otherwise check the schedule is enabled
+and that the job logged `retention.completed`. Nothing is lost by a missed night — the next run
+takes everything past its cutoff — but a purge that stays stopped is a compliance problem that
+grows by a day of transcripts every day. Invoke it by hand with `{ "dryRun": true }` first to see
+what it would take.
+**Force it:** disable the purge's schedule in a review stage for a day.
+
 ## ScheduledJobErrors
 
-**Means:** a scheduled job threw: the sweep, the claim sweep, the usage rollup or the outbox poller.
+**Means:** a scheduled job threw: the sweep, the claim sweep, the usage rollup, the retention purge
+or the outbox poller.
 **Do:** the `Errors` metric per function says which; that function's log has the error. The outbox
 poller failing means edited wines are not being queued for indexing — treat it first. The claim
 sweep failing means domain-claim notices and transfers are late.

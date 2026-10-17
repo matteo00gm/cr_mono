@@ -31,6 +31,7 @@ export const ALARMS = [
   'EmbeddingQueueAge',
   'QuotaRefusalSpike',
   'RefusedOriginSpike',
+  'RetentionPurgeSilent',
   'ScheduledJobErrors',
   'SweepDeletedNothing',
   'TenantModelSpend',

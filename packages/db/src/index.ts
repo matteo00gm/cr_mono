@@ -654,6 +654,13 @@ export {
 
 /** What the sommelier sold over a range (P6-10), net of refunds, read in the scope's tenant. */
 export { readAttributedSales, type AttributedSales, type SalesQuery } from './sales.js';
+export {
+  countPurgeable,
+  purgeConversations,
+  purgeWidgetEvents,
+  readTranscriptRetention,
+  type PurgeBatch,
+} from './retention.js';
 
 /** The funnel's counts (P6-02): visits reaching each stage, read in the scope's tenant. */
 export { readFunnel, type FunnelQuery } from './funnel.js';

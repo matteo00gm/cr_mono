@@ -32,7 +32,7 @@ import { api, chat } from './api';
 import { database } from './database';
 import { embeddingQueue, outboxPoller } from './queue';
 import { ROLLUP_METRIC_NAMESPACE } from './rollup-config';
-import { claimSweep, sweep, usageRollup } from './schedules';
+import { claimSweep, retentionPurge, sweep, usageRollup } from './schedules';
 
 /**
  * The alarms that watch more than one thing, or something no other file owns
@@ -268,12 +268,13 @@ if (instance !== undefined) {
  * and failed. The claim sweep and the poller have no silence alarm, so for
  * them this is the only one.
  */
-const scheduled = [sweep, claimSweep, usageRollup, outboxPoller];
+const scheduled = [sweep, claimSweep, usageRollup, retentionPurge, outboxPoller];
 
 new aws.cloudwatch.MetricAlarm('ScheduledJobErrors', {
   alarmDescription:
-    'A scheduled job failed: the sweep, the claim sweep, the usage rollup or the outbox ' +
-    'poller. Each logs its own failure; the Errors metric per function says which.',
+    'A scheduled job failed: the sweep, the claim sweep, the usage rollup, the retention ' +
+    'purge or the outbox poller. Each logs its own failure; the Errors metric per function ' +
+    'says which.',
   comparisonOperator: 'GreaterThanThreshold',
   evaluationPeriods: 1,
   threshold: 0,

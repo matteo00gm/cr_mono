@@ -18,6 +18,13 @@ import {
   ROLLUP_SILENCE_SECONDS,
   ROLLUP_TIMEOUT_SECONDS,
 } from './rollup-config';
+import {
+  RETENTION_METRIC_NAMESPACE,
+  RETENTION_RUNS_METRIC,
+  RETENTION_SCHEDULE,
+  RETENTION_SILENCE_SECONDS,
+  RETENTION_TIMEOUT_SECONDS,
+} from './retention-config';
 import { vpc } from './vpc';
 
 /**
@@ -172,6 +179,67 @@ new aws.cloudwatch.MetricAlarm('UsageRollupSilent', {
   dimensions: { Stage: $app.stage },
   statistic: 'Sum',
   period: ROLLUP_SILENCE_SECONDS,
+  evaluationPeriods: 1,
+  threshold: 1,
+  comparisonOperator: 'LessThanThreshold',
+  treatMissingData: 'breaching',
+  ...notify,
+});
+
+/** The purge's timeout as the literal SST's type wants, asserted to agree with its config. */
+const RETENTION_TIMEOUT = '300 seconds' as const;
+
+if (Number.parseInt(RETENTION_TIMEOUT, 10) !== RETENTION_TIMEOUT_SECONDS) {
+  throw new Error(
+    `The retention purge's timeout literal (${RETENTION_TIMEOUT}) and RETENTION_TIMEOUT_SECONDS ` +
+      `(${String(RETENTION_TIMEOUT_SECONDS)}) disagree (P7-07).`,
+  );
+}
+
+/**
+ * The retention purge (P7-07, §3.9): each winery's transcripts past its
+ * retention period, and widget events past theirs. In the VPC with the database
+ * URL and nothing else; it deletes rows and reads no secret besides.
+ *
+ * Run by hand with `{ "dryRun": true }` to see what a night would take.
+ */
+export const retentionPurge = new sst.aws.Cron('RetentionPurge', {
+  schedule: RETENTION_SCHEDULE,
+  function: {
+    handler: 'apps/worker/src/retention.handler',
+    architecture: 'arm64',
+    runtime: 'nodejs22.x',
+    memory: '256 MB',
+    timeout: RETENTION_TIMEOUT,
+    vpc,
+    environment: {
+      DATABASE_URL: databaseUrl.value,
+      NODE_ENV: 'production',
+      SST_STAGE: $app.stage,
+    },
+    permissions: [...parameterReadPermissions(['database/url'])],
+  },
+});
+
+/**
+ * A night with no run reported. **Missing data is breaching**: a purge that
+ * stopped is a compliance problem that grows by a day's transcripts every day,
+ * and makes no noise of its own.
+ *
+ * On runs, not on what was deleted, which is where this departs from the row.
+ * "A week without a deletion" is every winery's first ninety days and any quiet
+ * week after; it would fire until it was muted. A run that never reports is
+ * what a dead job looks like, and `ScheduledJobErrors` is what a failing one does.
+ */
+new aws.cloudwatch.MetricAlarm('RetentionPurgeSilent', {
+  alarmDescription:
+    'The retention purge reported no run for a day. Transcripts past their period are being ' +
+    'kept, which §3.9 says they are not (P7-07).',
+  namespace: RETENTION_METRIC_NAMESPACE,
+  metricName: RETENTION_RUNS_METRIC,
+  dimensions: { Stage: $app.stage },
+  statistic: 'Sum',
+  period: RETENTION_SILENCE_SECONDS,
   evaluationPeriods: 1,
   threshold: 1,
   comparisonOperator: 'LessThanThreshold',
