@@ -32,7 +32,7 @@ const limit = isProd ? PROD_BUDGET_USD : NON_PROD_BUDGET_USD;
  * Where alarms go. A secret rather than a literal, so no personal address is
  * committed; set it with `sst secret set BudgetAlertEmail you@example.com`.
  */
-const alertEmail = new sst.Secret('BudgetAlertEmail');
+export const alertEmail = new sst.Secret('BudgetAlertEmail');
 
 const topic = new aws.sns.Topic('BudgetAlerts', {
   displayName: `sommelier-${$app.stage}-budget`,

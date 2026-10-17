@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { widgetChatEvent, type WidgetChatEvent } from '@catalogorosso/api-client';
 import type { WidgetResolution } from '@catalogorosso/db';
-import { memoryRateLimiter } from '@catalogorosso/security';
+import { isPlanCap, memoryRateLimiter, type RateLimiter } from '@catalogorosso/security';
 import {
   generateWidgetTokenKey,
   loadWidgetTokenKeys,
@@ -512,5 +512,178 @@ describe('the turn’s trace (P7-01)', () => {
 
     expect(exports).toHaveLength(1);
     expect(spans.find((span) => span.name === 'chat.turn')?.status).toEqual({ code: 2 });
+  });
+});
+
+describe('what the alarms count (P7-02)', () => {
+  interface Counted {
+    readonly _aws: { readonly CloudWatchMetrics: readonly { readonly Namespace: string }[] };
+    readonly Stage: string;
+    readonly [metric: string]: unknown;
+  }
+
+  /** A widget on a named stage, writing its metric lines where the test can read them. */
+  const counting = (overrides: Partial<WidgetDependencies> = {}) => {
+    const lines: Counted[] = [];
+    const built = appWith({
+      stage: 'review',
+      emit: (line) => {
+        lines.push(JSON.parse(line) as Counted);
+      },
+      ...overrides,
+    });
+
+    return { built, lines };
+  };
+
+  /** A turn that reports, as the real port does when its stream ends. */
+  const reporting = (escalations: readonly string[]): ChatPort => ({
+    answer: (_request, onReport) =>
+      (async function* (): AsyncGenerator<WidgetChatEvent> {
+        yield await Promise.resolve({ type: 'text', delta: 'Un Barolo.' });
+
+        onReport({
+          outcome: 'ok',
+          escalations: escalations as never,
+          model: 'amazon.nova-lite-v1:0',
+          candidates: 1,
+          preCapCount: 1,
+          dropped: [],
+          redacted: 0,
+          locale: 'it',
+          localeDetected: true,
+          historyDropped: 0,
+          leaked: false,
+          costMicros: 12,
+        });
+      })(),
+  });
+
+  /** A limiter that lets the address through and refuses at `refusing`, as a full bucket would. */
+  const refusingAt = (refusing: (key: string) => boolean): RateLimiter => ({
+    check: (checks) => {
+      const full = checks.find((check) => refusing(check.key));
+
+      return Promise.resolve(
+        full === undefined
+          ? {
+              allowed: true,
+              remaining: 1,
+              limit: 2,
+              resetAt: new Date(),
+              key: checks[0]?.key ?? '',
+            }
+          : {
+              allowed: false,
+              remaining: 0,
+              limit: full.limit,
+              resetAt: new Date(),
+              key: full.key,
+              retryAfterSec: 60,
+            },
+      );
+    },
+  });
+
+  it.each([
+    ['a plain turn', [], 0],
+    ['a turn that escalated', ['multi_constraint'], 1],
+  ])(
+    'counts %s: one turn, and whether it went to the stronger tier',
+    async (_what, escalations, escalated) => {
+      const { built, lines } = counting({ chat: reporting(escalations) });
+
+      await (await ask(built)).text();
+
+      /* Parsed from what was written: the envelope is there, which the logger would have redacted. */
+      expect(lines).toEqual([
+        {
+          _aws: {
+            Timestamp: expect.any(Number) as number,
+            CloudWatchMetrics: [
+              {
+                Namespace: 'Catalogorosso/Chat',
+                Dimensions: [['Stage']],
+                Metrics: [
+                  { Name: 'Turns', Unit: 'Count' },
+                  { Name: 'Escalations', Unit: 'Count' },
+                ],
+              },
+            ],
+          },
+          Stage: 'review',
+          Turns: 1,
+          Escalations: escalated,
+        },
+      ]);
+    },
+  );
+
+  it('writes nothing on a local run, where there is no stage and nothing reads a metric', async () => {
+    const lines: string[] = [];
+    const built = appWith({
+      chat: reporting([]),
+      emit: (line) => {
+        lines.push(line);
+      },
+    });
+
+    await (await ask(built)).text();
+
+    expect(lines).toEqual([]);
+  });
+
+  it('counts a request refused for its origin, and not one refused for its key', async () => {
+    const mismatch = counting({
+      resolve: () => Promise.resolve({ found: false, reason: 'origin_mismatch', tenantId: TENANT }),
+    });
+    const unknown = counting({
+      resolve: () => Promise.resolve({ found: false, reason: 'unknown_key' }),
+    });
+
+    expect((await ask(mismatch.built)).status).toBe(403);
+    expect((await ask(unknown.built)).status).toBe(403);
+
+    expect(mismatch.lines).toHaveLength(1);
+    expect(mismatch.lines[0]).toMatchObject({ Stage: 'review', RefusedOrigins: 1 });
+    expect(mismatch.lines[0]?._aws.CloudWatchMetrics[0]?.Namespace).toBe('Catalogorosso/Widget');
+    /* Nothing of who or where: the row in `security_events` is the evidence, this is the count. */
+    expect(Object.keys(mismatch.lines[0] ?? {}).sort()).toEqual([
+      'RefusedOrigins',
+      'Stage',
+      '_aws',
+    ]);
+    expect(unknown.lines).toEqual([]);
+  });
+
+  it('counts a message turned away at the limiter because the month is spent, and no other limit', async () => {
+    const spent = counting({ limiter: refusingAt(isPlanCap) });
+    const hurried = counting({
+      limiter: refusingAt((key) => !isPlanCap(key) && key.includes(TENANT)),
+    });
+
+    expect((await ask(spent.built)).status).toBe(429);
+    expect((await ask(hurried.built)).status).toBe(429);
+
+    expect(spent.lines).toHaveLength(1);
+    expect(spent.lines[0]).toMatchObject({ Stage: 'review', QuotaRefusals: 1 });
+    expect(hurried.lines).toEqual([]);
+  });
+
+  it('counts a month that ran out inside the turn, and not a model that failed', async () => {
+    const failing = (error: Error): ChatPort => ({
+      answer: () => ({
+        [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(error) }),
+      }),
+    });
+    const spent = counting({ chat: failing(new QuotaExceededError()) });
+    const broken = counting({ chat: failing(new Error('bedrock is down')) });
+
+    expect(eventsOf(await (await ask(spent.built)).text())).toEqual(['error', 'done']);
+    expect(eventsOf(await (await ask(broken.built)).text())).toEqual(['error', 'done']);
+
+    expect(spent.lines).toHaveLength(1);
+    expect(spent.lines[0]).toMatchObject({ QuotaRefusals: 1 });
+    expect(broken.lines).toEqual([]);
   });
 });

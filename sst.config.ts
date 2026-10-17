@@ -113,6 +113,13 @@ export default $config({
     await import('./infra/schedules');
 
     /*
+     * The alarms that watch more than one of the things above, and the topic
+     * every alarm is routed to (P7-02). After all of them, because it reads
+     * their names.
+     */
+    await import('./infra/alarms');
+
+    /*
      * The deploy-time database path (P0-21b). Last, and independent of the
      * others: it is never invoked by a deploy, only created by one. See
      * `infra/migrator.ts` for why running migrations automatically is not

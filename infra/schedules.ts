@@ -1,5 +1,6 @@
 /// <reference path="../.sst/platform/config.d.ts" />
 
+import { notify } from './alerting';
 import { authBaseUrl, emailAllowlist, emailFrom, resendApiKey } from './api';
 import { databaseUrl, parameterReadPermissions } from './config';
 import {
@@ -86,6 +87,7 @@ new aws.cloudwatch.MetricAlarm('SweepDeletedNothing', {
   threshold: 0,
   comparisonOperator: 'LessThanOrEqualToThreshold',
   treatMissingData: 'breaching',
+  ...notify,
 });
 
 /**
@@ -174,4 +176,5 @@ new aws.cloudwatch.MetricAlarm('UsageRollupSilent', {
   threshold: 1,
   comparisonOperator: 'LessThanThreshold',
   treatMissingData: 'breaching',
+  ...notify,
 });
