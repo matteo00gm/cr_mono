@@ -203,6 +203,12 @@ export default {
           // reads in the caller's withTenant transaction, under the boilerplate
           // policies of the tables it purges. The job opens a scope per winery.
           '|^packages/db/src/retention[.]ts$' +
+          // src/tenant-data.ts is exempt from P7-08 on narrower terms: the export
+          // reads in the caller's withTenant transaction, and the erasure is
+          // handed its connection by an operator script running as the migration
+          // role — never by a request — and sets app.tenant_id on every statement
+          // it issues, so the policies that bind the owner still bind it (ADR 0033).
+          '|^packages/db/src/tenant-data[.]ts$' +
           // src/webhooks.ts is exempt from P0-64b, and unlike the two files
           // above it really does open a connection. A webhook arrives outside
           // any request — no session, no membership row, no tenant to set — and

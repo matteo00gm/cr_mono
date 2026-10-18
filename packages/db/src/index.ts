@@ -655,6 +655,17 @@ export {
 /** What the sommelier sold over a range (P6-10), net of refunds, read in the scope's tenant. */
 export { readAttributedSales, type AttributedSales, type SalesQuery } from './sales.js';
 export {
+  eraseTenant,
+  ErasureRefusedError,
+  NOT_EXPORTED,
+  OMITTED_COLUMNS,
+  readTenantExport,
+  recordExport,
+  tenantTables,
+  type ErasureReceipt,
+  type TenantExport,
+} from './tenant-data.js';
+export {
   countPurgeable,
   purgeConversations,
   purgeWidgetEvents,

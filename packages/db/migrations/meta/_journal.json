@@ -554,6 +554,13 @@
       "when": 1788740588612,
       "tag": "0078_tenants_transcript_retention",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1788826988612,
+      "tag": "0079_e_invoices_survive_erasure",
+      "breakpoints": true
     }
   ]
 }
