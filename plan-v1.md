@@ -246,7 +246,7 @@ The seller pastes one tag (dashboard shows it with a copy button):
 - **Shopify:** paste into `theme.liquid` before `</body>`. Ship a theme app extension in phase 2 so no theme edit is needed.
 - **Custom sites:** same tag; add-to-cart wired through the adapter contract (§1.7).
 
-`w.js` is served from the CDN with a **versioned, immutable** path and a published **SRI hash**; the docs show the `integrity` attribute for sellers who want it. Loader budget: **≤ 5 KB gzipped**. It must not define globals beyond `window.__sommelier`, must not use `eval`, must not touch host page globals, and must survive a strict CSP on the host site (documented required directives). **The only directive a seller has to add is `connect-src` for the API** (P3-18): the widget adopts a constructed stylesheet rather than injecting a `<style>` element, so `style-src 'self'` is enough, and it needs no `'unsafe-inline'` and no `'unsafe-eval'`.
+`w.js` is served from the CDN with a **versioned, immutable** path and a published **SRI hash**; the docs show the `integrity` attribute for sellers who want it. *(As built, P3-01a: `/v1/w.js` is the address every snippet carries, so it moves with each deploy and is cached for five minutes; the versioned, immutable copy is `/v1/w-<hash>.js`, and `/v1/integrity.json` names the current one with its hash.)* Loader budget: **≤ 5 KB gzipped**. It must not define globals beyond `window.__sommelier`, must not use `eval`, must not touch host page globals, and must survive a strict CSP on the host site (documented required directives). **The only directive a seller has to add is `connect-src` for the API** (P3-18): the widget adopts a constructed stylesheet rather than injecting a `<style>` element, so `style-src 'self'` is enough, and it needs no `'unsafe-inline'` and no `'unsafe-eval'`.
 
 ### 1.2 Boot sequence
 
@@ -715,7 +715,8 @@ Escalation rate should sit in the low single-digit percent. This buys most of th
 
 ```
 CloudFront  (one distribution, immutable versioned paths)
-  ├─ /v1/w.js, /v1/widget-*.js   → S3 (widget bundles, cache-forever)
+  ├─ /v1/w.js, /v1/widget-*.js   → S3 (widget bundles, cache-forever; as built, P3-01a:
+  │                                 w.js five minutes, w-<hash>.js pinned, integrity.json)
   ├─ /v1/widget/chat             → Lambda Function URL  [RESPONSE_STREAM]  SSE
   └─ /v1/*                       → Lambda Function URL  [BUFFERED]
 
@@ -1344,6 +1345,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | # | Task | How / notes | Deps |
 |---|---|---|---|
 | ✅ P3-01 | Loader `w.js` | custom element, Shadow DOM, launcher only | P2-10 |
+| ✅ P3-01a | The widget published to the CDN | `/v1/w.js` and the lazy bundle on the distribution, CORS for every storefront, a pinned copy with its SRI hash — found missing by P7-09 | P3-01, P0-58 |
 | ✅ P3-02 | CI: loader size budget | ≤ 5 KB gz, build fails over | P3-01 |
 | ✅ P3-03 | Config fetch + DISABLED short-circuit | no session, no bundle, no model call | P3-01 |
 | ✅ P3-04 | Lazy-load main bundle on click | | P3-03 |
@@ -5884,6 +5886,39 @@ At launch there is **no cross-tenant support role**: support asks the merchant t
 - **`document.currentScript` is read at module top level**, as the row insists — and the test defines it, because it is null outside script execution and a suite that did not stand it in would be testing a loader that reads nothing.
 - **Every entry point returns rather than throws.** A document with no body, a browser without `attachShadow`, a missing key: each leaves the storefront exactly as it was. Silent, because there is no console on a seller's page that is ours to write to.
 - **What it does *not* do is most of the suite**: one global and no others, one element on the page, no `<style>` outside the shadow root, no markup parsed anywhere.
+
+---
+
+### P3-01a · The widget published to the CDN
+
+**Why.** Found while writing P7-09's integration docs, which have to name the address a storefront loads: **nothing published the widget.** The build wrote `loader.js` and `widget.js` into `apps/widget/dist/bundle`, the snippet and the Shopify extension pointed at `/v1/w.js` (`LOADER_SRC`), and no object, bucket or CloudFront behaviour joined the two. A deployed stack would have answered every storefront's `<script>` from the API — a JSON 404 under `/v1/*` — and no test of ours would have noticed: the browser suite serves the bundle from the storefront's own origin, and `sst deploy` reports success for a distribution with nothing to route.
+
+**As built (2026-10-18).** `infra/widget-assets.ts` decides what goes up and for how long, with its test; `infra/widget.ts` uploads it into the dashboard's bucket under `v1/`; `infra/cdn.ts` routes the paths there ahead of `/v1/*`; `infra/headers.ts` holds the response policy.
+
+- **Three kinds of object, by what a storefront asks for.**
+  - **`/v1/w.js`**, the loader at the address every snippet carries. It cannot move, so it cannot be immutable: **five minutes**, which is how long a deploy takes to reach the next page view of every storefront.
+  - **`/v1/w-<hash>.js`**, the same bytes at an address of their own, immutable, for a seller who pins the loader with `integrity` (§1.1). **`/v1/integrity.json`** names the current one and its SHA-384, for the docs and for that seller.
+  - **`/v1/widget-<hash>.js`**, the lazy bundle. **⚠ Δ The build now names it by its content** (`apps/widget/vite.config.ts`), and Rollup writes that name into the loader's `import()`. A loader cached for its five minutes therefore fetches the widget it was built with, never a newer one it does not know how to start; and a pinned loader keeps working for as long as its widget exists. The loader keeps its fixed name; the size check (P3-02, P3-05) finds the widget by its shape, and refuses a fixed name or two at once.
+- **The bundles are kept when their build is gone** (`retainOnDelete`): a pinned loader is a tag in a theme nobody here can edit. They are tens of kilobytes; the bucket outgrows nothing. And **the bundles go up before the address that names them**, so a new `w.js` is never live before its widget exists.
+- **Decision: a pinned loader is supported for twelve months from its publication.** The API's `/v1` widget contract stays compatible with every widget published in the last year; the docs tell a seller who pins to take the current pair from `integrity.json` at least yearly. A seller who does not pin — almost all — never thinks about it.
+- **⚠ Every origin may read them, because a module script is fetched with CORS** *(a finding of the row)*. `<script type="module">`, which the loader has to be (P3-18), asks with the storefront's `Origin`, and so does the `import()` of the widget; both are refused unless the answer allows it, and nothing would have said why except a storefront showing nothing. The behaviours carry a response policy with `Access-Control-Allow-Origin: *`, no credentials, `nosniff`, HSTS and `Cross-Origin-Resource-Policy: cross-origin` for a storefront that isolates itself. **This is not the API's CORS**, which stays an exact allowlist (P2-08): these are public files that carry no data and are never sent credentials.
+- **Proven in a browser, both ways.** The test storefront gains a stand-in CDN on an origin of its own, serving the build as `widget-assets.ts` lays it out. From it, the launcher mounts, the widget is fetched from the CDN on the first click, and the panel opens; from the same CDN without the header, Chromium refuses the loader and nothing mounts. The suite's older "the bundle is not fetched before a click" assertion looked for the literal `widget.js`, which would have held for ever once that name stopped existing; it now matches the hashed name, and the same case clicks and sees the bundle fetched under it.
+- **Five narrow patterns, not one wide one**: `/v1/w.js`, `/v1/w-*.js`, `/v1/widget-*`, `/v1/loader.js.map`, `/v1/integrity.json`. `/v1/w*` would take `/v1/widget/config`, and `/v1/widget*` the chat; the test walks the API's paths and holds every pattern off them, and `checkedBehaviourOrder` holds them ahead of `/v1/*`.
+- **CI**: a grep step beside the dashboard's, because `typecheck:infra` is local-only (E3) and the failure is silent — `sst.config.ts` imports `infra/widget`, the upload keeps what is marked kept, and the CDN spreads the widget's behaviours.
+- **⚠ Open: the pinned loader's source map is the current one.** `w-<hash>.js` says `sourceMappingURL=loader.js.map`, which is the latest build's; an old pinned loader's map is wrong in a debugger. Rewriting the comment would change the bytes the hash is of.
+- **⚠ Operator.** `api.catalogorosso.com` is still the distribution's default certificate and domain (P0-17a); `LOADER_SRC` and the docs assume the custom domain. Nothing is deployed.
+
+**Verified.** Unit, the infra suite (`widget-assets.test.ts`: what is published, cached and kept; the integrity against FIPS 180-2's own vector for "abc"; the pinned address by content; a redeploy noticing a changed `w.js`; every refusal of a build that cannot be published whole; the patterns against the API's paths and the behaviour order — and `headers.test.ts` for the policy), `typecheck:infra`, the size check against the real build (`loader.js` 2.43 KB, `widget-<hash>.js` 14.57 KB), and the whole browser suite (70 cases, two new). 18 mutants: 17 killed on the first run. The survivor — a redeploy hashing the file's *path* instead of its bytes — passed because the test built its two loaders in two directories, so the path changed too; the test now rebuilds one directory in place, as a deploy does, and kills it.
+
+| Mutation | Caught by |
+|---|---|
+| The pasted address held for a year, or marked immutable; the widget bundle, or the pinned loader, not kept; one pinned address for every loader | `widget-assets.test.ts` |
+| An integrity of SHA-256 labelled SHA-384; two widgets published; a widget under a fixed name published; a redeploy blind to a changed `w.js` | `widget-assets.test.ts` |
+| A pattern wide enough to take the API; the loader's map left to the API | `widget-assets.test.ts` |
+| The scripts readable by one origin only; credentials asked for with a wildcard | `headers.test.ts` |
+| The size check taking an unhashed widget, or measuring one of two | `check-bundle-size.test.mjs` |
+| The widget built under a fixed name | the size check against the real build |
+| The stand-in CDN saying every origin may read when it should not, or never saying it | `cross-origin.spec.ts` (browser) |
 
 ---
 

@@ -18,11 +18,15 @@ export * from './rate-limit-suite.js';
  */
 export {
   bundleDirectory,
+  CDN_PORT,
+  CDN_WITHOUT_CORS_PORT,
+  startCdn,
   startHostPages,
   THEMED,
   UNVERIFIED_PORT,
   VERIFIED_PORT,
   type CartCall,
+  type Cdn,
   type HostPageOptions,
   type HostPages,
 } from './host-pages.js';

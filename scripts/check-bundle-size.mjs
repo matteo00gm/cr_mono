@@ -31,13 +31,25 @@ const ROOT = resolve(import.meta.dirname, '..');
  * is why it is an order of magnitude below the widget's own.
  */
 const BUDGETS = {
-  'loader.js': { limit: 5 * 1024, why: '§1.1: runs on every page of a storefront' },
+  'loader.js': {
+    match: /^loader\.js$/u,
+    limit: 5 * 1024,
+    why: '§1.1: runs on every page of a storefront',
+  },
   /*
    * Twelve times the loader's, and that ratio is the argument for the split:
    * this is paid once by the visitors who open the widget, and the loader is
    * paid by everybody else.
+   *
+   * Named by its content (P3-01a), so it is found by its shape. An unhashed
+   * `widget.js` is not it: published at a fixed address, a new one would be
+   * fetched by a loader cached from before it.
    */
-  'widget.js': { limit: 60 * 1024, why: '§1.1: fetched on the first click (P3-05)' },
+  'widget-<hash>.js': {
+    match: /^widget-[A-Za-z0-9_-]{8,}\.js$/u,
+    limit: 60 * 1024,
+    why: '§1.1: fetched on the first click (P3-05)',
+  },
 };
 
 /**
@@ -79,18 +91,26 @@ const main = () => {
   const built = new Set(readdirSync(dir).filter((name) => name.endsWith('.js')));
   const rows = [];
 
-  for (const [name, { limit, why }] of Object.entries(BUDGETS)) {
+  for (const [budgeted, { match, limit, why }] of Object.entries(BUDGETS)) {
+    const found = [...built].filter((file) => match.test(file));
+
     /*
      * A budgeted bundle that is not in the build is a failure, not a pass. The
      * alternative is a renamed entry quietly taking its budget with it — a
      * check that measures nothing and reports success.
      */
-    if (!built.has(name)) {
+    if (found.length === 0) {
       reportDie(
-        `${name} is budgeted (${why}) and was not built. A budget nobody measures is not a budget.`,
+        `${budgeted} is budgeted (${why}) and was not built. A budget nobody measures is not a budget.`,
       );
     }
 
+    /* Two of one entry is a stale build beside a fresh one, and only one of them is measured. */
+    if (found.length > 1) {
+      reportDie(`${budgeted} matches ${found.join(', ')}: rebuild into an empty directory.`);
+    }
+
+    const [name] = found;
     const size = gzippedSize(join(dir, name));
 
     rows.push({ name, size, limit, ok: size <= limit, why });

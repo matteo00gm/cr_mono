@@ -19,11 +19,15 @@ import { hashSecretKey, newSecretKey } from '@catalogorosso/security/api-keys';
 import { generateWidgetTokenKey, loadWidgetTokenKeys } from '@catalogorosso/security/tokens';
 import {
   bundleDirectory,
+  CDN_PORT,
+  CDN_WITHOUT_CORS_PORT,
+  startCdn,
   startE2eApi,
   startHostPages,
   UNVERIFIED_PORT,
   VERIFIED_PORT,
   WIDGET_KEY,
+  type Cdn,
   type E2eApi,
   type HostPages,
 } from '@catalogorosso/testing';
@@ -44,6 +48,10 @@ export interface Harness {
   readonly secretKey: string;
   readonly verified: HostPages;
   readonly unverified: HostPages;
+  /** The widget's scripts from an origin of their own, as production serves them (P3-01a). */
+  readonly cdn: Cdn;
+  /** The same, without the header a module script needs. */
+  readonly cdnWithoutCors: Cdn;
   /**
    * Moves the rate limiter one window on, as if a minute had passed.
    *
@@ -241,6 +249,12 @@ export const start = async ({ shopify = false }: StartOptions = {}): Promise<Har
 
   const verified = await startHostPages({ port: VERIFIED_PORT, ...pages });
   const unverified = await startHostPages({ port: UNVERIFIED_PORT, ...pages });
+  const cdn = await startCdn({ port: CDN_PORT, bundleDir: pages.bundleDir, cors: true });
+  const cdnWithoutCors = await startCdn({
+    port: CDN_WITHOUT_CORS_PORT,
+    bundleDir: pages.bundleDir,
+    cors: false,
+  });
 
   if (store !== undefined) await api.connectShop(store.shop);
 
@@ -249,6 +263,8 @@ export const start = async ({ shopify = false }: StartOptions = {}): Promise<Har
     secretKey,
     verified,
     unverified,
+    cdn,
+    cdnWithoutCors,
     nextMinute: () => {
       skew += 60_000;
     },
@@ -256,6 +272,8 @@ export const start = async ({ shopify = false }: StartOptions = {}): Promise<Har
     close: async () => {
       await verified.close();
       await unverified.close();
+      await cdn.close();
+      await cdnWithoutCors.close();
       await api.close();
     },
   };

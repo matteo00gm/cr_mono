@@ -46,7 +46,17 @@ export default defineConfig({
 
       output: {
         format: 'es',
-        entryFileNames: '[name].js',
+        /*
+         * The loader keeps one name and the widget is named by its content
+         * (P3-01a). The loader is published at the address a seller pastes,
+         * which cannot change, and it imports the widget by a relative path
+         * Rollup writes in — so a widget that changes gets a new address and
+         * the loader that names it changes with it. A loader cached for its
+         * five minutes then still fetches the widget it was built with, never
+         * a newer one it does not know how to start, and a loader pinned by
+         * its integrity hash keeps working for as long as its widget is kept.
+         */
+        entryFileNames: (chunk) => (chunk.name === 'loader' ? 'loader.js' : '[name]-[hash].js'),
         /*
          * The lazily-loaded panel is one chunk with a stable name, so the size
          * budget (P3-05) has something to point at. Everything else Rollup

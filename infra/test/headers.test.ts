@@ -7,6 +7,7 @@ import {
   dashboardHeadersPolicyArgs,
   HSTS_MAX_AGE_SECONDS,
   PERMISSIONS_POLICY,
+  widgetAssetHeadersPolicyArgs,
 } from '../headers';
 
 /**
@@ -116,6 +117,33 @@ describe('the API policy', () => {
   });
 
   it('drops the Server banner', () => {
+    expect(policy.removeHeadersConfig.items).toEqual([{ header: 'Server' }]);
+  });
+});
+
+describe('the widget scripts policy', () => {
+  const policy = widgetAssetHeadersPolicyArgs();
+
+  it('lets every storefront load them, since a module script is fetched with CORS', () => {
+    expect(policy.corsConfig.accessControlAllowOrigins.items).toEqual(['*']);
+    expect(policy.corsConfig.originOverride).toBe(true);
+  });
+
+  it('never asks for credentials, which a wildcard origin may not carry', () => {
+    expect(policy.corsConfig.accessControlAllowCredentials).toBe(false);
+    expect(policy.corsConfig.accessControlAllowMethods.items).toEqual(['GET', 'HEAD']);
+  });
+
+  it('may be embedded by a storefront that isolates itself', () => {
+    expect(policy.customHeadersConfig.items).toEqual([
+      { header: 'Cross-Origin-Resource-Policy', value: 'cross-origin', override: true },
+    ]);
+  });
+
+  it('sends nosniff and HSTS, and never a framing header', () => {
+    expect(policy.securityHeadersConfig.contentTypeOptions.override).toBe(true);
+    expect(policy.securityHeadersConfig.strictTransportSecurity.preload).toBe(true);
+    expect(policy.securityHeadersConfig).not.toHaveProperty('frameOptions');
     expect(policy.removeHeadersConfig.items).toEqual([{ header: 'Server' }]);
   });
 });

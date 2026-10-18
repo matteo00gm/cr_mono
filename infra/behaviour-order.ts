@@ -24,6 +24,10 @@ const toRegExp = (pattern: string): RegExp =>
       .join('')}$`,
   );
 
+/** Whether CloudFront routes `path` by `pattern`, read the way `shadowedBehaviours` reads it. */
+export const patternMatches = (pattern: string, path: string): boolean =>
+  toRegExp(pattern).test(path);
+
 /** A path the pattern certainly matches, with each wildcard filled in. */
 const sampleOf = (pattern: string): string => pattern.replaceAll('*', 'x').replaceAll('?', 'x');
 

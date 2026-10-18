@@ -57,10 +57,13 @@ const bundleOf = (gzippedBytes, loaderPrefix = '') => {
 
   writeFileSync(join(dir, 'loader.js'), Buffer.concat([Buffer.from(loaderPrefix), body]));
   /* Every budgeted bundle must exist, or the gate fails for that reason instead. */
-  writeFileSync(join(dir, 'widget.js'), 'export const mountPanel = () => {};');
+  writeFileSync(join(dir, WIDGET), 'export const mountPanel = () => {};');
 
   return dir;
 };
+
+/** The widget as the build names it: by its content (P3-01a). */
+const WIDGET = 'widget-uIbylzyi.js';
 
 const check = (dir) => spawnSync(process.execPath, [SCRIPT, dir], { encoding: 'utf8' });
 
@@ -95,12 +98,12 @@ describe('the widget bundle', () => {
       ]);
     }
 
-    writeFileSync(join(dir, 'widget.js'), body);
+    writeFileSync(join(dir, WIDGET), body);
 
     const result = check(dir);
 
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain('widget.js');
+    expect(result.stdout).toContain(WIDGET);
     expect(result.stderr).toContain('60 KB budget');
   });
 });
@@ -141,6 +144,31 @@ describe('a budgeted bundle that was not built', () => {
   });
 });
 
+describe('the widget named by its content', () => {
+  it('is not found under a fixed name, which a cached loader would fetch a new one under', () => {
+    const dir = bundleOf(1024);
+
+    rmSync(join(dir, WIDGET));
+    writeFileSync(join(dir, 'widget.js'), 'export const mountPanel = () => {};');
+
+    const result = check(dir);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('widget-<hash>.js is budgeted');
+  });
+
+  it('fails on two, a stale build beside a fresh one, rather than measuring either', () => {
+    const dir = bundleOf(1024);
+
+    writeFileSync(join(dir, 'widget-0ld0ld0ld.js'), 'export const mountPanel = () => {};');
+
+    const result = check(dir);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('rebuild into an empty directory');
+  });
+});
+
 describe('no build at all', () => {
   it('says to run the build rather than passing', () => {
     const result = check(join(scratch, 'does-not-exist'));
@@ -170,7 +198,7 @@ describe('the two entries collapsing into one', () => {
   });
 
   it('allows the dynamic import that is the whole design', () => {
-    const result = check(bundleOf(1024, 'const m=()=>import("./widget.js");' + NEWLINE));
+    const result = check(bundleOf(1024, `const m=()=>import("./${WIDGET}");` + NEWLINE));
 
     expect(result.status).toBe(0);
   });
@@ -193,7 +221,7 @@ describe('what it measures', () => {
     mkdirSync(dir, { recursive: true });
     // Repeated bytes: far over the budget raw, far under it gzipped.
     writeFileSync(join(dir, 'loader.js'), 'x'.repeat(raw * 4));
-    writeFileSync(join(dir, 'widget.js'), 'export const mountPanel = () => {};');
+    writeFileSync(join(dir, WIDGET), 'export const mountPanel = () => {};');
 
     expect(check(dir).status).toBe(0);
   });

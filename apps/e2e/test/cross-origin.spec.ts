@@ -52,6 +52,9 @@ const launcher = (page: Page) => page.locator('sommelier-widget').locator('butto
 
 const panel = (page: Page) => page.locator('sommelier-widget').locator('.panel');
 
+/** The lazy bundle, named by its content (P3-01a), wherever it is served from. */
+const WIDGET_BUNDLE = /\/widget-[A-Za-z0-9_-]{8,}\.js$/u;
+
 /** Everything the page complained about, which is where a CORS refusal lands. */
 const consoleOf = (page: Page): string[] => {
   const lines: string[] = [];
@@ -82,7 +85,16 @@ test.describe('from a verified domain', () => {
     await expect(launcher(page)).toBeVisible();
 
     expect(requested.some((url) => url.includes('/v1/widget/config'))).toBe(true);
-    expect(requested.some((url) => url.includes('/widget/widget.js'))).toBe(false);
+    expect(requested.some((url) => WIDGET_BUNDLE.test(url))).toBe(false);
+
+    /*
+     * And then it does, under the name the pattern above looks for. Without
+     * this half the assertion holds for any name at all — it did, for the
+     * fixed `widget.js` the build stopped emitting (P3-01a).
+     */
+    await launcher(page).click();
+    await expect(panel(page)).toBeVisible();
+    expect(requested.some((url) => WIDGET_BUNDLE.test(url))).toBe(true);
   });
 
   test('fetches the widget on the first click and opens the panel', async ({ page }) => {
@@ -186,6 +198,45 @@ test.describe('from a verified domain', () => {
 
     expect(body.items[0]?.id).toBe('45123456789');
     expect(body.items[0]?.properties._somm_session).toBeTruthy();
+  });
+});
+
+test.describe('from a CDN on an origin of its own, as production serves it (P3-01a)', () => {
+  /*
+   * Every other page here serves the bundle from the storefront's own origin.
+   * Production does not: the loader comes from our domain onto a seller's, and
+   * a module script that crosses origins is fetched with CORS — the loader, and
+   * then the `import()` of the widget, each refused unless the answer says
+   * every origin may read it. Nothing else in the suite would notice its
+   * absence; a storefront would show nothing at all.
+   */
+  test('loads the loader and then the widget from the CDN, and opens', async ({ page }) => {
+    const requested: string[] = [];
+
+    page.on('request', (request) => requested.push(request.url()));
+
+    await page.goto(`${harness.verified.origin}/cdn`);
+    await launcher(page).click();
+    await expect(panel(page)).toBeVisible();
+
+    expect(requested).toContain(`${harness.cdn.origin}/v1/w.js`);
+    expect(
+      requested.some((url) => url.startsWith(harness.cdn.origin) && WIDGET_BUNDLE.test(url)),
+    ).toBe(true);
+  });
+
+  test('is refused by the browser when the CDN does not say every origin may read it', async ({
+    page,
+  }) => {
+    const lines = consoleOf(page);
+
+    await page.goto(`${harness.verified.origin}/cdn-without-cors`);
+    await page.waitForLoadState('networkidle');
+
+    /* Asked for, and refused: not a tag that pointed nowhere. */
+    expect(harness.cdnWithoutCors.requested()).toContain('/v1/w.js');
+    expect(lines.join('\n')).toMatch(/Access-Control-Allow-Origin|CORS/u);
+    await expect(page.locator('sommelier-widget')).toHaveCount(0);
   });
 });
 

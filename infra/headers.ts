@@ -92,6 +92,40 @@ export const dashboardHeadersPolicyArgs = () => ({
 });
 
 /**
+ * The widget's scripts on the CDN (P3-01a).
+ *
+ * **Readable from every origin, because a module script is fetched with CORS.**
+ * `<script type="module">` — which the loader has to be (P3-18) — asks with
+ * the page's `Origin` and is refused unless the answer allows it, and so is the
+ * `import()` that fetches the widget. The page is a seller's storefront, any
+ * one of them, so the answer is `*`. This is not the API's CORS, which is an
+ * exact allowlist (P2-08): these are public files that carry no data, are never
+ * sent credentials, and are already readable by anybody with a URL.
+ *
+ * `Cross-Origin-Resource-Policy: cross-origin` for a storefront that isolates
+ * itself with COEP, which would otherwise refuse a script from another origin
+ * that does not say it may be embedded. No framing header, as for `/v1/*`.
+ */
+export const widgetAssetHeadersPolicyArgs = () => ({
+  comment: 'Widget scripts: CORS for every storefront, nosniff, HSTS (P3-01a)',
+  corsConfig: {
+    accessControlAllowCredentials: false,
+    accessControlAllowHeaders: { items: ['*'] },
+    accessControlAllowMethods: { items: ['GET', 'HEAD'] },
+    accessControlAllowOrigins: { items: ['*'] },
+    originOverride: true,
+  },
+  securityHeadersConfig: {
+    contentTypeOptions: { override: true },
+    strictTransportSecurity,
+  },
+  customHeadersConfig: {
+    items: [{ header: 'Cross-Origin-Resource-Policy', value: 'cross-origin', override: true }],
+  },
+  removeHeadersConfig: removeServer,
+});
+
+/**
  * Every `/v1/*` behaviour: HSTS and `nosniff`, and **no framing header at all**,
  * because the widget's responses are read by pages on sellers' own origins.
  * The API sets its own surface-specific headers too (`security-headers.ts`);

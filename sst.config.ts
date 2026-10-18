@@ -99,6 +99,12 @@ export default $config({
     await import('./infra/dashboard');
 
     /*
+     * The widget's scripts (P3-01a), into the same bucket for the same reason,
+     * and failing at synth the same way when the widget was not built.
+     */
+    await import('./infra/widget');
+
+    /*
      * The embedding pipeline (P1-32): the queue, the worker that consumes it,
      * and the poller that fills it. After `config` for the database URL, and
      * independent of the API — the two share a database and nothing else.
