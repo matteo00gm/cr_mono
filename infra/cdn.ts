@@ -4,9 +4,14 @@ import { api, chat } from './api';
 import { originSecret } from './config';
 import { checkedBehaviourOrder } from './behaviour-order';
 import { SPA_REWRITE_CODE, VIEWER_IP_CODE } from './edge-functions';
-import { apiHeadersPolicyArgs, dashboardHeadersPolicyArgs } from './headers';
+import {
+  apiHeadersPolicyArgs,
+  dashboardHeadersPolicyArgs,
+  widgetAssetHeadersPolicyArgs,
+} from './headers';
 import { webAcl } from './waf';
 import { WIDGET_CONFIG_PATH, widgetConfigCachePolicyArgs } from './widget-cache';
+import { WIDGET_PATH_PATTERNS } from './widget-assets';
 import { isProtectedStage } from './stage';
 
 /**
@@ -176,6 +181,35 @@ const dashboardHeaders = new aws.cloudfront.ResponseHeadersPolicy(
 );
 const apiHeaders = new aws.cloudfront.ResponseHeadersPolicy('ApiHeaders', apiHeadersPolicyArgs());
 
+/** The widget's scripts (P3-01a): readable from every storefront — see `headers.ts` for why. */
+const widgetAssetHeaders = new aws.cloudfront.ResponseHeadersPolicy(
+  'WidgetAssetHeaders',
+  widgetAssetHeadersPolicyArgs(),
+);
+
+/**
+ * Held as long as each object says. `Managed-CachingOptimized` honours an
+ * origin `Cache-Control` between a second and a year, and `widget-assets.ts`
+ * writes five minutes on `w.js` and a year on everything named by its content.
+ */
+const cachingOptimized = aws.cloudfront.getCachePolicyOutput({ name: 'Managed-CachingOptimized' });
+
+/**
+ * The widget's scripts, from the bucket (P3-01a, §5.1). Each pattern is
+ * narrow enough to miss every API path, and they go first: `/v1/*` below would
+ * otherwise hand `w.js` to the API.
+ */
+const widgetBehaviours = WIDGET_PATH_PATTERNS.map((pathPattern) => ({
+  pathPattern,
+  targetOriginId: 'dashboard-s3',
+  viewerProtocolPolicy: 'redirect-to-https',
+  allowedMethods: ['GET', 'HEAD'],
+  cachedMethods: ['GET', 'HEAD'],
+  compress: true,
+  cachePolicyId: requirePolicyId('Managed-CachingOptimized', cachingOptimized.id),
+  responseHeadersPolicyId: widgetAssetHeaders.id,
+}));
+
 /** Shared by both API behaviours; they differ only in caching and timeout. */
 const apiBehaviourBase = {
   targetOriginId: apiOriginId,
@@ -308,6 +342,7 @@ export const distribution = new aws.cloudfront.Distribution('Cdn', {
    * behaviour (review fix), so this is no longer held by the comment alone.
    */
   orderedCacheBehaviors: checkedBehaviourOrder([
+    ...widgetBehaviours,
     {
       /*
        * The chat path, and the reason P0-17a exists.

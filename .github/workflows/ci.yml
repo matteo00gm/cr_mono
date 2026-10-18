@@ -342,6 +342,25 @@ jobs:
           fi
           echo "the dashboard build is wired into the deploy."
 
+      # The same seam for the widget (P3-01a), with one more half: the CDN has
+      # to route `/v1/w.js` to the bucket, or the API answers every storefront's
+      # script tag with a JSON 404 and nothing in the deploy fails.
+      - name: Assert the widget build is actually deployed
+        run: |
+          if ! grep -q "await import('./infra/widget')" sst.config.ts; then
+            echo "::error::sst.config.ts does not import ./infra/widget — the loader would never reach the bucket, and every storefront would load nothing (P3-01a)"
+            exit 1
+          fi
+          if ! grep -q "retainOnDelete: object.retain" infra/widget.ts; then
+            echo "::error::infra/widget.ts does not keep what widget-assets.ts marks as kept — a pinned loader in a seller's theme would lose its widget on the next deploy (P3-01a)"
+            exit 1
+          fi
+          if ! grep -q "\.\.\.widgetBehaviours," infra/cdn.ts; then
+            echo "::error::infra/cdn.ts does not route the widget's paths to the bucket — /v1/w.js would reach the API (P3-01a)"
+            exit 1
+          fi
+          echo "the widget build is wired into the deploy."
+
       # The notification that a dependency wants to run code at install time.
       #
       # pnpm appends `<package>: set this to true or false` to

@@ -61,7 +61,33 @@ const ROUTES: Readonly<Record<string, string>> = {
   '/generic': 'generic.html',
   '/hostile': 'hostile.html',
   '/hostile.css': 'hostile.css',
+  /* The same storefront, loading the widget from a CDN on an origin of its own (P3-01a). */
+  '/cdn': 'storefront.html',
+  '/cdn-without-cors': 'storefront.html',
 };
+
+/**
+ * A stand-in for the CDN, on an origin that is neither the storefront's nor the
+ * API's (P3-01a). Production serves the loader from our domain onto a seller's,
+ * and a module script crossing origins is fetched with CORS — which a bundle
+ * served from the storefront's own origin, as every other page here is, never
+ * exercises.
+ */
+export const CDN_PORT = 4003;
+
+/** The same CDN without `Access-Control-Allow-Origin`: what the distribution would be without its policy. */
+export const CDN_WITHOUT_CORS_PORT = 4004;
+
+const CDN_PAGES: Readonly<Record<string, number>> = {
+  '/cdn': CDN_PORT,
+  '/cdn-without-cors': CDN_WITHOUT_CORS_PORT,
+};
+
+const LOADER_TAG = 'src="/widget/loader.js"';
+
+/** The storefront's tag, pointed at the CDN's `/v1/w.js` as `LOADER_SRC` points at production's. */
+const fromCdn = (page: string, port: number): string =>
+  page.replace(LOADER_TAG, `src="http://localhost:${String(port)}/v1/w.js"`);
 
 /**
  * What a Shopify theme sets on every storefront, as a script of its own (P3-19).
@@ -184,9 +210,12 @@ export const startHostPages = async ({
     }
 
     /*
-     * The real bundle, from the host page's own origin. A script's origin does
-     * not enter into CORS — the *document's* does — so this is faithful and
-     * saves standing up a third server to play the CDN.
+     * The real bundle, from the host page's own origin. Faithful for the API's
+     * CORS, which is decided by the *document's* origin whatever the script's.
+     * **Not faithful for the script itself**: a module script from another
+     * origin is fetched with CORS too, which serving it from here never
+     * exercises — the gap that let the widget go unpublished (P3-01a). The
+     * `/cdn` pages and `startCdn` below are the production arrangement.
      */
     if (url.pathname.startsWith('/widget/')) {
       const name = url.pathname.slice('/widget/'.length);
@@ -208,7 +237,9 @@ export const startHostPages = async ({
     }
 
     const file = await readFile(new URL(page, PAGES), 'utf8');
-    const text = url.pathname === '/themed' ? themed(file) : file;
+    const cdn = CDN_PAGES[url.pathname];
+    const text =
+      url.pathname === '/themed' ? themed(file) : cdn === undefined ? file : fromCdn(file, cdn);
 
     response.writeHead(200, { 'content-type': typeOf(page) });
     /* The snippet a seller pastes, filled in with this run's key and API. */
@@ -234,6 +265,77 @@ export const startHostPages = async ({
     reset: () => {
       calls = [];
     },
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      }),
+  };
+};
+
+export interface Cdn {
+  readonly origin: string;
+  /** Every path asked of it, in order. */
+  readonly requested: () => readonly string[];
+  readonly close: () => Promise<void>;
+}
+
+/**
+ * The CDN's half of the widget's publication (P3-01a), served as
+ * `infra/widget-assets.ts` lays it out: the loader at `/v1/w.js`, and the rest
+ * of the build beside it under its own name — so the loader's relative
+ * `import()` of `./widget-<hash>.js` lands here too, crossing origins again.
+ */
+export const startCdn = async ({
+  port,
+  bundleDir,
+  cors,
+}: {
+  readonly port: number;
+  readonly bundleDir: string;
+  /** Whether to say every origin may read these, as the distribution's policy does. */
+  readonly cors: boolean;
+}): Promise<Cdn> => {
+  const requested: string[] = [];
+
+  const server: Server = createServer((request, response) => {
+    const { pathname } = new URL(request.url ?? '/', `http://localhost:${String(port)}`);
+
+    requested.push(pathname);
+
+    const name = pathname === '/v1/w.js' ? 'loader.js' : pathname.slice('/v1/'.length);
+
+    if (!pathname.startsWith('/v1/') || !/^[A-Za-z0-9._-]+$/u.test(name)) {
+      response.writeHead(404, { 'content-type': 'text/plain' });
+      response.end('not found');
+
+      return;
+    }
+
+    void readFile(new URL(name, `file://${bundleDir.replaceAll('\\', '/')}/`)).then(
+      (file) => {
+        response.writeHead(200, {
+          'content-type': typeOf(name),
+          ...(cors ? { 'access-control-allow-origin': '*' } : {}),
+        });
+        response.end(file);
+      },
+      () => {
+        response.writeHead(404, { 'content-type': 'text/plain' });
+        response.end('not found');
+      },
+    );
+  });
+
+  await new Promise<void>((resolve) => {
+    server.listen(port, '127.0.0.1', resolve);
+  });
+
+  return {
+    origin: `http://localhost:${String(port)}`,
+    requested: () => requested,
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => {
