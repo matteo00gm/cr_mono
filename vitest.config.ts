@@ -42,8 +42,9 @@ const project = (root: string, environment: 'node' | 'jsdom', name?: string) => 
      * collect none of them — a suite reported as passing because it was empty.
      */
     include: ['test/**/*.test.{ts,tsx}'],
-    // Integration tests need Docker and run from vitest.integration.config.ts.
-    exclude: ['test/**/*.integration.test.ts'],
+    // Integration tests need Docker and run from vitest.integration.config.ts;
+    // the headroom check needs minutes as well, and runs from its own (P7-05).
+    exclude: ['test/**/*.integration.test.ts', 'test/**/*.headroom.test.ts'],
   },
 });
 

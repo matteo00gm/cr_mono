@@ -677,7 +677,7 @@ The explicit `e.tenant_id = current_setting(...)` is **redundant with RLS on pur
 
 *As built (P2-18, P2-21):* the sketch's `stock_status <> 'OUT_OF_STOCK'` is **not** in the branch, and step 4 above is the one that holds. Filtering inside a branch changes the ranks of everything below what it removed, so RRF would fuse a ranking that never existed — and a sold-out wine has to survive fusion at all to be returned flagged when nothing else matches (§1.5). `status = 'ACTIVE'` does stay in the branch, because an archived wine is retrievable by no path whatever (P1-05). The cast is `::halfvec`, per the storage decision above.
 
-**Known scaling concern, with a mitigation:** a filtered ANN search over a shared HNSW index can over-scan as tenant count grows, because the index is traversed globally and then filtered. Plan for it now: enable pgvector's iterative index scans (`hnsw.iterative_scan`), and when a tenant's catalog or the tenant count crosses a measured threshold, **hash-partition `product_embeddings` by `tenant_id`** (or add partial indexes for the largest tenants). A k6 scenario with 200 synthetic tenants × 2,000 products measures p95 and tells us when to pull that lever — do not guess.
+**Known scaling concern, with a mitigation:** a filtered ANN search over a shared HNSW index can over-scan as tenant count grows, because the index is traversed globally and then filtered. Plan for it now: enable pgvector's iterative index scans (`hnsw.iterative_scan`), and when a tenant's catalog or the tenant count crosses a measured threshold, **hash-partition `product_embeddings` by `tenant_id`** (or add partial indexes for the largest tenants). A k6 scenario with 200 synthetic tenants × 2,000 products measures p95 and tells us when to pull that lever — do not guess. *(As built, P7-05: measured at thirty tenants × 2,000 — three times §5.0's ceiling — and flat: no plan reaches the HNSW index at all, every one reads one winery's rows by the tenant index, and the database's p95 moved from 62 to 76 ms. The lever stays unpulled.)*
 
 ### 4.5 Generation
 
@@ -792,8 +792,8 @@ The target is **at most ~10 tenants**, not 50 and not 200. That is a design inpu
 |---|---|
 | Valkey / any cache tier | **Never.** §5.7's ~50-tenant trigger will not be reached. Postgres rate limiting is permanent, not transitional |
 | Read caches (allowlist, tenant status, query results) | **Never.** Domain removal and `DISABLED` stay immediate, which is strictly better |
-| Vector index partitioning (§4.4) | **Never.** ~10 × 2,000 products ≈ 20k vectors ≈ 40 MB at `halfvec(1024)` — the index sits in `shared_buffers` permanently |
-| `P7-05` 200-tenant scale test | **Dropped.** Replaced by a much smaller sanity run (below) |
+| Vector index partitioning (§4.4) | **Never.** ~10 × 2,000 products ≈ 20k vectors ≈ 40 MB at `halfvec(1024)` — the index sits in `shared_buffers` permanently *(measured by P7-05: ~52 MB of vectors at ten wineries, and as much again in an HNSW index retrieval never reads)* |
+| `P7-05` 200-tenant scale test | **Dropped.** Replaced by a much smaller sanity run (below) — built, and flat at thirty tenants (P7-05, 2026-10-18) |
 | RDS `t4g.medium` upgrade path | Unlikely to be needed. `t4g.micro` is the steady state, not a starting point |
 | Email send staggering (P0-64) | **Unnecessary.** 10 tenants × 2 thresholds = 20 emails at rollover, far inside the 100/day cap. Keep the retry-on-429, drop the scheduler |
 | Reserved concurrency 10 / worker 5 | Permanent. No re-tuning ladder needed |
@@ -1445,7 +1445,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P7-02 | Alerts | 5xx, chat p95, UNAUTHORIZED_ORIGIN spikes, quota, queue depth, model spend | P7-01 |
 | P7-03 | k6: chat load scenario | p95 target | P2-29 |
 | P7-04 | k6: abuse scenario | validates T4 under real concurrency | P2-04 |
-| P7-05 | Retrieval headroom check | 30 tenants, one assertion — **scaled down from the 200-tenant study** (§5.0) | P2-18 |
+| ✅ P7-05 | Retrieval headroom check | 30 tenants, one assertion — **scaled down from the 200-tenant study** (§5.0) | P2-18 |
 | P7-06 | Backup restore drill + runbook | an untested backup is not a backup | P0-14 |
 | ✅ P7-07 | Transcript retention purge job | 90 days default, per-tenant override, tested | P0-28 |
 | ✅ P7-08 | GDPR ops runbook + export/delete script | the deferred self-serve UI's stand-in | P7-07 |
@@ -3654,7 +3654,7 @@ What did ship:
 - **The `italian` configuration is asserted at migration time.** A database built without the Italian dictionary would silently index with `simple`, stop stemming, and the symptom would be "search finds fewer things than it should", months later.
 - **`search_tsv` is not declared in the Drizzle schema**, which is a departure from "contracts are derived from the schema" (P0-42) and is deliberate: declaring it would put a large tsvector into `ProductRow` and fetch it on every catalogue read for a column nothing displays.
 
-**⚠ The indexes' existence is asserted; their *use* is not, and that is a concession.** The obvious test is an `EXPLAIN` showing the index in the plan, because a silently unused index is a latency cliff nobody notices — retrieval keeps returning correct results and simply gets slower. Three attempts failed, and **the planner was right every time**: at a few thousand rows the whole table is a handful of pages, so a sequential scan genuinely beats a GIN bitmap scan's startup cost. Seeding enough rows to reverse that would mean a catalogue far larger than the ~2,500 SKUs per tenant §5.0 plans for, and the assertion would then be about a table this product does not have. Whether these indexes are used at real scale belongs to **P7-05**'s retrieval headroom check, which exists for exactly that.
+**⚠ The indexes' existence is asserted; their *use* is not, and that is a concession.** The obvious test is an `EXPLAIN` showing the index in the plan, because a silently unused index is a latency cliff nobody notices — retrieval keeps returning correct results and simply gets slower. Three attempts failed, and **the planner was right every time**: at a few thousand rows the whole table is a handful of pages, so a sequential scan genuinely beats a GIN bitmap scan's startup cost. Seeding enough rows to reverse that would mean a catalogue far larger than the ~2,500 SKUs per tenant §5.0 plans for, and the assertion would then be about a table this product does not have. Whether these indexes are used at real scale belongs to **P7-05**'s retrieval headroom check, which exists for exactly that. **Answered by P7-05 (2026-10-18): they are not, at three times the ceiling either.** Every plan at thirty wineries × 2,000 reads one winery's rows through the tenant index and filters them; neither the `search_tsv` GIN index nor the trigram indexes appear in any plan, for any kind of question, and the planner is right — two thousand rows is a handful of pages.
 
 **A related flake was fixed on the way.** `product-embeddings.integration.test.ts` has an equivalent HNSW plan assertion that failed, then **passed on a re-run of the identical commit** — contention rather than a regression, because every integration file starts its own container and the suite had just grown by three. `vitest.integration.config.ts` now caps that at four at a time.
 
@@ -8189,6 +8189,31 @@ What remains worth doing is confirming there is no cliff just past the ceiling, 
 
 **Files.** `load/retrieval-headroom.js`, seeding script. **~60 lines.**
 
+**As built (2026-10-18).** `packages/db/test/retrieval-headroom.headroom.test.ts`, run on demand with `pnpm test:headroom` under its own `vitest.headroom.config.ts`, and excluded from the unit and the Postgres suites.
+
+- **⚠ Δ A Postgres check, not a k6 script.** The question is the database's — does one winery's retrieval change when the table holds twenty-nine other wineries — and k6 would put a Lambda, a network and a model stub between the measurement and the thing measured. The seeding script is the test's own: two statements per winery, generated in the database, because sixty thousand round trips carrying a thousand floats each would take longer than the measurement.
+- **⚠ Δ On demand, not in CI.** Seeding sixty thousand vectors takes about ten minutes, and a latency figure from a shared runner is noise. Re-run it when the corpus or the retrieval statement changes shape; the figures go here.
+- **What is measured is the statement a chat turn runs**: `fusedSearch`, in its own `withTenant` transaction, as `app_rw` under RLS, for eight kinds of question — words that match, a grape, a misspelling only the trigram fallback finds, a producer misspelled, and a question whose words match nothing. Round after round of all eight, so a slow minute on the machine falls on every kind alike.
+- **⚠ Asserted on the database's time, with the wall time beside it** *(a finding of the row itself)*. The first run timed calls from the client and read a doubling — p50 97 → 196 ms — that a second run on the same machine did not reproduce. A laptop's Docker VM swings that much on its own, and every call pays ~7.5 ms of round trips that have nothing to do with how many wineries there are. What grows with the corpus is planning and execution, so that is what `EXPLAIN (ANALYZE, TIMING OFF)` measures — on the statement caught on its way to the driver, not a copy — and what the assertion holds.
+- **The budget is 100 ms at p95**, two to three per cent of a turn that is seconds of a model writing (P7-02 alarms at twenty), and **degrading meaningfully is past twice the baseline**, with five milliseconds of slack. Neither is close.
+- **Exactness is checked at the ceiling**: ten random questions, the vector branch's forty against a brute-force ordering with every index disabled. A plan that reached the global HNSW index would lose rows here (P2-18's measurement), and it would not show as latency.
+
+Measured 2026-10-18 on a Windows 11 laptop under Docker Desktop, `pgvector/pgvector:0.8.0-pg16` at its default 128 MB of `shared_buffers`:
+
+| | 2 wineries | 30 wineries |
+|---|---|---|
+| Vectors | 4,000 | 60,000 (331 MB with indexes: 156 MB of vectors in TOAST, 156 MB of HNSW) |
+| Database time, p50 / p95 | 41.4 / 62.2 ms | 50.0 / 75.6 ms |
+| Wall time, p50 / p95 | 101.2 / 123.2 ms | 112.4 / 138.8 ms |
+| Slowest question at p95 | 66.3 ms (no word matches) | 80.0 ms (the same) |
+| Indexes in any plan | the tenant btrees, primary keys, and the RLS policies' own | the same: never the HNSW, `search_tsv` or trigram indexes |
+| Vector branch exact | — | 10 of 10 |
+
+- **⚠ The fused statement is tens of milliseconds, not the single digits the bare scan suggested.** P7-03's note measured an exact vector scan at 5.9 ms. The statement a turn runs does more per wine: it reads a 2 kB vector out of TOAST — every `halfvec(1024)` is just over the inline threshold — joins its product, and checks the winery's embedding version through a correlated subquery under the `tenants` policy; then two lexical branches, and ~3 ms of planning. Inside the budget, and flat with the corpus, so nothing is changed here. If P7-03's load test finds retrieval holding connections, the version check is the first place to look: it is evaluated once per wine and could be once per statement.
+- **⚠ Open (a recommendation, not acted on): the HNSW index serves no query.** Retrieval's `distinct on (product_id)` makes every plan an exact scan of one winery's rows, which is what P2-18 wants, so the index is never read. It is written to on every embedding upsert, and it is as large as the vectors themselves: 156 MB at thirty wineries, about 52 MB at ten, competing with the vectors for a `t4g.micro`'s buffer cache. Dropping it is a one-line migration. P2-18 kept it for a corpus that outgrows the scan; this check is how to tell when that is, and at three times the ceiling it is not yet.
+
+**Verified.** The check passes as committed (the figures above), and its three lines were each made to fire. The degradation line and the budget, each drawn below what was measured, failed it. **The vector branch rewritten the way pgvector's documentation writes it — `order by embedding <=> $1 limit 40`, so an index can order it — did not:** at thirty wineries the planner still read one winery's rows by the tenant index and sorted them, so the answer stayed exact. That is an equivalent mutant at this size, and the reason this check exists rather than a reason to trust the rewrite. **The same rewrite with the planner made to take the HNSW index**, as skew or a larger corpus would, returned **3 of the 40** nearest wines, and the exactness check failed on it — P2-18's measurement, reproduced at three times the ceiling. Unit suite unchanged (the headroom file is excluded from it), lint, typecheck and every `:check`.
+
 ---
 
 ### P7-06 · Backup restore drill
@@ -8711,6 +8736,7 @@ This register is the index. **Everything the P0-54 → P0-53 chain left open is 
 |---|---|---|
 | Tracing has nowhere to send | **operator decision (Open Decision 11)** | P7-01 is built and off. Choose the AWS collector (no new processor; recommended) or a vendor's OTLP endpoint (a sub-processor: DPA and privacy notice first), then wire it in `infra/` — the collector layer on both functions, or the vendor's key in SSM. |
 | `security_events` grow for ever | **design decision** | P7-07 purges transcripts and widget events and cannot touch `security_events`, which are append-only at the grant level (migration 0019). A purge needs a path that deletes from a ledger — a function with a hard floor on age, or a scheduled job under `app_admin` — and its own ADR. Small table; not urgent at two wineries. |
+| The HNSW index serves no query | **decision, later** | P7-05 found that no retrieval plan reads `product_embeddings_embedding_hnsw` — the `distinct on` makes every one an exact per-winery scan, as P2-18 wants — while it costs as much memory as the vectors (52 MB at ten wineries) and a graph insert on every embedding write. Dropping it is a one-line migration; P2-18 kept it for a corpus that outgrows the scan, and `pnpm test:headroom` says when that is. Not urgent at two wineries. |
 | Detached charges kept past ten years | **operator, from 2036** | P7-08 keeps an erased winery's paid charges, with the buyer on them, for the ten years Italian law requires (ADR 0033), and nothing deletes them after. The statement is in `docs/runbooks/gdpr.md` until a job does it. |
 | Alarms have never fired | **operator** | P7-02 creates sixteen and nothing is deployed. Confirm the SNS email subscription once per stage, then force each condition once in a review stage — `docs/runbooks/alarms.md` says how for each. |
 | The SdI bridge has nothing to send through | **operator decision** | P5-03a records every paid charge in `e_invoices`, and nothing drains it yet. Choose the provider (Fatture in Cloud, Fatturapertutti or Striptu), open its account and sandbox, agree the spend (P1-47's rule), and decide `tax_behavior` — VAT-inclusive or exclusive — which the invoice must state. Then the queue, worker job and adapter, verified against the sandbox, close the row. |
