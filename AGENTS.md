@@ -82,6 +82,11 @@ patch will not, because the ORM's own documentation shows the forbidden form.
   `usage_events`, `usage_top_ups`, `security_events`, `processed_webhooks` and
   `notification_events` are append-only at the grant level, and `app_rw` cannot
   delete a tenant (P0-31, P0-33a, P5-11a, P5-12).
+- Erase a winery only with `eraseTenant`, never a bare `DELETE FROM tenants`.
+  Every tenant table cascades except `e_invoices`, whose paid charges are
+  fiscal records kept ten years: the erasure copies the buyer onto them before
+  the delete detaches them, and a CHECK refuses the other order (P7-08,
+  ADR 0033).
 - Every migration has a hand-written reverse in `migrations/down/` (P0-40).
 
 **API**

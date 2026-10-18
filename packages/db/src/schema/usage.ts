@@ -176,9 +176,11 @@ export const eInvoices = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
 
-    tenantId: uuid('tenant_id')
-      .notNull()
-      .references(() => tenants.id, { onDelete: 'cascade' }),
+    /**
+     * Null once the winery is erased (P7-08, ADR 0033): the charge outlives it
+     * as a fiscal record, carrying the buyer below. Every other table cascades.
+     */
+    tenantId: uuid('tenant_id').references(() => tenants.id, { onDelete: 'set null' }),
 
     /** `in_…` or a payment intent: unique, so Stripe's second word for one payment is no second row. */
     stripeObjectId: text('stripe_object_id').notNull().unique(),
@@ -193,6 +195,17 @@ export const eInvoices = pgTable(
     status: text('status').notNull().default('pending'),
     providerDocumentId: text('provider_document_id'),
 
+    /**
+     * Who bought, copied from the winery when it is erased, because the row it
+     * was read from goes. Null while the winery exists; required once it does
+     * not, by the CHECK in migration 0079.
+     */
+    buyerName: text('buyer_name'),
+    buyerVatId: text('buyer_vat_id'),
+    buyerSdiCode: text('buyer_sdi_code'),
+    buyerPecAddress: text('buyer_pec_address'),
+    buyerKeptAt: timestamp('buyer_kept_at', { withTimezone: true, mode: 'date' }),
+
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
   (table) => [
@@ -201,6 +214,10 @@ export const eInvoices = pgTable(
     check('e_invoices_source', sql`source in ('invoice', 'top_up')`),
     check('e_invoices_amount_positive', sql`amount_cents > 0`),
     check('e_invoices_status', sql`status in ('pending', 'issued', 'not_required')`),
+    check(
+      'e_invoices_detached_keeps_buyer',
+      sql`tenant_id is not null or (buyer_name is not null and buyer_kept_at is not null)`,
+    ),
   ],
 );
 

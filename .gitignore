@@ -58,3 +58,8 @@ apps/e2e/test-results/
 apps/e2e/test/*-snapshots/*-win32.png
 apps/e2e/test/*-snapshots/*-darwin.png
 apps/e2e/playwright-report/
+
+# Operator exports and erasure receipts (P7-08): a winery's whole data set, and
+# the record of its erasure. Never committed; docs/runbooks/gdpr.md says how long
+# each is kept and where it goes.
+exports/
