@@ -10,6 +10,7 @@ catalogue. One database, one API, many tenants.
 pnpm test              # unit suites, no Docker
 pnpm test:integration  # real Postgres via Testcontainers, needs Docker
 pnpm test:security     # the T1–T10 threat matrix, unit + Postgres (P4-17)
+pnpm test:headroom     # retrieval at 3× the tenant ceiling, on demand, ~15 min (P7-05)
 pnpm lint              # per-package eslint
 pnpm typecheck         # per-package tsc --noEmit
 pnpm boundaries        # architectural rules that lint cannot express
