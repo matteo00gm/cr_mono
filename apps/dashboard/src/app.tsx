@@ -4,6 +4,12 @@ import { can, type Role } from '@catalogorosso/security';
 import { Link, Route, Switch, useLocation } from 'wouter-preact';
 
 import { AnalyticsScreen } from './features/analytics/AnalyticsScreen.js';
+import {
+  ForgotPasswordScreen,
+  RESET_PATH,
+  ResetPasswordScreen,
+} from './features/auth/PasswordScreens.js';
+import { SignInScreen } from './features/auth/SignInScreen.js';
 import { BillingBanner } from './features/billing/BillingBanner.js';
 import { BillingScreen } from './features/billing/BillingScreen.js';
 import { CatalogScreen } from './features/catalog/CatalogScreen.js';
@@ -63,7 +69,7 @@ export const RequireAuth = ({
      */
     return (
       <div class="shell-signed-out">
-        <p>La sessione è scaduta.</p>
+        <p>Per usare la console, accedi.</p>
         <a
           href="/accedi"
           onClick={(event: Event) => {
@@ -337,8 +343,22 @@ export const Layout = ({
   );
 };
 
+/**
+ * The pages a signed-out visitor can reach (P0-45b). Everything else is behind
+ * `RequireAuth`, which sends a signed-out visitor to the first of these.
+ */
+export const PUBLIC_PAGES: Readonly<Record<string, () => JSX.Element>> = {
+  '/accedi': () => <SignInScreen />,
+  '/password-dimenticata': () => <ForgotPasswordScreen />,
+  [RESET_PATH]: () => <ResetPasswordScreen />,
+};
+
 export const App = ({ client }: { readonly client?: ApiClient } = {}): JSX.Element => {
+  const [location] = useLocation();
   const session = useSession(client);
+  const page = PUBLIC_PAGES[location];
+
+  if (page !== undefined) return page();
 
   return <RequireAuth session={session}>{(signedIn) => <Layout session={signedIn} />}</RequireAuth>;
 };
