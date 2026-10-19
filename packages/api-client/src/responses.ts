@@ -1122,6 +1122,11 @@ export const DASHBOARD_RESPONSES = {
   'GET /v1/dashboard/analytics/sales': salesResponse,
   /* The one-click add from the refused-origins panel (P6-05): the ordinary route, nothing new. */
   'POST /v1/dashboard/domains': domainAddedResponse,
+  /* The Widget screen (P4-09b): the keys, the one answer that carries a secret, and the rotations. */
+  'GET /v1/dashboard/keys': keysResponse,
+  'POST /v1/dashboard/keys': issuedKeysResponse,
+  'POST /v1/dashboard/keys/secret/rotate': issuedKeysResponse,
+  'POST /v1/dashboard/keys/public/rotate': keysResponse,
   'GET /v1/dashboard/shopify': shopifyStatusResponse,
   'POST /v1/dashboard/shopify/install': shopifyInstallResponse,
 } as const;

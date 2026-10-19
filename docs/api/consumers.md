@@ -15,6 +15,7 @@ complete only because raw `fetch` to our own API is forbidden outside
 | `GET /v1/dashboard/analytics/top` | apps/dashboard/src/features/analytics/AnalyticsScreen.tsx:227 |
 | `GET /v1/dashboard/analytics/zero-results` | apps/dashboard/src/features/analytics/ZeroResultsPanel.tsx:83 |
 | `GET /v1/dashboard/domains/claims/served` | apps/dashboard/src/features/domains/ClaimNotice.tsx:38 |
+| `GET /v1/dashboard/keys` | apps/dashboard/src/features/widget/WidgetScreen.tsx:107 |
 | `GET /v1/dashboard/me` | apps/dashboard/src/session.ts:152 |
 | `GET /v1/dashboard/products` | apps/dashboard/src/features/catalog/CatalogScreen.tsx:134<br>apps/dashboard/src/features/catalog/catalogue-export.ts:70 |
 | `GET /v1/dashboard/shopify` | apps/dashboard/src/features/integrations/IntegrationsScreen.tsx:95 |
@@ -26,6 +27,9 @@ complete only because raw `fetch` to our own API is forbidden outside
 | `POST /v1/dashboard/billing/top-up` | apps/dashboard/src/features/billing/BillingScreen.tsx:162 |
 | `POST /v1/dashboard/domains` | apps/dashboard/src/features/analytics/RefusedOriginsPanel.tsx:110 |
 | `POST /v1/dashboard/domains/claims/:id/withdraw` | apps/dashboard/src/features/domains/ClaimNotice.tsx:56 |
+| `POST /v1/dashboard/keys` | apps/dashboard/src/features/widget/WidgetScreen.tsx:149 |
+| `POST /v1/dashboard/keys/public/rotate` | apps/dashboard/src/features/widget/WidgetScreen.tsx:163 |
+| `POST /v1/dashboard/keys/secret/rotate` | apps/dashboard/src/features/widget/WidgetScreen.tsx:156 |
 | `POST /v1/dashboard/products/:id/reindex` | apps/dashboard/src/features/catalog/IndexStatus.tsx:197 |
 | `POST /v1/dashboard/products/import` | apps/dashboard/src/features/catalog/ImportSummary.tsx:236 |
 | `POST /v1/dashboard/products/import/preview` | apps/dashboard/src/features/catalog/ImportSummary.tsx:210 |
