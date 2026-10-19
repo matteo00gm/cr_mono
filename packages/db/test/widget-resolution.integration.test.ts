@@ -128,6 +128,7 @@ describe('the outcomes the row lists', () => {
       plan: 'CANTINA',
       locale: 'it',
       turnstile: false,
+      serverSessionsOnly: false,
       originKind: 'production',
     });
   });
@@ -151,6 +152,26 @@ describe('the outcomes the row lists', () => {
       });
     } finally {
       await withTenant(A, (tx) => tx.execute(sql`UPDATE tenants SET status = 'ACTIVE'`), db);
+    }
+  });
+
+  it('carries whether its sessions come only from its own server (P4-10b)', async () => {
+    await withTenant(
+      A,
+      (tx) => tx.execute(sql`UPDATE tenants SET server_sessions_only = true`),
+      db,
+    );
+
+    try {
+      await expect(resolveTenantByKeyAndOrigin(KEY_A, ORIGIN_A, db)).resolves.toMatchObject({
+        serverSessionsOnly: true,
+      });
+    } finally {
+      await withTenant(
+        A,
+        (tx) => tx.execute(sql`UPDATE tenants SET server_sessions_only = false`),
+        db,
+      );
     }
   });
 

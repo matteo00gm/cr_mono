@@ -20,6 +20,7 @@ export {
   bundleDirectory,
   CDN_PORT,
   CDN_WITHOUT_CORS_PORT,
+  SESSION_ENDPOINT,
   startCdn,
   startHostPages,
   THEMED,

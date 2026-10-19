@@ -35,6 +35,11 @@ export interface HostPageOptions {
   readonly widgetKey: string;
   /** Where the built widget bundle is, served under `/widget/`. */
   readonly bundleDir: string;
+  /**
+   * The winery's secret key, as the storefront's own server holds it (P4-10b).
+   * Used by `/__session` on this server and never written into a page.
+   */
+  readonly secretKey?: string | undefined;
 }
 
 /** One line the fake Shopify cart recorded, for a test to read back. */
@@ -47,6 +52,8 @@ export interface HostPages {
   readonly origin: string;
   /** Every `/cart/add.js` the widget sent, in order. */
   readonly calls: () => readonly CartCall[];
+  /** How many sessions the storefront's own server has minted (P4-10b). */
+  readonly sessionsMinted: () => number;
   readonly reset: () => void;
   readonly close: () => Promise<void>;
 }
@@ -58,6 +65,8 @@ const ROUTES: Readonly<Record<string, string>> = {
   '/': 'storefront.html',
   /* The same storefront, with a theme's own choices on the tag (P6-09). */
   '/themed': 'storefront.html',
+  /* The same storefront, taking its sessions from its own server (P4-10b). */
+  '/server-session': 'storefront.html',
   '/generic': 'generic.html',
   '/hostile': 'hostile.html',
   '/hostile.css': 'hostile.css',
@@ -112,6 +121,20 @@ export const THEMED = { position: 'bottom-left', color: '#1f6f4a' } as const;
 
 const SNIPPET_API = 'data-api="__API__"';
 
+/** Where the storefront's own server hands out sessions, as a seller's would (P4-10b). */
+export const SESSION_ENDPOINT = '/__session';
+
+/**
+ * The route that storefront's server calls (P4-10). Named, as the widget names
+ * `SESSION_PATH`: this is a seller's backend talking to our public widget
+ * surface, not one of our consumers, so it has no place in the client or the
+ * consumer map (P0-63).
+ */
+const SERVER_SESSION_PATH = '/v1/widget/session/server';
+
+const fromServer = (page: string): string =>
+  page.replace(SNIPPET_API, `${SNIPPET_API} data-session-url="${SESSION_ENDPOINT}"`);
+
 const themed = (page: string): string =>
   page.replace(
     SNIPPET_API,
@@ -148,8 +171,10 @@ export const startHostPages = async ({
   api,
   widgetKey,
   bundleDir,
+  secretKey,
 }: HostPageOptions): Promise<HostPages> => {
   let calls: CartCall[] = [];
+  let sessionsMinted = 0;
 
   const handle = async (
     request: IncomingMessage,
@@ -183,6 +208,38 @@ export const startHostPages = async ({
 
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ items: [] }));
+
+      return;
+    }
+
+    /*
+     * **The storefront's own server minting a session** (P4-10b): what a
+     * seller's backend does behind `data-session-url`. It holds the secret key,
+     * names its own origin, forwards the visitor's previous token so the
+     * conversation goes on, and hands back what the API answered. From Node, so
+     * it sends no `Origin` — the server route refuses one.
+     */
+    if (url.pathname === SESSION_ENDPOINT && request.method === 'POST') {
+      if (secretKey === undefined) {
+        response.writeHead(404, { 'content-type': 'text/plain' });
+        response.end('no secret key on this storefront');
+
+        return;
+      }
+
+      const asked = JSON.parse((await bodyOf(request)) || '{}') as { previous?: unknown };
+      const minted = await fetch(`${api}${SERVER_SESSION_PATH}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${secretKey}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          origin: `http://localhost:${String(port)}`,
+          ...(typeof asked.previous === 'string' ? { previous: asked.previous } : {}),
+        }),
+      });
+
+      sessionsMinted += 1;
+      response.writeHead(minted.status, { 'content-type': 'application/json' });
+      response.end(await minted.text());
 
       return;
     }
@@ -239,7 +296,13 @@ export const startHostPages = async ({
     const file = await readFile(new URL(page, PAGES), 'utf8');
     const cdn = CDN_PAGES[url.pathname];
     const text =
-      url.pathname === '/themed' ? themed(file) : cdn === undefined ? file : fromCdn(file, cdn);
+      url.pathname === '/themed'
+        ? themed(file)
+        : url.pathname === '/server-session'
+          ? fromServer(file)
+          : cdn === undefined
+            ? file
+            : fromCdn(file, cdn);
 
     response.writeHead(200, { 'content-type': typeOf(page) });
     /* The snippet a seller pastes, filled in with this run's key and API. */
@@ -262,6 +325,7 @@ export const startHostPages = async ({
   return {
     origin: `http://localhost:${String(port)}`,
     calls: () => calls,
+    sessionsMinted: () => sessionsMinted,
     reset: () => {
       calls = [];
     },

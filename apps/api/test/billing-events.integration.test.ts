@@ -645,6 +645,7 @@ describe('a top-up, paid (P5-11a)', () => {
       trialEndsAt: null,
       locale: 'it',
       turnstile: false,
+      serverSessionsOnly: false,
       originKind: 'production' as const,
     };
 

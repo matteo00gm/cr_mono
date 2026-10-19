@@ -83,6 +83,7 @@ describe('the flag', () => {
     expect(await resolveTenantByKeyAndOrigin(key, origin)).toMatchObject({
       found: true,
       turnstile: false,
+      serverSessionsOnly: false,
     });
   });
 

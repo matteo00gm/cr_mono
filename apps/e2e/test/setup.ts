@@ -247,7 +247,8 @@ export const start = async ({ shopify = false }: StartOptions = {}): Promise<Har
     bundleDir: bundleDirectory(),
   };
 
-  const verified = await startHostPages({ port: VERIFIED_PORT, ...pages });
+  /* The verified storefront's server holds the secret key, as a seller's would (P4-10b). */
+  const verified = await startHostPages({ port: VERIFIED_PORT, ...pages, secretKey });
   const unverified = await startHostPages({ port: UNVERIFIED_PORT, ...pages });
   const cdn = await startCdn({ port: CDN_PORT, bundleDir: pages.bundleDir, cors: true });
   const cdnWithoutCors = await startCdn({

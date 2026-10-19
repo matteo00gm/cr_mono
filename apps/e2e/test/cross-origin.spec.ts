@@ -1,6 +1,6 @@
 import { expect, test, type ConsoleMessage, type Page } from '@playwright/test';
 
-import { WIDGET_KEY } from '@catalogorosso/testing';
+import { SESSION_ENDPOINT, WIDGET_KEY } from '@catalogorosso/testing';
 
 import { SCRIPTED_REASON, SCRIPTED_REPLY, start, type Harness } from './setup.js';
 
@@ -524,6 +524,66 @@ test.describe('when a removed domain is verified again (P4-06)', () => {
       .toContainEqual(
         expect.objectContaining({ type: 'INVALID_TOKEN', origin: harness.verified.origin }),
       );
+  });
+});
+
+test.describe('from a winery that takes its sessions from its own server (P4-10b)', () => {
+  /*
+   * §3.2 layer 3, end to end: the script tag names a path on the storefront
+   * (`data-session-url`), the storefront's server holds the secret key and
+   * mints, and the widget never asks our browser mint. With the browser mint
+   * shut for the winery, a script that forges an `Origin` mints nothing —
+   * and the storefront that does it properly still answers.
+   */
+  test.afterEach(async () => {
+    await harness.api.serverSessionsOnly(false);
+  });
+
+  const ask = async (page: Page) => {
+    const composer = panel(page).locator('.composer-input');
+
+    await composer.fill('Cosa mi consigli con una bistecca?');
+    await composer.press('Enter');
+  };
+
+  test('asks the storefront’s own server for its session, and is answered on it', async ({
+    page,
+  }) => {
+    const requested: string[] = [];
+    const minted = harness.verified.sessionsMinted();
+
+    page.on('request', (request) => requested.push(request.url()));
+
+    await page.goto(`${harness.verified.origin}/server-session`);
+    await launcher(page).click();
+    await expect(panel(page)).toBeVisible();
+    await ask(page);
+
+    await expect(panel(page).locator('.chat-log')).toContainText(SCRIPTED_REPLY);
+    expect(requested).toContain(`${harness.verified.origin}${SESSION_ENDPOINT}`);
+    expect(harness.verified.sessionsMinted()).toBeGreaterThan(minted);
+    expect(requested.some((url) => url.includes('/v1/widget/session'))).toBe(false);
+  });
+
+  test('with the browser mint shut, the pasted snippet is refused and the server’s storefront still answers', async ({
+    page,
+  }) => {
+    await harness.api.serverSessionsOnly(true);
+
+    await page.goto(harness.verified.origin);
+    await launcher(page).click();
+    await expect(panel(page)).toBeVisible();
+    await ask(page);
+
+    /* Told, not left waiting (§1.3) — and answered nothing. */
+    await expect(panel(page).locator('.notice-text')).toBeVisible();
+    await expect(panel(page).locator('.chat-log')).not.toContainText(SCRIPTED_REPLY);
+
+    await page.goto(`${harness.verified.origin}/server-session`);
+    await launcher(page).click();
+    await ask(page);
+
+    await expect(panel(page).locator('.chat-log')).toContainText(SCRIPTED_REPLY);
   });
 });
 

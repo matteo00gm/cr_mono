@@ -516,7 +516,7 @@ Layered defence:
 
 1. **Origin binding.** `pk_` alone authorizes nothing. Every widget request resolves `(pk_, Origin)` and both must agree on one tenant. Browsers set `Origin` on cross-origin requests and page JS cannot override it.
 2. **Origin-bound session tokens.** The minted token carries an `origin` claim; every subsequent call requires `claim.origin === request Origin === a verified origin of the token's tenant`. Lifting a token to another site fails; replaying it from a script with no `Origin` header fails too, because widget tokens require a non-empty matching origin.
-3. **Server-minted sessions (the strong option).** For sellers who want forgery-proof integration, their backend calls `POST /v1/widget/session/server` *(as built, P4-10)* with the **secret** key `sk_live_…` (server-side only, never in the browser) and the origin the session is for, and passes the resulting token to the page. A request carrying an `Origin` header is refused before the key is read, so a secret pasted into browser code does not work there even before it is rotated. This is the only path that cannot be spoofed by a page, and it is the recommended integration for proprietary sites and for the top plan tier.
+3. **Server-minted sessions (the strong option).** For sellers who want forgery-proof integration, their backend calls `POST /v1/widget/session/server` *(as built, P4-10)* with the **secret** key `sk_live_…` (server-side only, never in the browser) and the origin the session is for, and passes the resulting token to the page. *(As built, P4-10b: the script tag names a path on the storefront with `data-session-url`, and the widget asks that path instead of our browser mint; a refresh passes the previous token through it, so the conversation goes on. **And a winery can shut the browser mint** — `tenants.server_sessions_only` — which is what makes this path forgery-proof rather than merely available: while the browser mint stays open beside it, a script that forges an `Origin` mints there instead.)* A request carrying an `Origin` header is refused before the key is read, so a secret pasted into browser code does not work there even before it is rotated. This is the only path that cannot be spoofed by a page, and it is the recommended integration for proprietary sites and for the top plan tier.
 4. **Detection.** A valid `pk_` arriving from an unknown origin is the signature of widget theft. It is logged as `UNAUTHORIZED_ORIGIN`, counted per `(pk_, origin)`, surfaced in the tenant's dashboard, and alerts us above a threshold.
 5. **Blast radius.** Public key rotation is one click with a 24h grace window, so a leaked key is cheap to retire.
 
@@ -1382,6 +1382,7 @@ P0-55 and P0-56 come before P0-45 because the error handler must be in place bef
 | ✅ P4-08 | 🔒 Public key rotation | 24 h grace, countdown in UI | P0-25 |
 | ✅ P4-09 | 🔒 Secret key create/rotate | SHA-256 (ADR 0025), shown exactly once, prefix+last4 stored | P0-25 |
 | ✅ P4-10 | 🔒 Server-minted session endpoint | `sk_` authenticated, the forgery-proof path | P4-09,P2-12 |
+| ✅ P4-10b | 🔒 The widget takes a server-minted session | `data-session-url`, a refresh that keeps the conversation, and a winery able to shut the browser mint — found missing by P7-09 | P4-10 |
 | ✅ P4-11 | 🔒 MFA for OWNER + step-up re-auth | on keys, domains, plan, membership changes | P0-45 |
 | ✅ P4-12 | 🔒 Security headers | nonce CSP, HSTS preload, nosniff, referrer, frame-deny | P0-54 |
 | ✅ P4-13 | SST: AWS WAF on CloudFront | managed bot + reputation rules, per-path rate rules | P0-17 |
@@ -6629,6 +6630,35 @@ Message names the current plan and the cap, and links to upgrade. Counted per te
 - **The dashboard warning is deferred with the keys screen**, which P4-08 and P4-09 also left unbuilt. The route's own OpenAPI description carries the "never in browser code" warning, and P7-09's integration docs carry the flow.
 
 **Verified.** 32 cases on the mint, 11 on the scope's mechanics, 14 on the scope against real Postgres, 6 on the route, 4 in a real browser. **The Postgres suite needed a second connection before it could fail**: seeding goes through `createTenant`, which sets `app.tenant_id` at session level, and a resolution on that connection found its key through the *tenant* branch — every test would have passed with the new branch deleted. The browser test for the binding verifies both origins first, because from an unverified origin CORS refuses before the token's claim is read and the test would pass without the binding being checked. A mutation run of 27 mutants — the scope, the policy, the index, every check in the mint and the route's guards — killed 27. One case was added first: nothing asserted that the mint normalises with the stage's environment, so a mint that treated a local stack as production would have gone unnoticed until somebody ran one.
+
+---
+
+### P4-10b · The widget takes a server-minted session 🔒
+
+**Why.** Found while writing P7-09's integration docs, which have to tell a proprietary site how to use §3.2's strong option. **It could not be used.** P4-10 built the route a seller's server calls, and §3.2 says the server "passes the resulting token to the page" — but nothing on the page could receive one: the widget only ever minted through our browser path. Two more gaps sat behind that one:
+
+- **A refresh started a new conversation.** The server route took no previous token ("a continuation is the browser's to ask for"), so a visitor talking for longer than a token lives would have been split into two sessions mid-sentence, which is what P2-12a exists to prevent.
+- **Nothing made the path forgery-proof.** The browser mint trusts the `Origin` a request carries, which a browser cannot forge and a script can. While it stays open beside the server path, a script forging the winery's origin mints there and spends the winery's month whatever its server does.
+
+**As built (2026-10-19).**
+
+- **`data-session-url` on the script tag**: a path on the storefront. The loader reads it with the other attributes; it crosses the lazy boundary untouched; and the session asks it — `POST`, the shop's own cookies, `{}` the first time and `{ "previous": … }` after — instead of `/v1/widget/session`. Never the challenge: Turnstile proves a browser to us, and here the winery's server vouches.
+- **Held to the storefront's own origin**, resolved before compared as `safeCartUrl` is (a `//elsewhere.example/…` reads as a path and is not one). A session URL that leaves the shop would hand the visitor's cookies for it to whoever is there, so the widget refuses to ask it and says why in the refusal's code. An answer with no token is a refusal too, not a session.
+- **The server route continues a session** (`previous` in the body, optional, a string of at most 4 KB), through the same mint and on the browser path's terms: verified against the winery and the origin, a replayed token refused, a stale one starting afresh.
+- **`tenants.server_sessions_only`** (migration 0080), off for every winery. On, the browser mint refuses the winery **first** — before a challenge is checked or a previous token read, a refresh included — with an English message that tells the developer to set `data-session-url`. Resolved with the key and the origin (`resolveTenantByKeyAndOrigin`) and with the secret key (`resolveTenantBySecretKey`), so both paths carry it.
+- **Proven in a browser.** The verified test storefront's own server now holds the winery's secret key and answers `/__session` as a seller's backend would; `/server-session` is the storefront with `data-session-url` on its tag. The widget opens there, asks the storefront, never asks our mint, and is answered. With the winery switched to server sessions only, the plain storefront's question is refused — a notice, no answer — and the `/server-session` one is still answered.
+- **⚠ Open: no screen sets the flag.** An operator sets `server_sessions_only`, as with the transcript period (P7-07). Nor is there yet a screen that shows a winery its secret key (P4-08, P4-09); onboarding a proprietary site needs somebody to hand it over.
+
+**Verified.** Unit (6137 tests), the full Postgres suite (95 files, 1332 tests), coverage gates, every `:check`, the threat matrix (358) and the whole browser suite (72 cases, two new). The first full run lost a coverage hook (`tenant-from-input.test.ts`'s ESLint warm-up, past its two minutes) and four Postgres files at container start while other sessions loaded the machine; both reran clean, and nothing in them touches this row. `widget-session.test.ts`: a server-only winery refused first, with a challenge and a previous token offered and neither read. `server-session.test.ts`: a refresh continues exactly the session its token names, a foreign token starts afresh, a revoked one or one from another of the winery's sites is refused, and an empty or non-string `previous` is refused with the body. `session.test.ts` (widget): the storefront's path asked with its cookies and never our mint, the previous token handed back, a path off the storefront never asked, an answer without a token refused, a refusal passed on with its status, no challenge. The flag against Postgres on both resolutions. 16 mutants, 16 killed on the first run.
+
+| Mutation | Caught by |
+|---|---|
+| The browser mint left open for a server-only winery; the refusal only when no challenge is asked; the flag lost between CORS and the route | `widget-session.test.ts` |
+| A refresh on the server route starting a new conversation; an empty previous token taken | `server-session.test.ts` |
+| The flag not read with the key and origin, or with the secret key; every winery server-only by default | `widget-resolution.integration.test.ts`, `with-secret-key.integration.test.ts` |
+| A session URL off the storefront asked; the storefront asked without its cookies; the previous token not handed back; an answer with no token taken as a session; the session URL ignored | `session.test.ts` (widget) |
+| The attribute not read; the session URL dropped at the lazy boundary | `loader.test.ts`, `lazy.test.ts` |
+| The session URL never reaching the session | `cross-origin.spec.ts` (browser) |
 
 ---
 

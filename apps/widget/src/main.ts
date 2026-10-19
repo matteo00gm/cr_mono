@@ -90,6 +90,7 @@ export const run = (deps: Deps = {}): void => {
       cart: sommelier.cart,
       position: sommelier.position,
       color: sommelier.color,
+      sessionUrl: sommelier.sessionUrl,
     });
 
     attach_(mounted.launcher, {

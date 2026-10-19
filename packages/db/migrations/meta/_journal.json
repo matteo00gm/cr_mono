@@ -561,6 +561,13 @@
       "when": 1788826988612,
       "tag": "0079_e_invoices_survive_erasure",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1788913388612,
+      "tag": "0080_tenants_server_sessions_only",
+      "breakpoints": true
     }
   ]
 }

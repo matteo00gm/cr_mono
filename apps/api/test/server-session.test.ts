@@ -75,6 +75,7 @@ const deps = (overrides: Partial<ServerSessionDeps> = {}, allowed = true): Serve
               locale: 'it',
               verifiedOrigins: [ORIGIN, 'https://winery.com'],
               stagingOrigins: [],
+              serverSessionsOnly: false,
             }
           : undefined,
       );
@@ -299,6 +300,7 @@ describe('the origin a server asks for', () => {
           locale: 'it',
           verifiedOrigins: [local],
           stagingOrigins: [],
+          serverSessionsOnly: false,
         }),
     });
 
@@ -344,6 +346,8 @@ describe('the body', () => {
     ['an empty origin', { origin: '' }],
     ['a tenant as well', { origin: ORIGIN, tenantId: TENANT }],
     ['a number', { origin: 42 }],
+    ['a previous token that is not a string', { origin: ORIGIN, previous: 42 }],
+    ['an empty previous token', { origin: ORIGIN, previous: '' }],
   ])('is refused when it carries %s', async (_name, body) => {
     await expect(mintServerSession(request({ body }), deps())).rejects.toMatchObject({
       kind: 'invalid',
@@ -370,6 +374,7 @@ describe('a winery the widget does not run for', () => {
                 locale: 'it',
                 verifiedOrigins: [ORIGIN],
                 stagingOrigins: [],
+                serverSessionsOnly: false,
               }),
           }),
         ),
@@ -391,9 +396,52 @@ describe('a winery the widget does not run for', () => {
               locale: 'it',
               verifiedOrigins: [ORIGIN],
               stagingOrigins: [],
+              serverSessionsOnly: false,
             }),
         }),
       ),
     ).rejects.toMatchObject({ kind: 'unavailable' });
+  });
+});
+
+describe('a refresh, the previous token in the body (P4-10b)', () => {
+  /*
+   * A winery whose sessions come only from its server has no other way to keep
+   * a conversation going: the browser mint refuses it. So this path continues
+   * a session on the browser path's terms (P2-12a), through the same mint.
+   */
+  const refresh = (previous: string, origin = ORIGIN, overrides: Partial<ServerSessionDeps> = {}) =>
+    mintServerSession(request({ body: { origin, previous } }), deps(overrides));
+
+  it('continues exactly the session the previous token names', async () => {
+    const previous = (await mintServerSession(request(), deps())).token;
+    const claims = decodeJwt(previous);
+    const next = decodeJwt((await refresh(previous)).token);
+
+    expect(next.sid).toBe(claims.sid);
+    expect(next.jti).not.toBe(claims.jti);
+    expect(next.iat_original).toBe(claims.iat_original);
+  });
+
+  it('starts afresh from a token that is not one of ours', async () => {
+    const next = decodeJwt((await refresh('not-a-token')).token);
+
+    expect(next.sid).toEqual(expect.any(String));
+  });
+
+  it('refuses a revoked token, as the browser path does', async () => {
+    const previous = (await mintServerSession(request(), deps())).token;
+
+    await expect(
+      refresh(previous, ORIGIN, { isRevoked: () => Promise.resolve(true) }),
+    ).rejects.toMatchObject({ kind: 'unauthenticated' });
+  });
+
+  it("refuses a token minted for another of the winery's sites", async () => {
+    const previous = (await mintServerSession(request(), deps())).token;
+
+    await expect(refresh(previous, 'https://winery.com')).rejects.toMatchObject({
+      kind: 'unauthenticated',
+    });
   });
 });

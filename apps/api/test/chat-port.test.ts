@@ -71,6 +71,7 @@ const tenant: WidgetTenant = {
   trialEndsAt: null,
   locale: 'it',
   turnstile: false,
+  serverSessionsOnly: false,
   originKind: 'production',
 };
 

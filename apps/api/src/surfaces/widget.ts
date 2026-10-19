@@ -50,7 +50,11 @@ import {
   limitUnresolvedWidgetRequest,
   limitWidgetRequest,
 } from '../middleware/rate-limit.js';
-import { mintServerSession, type ServerSessionDeps } from '../server-session.js';
+import {
+  mintServerSession,
+  SERVER_SESSIONS_ONLY,
+  type ServerSessionDeps,
+} from '../server-session.js';
 import { WIDGET_PREFIX } from '../routes.js';
 import { widgetConfigFor } from '../widget-config.js';
 import { readEventBatch, tokenInBatch } from '../widget-events.js';
@@ -537,6 +541,14 @@ export const createWidgetApp = (widget?: WidgetDependencies): Hono<AppEnv> => {
     async (c) => {
       const { tokenKeys } = widget;
       const tenant = c.get('widgetTenant');
+
+      /*
+       * **Shut for a winery whose sessions come from its own server** (P4-10b).
+       * First, before a challenge is checked or a previous token read: this
+       * path trusts the `Origin` a request carries, which a script can forge,
+       * and the winery chose not to. A refresh is refused with the rest.
+       */
+      if (tenant.serverSessionsOnly) throw new ForbiddenError(SERVER_SESSIONS_ONLY);
 
       /*
        * **The challenge, for a winery that turned it on** (P4-14). After the

@@ -172,6 +172,7 @@ const resolution = (turnstile: boolean): WidgetResolution => ({
   plan: 'CANTINA',
   locale: 'it',
   turnstile,
+  serverSessionsOnly: false,
   originKind: 'production',
 });
 

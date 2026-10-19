@@ -40,11 +40,30 @@ import { mintWidgetSession } from './widget-session.js';
  *    equality after normalisation, never a pattern (§3.4).
  */
 
-/** What the caller sends: the origin the session is for, and nothing else. */
-export const serverSessionRequest = z.object({ origin: z.string().min(1).max(300) }).strict();
+/**
+ * What the caller sends: the origin the session is for, and — on a refresh —
+ * the token the visitor already holds, so the conversation goes on rather than
+ * starting again (P4-10b). Nothing else.
+ */
+export const serverSessionRequest = z
+  .object({
+    origin: z.string().min(1).max(300),
+    previous: z.string().min(1).max(4096).optional(),
+  })
+  .strict();
 
 export const SERVER_SESSION_BODY_EXPECTED =
-  'Send a JSON body with the origin the session is for, e.g. {"origin":"https://www.winery.com"}.';
+  'Send a JSON body with the origin the session is for, e.g. {"origin":"https://www.winery.com"}, ' +
+  'and on a refresh the previous token as "previous".';
+
+/**
+ * Told to a browser mint for a winery whose sessions come from its own server
+ * (P4-10b). English, like every widget refusal: it reaches a developer's
+ * console, and it says what to do.
+ */
+export const SERVER_SESSIONS_ONLY =
+  'This winery mints its widget sessions on its own server. Give the script tag a ' +
+  'data-session-url that points at it.';
 
 /**
  * How many sessions one secret key may mint per minute.
@@ -144,6 +163,7 @@ export const mintServerSession = async (
      * one (P4-14).
      */
     turnstile: false,
+    serverSessionsOnly: tenant.serverSessionsOnly,
     /* A staging origin draws its lower allowance on this path too (P4-19). */
     originKind: tenant.stagingOrigins.includes(normalised.origin) ? 'staging' : 'production',
   };
@@ -151,14 +171,16 @@ export const mintServerSession = async (
   /*
    * The same mint the browser path uses, so the token is indistinguishable and
    * every later check — origin binding, revocation, the P4-06 cutoff — applies
-   * to it unchanged. No previous token: a server starts a session, and a
-   * continuation is the browser's to ask for.
+   * to it unchanged. **A previous token continues its session** (P4-10b), on
+   * the browser path's terms (P2-12a): verified against this winery and this
+   * origin, a replayed one refused, a stale one starting afresh. A winery whose
+   * sessions come only from here has no other way to keep a conversation going.
    */
   return mintWidgetSession({
     loadKeys,
     tenant: widgetTenant,
     origin: normalised.origin,
-    previous: undefined,
+    previous: parsed.data.previous,
     isRevoked,
   });
 };

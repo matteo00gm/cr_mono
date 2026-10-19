@@ -224,6 +224,7 @@ export const widgetCors =
       trialEndsAt: resolution.trialEndsAt,
       locale: resolution.locale,
       turnstile: resolution.turnstile,
+      serverSessionsOnly: resolution.serverSessionsOnly,
       originKind: resolution.originKind,
     });
     c.set('widgetOrigin', origin);

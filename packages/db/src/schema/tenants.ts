@@ -119,6 +119,14 @@ export const tenants = pgTable('tenants', {
   turnstileEnabled: boolean('turnstile_enabled').notNull().default(false),
 
   /**
+   * Whether this winery's widget sessions come from its own server only
+   * (P4-10b, §3.2 layer 3). On, the browser mint refuses it, so a script that
+   * forges an `Origin` mints nothing. Off by default: a storefront that pastes
+   * the snippet has no server of ours to ask.
+   */
+  serverSessionsOnly: boolean('server_sessions_only').notNull().default(false),
+
+  /**
    * Development mode (P4-19b): one exact local origin the widget may be served
    * to, until `devModeExpiresAt`. Both or neither, and local addresses only —
    * the checks are in migration 0058, and the expiry is enforced by the tenants

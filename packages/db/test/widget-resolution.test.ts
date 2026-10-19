@@ -64,6 +64,7 @@ describe('the outcomes', () => {
       plan: 'CANTINA',
       locale: 'it',
       turnstile: false,
+      serverSessionsOnly: false,
       originKind: 'production',
     });
   });
@@ -115,6 +116,7 @@ describe('the outcomes', () => {
 
     await expect(resolveTenantByKeyAndOrigin(KEY, ORIGIN, db)).resolves.toMatchObject({
       turnstile: true,
+      serverSessionsOnly: false,
     });
   });
 
