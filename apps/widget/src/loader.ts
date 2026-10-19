@@ -64,6 +64,12 @@ export interface SommelierGlobal {
    * held to `#rrggbb`, because it is written into a stylesheet.
    */
   readonly color?: string | undefined;
+  /**
+   * `data-session-url`, when the winery mints its sessions on its own server
+   * (P4-10b, §3.2 layer 3): a path on the storefront that answers with a
+   * token. Forwarded as written; the session holds it to the page's origin.
+   */
+  readonly sessionUrl?: string | undefined;
   /** Set once mounted, so a double inclusion is a no-op rather than a second launcher. */
   mounted: boolean;
 }
@@ -305,6 +311,7 @@ export const start = (options: MountOptions = {}): Mounted | undefined => {
       /* Anything but the one alternative is the default, including a typo. */
       position: scriptAttribute('position') === LEFT ? LEFT : undefined,
       color: color !== undefined && HEX.test(color) ? color : undefined,
+      sessionUrl: scriptAttribute('sessionUrl'),
       mounted: false,
     };
 

@@ -54,6 +54,7 @@ describe('what the storefront chose (P6-09)', () => {
       api: 'https://api.example',
       position: 'bottom-left',
       color: '#1f6f4a',
+      sessionUrl: '/sommelier/session',
       mounted: true,
     };
 
@@ -75,6 +76,7 @@ describe('what the storefront chose (P6-09)', () => {
         api: 'https://api.example',
         position: 'bottom-left',
         color: '#1f6f4a',
+        sessionUrl: '/sommelier/session',
       }),
     );
   });

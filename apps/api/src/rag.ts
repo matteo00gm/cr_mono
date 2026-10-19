@@ -280,6 +280,7 @@ export const createRagPort = ({
             ...service,
             /* Neither is read on this path: no session is minted, no origin is limited. */
             turnstile: false,
+            serverSessionsOnly: false,
             originKind: 'production',
           },
           visitor: null,

@@ -1,0 +1,14 @@
+-- A winery may take its widget's sessions from its own server only (P4-10b).
+--
+-- §3.2 layer 3 calls a session minted by the seller's server "the only path
+-- that cannot be spoofed" — and it is only that when the other path is shut.
+-- The browser mint trusts the `Origin` a request carries, which a browser
+-- cannot forge and a script can; while it stays open beside the server path, a
+-- script minting with a forged `Origin` spends the winery's month whatever its
+-- server does. With this on, the browser mint refuses the winery and its
+-- sessions come from `POST /v1/widget/session/server` alone.
+--
+-- Off for every winery, existing and new: almost every storefront pastes a
+-- snippet and runs no server of ours, and for them this would be a widget that
+-- never opens.
+ALTER TABLE "tenants" ADD COLUMN "server_sessions_only" boolean DEFAULT false NOT NULL;

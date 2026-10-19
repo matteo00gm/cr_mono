@@ -30,6 +30,7 @@ const CANTINA: WidgetTenant = {
   trialEndsAt: null,
   locale: 'it',
   turnstile: false,
+  serverSessionsOnly: false,
   originKind: 'production',
 };
 const SECRET = randomUUID();
@@ -173,6 +174,7 @@ describe('each dimension trips on its own', () => {
         trialEndsAt: new Date(Date.now() + 86_400_000),
         locale: 'it',
         turnstile: false,
+        serverSessionsOnly: false,
         originKind: 'production',
       },
       limits: { ...ROOMY, tenantPerMinute: { ...ROOMY.tenantPerMinute, none: 1 } },

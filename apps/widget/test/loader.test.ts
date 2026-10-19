@@ -204,6 +204,13 @@ describe('what a storefront may choose (P6-09)', () => {
     },
   );
 
+  it('takes the winery’s session URL as written, for the session to hold to the page (P4-10b)', () => {
+    expect(globalFor({ 'data-session-url': '/sommelier/session' })?.sessionUrl).toBe(
+      '/sommelier/session',
+    );
+    expect(globalFor({})?.sessionUrl).toBeUndefined();
+  });
+
   it('stays in the right corner when nothing is said, exactly as before', () => {
     expect(globalFor({})?.position).toBeUndefined();
     expect(globalFor({})?.color).toBeUndefined();

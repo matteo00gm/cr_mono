@@ -35,6 +35,8 @@ export type WidgetResolution =
       readonly locale: string;
       /** Whether the session mint asks for a Turnstile token (P4-14). */
       readonly turnstile: boolean;
+      /** Whether the browser mint refuses this winery: its sessions come from its server (P4-10b). */
+      readonly serverSessionsOnly: boolean;
       /**
        * Which kind of origin the request came from (P4-19). A staging origin
        * gets its own, lower rate limit and shares the winery's monthly quota;
@@ -66,6 +68,7 @@ interface ResolutionRow {
   readonly plan: TenantPlan | null;
   readonly locale: string | null;
   readonly turnstile_enabled: boolean | null;
+  readonly server_sessions_only: boolean | null;
   /** The winery reached through its development origin rather than a domain (P4-19b). */
   readonly development: boolean | null;
 }
@@ -101,6 +104,7 @@ export const resolveTenantByKeyAndOrigin = (
           t.plan,
           t.locale,
           t.turnstile_enabled,
+          t.server_sessions_only,
           (d.id IS NULL AND t.id IS NOT NULL) AS development
         FROM widget_keys k
         LEFT JOIN tenant_domains d
@@ -153,6 +157,7 @@ export const resolveTenantByKeyAndOrigin = (
         plan: row.plan,
         locale: row.locale,
         turnstile: row.turnstile_enabled === true,
+        serverSessionsOnly: row.server_sessions_only === true,
         originKind:
           row.development === true
             ? 'development'

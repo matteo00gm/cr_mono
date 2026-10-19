@@ -47,6 +47,8 @@ export interface LazyPanelOptions {
   /** `data-position` and `data-color` (P6-09), on the same terms. */
   readonly position?: string | undefined;
   readonly color?: string | undefined;
+  /** `data-session-url` (P4-10b), likewise. */
+  readonly sessionUrl?: string | undefined;
   readonly load?: LoadWidget | undefined;
   readonly document?: Document | undefined;
   /** Injected so a test can run the idle callback rather than wait for one. */
@@ -102,6 +104,7 @@ export const lazyPanel = ({
   cart,
   position,
   color,
+  sessionUrl,
   load = importWidget,
   document: document_ = document,
   whenIdle = idle,
@@ -162,6 +165,7 @@ export const lazyPanel = ({
           cart,
           position,
           color,
+          sessionUrl,
           /* The loader's own copy, so the widget bundle imports no module the
            * loader also imports (P3-05, P3-18). */
           adoptStyles,

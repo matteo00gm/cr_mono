@@ -8,10 +8,11 @@ import {
   loadWidgetTokenKeys,
   type WidgetTokenKeys,
 } from '@catalogorosso/security/tokens';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app.js';
 import { WIDGET_SESSION_CACHE_CONTROL, type WidgetDependencies } from '../src/surfaces/widget.js';
+import { SERVER_SESSIONS_ONLY } from '../src/server-session.js';
 import { WIDGET_UNAVAILABLE } from '../src/widget-config.js';
 import {
   mintWidgetSession,
@@ -54,6 +55,7 @@ const found = (over: Partial<Found> = {}): Found => ({
   plan: 'CANTINA',
   locale: 'it',
   turnstile: false,
+  serverSessionsOnly: false,
   originKind: 'production',
   ...over,
 });
@@ -229,6 +231,34 @@ describe('what is refused', () => {
     },
   );
 
+  it('a winery whose sessions come from its own server: 403, before a challenge or a previous token is looked at (P4-10b)', async () => {
+    /*
+     * Turnstile on, a solved challenge and a previous token all offered: none
+     * of them may be read first. This path trusts the `Origin` a request
+     * carries, and the winery chose not to — a refresh is refused with the rest.
+     */
+    const { loads, load } = counting(await freshKeys());
+    const verify = vi.fn(() => Promise.resolve(true));
+    const isTokenRevoked = vi.fn(() => Promise.resolve(false));
+    const response = await mint(
+      app({
+        tokenKeys: load,
+        isTokenRevoked,
+        turnstile: { siteKey: 'site-key', verify },
+        resolve: () => Promise.resolve(found({ serverSessionsOnly: true, turnstile: true })),
+      }),
+      { body: { turnstileToken: 'solved' }, authorization: 'Bearer previous-token' },
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { message: SERVER_SESSIONS_ONLY } });
+    /* Readable, like `unavailable`: the developer integrating it has to see why. */
+    expect(response.headers.get('access-control-allow-origin')).toBe(ORIGIN);
+    expect(verify).not.toHaveBeenCalled();
+    expect(isTokenRevoked).not.toHaveBeenCalled();
+    expect(loads.count).toBe(0);
+  });
+
   it('a trial whose date has passed: 403 unavailable, and no key touched (P5-05a)', async () => {
     const { loads, load } = counting(await freshKeys());
     const response = await mint(
@@ -311,6 +341,7 @@ describe('mintWidgetSession', () => {
         trialEndsAt: null,
         locale: 'en',
         turnstile: false,
+        serverSessionsOnly: false,
         originKind: 'production',
       },
       origin: ORIGIN,
@@ -338,6 +369,7 @@ describe('mintWidgetSession', () => {
     trialEndsAt: null,
     locale: 'it',
     turnstile: false,
+    serverSessionsOnly: false,
     originKind: 'production',
   } as const;
   const notRevoked = () => Promise.resolve(false);

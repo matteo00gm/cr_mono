@@ -37,6 +37,7 @@ import { registeredRoutes } from '../src/middleware/capability.js';
 import { WIDGET_REFUSED } from '../src/middleware/cors.js';
 import { logger } from '../src/middleware/logger.js';
 import { DASHBOARD_PREFIX } from '../src/routes.js';
+import { SERVER_SESSIONS_ONLY } from '../src/server-session.js';
 import { TURNSTILE_REFUSED } from '../src/turnstile.js';
 import { WIDGET_UNAVAILABLE } from '../src/widget-config.js';
 import { WIDGET_TOKEN_REFUSED } from '../src/widget-token.js';
@@ -194,6 +195,7 @@ const NAMED: ReadonlyMap<string, readonly string[]> = new Map([
   ['SHOP_EXPECTED', [SHOP_EXPECTED]],
   ['VARIANT_ID_EXPECTED', [VARIANT_ID_EXPECTED]],
   ['TURNSTILE_REFUSED', [TURNSTILE_REFUSED]],
+  ['SERVER_SESSIONS_ONLY', [SERVER_SESSIONS_ONLY]],
   ['WIDGET_REFUSED', [WIDGET_REFUSED]],
   ['WIDGET_TOKEN_REFUSED', [WIDGET_TOKEN_REFUSED]],
   ['WIDGET_UNAVAILABLE', [WIDGET_UNAVAILABLE]],

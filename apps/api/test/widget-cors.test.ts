@@ -38,6 +38,7 @@ const FOUND_A: WidgetResolution = {
   plan: 'CANTINA',
   locale: 'it',
   turnstile: false,
+  serverSessionsOnly: false,
   originKind: 'production',
 };
 
@@ -134,6 +135,7 @@ describe('an allowed request', () => {
         trialEndsAt: null,
         locale: 'it',
         turnstile: false,
+        serverSessionsOnly: false,
         originKind: 'production',
       },
     });

@@ -35,6 +35,8 @@ export interface SecretKeyTenant {
   readonly trialEndsAt: Date | null;
   readonly plan: TenantPlan | null;
   readonly locale: string;
+  /** Whether the browser mint refuses this winery, so this path is its only one (P4-10b). */
+  readonly serverSessionsOnly: boolean;
   /** Every origin this tenant has verified, which is the set a session may be minted for. */
   readonly verifiedOrigins: readonly string[];
   /** Those of them that are staging origins, for the lower rate limit they draw (P4-19). */
@@ -112,7 +114,7 @@ export const resolveTenantBySecretKey = async (
       );
 
       const tenants = await tx.execute(
-        sql`SELECT status, trial_ends_at, plan, locale FROM tenants LIMIT 1`,
+        sql`SELECT status, trial_ends_at, plan, locale, server_sessions_only FROM tenants LIMIT 1`,
       );
       const tenant = [...tenants][0] as
         | {
@@ -120,6 +122,7 @@ export const resolveTenantBySecretKey = async (
             trial_ends_at: string | Date | null;
             plan: TenantPlan | null;
             locale: string;
+            server_sessions_only: boolean;
           }
         | undefined;
 
@@ -136,6 +139,7 @@ export const resolveTenantBySecretKey = async (
         trialEndsAt: tenant.trial_ends_at === null ? null : new Date(tenant.trial_ends_at),
         plan: tenant.plan,
         locale: tenant.locale,
+        serverSessionsOnly: tenant.server_sessions_only,
         verifiedOrigins: verified.map((row) => row.origin),
         stagingOrigins: verified.filter((row) => row.kind === 'staging').map((row) => row.origin),
       };

@@ -6,7 +6,10 @@ import {
   createSession,
   expiryOf,
   REFRESH_MARGIN_MS,
+  sameOriginSessionUrl,
   SESSION_PATH,
+  SESSION_URL_NO_TOKEN,
+  SESSION_URL_NOT_SAME_ORIGIN,
   SessionRefused,
 } from '../src/session.js';
 
@@ -578,5 +581,123 @@ describe('a refusal the widget has to tell apart', () => {
     await expect(live.token()).rejects.toBeInstanceOf(SessionRefused);
 
     expect(await live.token()).toBe(token);
+  });
+});
+
+/**
+ * A session from the winery's own server (P4-10b, §3.2 layer 3): the script
+ * tag names a path on the storefront, the storefront's server holds the secret
+ * key, and our browser mint is never asked.
+ */
+describe('a session from the winery’s own server', () => {
+  const SHOP = 'https://www.cantina-rossi.example';
+
+  const fromServer = (fetch_: ReturnType<typeof minting>, sessionUrl = '/sommelier/session') =>
+    createSession({ api: API, key: KEY, fetch: fetch_, sessionUrl, origin: SHOP });
+
+  const requestOf = (fetch_: ReturnType<typeof minting>, call = 0) => {
+    const [url, init] = fetch_.mock.calls[call] ?? [];
+    const target = typeof url === 'string' ? url : url instanceof URL ? url.href : (url?.url ?? '');
+    const body = typeof init?.body === 'string' ? init.body : '';
+
+    return { url: target, init: init ?? {}, body };
+  };
+
+  it('asks the storefront’s own path, with the shop’s cookies, and never our mint', async () => {
+    const token = tokenFor();
+    const fetch_ = minting(token);
+
+    expect(await fromServer(fetch_).token()).toBe(token);
+
+    const { url, init } = requestOf(fetch_);
+
+    expect(url).toBe(`${SHOP}/sommelier/session`);
+    expect(url).not.toContain(SESSION_PATH);
+    expect(init.method).toBe('POST');
+    expect(init.credentials).toBe('same-origin');
+    expect(JSON.parse(requestOf(fetch_).body)).toEqual({});
+  });
+
+  it('hands the previous token back on a refresh, so the conversation goes on', async () => {
+    const first = tokenFor();
+    const fetch_ = minting(first);
+    const held = fromServer(fetch_);
+
+    await held.token();
+    fetch_.mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ token: tokenFor() }))),
+    );
+    await held.refresh();
+
+    expect(JSON.parse(requestOf(fetch_, 1).body)).toEqual({ previous: first });
+  });
+
+  it('never asks a path that leaves the storefront, and says why', async () => {
+    for (const elsewhere of [
+      'https://elsewhere.example/session',
+      '//elsewhere.example/session',
+      'http://www.cantina-rossi.example/session',
+    ]) {
+      const fetch_ = minting(tokenFor());
+
+      await expect(fromServer(fetch_, elsewhere).token(), elsewhere).rejects.toMatchObject({
+        code: SESSION_URL_NOT_SAME_ORIGIN,
+      });
+      expect(fetch_, elsewhere).not.toHaveBeenCalled();
+    }
+  });
+
+  it('takes an answer with no token as a refusal, not a session', async () => {
+    const fetch_ = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(new Response(JSON.stringify({ ok: true }))),
+    );
+
+    await expect(fromServer(fetch_).token()).rejects.toMatchObject({ code: SESSION_URL_NO_TOKEN });
+  });
+
+  it('passes a refusal from the storefront on with its status', async () => {
+    const fetch_ = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(new Response('nope', { status: 503 })),
+    );
+
+    const refused = await fromServer(fetch_)
+      .token()
+      .catch((error: unknown) => error);
+
+    expect(refused).toBeInstanceOf(SessionRefused);
+    expect(refused).toMatchObject({ status: 503 });
+  });
+
+  it('asks no challenge: Turnstile proves a browser to us, and here the winery’s server vouches', async () => {
+    const challenge = vi.fn(() => Promise.resolve('solved'));
+    const fetch_ = minting(tokenFor());
+
+    await createSession({
+      api: API,
+      key: KEY,
+      fetch: fetch_,
+      sessionUrl: '/sommelier/session',
+      origin: SHOP,
+      challenge,
+    }).token();
+
+    expect(challenge).not.toHaveBeenCalled();
+  });
+});
+
+describe('sameOriginSessionUrl', () => {
+  const SHOP = 'https://www.cantina-rossi.example';
+
+  it('resolves a path, or a URL on the storefront, against the storefront', () => {
+    expect(sameOriginSessionUrl('/api/sommelier', SHOP)).toBe(`${SHOP}/api/sommelier`);
+    expect(sameOriginSessionUrl(` ${SHOP}/api/sommelier?x=1 `, SHOP)).toBe(
+      `${SHOP}/api/sommelier?x=1`,
+    );
+  });
+
+  it('refuses anything that resolves elsewhere, including what only reads like a path', () => {
+    expect(sameOriginSessionUrl('//elsewhere.example/api', SHOP)).toBeUndefined();
+    expect(sameOriginSessionUrl('https://cantina-rossi.example/api', SHOP)).toBeUndefined();
+    expect(sameOriginSessionUrl('http://[', SHOP)).toBeUndefined();
   });
 });

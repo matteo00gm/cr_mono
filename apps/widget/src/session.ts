@@ -44,7 +44,40 @@ export interface SessionOptions {
    * challenge on (P4-14). Absent — the default — and the mint sends no body.
    */
   readonly challenge?: (() => Promise<string>) | undefined;
+  /**
+   * `data-session-url` (P4-10b): the winery mints its sessions on its own
+   * server, behind this path on the storefront. Absent — the default — and the
+   * session comes from our browser mint.
+   */
+  readonly sessionUrl?: string | undefined;
+  /** The storefront's own origin, which the session URL must share. Injected by tests. */
+  readonly origin?: string | undefined;
 }
+
+/** Why a session URL was not asked: it pointed somewhere other than the storefront. */
+export const SESSION_URL_NOT_SAME_ORIGIN = 'session_url_not_same_origin';
+
+/** Why a session URL's answer was not used: it carried no token. */
+export const SESSION_URL_NO_TOKEN = 'session_url_no_token';
+
+/**
+ * The session URL, resolved, if it is on the storefront's own origin.
+ *
+ * **Same origin or nothing**, resolved before compared, as `safeCartUrl` is: a
+ * `//elsewhere.example/session` reads as a path and is not one. The endpoint
+ * is the winery's server proving the visitor is on its shop, and a URL that
+ * left the shop would hand the visitor's cookies for it to whoever is there.
+ */
+export const sameOriginSessionUrl = (sessionUrl: string, origin: string): string | undefined => {
+  try {
+    const base = new URL(origin);
+    const resolved = new URL(sessionUrl.trim(), base);
+
+    return resolved.origin === base.origin ? resolved.href : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 /**
  * A refusal from the session endpoint, carrying what it refused with.
@@ -219,6 +252,8 @@ export const createSession = ({
   fetch: fetch_ = globalThis.fetch,
   now = () => Date.now(),
   challenge,
+  sessionUrl,
+  origin,
 }: SessionOptions): Session => {
   /** The live token and when it stops being one. Never written anywhere durable. */
   let held: { token: string; expiresAt: number | undefined } | undefined;
@@ -233,7 +268,43 @@ export const createSession = ({
    */
   let minting: Promise<string> | undefined;
 
+  /**
+   * A session from the winery's own server (P4-10b, §3.2 layer 3).
+   *
+   * The storefront's endpoint holds the secret key and calls
+   * `POST /v1/widget/session/server`; this asks it, with the shop's own
+   * cookies, and passes it the previous token so the conversation continues
+   * (the server route accepts it as the browser mint does). No challenge:
+   * Turnstile proves a browser to us, and here the winery's server vouches.
+   */
+  const mintFromServer = async (url: string, previous: string | undefined): Promise<string> => {
+    const target = sameOriginSessionUrl(url, origin ?? globalThis.location.origin);
+
+    if (target === undefined) throw new SessionRefused(0, SESSION_URL_NOT_SAME_ORIGIN);
+
+    const response = await fetch_(target, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify(previous === undefined ? {} : { previous }),
+    });
+
+    if (!response.ok) throw new SessionRefused(response.status, await codeIn(response));
+
+    const session = (await response.json()) as Partial<WidgetSessionResponse> | null;
+
+    if (typeof session?.token !== 'string' || session.token === '') {
+      throw new SessionRefused(response.status, SESSION_URL_NO_TOKEN);
+    }
+
+    held = { token: session.token, expiresAt: expiryOf(session.token) };
+
+    return session.token;
+  };
+
   const mint = async (previous: string | undefined): Promise<string> => {
+    if (sessionUrl !== undefined) return mintFromServer(sessionUrl, previous);
+
     /* Solved before the request, so a challenge that fails costs no mint. */
     const turnstileToken = challenge === undefined ? undefined : await challenge();
 

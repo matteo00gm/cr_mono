@@ -46,6 +46,8 @@ export interface E2eApi {
   readonly unverifyDomain: () => Promise<void>;
   /** Puts it back. The suite is serial and shares one database, so state has to be restorable. */
   readonly reverifyDomain: () => Promise<void>;
+  /** Shuts the browser mint for the winery, or opens it again (P4-10b). */
+  readonly serverSessionsOnly: (on: boolean) => Promise<void>;
   /**
    * Ends every session on the verified origin, as a removal does (P4-06).
    *
@@ -289,6 +291,12 @@ export const startE2eApi = async ({
         UPDATE tenant_domains SET status = 'VERIFIED', verified_at = now()
         WHERE tenant_id = ${tenantId} AND origin = ${VERIFIED_ORIGIN}
       `);
+    },
+
+    serverSessionsOnly: async (on) => {
+      await admin.execute(
+        sql`UPDATE tenants SET server_sessions_only = ${on} WHERE id = ${tenantId}`,
+      );
     },
 
     endSessions: async () => {

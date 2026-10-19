@@ -144,6 +144,11 @@ export interface PanelOptions {
    * which wins over the winery's when it is a colour.
    */
   readonly color?: string | undefined;
+  /**
+   * `data-session-url` from the script tag (P4-10b): where the winery's own
+   * server hands out sessions, instead of our browser mint.
+   */
+  readonly sessionUrl?: string | undefined;
   /** Injected by tests; the default resolves the host page's own cart. */
   readonly cartPort?: CartPort | undefined;
   /** Injected by tests; the default batches to P6-01's ingest (P3-20). */
@@ -267,6 +272,7 @@ export const mountPanel = ({
   cart,
   position,
   color,
+  sessionUrl,
   cartPort,
   analytics: analytics_,
   navigate,
@@ -308,6 +314,7 @@ export const mountPanel = ({
   const session = createSession({
     api,
     key,
+    sessionUrl,
     challenge:
       config.turnstileSiteKey === null
         ? undefined

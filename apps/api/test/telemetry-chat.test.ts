@@ -332,6 +332,7 @@ describe('a visitor’s turn', () => {
     trialEndsAt: null,
     locale: 'it',
     turnstile: false,
+    serverSessionsOnly: false,
     originKind: 'production',
   };
 

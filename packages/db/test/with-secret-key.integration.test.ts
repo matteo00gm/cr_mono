@@ -120,6 +120,22 @@ describe('a server presenting a secret key', () => {
     });
   });
 
+  it('carries whether this is the winery’s only way to a session (P4-10b)', async () => {
+    const { tenantId, key } = await winery();
+
+    await expect(resolveTenantBySecretKey(sha(key), db)).resolves.toMatchObject({
+      serverSessionsOnly: false,
+    });
+
+    await adminDb.execute(
+      sql`UPDATE tenants SET server_sessions_only = true WHERE id = ${tenantId}::uuid`,
+    );
+
+    await expect(resolveTenantBySecretKey(sha(key), db)).resolves.toMatchObject({
+      serverSessionsOnly: true,
+    });
+  });
+
   it('learns the verified origins, and only the verified ones', async () => {
     /* A session may be minted for these and nothing else. A pending claim is
      * not an origin the widget may be served to. */

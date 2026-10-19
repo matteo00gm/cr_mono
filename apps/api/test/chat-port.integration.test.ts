@@ -37,6 +37,7 @@ const tenant = (id: string): WidgetTenant => ({
   trialEndsAt: null,
   locale: 'it',
   turnstile: false,
+  serverSessionsOnly: false,
   originKind: 'production',
 });
 

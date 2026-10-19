@@ -81,13 +81,18 @@ describe('what the storefront chose (P6-09)', () => {
       key: KEY,
       position: 'bottom-left',
       color: '#1f6f4a',
+      sessionUrl: '/sommelier/session',
       load: () => Promise.resolve({ mountPanel: mountPanel_ }),
     });
 
     await lazy.toggle();
 
     expect(mountPanel_).toHaveBeenCalledWith(
-      expect.objectContaining({ position: 'bottom-left', color: '#1f6f4a' }),
+      expect.objectContaining({
+        position: 'bottom-left',
+        color: '#1f6f4a',
+        sessionUrl: '/sommelier/session',
+      }),
     );
   });
 
