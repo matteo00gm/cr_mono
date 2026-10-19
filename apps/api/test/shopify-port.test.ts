@@ -449,7 +449,9 @@ describe('the status and the uninstall, with nothing set up', () => {
 
     it('does not let one shop’s burst hold back another’s', async () => {
       const resolveShop = vi.fn(() => Promise.resolve(undefined));
-      const limiter = memoryRateLimiter();
+      /* One window, held still: six hundred sends on the real clock can cross a minute and start counting again. */
+      const at = Date.now();
+      const limiter = memoryRateLimiter(() => at);
       const { port } = portWith({ resolveShop, limiter });
       const busy = 'cantina-affollata.myshopify.com';
 

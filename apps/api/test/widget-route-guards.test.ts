@@ -318,7 +318,14 @@ describe('POST /v1/widget/session/server (P4-10)', () => {
      * inventing keys gets a free indexed read per key.
      */
     const resolved: string[] = [];
-    const limiter = memoryRateLimiter();
+    /*
+     * **One window, held still.** Twelve hundred requests on the real clock
+     * crossed a minute on a slow CI runner, the count started again, and the
+     * last one was let through to the lookup — a flake that read as the
+     * invariant breaking. The window is what is being exhausted, so it stays.
+     */
+    const at = Date.now();
+    const limiter = memoryRateLimiter(() => at);
     const built = appWith({
       limiter,
       resolveSecretKey: (hash) => {

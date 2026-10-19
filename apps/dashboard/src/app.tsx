@@ -10,6 +10,7 @@ import { CatalogScreen } from './features/catalog/CatalogScreen.js';
 import { ClaimNotice } from './features/domains/ClaimNotice.js';
 import { IntegrationsScreen } from './features/integrations/IntegrationsScreen.js';
 import { SandboxScreen } from './features/sandbox/SandboxScreen.js';
+import { WidgetScreen } from './features/widget/WidgetScreen.js';
 import { EnrolmentScreen } from './features/security/EnrolmentScreen.js';
 import { navFor } from './nav.js';
 import { apiFor, rememberTenant, useSession, type SessionState } from './session.js';
@@ -182,6 +183,18 @@ const IntegrationsRoute = ({
   return <IntegrationsScreen client={client} canConnect={can(role, 'domains:manage')} />;
 };
 
+/** Widget (P4-09b), with a client built once per winery for `CatalogRoute`'s reason. */
+const WidgetRoute = ({
+  tenantId,
+  clientFor,
+}: {
+  readonly tenantId: string;
+  readonly clientFor: (tenantId: string) => ApiClient;
+}): JSX.Element => {
+  const client = useMemo(() => clientFor(tenantId), [tenantId, clientFor]);
+  return <WidgetScreen client={client} />;
+};
+
 /** Prova il sommelier (P2-37b), with a client built once per winery for `CatalogRoute`'s reason. */
 const SandboxRoute = ({
   tenantId,
@@ -300,6 +313,9 @@ export const Layout = ({
               role={active.role}
               clientFor={clientFor}
             />
+          </Route>
+          <Route path="/widget">
+            <WidgetRoute tenantId={active.tenantId} clientFor={clientFor} />
           </Route>
           <Route path="/membri">
             <Placeholder title="Membri" />

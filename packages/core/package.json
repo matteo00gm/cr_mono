@@ -40,6 +40,10 @@
     "./analytics-top": {
       "types": "./dist/analytics/top.d.ts",
       "default": "./dist/analytics/top.js"
+    },
+    "./install-snippet": {
+      "types": "./dist/install-snippet.d.ts",
+      "default": "./dist/install-snippet.js"
     }
   },
   "files": [
